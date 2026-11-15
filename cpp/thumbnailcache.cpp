@@ -129,7 +129,10 @@ void ThumbnailCache::request(const QString& path, int edge, qint64 modified, qin
 
 void ThumbnailCache::generate(const Job& job)
 {
-  QtConcurrent::run(QThreadPool::globalInstance(), [this, job]() {
+  // Fire and forget: nobody waits on this future, and the result is reported
+  // through the queued `finish()` instead. The cast is what keeps the
+  // `[[nodiscard]]` future from warning.
+  (void)QtConcurrent::run(QThreadPool::globalInstance(), [this, job]() {
     QImageReader reader(job.path);
     // Honour the EXIF orientation, exactly like the un-cached `Image` did, or
     // phone photos come out sideways.
