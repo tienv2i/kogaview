@@ -361,6 +361,7 @@ ApplicationWindow {
             objectName: "browser"
             theme: appTheme
             state: root.state
+            thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             listFolders: root.listFolders
             onCommand: function(command) { root.send(command); }
             onToast: function(message) { root.showToast(message); }
@@ -384,6 +385,7 @@ ApplicationWindow {
             objectName: "viewer"
             theme: appTheme
             state: root.state
+            thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             onCommand: function(command) { root.send(command); }
         }
     }

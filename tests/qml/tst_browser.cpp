@@ -20,6 +20,8 @@
 #include <QSignalSpy>
 #include <QTest>
 
+#include "stubthumbnailcache.h"
+
 namespace {
 
 constexpr int kSwitcherWidth = 420;
@@ -229,6 +231,32 @@ private:
     return found.isEmpty() ? nullptr : found.first();
   }
 
+  /// The grid cell showing the entry at `path`, or nullptr.
+  QQuickItem* findCell(const QString& path)
+  {
+    for (QQuickItem* candidate : items(browserItem(), QStringLiteral("fileCell"))) {
+      if (readQml(candidate, QStringLiteral("entry.path")).toString() == path) {
+        return candidate;
+      }
+    }
+    return nullptr;
+  }
+
+  /// The thumbnail image inside a cell (or the preview panel) for `name`.
+  QQuickItem* findImage(QQuickItem* root, const QString& name)
+  {
+    const QList<QQuickItem*> found = items(root, name);
+    return found.isEmpty() ? nullptr : found.first();
+  }
+
+  /// Hand the view a stub cache the way `Main.qml` hands it the real one.
+  void installThumbnailCache(StubThumbnailCache* cache)
+  {
+    browserItem()->setProperty("thumbnails",
+                               QVariant::fromValue(static_cast<QObject*>(cache)));
+    settle();
+  }
+
   static QPoint centreOf(QQuickItem* item)
   {
     return item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
@@ -313,6 +341,11 @@ private slots:
     view->setProperty("expandedPaths", QVariantMap());
     view->setProperty("collapsedPaths", QVariantMap());
     view->setProperty("lastTreeRevision", -1);
+    // The stub cache of a previous test lived on its stack; drop it before it
+    // dangles and before this test decides whether it wants a cache at all.
+    // (A null *QObject pointer*, not an invalid QVariant: the property is `var`
+    // and an invalid variant would leave the previous value in place.)
+    view->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 0);
     view->setProperty("state", state);
@@ -867,6 +900,108 @@ private slots:
     view->setProperty("state", state);
     QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
                  "the tree did not reload when the revision changed");
+  }
+
+  // --------------------------------------------------------- thumbnails
+
+  /// The grid tile draws the cached thumbnail instead of the original file, and
+  /// asks for it with the entry's size and mtime, so an edited image misses.
+  void gridDrawsTheCachedThumbnail()
+  {
+    StubThumbnailCache cache;
+    installThumbnailCache(&cache);
+
+    QQuickItem* cell = findCell(QStringLiteral("/root/img.png"));
+    QVERIFY2(cell != nullptr, "no grid cell for the image");
+    QQuickItem* image = findImage(cell, QStringLiteral("gridThumbnail"));
+    QVERIFY2(image != nullptr, "the grid cell has no thumbnail image");
+
+    QTRY_VERIFY2(!cache.calls.isEmpty(), "the grid never asked for a thumbnail");
+    const StubThumbnailCache::Call call = cache.lastCallFor(QStringLiteral("/root/img.png"));
+    QCOMPARE(call.modified, qint64(1731000000));
+    QCOMPARE(call.size, qint64(4096));
+    QVERIFY2(call.edge >= 160, "the requested edge is below the smallest bucket");
+
+    // Nothing is drawn before the thumbnail exists: the tile keeps its
+    // placeholder instead of decoding the original a second time.
+    QCOMPARE(image->property("source").toString(), QString());
+
+    cache.deliver(call, QStringLiteral("file:///cache/thumb-grid.jpg"));
+    QTRY_COMPARE(image->property("source").toString(),
+                 QStringLiteral("file:///cache/thumb-grid.jpg"));
+
+    // The folder in the same grid asked for nothing: it is not an image.
+    QVERIFY2(cache.lastCallFor(QStringLiteral("/root/dirA")).path.isEmpty(),
+             "the folder entry was sent to the thumbnail cache");
+  }
+
+  /// The preview panel is thumbnailed too, and dropping the cache object puts
+  /// the views back on the original file.
+  void previewDrawsTheCachedThumbnail()
+  {
+    StubThumbnailCache cache;
+    installThumbnailCache(&cache);
+
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("rightPanel"), true);
+    QVariantMap info;
+    info.insert(QStringLiteral("path"), QStringLiteral("/root/img.png"));
+    info.insert(QStringLiteral("name"), QStringLiteral("img.png"));
+    info.insert(QStringLiteral("kind"), QStringLiteral("JPEG image"));
+    info.insert(QStringLiteral("isImage"), true);
+    info.insert(QStringLiteral("size"), qint64(4096));
+    info.insert(QStringLiteral("modified"), qint64(1731000000));
+    state.insert(QStringLiteral("selectionInfo"), info);
+    browserItem()->setProperty("state", state);
+    settle();
+
+    QQuickItem* preview = findItem(QStringLiteral("previewThumbnail"));
+    QVERIFY2(preview != nullptr, "no preview image in the right sidebar");
+
+    QTRY_VERIFY2(!cache.callsFor(QStringLiteral("/root/img.png")).isEmpty(),
+                 "the preview panel never asked for a thumbnail");
+    // Every ask carries the file's version, whatever size bucket it is for.
+    const QList<StubThumbnailCache::Call> asks = cache.callsFor(QStringLiteral("/root/img.png"));
+    for (const StubThumbnailCache::Call& ask : asks) {
+      QCOMPARE(ask.modified, qint64(1731000000));
+      QCOMPARE(ask.size, qint64(4096));
+      QVERIFY2(ask.edge >= 160, "the requested edge is below the smallest bucket");
+    }
+
+    cache.deliverAllFor(QStringLiteral("/root/img.png"),
+                        QStringLiteral("file:///cache/thumb-preview.jpg"));
+    QTRY_COMPARE(preview->property("source").toString(),
+                 QStringLiteral("file:///cache/thumb-preview.jpg"));
+
+    // No cache object (`ThumbnailBook.cache` is null): the original is drawn.
+    browserItem()->setProperty("thumbnails",
+                               QVariant::fromValue(static_cast<QObject*>(nullptr)));
+    QTRY_VERIFY2(preview->property("source").toString() == QStringLiteral("file:///root/img.png"),
+                 "without a cache object the preview stopped drawing the original");
+  }
+
+  /// An undecodable image falls back to the original instead of staying blank,
+  /// and is not asked for again — the cache remembers the failure.
+  void AFailedThumbnailFallsBackToTheOriginal()
+  {
+    StubThumbnailCache cache;
+    installThumbnailCache(&cache);
+
+    QQuickItem* cell = findCell(QStringLiteral("/root/img.png"));
+    QVERIFY(cell != nullptr);
+    QQuickItem* image = findImage(cell, QStringLiteral("gridThumbnail"));
+    QVERIFY(image != nullptr);
+
+    QTRY_VERIFY(!cache.lastCallFor(QStringLiteral("/root/img.png")).path.isEmpty());
+    const StubThumbnailCache::Call call = cache.lastCallFor(QStringLiteral("/root/img.png"));
+    cache.fail(call);
+
+    QTRY_COMPARE(image->property("source").toString(), QStringLiteral("file:///root/img.png"));
+    // Every later evaluation takes the remembered failure: no new request.
+    const int requests = cache.calls.size();
+    browserItem()->setProperty("state", baseState());
+    settle();
+    QCOMPARE(cache.calls.size(), requests);
   }
 
   /// Breadcrumbs navigate like the tree: they do not re-root anything.

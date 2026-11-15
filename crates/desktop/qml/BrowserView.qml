@@ -7,6 +7,9 @@ Item {
 
     property Theme theme: Theme {}
     property var state: ({})
+    /// The `Thumbnails` context object (C++ `ThumbnailCache`). Null in the QML
+    /// test harness, where the views decode the originals as before.
+    property var thumbnails: null
     property var listFolders: function(path) { return { ok: false, folders: [] }; }
 
     signal command(var command)
@@ -140,6 +143,14 @@ Item {
     function openQuickMenu(path) {
         view.menuPath = path;
         quickMenu.popup();
+    }
+
+    // Shared thumbnail bookkeeping for the grid and the preview panel. The
+    // decoding itself belongs to C++; this only maps (path, size, mtime, edge)
+    // to a cached file url.
+    ThumbnailBook {
+        id: thumbs
+        cache: view.thumbnails
     }
 
     RowLayout {
@@ -481,9 +492,21 @@ Item {
                             clip: true
 
                             Image {
+                                id: thumbImage
+                                objectName: "gridThumbnail"
                                 anchors.fill: parent
                                 anchors.margins: 2
-                                source: entry.isImage ? "file://" + entry.path : ""
+                                /// The cache key's size component: one bucket
+                                /// for the tile, not one per pixel width.
+                                readonly property int edge:
+                                    thumbs.edgeFor(Math.max(thumbFrame.width, thumbFrame.height))
+                                /// Cached thumbnail for this bucket; the call
+                                /// asks for it, so the tile draws exactly what
+                                /// it requested (see `ThumbnailBook.url`).
+                                source: cell.entry.isImage
+                                        ? thumbs.url(cell.entry.path, edge,
+                                                     cell.entry.modified, cell.entry.size)
+                                        : ""
                                 asynchronous: true
                                 cache: false
                                 fillMode: Image.PreserveAspectFit
@@ -588,10 +611,14 @@ Item {
                     clip: true
 
                     Image {
+                        id: previewImage
+                        objectName: "previewThumbnail"
                         anchors.fill: parent
                         anchors.margins: 4
-                        source: (view.selectionInfo && view.selectionInfo.isImage)
-                                ? "file://" + view.selectionInfo.path : ""
+                        readonly property var info: view.selectionInfo
+                        readonly property int edge: thumbs.edgeFor(Math.max(width, height))
+                        source: (info && info.isImage)
+                                ? thumbs.url(info.path, edge, info.modified, info.size) : ""
                         asynchronous: true
                         fillMode: Image.PreserveAspectFit
                         sourceSize.width: Math.ceil(width * 2)

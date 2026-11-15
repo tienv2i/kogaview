@@ -41,7 +41,7 @@ cxx_qt_import_qml_module(
   SOURCE_CRATE kogaview_desktop
 )
 
-add_executable(kogaview cpp/main.cpp cpp/platform.cpp)
+add_executable(kogaview cpp/main.cpp cpp/platform.cpp cpp/thumbnailcache.cpp)
 target_link_libraries(kogaview PRIVATE kogaview_qml_module Qt6::DBus Qt6::Concurrent)
 
 set_target_properties(
@@ -67,16 +67,29 @@ if(KOGAVIEW_BUILD_TESTS)
   # Suite sources are paired with the target that runs them.
   set(KOGAVIEW_QML_TEST_SUITES
     "kogaview_qml_tests:tst_viewer.cpp"
-    "kogaview_browser_qml_tests:tst_browser.cpp")
+    "kogaview_browser_qml_tests:tst_browser.cpp"
+    "kogaview_browser_cache_tests:tst_thumbnails.cpp")
 
   foreach(suite IN LISTS KOGAVIEW_QML_TEST_SUITES)
     string(REPLACE ":" ";" parts "${suite}")
     list(GET parts 0 target)
     list(GET parts 1 source)
-    add_executable(${target} tests/qml/${source})
-    target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate)
+    set(suite_sources tests/qml/${source})
+    # A suite may need non-QML sources from the app (the thumbnail cache is
+    # exercised directly, without a QML scene).
+    if(target STREQUAL "kogaview_browser_cache_tests")
+      list(APPEND suite_sources cpp/thumbnailcache.cpp)
+    endif()
+    # The thumbnail stub is a QObject both view suites drive; listing the header
+    # is what lets AUTOMOC generate its meta-object into these targets.
+    if(target STREQUAL "kogaview_qml_tests" OR target STREQUAL "kogaview_browser_qml_tests")
+      list(APPEND suite_sources tests/qml/stubthumbnailcache.h)
+    endif()
+    add_executable(${target} ${suite_sources})
+    target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate Qt6::Concurrent)
     target_compile_definitions(${target}
       PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cpp")
   endforeach()
 endif()
 

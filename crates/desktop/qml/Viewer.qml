@@ -7,6 +7,27 @@ Item {
 
     property Theme theme: Theme {}
     property var state: ({})
+    /// The `Thumbnails` context object (C++ `ThumbnailCache`). Null in the QML
+    /// test harness, where the filmstrip decodes the originals as before.
+    property var thumbnails: null
+
+    /// The filmstrip tiles are drawn from the cache, so it needs each file's
+    /// size and mtime for the key; `viewerImages` carries paths only, so they
+    /// come from the folder listing. Rebuilt once per state update.
+    property var imageMeta: {
+        var map = {};
+        var list = view.state.entries || [];
+        for (var index = 0; index < list.length; ++index) {
+            var entry = list[index];
+            if (entry && entry.isImage) map[entry.path] = entry;
+        }
+        return map;
+    }
+
+    ThumbnailBook {
+        id: thumbs
+        cache: view.thumbnails
+    }
 
     property real zoom: 1
     property real offsetX: 0
@@ -262,9 +283,18 @@ Item {
                         clip: true
 
                         Image {
+                            id: stripThumb
+                            objectName: "stripThumbnail"
                             anchors.fill: parent
                             anchors.margins: 3
-                            source: "file://" + modelData
+                            /// Entry of this image, for the cache key.
+                            readonly property var meta: view.imageMeta[modelData] || null
+                            readonly property int edge: thumbs.edgeFor(Math.max(width, height))
+                            /// Cached tile; the call also requests it, so the
+                            /// strip never decodes the originals itself.
+                            source: meta
+                                    ? thumbs.url(modelData, edge, meta.modified, meta.size)
+                                    : "file://" + modelData
                             asynchronous: true
                             cache: false
                             fillMode: Image.PreserveAspectCrop

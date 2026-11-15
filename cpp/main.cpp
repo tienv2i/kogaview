@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "thumbnailcache.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -28,8 +29,9 @@ constexpr auto kMainQml = "qrc:/qt/qml/io/github/tienv2i/KogaView/qml/Main.qml";
 
 #ifdef KOGAVIEW_DEV_HARNESS
 /// Print the two folders that decide where the explorer is rooted, so
-/// "the tree root is not the open folder" is checkable from a log.
-void logDevState(QObject* rootObject, QObject* bridge)
+/// "the tree root is not the open folder" is checkable from a log, plus what the
+/// thumbnail cache holds on disk.
+void logDevState(QObject* rootObject, QObject* bridge, ThumbnailCache* thumbnails)
 {
   if (!qEnvironmentVariableIsSet("KOGAVIEW_DEV_STATE") || bridge == nullptr) {
     return;
@@ -41,6 +43,11 @@ void logDevState(QObject* rootObject, QObject* bridge)
                     << state.value(QStringLiteral("currentFolder")).toString() << "workspace"
                     << state.value(QStringLiteral("workspace")).toString() << "treeRevision"
                     << static_cast<qint64>(state.value(QStringLiteral("treeRevision")).toDouble());
+  if (thumbnails != nullptr) {
+    qInfo().noquote() << "KogaView dev thumbnails: entries" << thumbnails->entryCount() << "bytes"
+                      << thumbnails->bytesUsed() << "hits" << thumbnails->hits() << "generated"
+                      << thumbnails->generated() << "dir" << thumbnails->directory();
+  }
   // The tree keeps its own expansion (it outlives the nodes), so read it from
   // the view: a refresh after a file operation must keep both these paths and
   // the current folder above.
@@ -55,7 +62,7 @@ void logDevState(QObject* rootObject, QObject* bridge)
 // UI uses so workspaces and panels can be exercised for screenshots without
 // synthetic input events. `KOGAVIEW_DEV_COMMANDS` holds `;`-separated command
 // objects, for example `{"type":"set_workspace","workspace":"editor"}`.
-void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
+void dispatchDevCommands(QObject* rootObject, QGuiApplication& app, ThumbnailCache& thumbnails)
 {
   const QString raw = qEnvironmentVariable("KOGAVIEW_DEV_COMMANDS");
   if (raw.isEmpty()) {
@@ -75,7 +82,7 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
     ++index;
     // Background file operations take time; stagger so each command is not
     // rejected with `busy` by the previous one.
-    QTimer::singleShot(delay, &app, [bridge, rootObject, command, index]() {
+    QTimer::singleShot(delay, &app, [bridge, rootObject, command, index, &thumbnails]() {
       const QString envelope =
         QStringLiteral(R"({"id":"dev-%1","protocol":1,"command":%2})")
           .arg(index)
@@ -87,14 +94,15 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
       if (!invoked) {
         qCritical() << "KogaView dev commands: dispatch failed";
       }
-      logDevState(rootObject, bridge);
+      logDevState(rootObject, bridge, &thumbnails);
     });
   }
 }
 
 // Debug-only evidence harness: grab the app window after it is exposed.
 // The permission-checked `debug.screenshot` command replaces this later.
-void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper& platform)
+void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper& platform,
+                       ThumbnailCache& thumbnails)
 {
   // QA hook: print the Viewer canvas geometry so layout and centring
   // regressions can be caught without pixel measurements. Geometry only; it
@@ -249,9 +257,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   // What did the app restore? Logged before any command runs, so "the sidebar
   // root and the open folder came back as two separate values" is visible.
   if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_STATE")) {
-    QTimer::singleShot(0, &app, [rootObject]() {
-      logDevState(rootObject,
-                  rootObject->findChild<QObject*>(QStringLiteral("bridge")));
+    QTimer::singleShot(0, &app, [rootObject, &thumbnails]() {
+      logDevState(rootObject, rootObject->findChild<QObject*>(QStringLiteral("bridge")),
+                  &thumbnails);
     });
   }
 
@@ -265,9 +273,10 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
 /// Load the QML entry point, reporting compile and instantiation errors.
 /// A missing root object must fail loudly instead of starting a blank session.
 QObject* loadUserInterface(QQmlEngine& engine, const QStringList& launchArguments,
-                           PlatformHelper& platform)
+                           PlatformHelper& platform, ThumbnailCache& thumbnails)
 {
   engine.rootContext()->setContextProperty(QStringLiteral("Platform"), &platform);
+  engine.rootContext()->setContextProperty(QStringLiteral("Thumbnails"), &thumbnails);
   engine.rootContext()->setContextProperty(QStringLiteral("launchArgs"), launchArguments);
 
   const QUrl url(QString::fromLatin1(kMainQml));
@@ -320,9 +329,12 @@ int main(int argc, char* argv[])
   }
 
   PlatformHelper platform;
+  // Thumbnails live under the profile's cache root. Core owns that path, so the
+  // naming rule is not duplicated here.
+  ThumbnailCache thumbnails(kogaview_cache_dir() + QStringLiteral("/thumbnails"));
   QQmlEngine engine;
 
-  QObject* rootObject = loadUserInterface(engine, launchArguments, platform);
+  QObject* rootObject = loadUserInterface(engine, launchArguments, platform, thumbnails);
   if (rootObject == nullptr) {
     kogaview_shutdown();
     return 1;
@@ -332,8 +344,8 @@ int main(int argc, char* argv[])
   QObject::connect(&engine, &QQmlEngine::exit, &app, &QCoreApplication::exit);
 
 #ifdef KOGAVIEW_DEV_HARNESS
-  installDevHarness(rootObject, app, platform);
-  dispatchDevCommands(rootObject, app);
+  installDevHarness(rootObject, app, platform, thumbnails);
+  dispatchDevCommands(rootObject, app, thumbnails);
 #endif
 
   const int result = app.exec();

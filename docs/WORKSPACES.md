@@ -77,6 +77,34 @@
   so no delegate is recreated and a one-level reload would keep showing stale
   grandchild rows while the grid was already fresh.
 
+## Thumbnail cache contract
+- The grid, the preview panel and the filmstrip never decode a full image to
+  draw a small one. `ThumbnailCache` (C++) turns each image into one small file
+  per (path, size, mtime, requested edge) under
+  `$XDG_CACHE_HOME/kogaview[-dev]/thumbnails`, generated on the thread pool and
+  handed back as a url through `thumbnailReady`.
+- The key is a stable FNV-1a hash of `v3|path|edge|modified|size`, not
+  `std::hash`/`QHash` (both are salted per process and would orphan every file
+  after a restart). It carries mtime and size, so an edited image simply misses:
+  there is no invalidation step and no way to show stale pixels. The extension
+  records what was written — `.jpg` for opaque, `.png` when the source has
+  transparency — and a `.fail` marker records an undecodable source so it is not
+  retried on every scroll.
+- The edge is bucketed (160/256/384/512/768, request twice the drawn size), so
+  resizing the window reuses a neighbouring bucket instead of minting an entry
+  per pixel width. `Qt::KeepAspectRatio` fit, EXIF orientation honoured, atomic
+  write through `QSaveFile`.
+- Eviction keeps the directory under a byte budget (256 MB, aims at 90% when it
+  runs) and drops the least recently **used** entry first: a hit refreshes the
+  file's modification time. Failure markers are evicted by the same clock but
+  count as zero bytes.
+- The views ask through `ThumbnailBook.qml`, whose `url()` is bound to
+  `Image.source`: the binding requests exactly the thumbnail it is about to
+  draw (a recycled delegate, a new bucket and a late-arriving cache object all
+  ask again) and returns empty until the file exists, so a tile shows its
+  placeholder rather than decoding the original twice. Without a cache object
+  the views fall back to `file://<path>`.
+
 ## Command contracts
 - `app.open_files { paths: Vec<PathOrUri>, activation: bool }` -> viewer state and navigation context.
 - `app.open_folder { path: PathOrUri, activation: bool }` -> browser state.

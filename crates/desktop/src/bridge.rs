@@ -25,6 +25,9 @@ pub mod qobject {
         fn kogaview_app_id() -> QString;
         fn kogaview_display_name() -> QString;
         fn kogaview_app_version() -> QString;
+        /// Cache root for this profile (`$XDG_CACHE_HOME/kogaview[-dev]`).
+        /// Owned by Core so the C++ side never re-derives the naming rule.
+        fn kogaview_cache_dir() -> QString;
     }
 
     extern "RustQt" {
@@ -165,4 +168,12 @@ pub fn kogaview_display_name() -> QString {
 
 pub fn kogaview_app_version() -> QString {
     AppIdentity::current().version.into()
+}
+
+pub fn kogaview_cache_dir() -> QString {
+    kogaview_core::AppPaths::current()
+        .cache_dir
+        .to_string_lossy()
+        .into_owned()
+        .into()
 }

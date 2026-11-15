@@ -22,6 +22,7 @@ BINARY = BUILD_DIR / "bin" / "kogaview"
 QML_TEST_SUITES = (
     ("kogaview_qml_tests", BUILD_DIR / "bin" / "kogaview_qml_tests"),
     ("kogaview_browser_qml_tests", BUILD_DIR / "bin" / "kogaview_browser_qml_tests"),
+    ("kogaview_browser_cache_tests", BUILD_DIR / "bin" / "kogaview_browser_cache_tests"),
 )
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"

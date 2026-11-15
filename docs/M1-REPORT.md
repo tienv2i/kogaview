@@ -29,6 +29,12 @@
 - Browser: quick access + explorer-style folder tree, collapsible one-row
   breadcrumbs, responsive async thumbnail grid, preview/metadata sidebar with a
   toggle, context menus for files, folders and quick-access entries.
+- Thumbnail cache (`cpp/thumbnailcache.{h,cpp}`): one small file per (image,
+  size, mtime, requested edge) under `$XDG_CACHE_HOME/kogaview[-dev]/thumbnails`,
+  generated off the GUI thread, keyed by a stable FNV-1a hash so entries survive
+  a restart, evicted least-recently-used against a byte budget, with EXIF
+  orientation honoured and undecodable sources remembered so they are not
+  retried. The grid, the preview panel and the filmstrip all draw from it.
 - Viewer: back, previous/next, zoom in/out, fit, 100%, rotate left/right, flip
   horizontal/vertical, filmstrip toggle, panning and scroll-to-zoom.
 - Editor: placeholder with two sidebars, empty centre and status bar.
@@ -43,7 +49,7 @@ did not change the evidence.
 | # | Scenario | Command (abridged) | Result |
 |---|---|---|---|
 | 1 | Build | `just build` | PASS, artifact `build/dev/bin/kogaview` |
-| 2 | Tests | `just test` | PASS: 34 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests and 21 Qt Quick browser/explorer tests |
+| 2 | Tests | `just test` | PASS: 34 core + 3 protocol Rust tests, then 15 Qt Quick viewer tests, 24 Qt Quick browser/explorer tests and 12 thumbnail-cache tests |
 | 3 | Formatting | `cargo fmt --all -- --check` | PASS |
 | 4 | Version | `kogaview --version` | `KogaView (Dev) 0.1.0 (io.github.tienv2i.KogaView.Dev)` |
 | 5 | Config creation | first run, then `cat ~/.config/kogaview-dev/config.json` | file created with dark theme, `~/Pictures` + `~` quick access, panels and filmstrip on |
@@ -80,6 +86,11 @@ did not change the evidence.
 | 35 | Explorer root and open folder restored separately | `cargo test -p kogaview-core` (`the_root_and_the_open_folder_are_saved_apart`, `walking_out_of_the_tree_re_roots_the_saved_value`, `restoring_a_session_keeps_the_tree_above_the_open_folder`, `restoring_derives_the_value_that_is_missing`, `restoring_deleted_folders_opens_nothing`, plus the policy tests `the_root_survives_navigation_inside_the_tree`, `a_sibling_with_a_common_prefix_is_outside_the_tree`, `leaving_the_subtree_moves_the_root`, `both_saved_folders_are_restored_separately`, `a_missing_folder_is_derived_from_the_surviving_one`, `a_folder_outside_the_saved_root_is_repaired`); plus `KOGAVIEW_DEV_COMMANDS`/`KOGAVIEW_DEV_STATE` on the real binary | the tree root and the open folder are two persisted values (`config.json` → `"tree_root": "…/photos"`, `"last_folder": "…/photos/sub"`); restarting restores `rootFolder …/photos` with `currentFolder …/photos/sub` and the tree expanded down to `sub` (`docs/evidence/M1-root-vs-open.png`). Live sequence, root/current after each command: `open_folder photos` → `photos/photos`; explicit `open_folder photos/sub` (inside the tree) → `photos/photos/sub`; `navigate photos/sub/deep` → `photos/photos/sub/deep`; `navigate /tmp/opencode` (leaves the subtree) → `/tmp/opencode//tmp/opencode`; `navigate /tmp/opencode/photos` (inside again) → `/tmp/opencode//tmp/opencode/photos`. `navigate` now persists the open folder too, and only when the value really changed |
 | 36 | Root/list regression check | reintroduced four failure modes in turn (make `open_folder` always re-root, restore the tree collapsed into the open folder, persist only `last_folder`, persist only on explicit open) and re-ran `cargo test -p kogaview-core` | each mutation is caught — `the_root_and_the_open_folder_are_saved_apart` for three of them and `restoring_a_session_keeps_the_tree_above_the_open_folder` for the restore; the restored sources pass 34/34 |
 
+| 37 | Thumbnail cache: one small file per (image, size, mtime, edge) | `kogaview_browser_cache_tests` (`tst_thumbnails.cpp`) driving the real `ThumbnailCache` over temporary images: `generatesOneFilePerImageAndEdge`, `aCachedEntryIsAnsweredWithoutReEncoding`, `aChangedImageGetsANewEntry`, `anUndecodableImageIsRememberedAsFailed`, `transparencyDecidesTheEncoding`, `orientationFromExifIsHonoured`, `aRestartFindsTheExistingEntries`, `evictionKeepsTheCacheUnderBudget`, `evictionIsLeastRecentlyUsed`, `clearRemovesEverything` | a 1600x1000 JPEG asked at edge 256 gives a 256x160 file, asked at 128 a second 128x80 file, and the original is untouched. A hit answers while the source file has been deleted — no decode warning is logged, `bytesUsed` and the entry count do not change — so it reads the cache and nothing else. Changing only the mtime, then only the size, each mints a new entry (3 for one path). A 400x200 JPEG whose EXIF says orientation 6 gives a 128x256 (upright) thumbnail; transparency survives as `.png` while opaque images stay `.jpg`, and the `.png` is found again by a later lookup after the source is gone. A second cache object over the same directory reports the same `bytesUsed` and answers the cached url. 8 entries against a 40 KB budget keep `bytesUsed` under it with fewer files than were generated, and no dangling entries. Eviction drops the least recently *used* entry: A, B, hit A, then C evicts B and keeps A. `clear` removes thumbnails and failure markers and the cache rebuilds afterwards |
+| 38 | Grid, preview panel and filmstrip draw the cached thumbnails | `tests/qml/tst_browser.cpp` (`gridDrawsTheCachedThumbnail`, `previewDrawsTheCachedThumbnail`, `AFailedThumbnailFallsBackToTheOriginal`) and `tests/qml/tst_viewer.cpp` (`filmstripDrawsCachedThumbnails`) against a stub cache object with the same shape as `ThumbnailCache` | the grid asks for the tile with the entry's `size`/`modified` and a bucketed edge (>= 160), draws **nothing** until the thumbnail arrives (so the placeholder shows instead of a second decode), then draws exactly the url the cache delivered; the folder in the same folder is never sent to the cache. The preview panel does the same for `selectionInfo`, and both return to `file://<path>` when the cache object is absent. The filmstrip looks the size/mtime up in the folder listing (`viewerImages` carries paths only), falls back to the original for a path the listing does not have, and returns to the original without a cache. An undecodable image falls back to the original tile and is not asked for again after the failure is reported |
+| 39 | Cache and thumbnail-wiring regression check | 10 mutations in `cpp/thumbnailcache.cpp` and 4 in the QML, each reverted and both suites re-run | every one is caught. C++: drop the mtime from the key, drop the size from the key, drop `setAutoTransform`, ignore the `.fail` marker, always encode JPEG, search only `.jpg`, skip eviction after an insert, skip the LRU `touch` on a hit, evict newest-first, skip counting existing files at startup (`aChangedImageGetsANewEntry`, `orientationFromExifIsHonoured`, `anUndecodableImageIsRememberedAsFailed`, `transparencyDecidesTheEncoding`, `aRestartFindsTheExistingEntries`, `evictionKeepsTheCacheUnderBudget`, `evictionIsLeastRecentlyUsed`). QML: `ThumbnailBook.url` always returns the original, `note()` drops ready urls, the grid keys on `0, 0`, the filmstrip ignores the listing — 4, 4, 2 and 3 test failures respectively |
+| 40 | Thumbnail cache on the real binary: cold, then warm | `KOGAVIEW_DEV_COMMANDS`/`KOGAVIEW_DEV_STATE` on `build/dev/bin/kogaview` with `XDG_*` redirected to `/tmp/opencode/kvT`, over `/tmp/opencode/gallery` (6 x 3000x2000 JPEGs, a 2000x3000 portrait, a 3000x2000 JPEG whose EXIF says orientation 6, a 1600x1200 RGBA PNG and an 18-byte `broken.jpg`), plus `ls`/`du` on the cache directory | cold run: the directory starts empty and ends with 28 thumbnails (25 `.jpg`, 3 `.png`) and 3 `.fail` markers, 352 KB in total, `hits … generated 27`, and three `cannot decode` warnings — one per edge bucket asked for `broken.jpg`. Warm run over the same folder: startup reports `entries 28 bytes 313083` (the files are found and counted by `scanExisting`), then `hits 185 generated 0`, the directory listing is identical before and after, and **no** `cannot decode` warning appears — the marker stopped the retry. Opening the Viewer asks for a new size bucket for the filmstrip: `hits 305 generated 9`, everything else still a hit. `docs/evidence/M1-thumbnails.png` shows the grid and the preview panel drawn from the cache — `rotated-by-exif.jpg` upright, `broken.jpg` an empty tile — and `docs/evidence/M1-thumbnails-filmstrip.png` the filmstrip |
+
 ### Dev harness used for evidence
 
 The Debug binary enables `KOGAVIEW_DEV_*` hooks; every hook is inert unless its
@@ -94,9 +105,11 @@ the stable `objectName`s `viewer`, `viewerViewport`, `viewerCanvas` and
 
 `KOGAVIEW_DEV_STATE` prints `rootFolder`/`currentFolder`/`workspace`/`treeRevision`
 once at startup and after every dev command, plus the paths the tree currently
-has expanded, which is how "the sidebar root and the open folder are two values",
-"navigation only re-roots when it leaves the subtree" and "a file operation
-refreshes the tree without losing the open position" are checked from a log.
+has expanded and a `KogaView dev thumbnails:` line (entries, bytes, hits,
+generated, directory), which is how "the sidebar root and the open folder are two
+values", "navigation only re-roots when it leaves the subtree", "a file operation
+refreshes the tree without losing the open position" and "the second run is
+answered from the cache" are checked from a log.
 
 Three hooks exist for the platform paths that normally need a click:
 `KOGAVIEW_DEV_UI_REQUEST=open-folder|open-external` invokes the browser's
@@ -108,11 +121,13 @@ window. They go through the same signals
 and helpers the UI uses, so a log line proves the real path was taken — but they
 are still synthetic triggers, not a person clicking (see the gaps).
 
-The repeatable part of this is not the hooks: `just test` runs two Qt Quick
-suites that load the unchanged QML sources and assert on what Qt Quick actually
-does — `tests/qml/tst_viewer.cpp` (transform maths and injected mouse/touchpad
-wheel events) and `tests/qml/tst_browser.cpp` (real clicks on the workspace
-switcher and the explorer, asserted through the commands the views emit). These
+The repeatable part of this is not the hooks: `just test` runs three C++ suites
+that load the unchanged QML sources and assert on what Qt Quick actually does —
+`tests/qml/tst_viewer.cpp` (transform maths and injected mouse/touchpad wheel
+events, and the filmstrip), `tests/qml/tst_browser.cpp` (real clicks on the
+workspace switcher and the explorer, asserted through the commands the views
+emit, plus the grid and preview thumbnails) and `tests/qml/tst_thumbnails.cpp`
+(the cache itself: keys, hits, eviction, EXIF, failure markers). These
 regressions fail the pipeline instead of only showing up on screen.
 
 ### Bugs found and fixed during verification
@@ -234,8 +249,23 @@ regressions fail the pipeline instead of only showing up on screen.
   `sendEvent()`/`dispatchWheel()`; `handleWheelEvent()` returns `false` for
   mid-gesture phases on Qt 6.12, so use `NoScrollPhase` there or dispatch the
   event to the window directly.
-- Thumbnails are decoded by Qt's `Image` element per delegate; there is no
-  thumbnail cache, downscale pipeline or EXIF orientation yet (M2/M3).
+- The thumbnail cache is disk-first on purpose: what lives in RAM is the
+  key → url book in `ThumbnailBook.qml` (a few hundred bytes per entry) and not
+  decoded pixels — `Image.cache` stays `false` for the tiles, so Qt's own pixmap
+  cache is not a second, invisible copy of the gallery. A tile therefore
+  re-decodes a ~10 KB thumbnail from disk when it scrolls back, measured here as
+  indistinguishable from a hit; a decoded-pixmap LRU with its own budget is not
+  implemented.
+- The edge buckets (160/256/384/512/768) are what keep a resize from minting an
+  entry per pixel width, but a *cold* first visit can still produce up to one
+  entry per bucket an image is displayed at while the layout settles: the first
+  run above wrote 28 files for 9 images. Nothing prunes the losing buckets.
+- There is no user-facing "clear thumbnail cache" action or size setting; the
+  budget is the built-in 256 MB and `ThumbnailCache::clear()` is only reachable
+  from the dev harness and the tests.
+- Cache eviction is per file, not per folder, and it is not aware of a file
+  being replaced: an edited image simply leaves its old entry behind until the
+  budget pushes it out.
 - Viewer rotate/flip are presentation-only and reset when the image changes.
 - No single-instance coordination or IPC: a second instance shares the same
   config, journal and logs. Observed during verification when the interactive
@@ -253,6 +283,9 @@ regressions fail the pipeline instead of only showing up on screen.
 - `docs/evidence/M1-viewer-scroll-zoom.png` (injected touchpad scroll: zoom 0.77175 → 0.895978, anchored on the cursor)
 - `docs/evidence/M1-explorer-root.png` (current folder `photos/sub` in the grid and the breadcrumbs while the tree stays rooted at `photos`)
 - `docs/evidence/M1-tree-refresh.png` (after `move_to`: the tree row `after-refresh` left `photos/sub` and appeared at the `photos` level, with `sub` still expanded and still the folder on screen)
+- `docs/evidence/M1-root-vs-open.png` (tree rooted at `photos` while the list shows `photos/sub`, both restored from the configuration)
+- `docs/evidence/M1-thumbnails.png` (grid and preview panel drawn from the thumbnail cache; the EXIF-rotated photo is upright, the undecodable one is an empty tile)
+- `docs/evidence/M1-thumbnails-filmstrip.png` (Viewer filmstrip drawing cached 160 px tiles)
 
 The browser and viewer screenshots above were captured before rows 25–27, so
 they still show the icon-only mode buttons; `M1-explorer-root.png` shows the

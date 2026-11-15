@@ -8,6 +8,11 @@
 - Open directory via explicit `kogaview open-folder DIR`; do not claim folder MIME handler unless implemented and tested.
 - Do not forcibly replace user's default image viewer; user selects default via desktop settings.
 - Honor XDG directories, portal file chooser, Wayland and KDE/GNOME theme integration.
+- Derived files (the thumbnail cache) live under the XDG cache directory and are
+  therefore safe to delete at any time: `<cache>/thumbnails`, with `<cache>` from
+  `kogaview_cache_dir()` so the `-dev` naming rule is not duplicated in C++.
+  Losing it costs one regeneration, never correctness — every key carries the
+  source's size and mtime.
 
 ## Windows
 - Installer registers supported file types / Open With and optional folder context menu (only if implemented).

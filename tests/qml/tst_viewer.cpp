@@ -10,14 +10,18 @@
 // `angleDelta`.
 
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
 #include <QPointingDevice>
 #include <QQmlEngine>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
 #include <QTemporaryDir>
 #include <QTest>
+
+#include "stubthumbnailcache.h"
 
 #include <qpa/qwindowsysteminterface.h>
 
@@ -59,6 +63,41 @@ private:
   QObject* object(const char* name) const
   {
     return m_view->rootObject()->findChild<QObject*>(QString::fromLatin1(name));
+  }
+
+  /// Every item called `name`, walking the visual tree: ListView delegates are
+  /// `childItems` of the view's content item, not `QObject` children of the
+  /// view root, so `findChildren` would not see them.
+  static void collect(QQuickItem* root, const QString& name, QList<QQuickItem*>* out)
+  {
+    if (root->objectName() == name) {
+      out->append(root);
+    }
+    for (QQuickItem* child : root->childItems()) {
+      collect(child, name, out);
+    }
+  }
+
+  static QList<QQuickItem*> visualItems(QQuickItem* root, const QString& name)
+  {
+    QList<QQuickItem*> found;
+    collect(root, name, &found);
+    return found;
+  }
+
+  /// The filmstrip tile drawing `path`, or nullptr when it is not on screen.
+  QQuickItem* stripTile(const QString& path) const
+  {
+    const QList<QQuickItem*> found =
+      visualItems(m_view->rootObject(), QStringLiteral("stripThumbnail"));
+    for (QQuickItem* candidate : found) {
+      QQmlExpression reader(QQmlEngine::contextForObject(candidate), candidate,
+                            QStringLiteral("modelData"));
+      if (reader.evaluate().toString() == path) {
+        return candidate;
+      }
+    }
+    return nullptr;
   }
 
   /// Bounding box of the canvas in viewport coordinates, from the four mapped
@@ -262,8 +301,73 @@ private slots:
 
   void init()
   {
+    // A stub cache from a previous test lived on its stack: drop the pointer
+    // before it dangles and before this test decides whether it wants one.
+    m_viewer->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
     loadImage(m_landscape);
     fitAndReset();
+  }
+
+  /// The filmstrip draws cached tiles instead of the originals. `viewerImages`
+  /// carries paths only, so the size and mtime the cache keys on come from the
+  /// folder listing — and a tile only draws once its thumbnail is there.
+  void filmstripDrawsCachedThumbnails()
+  {
+    StubThumbnailCache cache;
+    m_viewer->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(&cache)));
+
+    const QString first = m_fixtures.path() + QStringLiteral("/strip-a.png");
+    const QString second = m_fixtures.path() + QStringLiteral("/strip-b.png");
+    for (const QString& path : { first, second }) {
+      QImage image(64, 64, QImage::Format_RGB32);
+      image.fill(QColor(120, 40, 60));
+      QVERIFY(image.save(path));
+    }
+
+    QVariantList entries;
+    for (const QString& path : { first, second }) {
+      QVariantMap entry;
+      entry.insert(QStringLiteral("name"), QFileInfo(path).fileName());
+      entry.insert(QStringLiteral("path"), path);
+      entry.insert(QStringLiteral("isDir"), false);
+      entry.insert(QStringLiteral("isImage"), true);
+      entry.insert(QStringLiteral("size"), qint64(4242));
+      entry.insert(QStringLiteral("modified"), qint64(1731000001));
+      entries.append(entry);
+    }
+
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), first);
+    state.insert(QStringLiteral("viewerImages"), QStringList{ first, second });
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    state.insert(QStringLiteral("entries"), entries);
+    m_viewer->setProperty("state", state);
+
+    QQuickItem* tile = nullptr;
+    QTRY_VERIFY2((tile = stripTile(first)) != nullptr, "no filmstrip tile for the first image");
+
+    QTRY_VERIFY2(!cache.callsFor(first).isEmpty(), "the filmstrip never asked for a thumbnail");
+    for (const StubThumbnailCache::Call& call : cache.callsFor(first)) {
+      QCOMPARE(call.modified, qint64(1731000001));
+      QCOMPARE(call.size, qint64(4242));
+      QVERIFY2(call.edge >= 160, "the filmstrip asked for a below-minimum edge");
+    }
+    // Nothing is drawn before the thumbnail exists: the tile keeps its
+    // placeholder background rather than decoding the original.
+    QCOMPARE(tile->property("source").toString(), QString());
+
+    cache.deliverAllFor(first, QStringLiteral("file:///cache/thumb-strip.png"));
+    QTRY_COMPARE(tile->property("source").toString(),
+                 QStringLiteral("file:///cache/thumb-strip.png"));
+
+    // Without a cache object the strip falls back to the original file.
+    m_viewer->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
+    QTRY_COMPARE(tile->property("source").toString(), QStringLiteral("file://") + first);
+
+    // The other tests measure the canvas against a filmstrip-less layout, so
+    // leave the viewer the way they expect to find it.
+    loadImage(m_landscape);
   }
 
   /// The bug this suite was written for: the canvas position multiplied `width`
