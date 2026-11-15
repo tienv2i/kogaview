@@ -20,6 +20,21 @@ ApplicationWindow {
         dark: root.state.theme === "dark"
     }
 
+    /// Menus size themselves to their longest label, and the pixels have to come
+    /// from C++: a `Menu`'s own `font` follows its width, so measuring text inside
+    /// the menu whose width depends on it loops in QML. The widths depend on the
+    /// window font only, which does not change while the app runs; one
+    /// measurement at startup is therefore enough, and it is assigned rather than
+    /// bound because Qt 6.12 does not re-evaluate a binding whose value comes
+    /// from a function that writes state of its own.
+    property bool menuWidthsMeasured: false
+    function measureMenuLabels() {
+        if (menuWidthsMeasured) return
+        appTheme.menuLabelWidths =
+            Platform.textWidths(appTheme.menuEntryLabels, Qt.application.font)
+        menuWidthsMeasured = true
+    }
+
     // Keep built-in controls (menus, dialogs, scroll bars) in step with the
     // app theme instead of the platform default palette.
     palette.window: appTheme.background
@@ -168,6 +183,8 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        // Before the first menu can open: they size themselves to the labels.
+        root.measureMenuLabels();
         snapshot.apply();
         root.processLaunchArguments();
     }
@@ -352,6 +369,7 @@ ApplicationWindow {
         BrowserView {
             objectName: "browser"
             theme: appTheme
+            menuLabelWidths: appTheme.menuLabelWidths
             state: root.state
             entries: snapshot.entries
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
@@ -361,6 +379,7 @@ ApplicationWindow {
             onCopyImage: function(path) { Platform.copyImage(path); }
             onCopyText: function(text) { Platform.copyText(text); }
             onOpenExternal: function(path) { Platform.openExternally(path); }
+            onOpenWith: function(path) { Platform.openWith(path); }
             onRequestDestination: function(action, paths) {
                 root.chooseDestination(action, paths);
             }
@@ -396,6 +415,7 @@ ApplicationWindow {
 
     Menu {
         id: mainMenu
+        implicitWidth: appTheme.menuWidth(appTheme.menuLabelWidths)
 
         MenuItem {
             text: "Open file…"

@@ -6,18 +6,26 @@
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
+#include <QDBusUnixFileDescriptor>
 #include <QDBusVariant>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QFontMetricsF>
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QImage>
 #include <QImageReader>
+#include <QProcess>
 #include <QTimer>
 #include <QUrl>
 #include <QWindow>
 #include <QtConcurrent/QtConcurrentRun>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace {
 constexpr auto kPortalService = "org.freedesktop.portal.Desktop";
@@ -175,14 +183,14 @@ void PlatformHelper::closeOpenRequest()
   qInfo() << "KogaView portal: closed" << m_requestPath;
 }
 
-uint PlatformHelper::fileChooserVersion() const
+uint PlatformHelper::portalInterfaceVersion(const QString& interface) const
 {
   QDBusMessage message = QDBusMessage::createMethodCall(
     QString::fromLatin1(kPortalService),
     QString::fromLatin1(kPortalPath),
     QStringLiteral("org.freedesktop.DBus.Properties"),
     QStringLiteral("Get"));
-  message << QString::fromLatin1(kFileChooserInterface) << QStringLiteral("version");
+  message << interface << QStringLiteral("version");
   const QDBusMessage reply = QDBusConnection::sessionBus().call(message, QDBus::Block, 2000);
   if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
     return 0;
@@ -193,6 +201,11 @@ uint PlatformHelper::fileChooserVersion() const
     return value.value<QDBusVariant>().variant().toUInt();
   }
   return value.toUInt();
+}
+
+uint PlatformHelper::fileChooserVersion() const
+{
+  return portalInterfaceVersion(QString::fromLatin1(kFileChooserInterface));
 }
 
 bool PlatformHelper::requestOpenFile(const QString& title)
@@ -401,6 +414,19 @@ void PlatformHelper::copyText(const QString& text)
   emit info(tr("Copied to the clipboard."));
 }
 
+QVariantList PlatformHelper::textWidths(const QStringList& labels, const QFont& font)
+{
+  const QFontMetricsF metrics(font);
+  QVariantList widths;
+  widths.reserve(labels.size());
+  for (const QString& label : labels) {
+    // The exact advance, not a rounded one: the caller adds its own padding and
+    // rounds once, so the width cannot be a pixel short of the text.
+    widths.append(metrics.horizontalAdvance(label));
+  }
+  return widths;
+}
+
 bool PlatformHelper::openUriWithPortal(const QUrl& url, bool directory)
 {
   if (!m_portalAvailable || !url.isLocalFile()) {
@@ -438,6 +464,105 @@ void PlatformHelper::openExternally(const QString& path)
   // The portal is the only route that works inside a sandbox; QDesktopServices
   // is the fallback on desktops without one.
   if (openUriWithPortal(url, QFileInfo(path).isDir())) {
+    return;
+  }
+  if (!QDesktopServices::openUrl(url)) {
+    emit dialogError(tr("No application is registered to open this file."));
+  }
+}
+
+bool PlatformHelper::openFileWithChooser(const QUrl& url)
+{
+  if (!m_portalAvailable || !url.isLocalFile()) {
+    return false;
+  }
+  // `ask` is the portal's own "which application?" switch. It only exists from
+  // OpenURI version 2; older front ends ignore unknown options, which would open
+  // the default handler and look like a chooser that never appeared.
+  if (portalInterfaceVersion(QString::fromLatin1(kOpenUriInterface)) < 2) {
+    qWarning() << "KogaView portal: OpenURI has no `ask`; cannot show the application chooser";
+    return false;
+  }
+
+  const QString token = nextToken();
+  QVariantMap options;
+  options.insert(QStringLiteral("handle_token"), token);
+  options.insert(QStringLiteral("ask"), true);
+  // The method is OpenFile, not OpenURI: only the `OpenFile`/`OpenDirectory`
+  // pair carries `ask`, so asking through OpenURI would simply open the file.
+  // `OpenFile` takes an open file descriptor (`h`), not a URI. A local run can
+  // hand over the file itself; Flatpak's document portal will lend its own fd for
+  // `app/<id>/<file>` paths, which this does not do yet (see docs/FLATPAK.md).
+  const QFileInfo info(url.toLocalFile());
+  if (!info.isFile() || !info.isReadable()) {
+    qWarning() << "KogaView portal: cannot hand" << url.toString()
+               << "to OpenFile; falling back";
+    return false;
+  }
+  const int fileDescriptor = ::open(QFile::encodeName(info.absoluteFilePath()).constData(), O_RDONLY);
+  if (fileDescriptor < 0) {
+    qWarning() << "KogaView portal: cannot open" << info.absoluteFilePath() << "for OpenFile";
+    return false;
+  }
+  QDBusMessage message = QDBusMessage::createMethodCall(
+    QString::fromLatin1(kPortalService),
+    QString::fromLatin1(kPortalPath),
+    QString::fromLatin1(kOpenUriInterface),
+    QStringLiteral("OpenFile"));
+  // `fileDescriptor` is written as a `QDBusUnixFileDescriptor` handle; the fd
+  // itself stays ours to close once the call returns.
+  message << parentWindowIdentifier()
+          << QVariant::fromValue(QDBusUnixFileDescriptor(fileDescriptor)) << options;
+
+  const QDBusMessage reply = QDBusConnection::sessionBus().call(message, QDBus::Block, 5000);
+  ::close(fileDescriptor);
+  if (reply.type() == QDBusMessage::ErrorMessage) {
+    qWarning() << "KogaView portal: OpenFile" << url.toString()
+               << "failed:" << reply.errorMessage();
+    return false;
+  }
+  const QString handle = objectPathOf(reply.arguments().value(0));
+  qInfo() << "KogaView portal: OpenFile (ask)" << url.toString() << "handle" << handle;
+  // No `Response` wait: the portal answers once the user picked an application
+  // (or cancelled), and the chooser itself is the whole point of the request.
+  return true;
+}
+
+bool PlatformHelper::openWithSystemChooser(const QString& path)
+{
+#ifdef Q_OS_WIN
+  // Explorer's own "Open with" dialog; it waits for the user to dismiss it, so
+  // it runs detached instead of blocking the GUI thread.
+  const QString native = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
+  const bool started = QProcess::startDetached(QStringLiteral("rundll32.exe"),
+                                               { QStringLiteral("shell32.dll,OpenAs_RunDLL"),
+                                                 native });
+  qInfo() << "KogaView open with: rundll32 OpenAs_RunDLL" << native
+          << (started ? "started" : "failed");
+  return started;
+#else
+  // Outside a portal there is no portable chooser. `gio open` is deliberately
+  // not tried: upstream `gio` has no "choose an application" option (checked on
+  // this machine: `gio: Unknown option --ask`), so it would only ever open the
+  // default handler and look like a chooser that never appeared.
+  Q_UNUSED(path);
+  return false;
+#endif
+}
+
+void PlatformHelper::openWith(const QString& path)
+{
+  const QUrl url = QUrl::fromLocalFile(path);
+  if (openFileWithChooser(url)) {
+    return;
+  }
+  // No desktop chooser was available. Opening the file with its default handler
+  // still does something useful, which is better than a menu entry that only
+  // reports an error.
+  openWithSystemChooser(path);
+  qWarning() << "KogaView open with: no chooser for" << path << "- opening the default handler";
+  if (QFileInfo(path).isDir()) {
+    openExternally(path);
     return;
   }
   if (!QDesktopServices::openUrl(url)) {

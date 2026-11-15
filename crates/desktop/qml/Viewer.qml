@@ -276,13 +276,41 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 /// The strip is horizontal, and Qt only scrolls the axis the
                 /// wheel reports — a mouse wheel reports vertical, so without
-                /// this the filmstrip ignores it entirely.
-                WheelScroll {
-                    view: strip
-                    horizontal: true
-                    /// Three 78 px tiles plus their 6 px gaps per notch, so one
-                    /// wheel notch nudges the strip instead of paging it.
-                    step: 252
+                /// this the filmstrip ignores it entirely. The wheel is taken
+                /// here so it scrolls the strip instead of bubbling up to the
+                /// canvas's scroll-to-zoom handler behind it.
+                WheelHandler {
+                    objectName: "filmstripWheelHandler"
+                    /// `PointerDevice.Mouse` only, the default, silently ignores
+                    /// touchpads on Wayland.
+                    acceptedDevices: PointerDevice.AllDevices
+                    onWheel: function(event) {
+                        /// Three 78 px tiles plus their 6 px gaps per notch, so
+                        /// one wheel notch nudges the strip instead of paging it.
+                        var step = 252;
+                        var maxX = Math.max(0, strip.contentWidth - strip.width);
+                        var dx = 0;
+                        if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
+                            /// Touchpad: the pixels it reported, 1:1. A finger
+                            /// moving down the pad reports a negative `y`, and
+                            /// that advances the strip — the same direction a
+                            /// notch down does, and the direction the grid
+                            /// already scrolls.
+                            dx = event.pixelDelta.x - event.pixelDelta.y;
+                        } else {
+                            /// Mouse: a vertical wheel moves the strip sideways,
+                            /// and a notch down (negative, "towards the user")
+                            /// advances to the next images, the same direction
+                            /// the grid below moves.
+                            var delta = event.angleDelta.y !== 0 ? event.angleDelta.y
+                                                                 : event.angleDelta.x;
+                            var notches = delta / 120;
+                            if (notches === 0) return;
+                            dx = -notches * step;
+                        }
+                        strip.contentX = Math.max(0, Math.min(maxX, strip.contentX + dx));
+                        event.accepted = true;
+                    }
                 }
 
                 delegate: Item {

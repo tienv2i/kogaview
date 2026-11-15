@@ -14,6 +14,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlExpression>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
@@ -211,13 +212,18 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   // signals the toolbar button and the menu emit.
   //   KOGAVIEW_DEV_UI_REQUEST=open-folder       -> browser `requestOpenFolder`
   //   KOGAVIEW_DEV_UI_REQUEST=open-external     -> browser `openExternal`
+  //   KOGAVIEW_DEV_UI_REQUEST=open-with         -> browser `openWith`
+  //   KOGAVIEW_DEV_UI_REQUEST=context-menu      -> `fileMenu` on the entry at
+  //     `KOGAVIEW_DEV_UI_REQUEST_ARG`, or `folderMenu` without one, for a
+  //     screenshot of the menu a right click would open
   //     (`KOGAVIEW_DEV_UI_REQUEST_ARG` is the path to hand over)
   //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
   //   "a dismissed dialog does not block the next one" path is observed.
   const QString uiRequest = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST");
   if (!uiRequest.isEmpty()) {
     const int requestDelay = qEnvironmentVariableIntValue("KOGAVIEW_DEV_UI_REQUEST_DELAY_MS");
-    auto fire = [rootObject, uiRequest]() {
+    const QString requestArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG");
+    auto fire = [rootObject, uiRequest, requestArg]() {
       QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"));
       if (browser == nullptr) {
         qWarning() << "KogaView dev ui request: browser view not found";
@@ -227,9 +233,25 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       if (uiRequest == QLatin1String("open-folder")) {
         emitted = QMetaObject::invokeMethod(browser, "requestOpenFolder");
       } else if (uiRequest == QLatin1String("open-external")) {
-        const QString path = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG");
-        emitted = !path.isEmpty() &&
-                  QMetaObject::invokeMethod(browser, "openExternal", Q_ARG(QString, path));
+        emitted = !requestArg.isEmpty() &&
+                  QMetaObject::invokeMethod(browser, "openExternal",
+                                            Q_ARG(QString, requestArg));
+      } else if (uiRequest == QLatin1String("open-with")) {
+        emitted = !requestArg.isEmpty() &&
+                  QMetaObject::invokeMethod(browser, "openWith", Q_ARG(QString, requestArg));
+      } else if (uiRequest == QLatin1String("context-menu")) {
+        // The menu a right click would open, so its width can be photographed.
+        // Only the menus an entry opens are named here; the quick-access menu
+        // needs a favourite, which this harness does not know.
+        const QString name = requestArg.isEmpty() ? QStringLiteral("folderMenu")
+                                                  : QStringLiteral("fileMenu");
+        QObject* menu = rootObject->findChild<QObject*>(name);
+        if (menu != nullptr && !requestArg.isEmpty()) {
+          browser->setProperty("menuPath", requestArg);
+          browser->setProperty("menuIsDir", true);
+          browser->setProperty("menuIsImage", true);
+        }
+        emitted = menu != nullptr && QMetaObject::invokeMethod(menu, "popup");
       }
       qInfo().noquote() << "KogaView dev ui request" << uiRequest
                         << (emitted ? "emitted" : "not supported");
@@ -253,6 +275,59 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       QMetaObject::invokeMethod(&platform, "dismissActiveDialog");
       qInfo() << "KogaView dev portal dismiss: requested";
     });
+  }
+
+  // QA hook: wheel notches over the filmstrip, logged with the strip's `contentX`
+  // before and after each one. The filmstrip is horizontal, so a mouse wheel has
+  // to scroll it sideways in both directions without also zooming the canvas
+  // (its handler takes the event before the canvas sees it).
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_FILMSTRIP_WHEEL")) {
+    // Poll until the strip exists and overflows: layout settles after the
+    // filmstrip is toggled and the thumbnails arrive, and a wheel sent into a
+    // zero-width strip would measure nothing.
+    auto* wait = new QTimer(&app);
+    wait->setInterval(200);
+    QObject::connect(wait, &QTimer::timeout, &app, [rootObject, wait, &app]() {
+      QObject* strip = rootObject->findChild<QObject*>(QStringLiteral("viewerFilmstrip"));
+      auto* flick = qobject_cast<QQuickItem*>(strip);
+      if (flick == nullptr || flick->width() <= 0 ||
+          strip->property("contentWidth").toReal() <= flick->width()) {
+        return;
+      }
+      wait->stop();
+      wait->deleteLater();
+      auto* window = qobject_cast<QQuickWindow*>(rootObject);
+      if (window == nullptr) {
+        qWarning() << "KogaView dev filmstrip: window not found";
+        return;
+      }
+      const QPointF local(flick->width() / 2.0, flick->height() / 2.0);
+      const QPointF scene = flick->mapToScene(local);
+      static auto* mouse = new QPointingDevice(
+        QStringLiteral("kogaview qa mouse"), 9101, QInputDevice::DeviceType::Mouse,
+        QPointingDevice::PointerType::Generic, QInputDevice::Capability::Scroll, 1, 3);
+      QObject* viewer = rootObject->findChild<QObject*>(QStringLiteral("viewer"));
+      const double zoomBefore = viewer ? viewer->property("zoom").toDouble() : -1;
+      auto notch = [&](int degrees) {
+        const double before = strip->property("contentX").toDouble();
+        QWheelEvent event(scene, QPointF(window->mapToGlobal(scene.toPoint())),
+                          QPoint(0, 0), QPoint(0, degrees), Qt::NoButton, Qt::NoModifier,
+                          Qt::NoScrollPhase, false, Qt::MouseEventNotSynthesized, mouse);
+        QCoreApplication::sendEvent(window, &event);
+        QCoreApplication::processEvents();
+        qInfo() << "KogaView dev filmstrip: notch" << degrees << "contentX" << before << "->"
+                << strip->property("contentX").toDouble();
+      };
+      qInfo() << "KogaView dev filmstrip: width" << flick->width() << "content"
+              << strip->property("contentWidth").toDouble();
+      notch(-120);
+      notch(-120);
+      notch(120);
+      QObject* filmHandler = rootObject->findChild<QObject*>(QStringLiteral("filmstripWheelHandler"));
+      qInfo() << "KogaView dev filmstrip: handler found" << (filmHandler != nullptr)
+              << "zoom" << zoomBefore << "->" << (viewer ? viewer->property("zoom").toDouble() : -1);
+    });
+    wait->start();
   }
 
   // What did the app restore? Logged before any command runs, so "the sidebar

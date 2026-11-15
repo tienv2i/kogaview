@@ -11,6 +11,7 @@
 // the tree) and only quick access may emit `open_folder`.
 
 #include <QCoreApplication>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QPointingDevice>
 #include <QQmlEngine>
@@ -238,6 +239,13 @@ private:
     return found.isEmpty() ? nullptr : found.first();
   }
 
+  /// A popup by `objectName`. Menus are `Popup`s, not items: they live in their
+  /// own window and only appear in `findChildren`, never in the item tree.
+  QObject* findPopup(const QString& name)
+  {
+    return browserItem()->findChild<QObject*>(name);
+  }
+
   /// The grid cell showing the entry at `path`, or nullptr.
   QQuickItem* findCell(const QString& path)
   {
@@ -389,6 +397,22 @@ private slots:
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 0);
     showState(view, state);
+    // Main.qml measures the menu labels with C++ and hands the widths to the
+    // view; there is no shell in this harness, so the suite does the same.
+    QObject* theme = view->property("theme").value<QObject*>();
+    // The widths go on the view, not on `theme`: BrowserView defaults to a
+    // `Theme` of its own, so a theme the harness reaches is not the one its
+    // menus measure with.
+    if (theme != nullptr && view->property("menuLabelWidths").value<QVariantList>().isEmpty()) {
+      // Same source the app uses: the labels the theme itself lists.
+      const QVariantList labels = theme->property("menuEntryLabels").value<QVariantList>();
+      QVariantList widths;
+      const QFontMetricsF metrics(QGuiApplication::font());
+      for (const QVariant& label : labels) {
+        widths.append(metrics.horizontalAdvance(label.toString()));
+      }
+      view->setProperty("menuLabelWidths", widths);
+    }
     QCoreApplication::processEvents();
 
     // Rebuild the tree from the stub just installed and wait out the coalesced
@@ -1153,6 +1177,197 @@ private slots:
     click(m_browser, crumbLabel);
 
     QCOMPARE(describe(commands(spy)), QStringLiteral("navigate:/root"));
+  }
+
+  // ------------------------------------------------------------ context menus
+
+  /// The context menus are as wide as their longest label needs.
+  ///
+  /// The style ships `MenuItem { implicitWidth: 200 }`, which is narrower than
+  /// "Delete permanently…" at the window font: the entry then shows
+  /// "delete permanently…" elided while short entries leave the menu half empty.
+  /// The width comes from C++ text metrics (a menu's own `font` follows its
+  /// width, so a QML measurement would loop), and this asserts the rendered menu
+  /// against what the style actually leaves an entry for its label.
+  void contextMenusFitTheirLongestLabel()
+  {
+    QQuickItem* view = browserItem();
+    QObject* theme = view->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    const qreal minimum = theme->property("menuMinimumWidth").toReal();
+
+    // The widest label any of these menus shows, measured independently of the
+    // width list the view was handed. Using the view's own numbers would only
+    // prove it agrees with itself.
+    qreal shortestMenu = 0;
+
+    for (const QString& name : { QStringLiteral("fileMenu"), QStringLiteral("folderMenu"),
+                                 QStringLiteral("quickMenu") }) {
+      QObject* menu = findPopup(name);
+      QVERIFY2(menu != nullptr, qPrintable(name + QStringLiteral(" is missing")));
+      QMetaObject::invokeMethod(menu, "popup");
+      QTRY_VERIFY2(menu->property("visible").toBool(),
+                   qPrintable(name + QStringLiteral(" did not open")));
+
+      const qreal width = menu->property("width").toReal();
+      QVERIFY2(width >= minimum,
+               qPrintable(QStringLiteral("%1 is %2 px, below the %3 px minimum")
+                            .arg(name)
+                            .arg(width)
+                            .arg(minimum)));
+
+      const int count = menu->property("count").toInt();
+      QVERIFY2(count > 0, qPrintable(name + QStringLiteral(" has no entries")));
+      int labels = 0;
+      for (int index = 0; index < count; ++index) {
+        QQuickItem* entry = nullptr;
+        QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                  Q_ARG(int, index));
+        if (entry == nullptr) {
+          continue;
+        }
+        const QString text = entry->property("text").toString();
+        if (text.isEmpty()) {
+          continue;  // a separator
+        }
+        ++labels;
+        // What the entry really leaves for its label: the label starts at
+        // `label->x()` inside the entry and may be as wide as the space left
+        // between it and the entry's right padding. Reading it from the rendered
+        // item keeps this honest if the style's metrics change.
+        QQuickItem* content = entry->property("contentItem").value<QQuickItem*>();
+        QVERIFY2(content != nullptr, qPrintable(name + QStringLiteral(" has an entry without content")));
+        QQuickItem* label = nullptr;
+        for (QQuickItem* child : content->childItems()) {
+          if (child->inherits("QQuickMnemonicLabel")) {
+            label = child;
+          }
+        }
+        QVERIFY2(label != nullptr,
+                 qPrintable(QStringLiteral("%1: \"%2\" has no label").arg(name, text)));
+        // The label is a child of the content item, so its x is relative to it.
+        const qreal labelLeft = content->x() + label->x();
+        const qreal available = entry->width() - labelLeft - entry->property("rightPadding").toReal();
+        const qreal needed = QFontMetricsF(QGuiApplication::font()).horizontalAdvance(text);
+        shortestMenu = qMax(shortestMenu, needed + labelLeft + entry->property("rightPadding").toReal());
+        QVERIFY2(available >= needed,
+                 qPrintable(QStringLiteral("%1: \"%2\" needs %3 px, has %4 in a %5 px menu")
+                              .arg(name, text)
+                              .arg(needed)
+                              .arg(available)
+                              .arg(width)));
+      }
+      QVERIFY2(labels > 0, qPrintable(name + QStringLiteral(" has no labels")));
+      // A width of its own, not the style's fixed 200: the menu is at least as
+      // wide as the entries this very test just measured, and never narrower
+      // than the theme's floor.
+      QVERIFY2(width + 2 >= qMax(minimum, shortestMenu),
+               qPrintable(QStringLiteral("%1 is %2 px but its own longest entry needs %3")
+                            .arg(name)
+                            .arg(width)
+                            .arg(shortestMenu)));
+      QMetaObject::invokeMethod(menu, "close");
+      QTRY_VERIFY(!menu->property("visible").toBool());
+    }
+  }
+
+  /// A menu follows a label that is longer than the style's fixed 200 px.
+  ///
+  /// Every real label fits the theme's 168 px floor at this font, so the
+  /// regression only shows with a longer one: the width list is the contract
+  /// between the C++ measurement in the shell and the menu, and a menu that
+  /// ignored it would clip. Widening the list is what `Main.qml` does after
+  /// measuring, so a label longer than 200 px is exactly the case to prove.
+  void aLongLabelWidensTheMenu()
+  {
+    QQuickItem* view = browserItem();
+    QStringList labels;
+    for (const QVariant& label :
+         view->property("theme").value<QObject*>()->property("menuEntryLabels").value<QVariantList>()) {
+      labels.append(label.toString());
+    }
+    QVERIFY2(!labels.isEmpty(), "the theme lists no menu labels to measure");
+    const QString longer = QStringLiteral("Delete permanently (…) — a label longer than the style");
+    labels.append(longer);
+    QVariantList widths;
+    const QFontMetricsF metrics(QGuiApplication::font());
+    for (const QString& label : labels) {
+      widths.append(metrics.horizontalAdvance(label));
+    }
+    view->setProperty("menuLabelWidths", widths);
+    QCoreApplication::processEvents();
+
+    QObject* menu = findPopup(QStringLiteral("fileMenu"));
+    QVERIFY(menu != nullptr);
+    QMetaObject::invokeMethod(menu, "popup");
+    QTRY_VERIFY(menu->property("visible").toBool());
+
+    const qreal entryWidth = menu->property("width").toReal();
+    // The theme's own rule: the text, both entry paddings, and the menu's 1 px
+    // border on each side (the entry is drawn inset by that).
+    const qreal looselyNeeded = metrics.horizontalAdvance(longer) + 2 * 6;
+    QVERIFY2(entryWidth >= looselyNeeded,
+             qPrintable(QStringLiteral("the menu stayed %1 px while a %2 px label was listed")
+                          .arg(entryWidth)
+                          .arg(metrics.horizontalAdvance(longer))));
+    // And the real entries inside it are wide enough for their own labels.
+    const int count = menu->property("count").toInt();
+    for (int index = 0; index < count; ++index) {
+      QQuickItem* entry = nullptr;
+      QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                Q_ARG(int, index));
+      if (entry == nullptr || entry->property("text").toString().isEmpty()) {
+        continue;
+      }
+      const QString text = entry->property("text").toString();
+      const qreal needed = metrics.horizontalAdvance(text);
+      QVERIFY2(entry->width() - 12 >= needed,
+               qPrintable(QStringLiteral("\"%1\" needs %2 px in %3").arg(text).arg(needed).arg(entry->width())));
+    }
+    QMetaObject::invokeMethod(menu, "close");
+  }
+
+  /// "Open with…" is the shell's application chooser, not the default handler.
+  void openWithAsksTheDesktopForAnApplicationChooser()
+  {
+    QObject* menu = findPopup(QStringLiteral("fileMenu"));
+    QVERIFY(menu != nullptr);
+    QSignalSpy openWith(browserRoot(), SIGNAL(openWith(QString)));
+    QSignalSpy openExternal(browserRoot(), SIGNAL(openExternal(QString)));
+
+    browserRoot()->setProperty("menuPath", QStringLiteral("/root/img.png"));
+    QMetaObject::invokeMethod(menu, "popup");
+    QTRY_VERIFY(menu->property("visible").toBool());
+
+    QQuickItem* entry = nullptr;
+    const int count = menu->property("count").toInt();
+    for (int index = 0; index < count && entry == nullptr; ++index) {
+      QQuickItem* candidate = nullptr;
+      QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, candidate),
+                                Q_ARG(int, index));
+      if (candidate != nullptr &&
+          candidate->property("text").toString() == QStringLiteral("Open with…")) {
+        entry = candidate;
+      }
+    }
+    QVERIFY2(entry != nullptr, "the file menu has no \"Open with…\" entry");
+    QVERIFY(entry->isEnabled());
+
+    // Activate it the way a click does. `trigger()` is not invokable through the
+    // meta-object, and this still goes through the same onTriggered handler.
+    // A menu is an inline popup here, so it lives in the main window; a key sent
+    // to a window of its own would never reach it.
+    entry->setProperty("highlighted", true);
+    QTRY_VERIFY(entry->property("highlighted").toBool());
+    // `trigger()` is not invokable through the meta-object and a key press does
+    // not reach an entry in this harness, so activate the button the way the
+    // style's own key handling does — through the same `onTriggered` handler a
+    // click uses.
+    QVERIFY(QMetaObject::invokeMethod(entry, "click"));
+    QTRY_COMPARE(openWith.count(), 1);
+    QCOMPARE(openWith.at(0).at(0).toString(), QStringLiteral("/root/img.png"));
+    // The default-handler signal must not fire: it opens, it does not ask.
+    QCOMPARE(openExternal.count(), 0);
   }
 };
 

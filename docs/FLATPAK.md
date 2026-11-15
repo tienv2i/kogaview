@@ -16,6 +16,7 @@ Develop native-first, remain sandbox-compatible, package Flatpak later. This doc
 
 ## Desktop portals and display
 - Prefer XDG Desktop Portals for sandboxed file chooser, opening URIs and other desktop-mediated operations where applicable. Confirm actual Qt/portal behavior on GNOME and KDE.
+- "Open with…" uses `org.freedesktop.portal.OpenURI.OpenFile` with `ask: true` (the desktop's application chooser) and hands the file over as an open file descriptor, because `OpenFile` takes `h` rather than a URI. That works for paths the app can open itself, which under Flatpak covers only files in its granted locations; a file obtained through the document portal is reached as `app/<id>/<file>` under `$XDG_RUNTIME_DIR/doc` and needs the document portal's own fd (or `OpenFile` on the granted path) instead. Not implemented yet; revisit together with document grants and revocation.
 - Capture the application window through the Qt UI adapter where feasible; desktop-wide capture requires portal/user authorization and is not guaranteed.
 - Support Wayland as a first-class target; X11 fallback only as necessary. Honor system font, palette, icon, accessibility and Qt high-DPI handling.
 

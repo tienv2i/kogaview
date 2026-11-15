@@ -27,6 +27,46 @@ QtObject {
     readonly property int previewWidth: 300
     readonly property int rowHeight: 40
 
+    /// How wide a menu showing `widths` has to be to not cut any of its entries.
+    ///
+    /// Qt Quick Controls gives every menu a fixed 200 and every entry
+    /// `implicitWidth: 200`, so a longer label ("Open with…", "Delete
+    /// permanently…") is elided mid-word while "Open" leaves the menu mostly
+    /// empty. The longest label decides the width; its pixels come from
+    /// `Platform.textWidths`, measured in C++ because a `Menu`'s own `font`
+    /// follows its width and measuring text inside the menu would loop it.
+    function menuWidth(widths) {
+        var widest = 0
+        for (var i = 0; i < widths.length; ++i) {
+            if (widths[i] > widest) widest = widths[i]
+        }
+        return Math.max(theme.menuMinimumWidth,
+                        Math.ceil(widest + theme.menuEntryGutter + theme.menuEntryPostText))
+    }
+
+    /// Every label a menu in this app can show. The set is fixed so the menu keeps
+    /// one width from one right click to the next instead of resizing per entry.
+    readonly property var menuEntryLabels: [
+        "Open", "Edit", "Open with…", "Copy image content", "Copy file path",
+        "Copy to…", "Move to…", "Move to trash", "Delete permanently…",
+        "Explore here", "New folder…", "Copy path", "Add to quick access",
+        "Remove from quick access", "Move up", "Move down",
+        "Open file…", "Open folder…", "Switch to light mode",
+        "Switch to dark mode", "Exit"
+    ]
+    /// Pixels each of `menuEntryLabels` needs, measured once by the shell with the
+    /// window font the entries are drawn in (`Main.qml` fills this in).
+    property var menuLabelWidths: []
+    /// Nothing narrower than this, so a menu of short labels is not a sliver.
+    readonly property real menuMinimumWidth: 168
+    /// What an entry draws before its text: the style's 6 px left padding. The
+    /// icon is a separate child that takes no room while it draws nothing (see
+    /// `docs/M1-REPORT.md`), so the label begins right after the padding.
+    readonly property real menuEntryGutter: 6
+    /// What it draws after the text: the 6 px right padding. No shortcut column
+    /// is used, so nothing else takes room from the label.
+    readonly property real menuEntryPostText: 6
+
     function formatBytes(bytes) {
         var value = Number(bytes) || 0;
         if (value < 1024) return value + " B";

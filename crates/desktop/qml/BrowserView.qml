@@ -6,6 +6,12 @@ Item {
     id: view
 
     property Theme theme: Theme {}
+    /// Pixel widths of `Theme.menuEntryLabels` and the menu width they imply.
+    /// The shell measures them in C++ (`Platform.textWidths`) and hands them in,
+    /// because this view can run with a `Theme` of its own — in the test harness
+    /// — that the shell never touches.
+    property var menuLabelWidths: []
+    property real menuWidth: theme.menuWidth(menuLabelWidths)
     property var state: ({})
     /// The folder listing, published apart from `state` so that an unchanged
     /// listing keeps the same array (and the grid keeps its delegates).
@@ -20,6 +26,8 @@ Item {
     signal copyImage(string path)
     signal copyText(string text)
     signal openExternal(string path)
+    /// Show the desktop's "Open With" chooser for the file.
+    signal openWith(string path)
     signal requestDestination(string action, var paths)
     signal requestDelete(var paths)
     /// "Open folder": the shell owns the dialog, so the view only asks for it.
@@ -901,6 +909,8 @@ Item {
     // ------------------------------------------------------------ context menus
     Menu {
         id: fileMenu
+        objectName: "fileMenu"
+        implicitWidth: view.menuWidth
 
         MenuItem {
             text: "Open"
@@ -925,9 +935,9 @@ Item {
             }
         }
         MenuItem {
-            text: "Open with system application"
+            text: "Open with…"
             icon.name: "application-x-executable-symbolic"
-            onTriggered: view.openExternal(view.menuPath)
+            onTriggered: view.openWith(view.menuPath)
         }
         MenuSeparator {}
         MenuItem {
@@ -967,6 +977,8 @@ Item {
 
     Menu {
         id: folderMenu
+        objectName: "folderMenu"
+        implicitWidth: view.menuWidth
 
         MenuItem {
             text: "Open"
@@ -1025,6 +1037,8 @@ Item {
 
     Menu {
         id: quickMenu
+        objectName: "quickMenu"
+        implicitWidth: view.menuWidth
 
         MenuItem {
             text: "Open"

@@ -361,11 +361,60 @@ private slots:
     const qreal zoomBefore = zoom();
     const QPointF over = strip->mapToScene(QPointF(strip->width() / 2.0,
                                                    strip->height() / 2.0));
+    // A notch *down* is "towards the user": the strip advances to the next
+    // images, the direction the grid scrolls.
     injectWheel(mouseDevice(), over, QPoint(0, 0), QPoint(0, -120));
-
     QTRY_VERIFY2(strip->property("contentX").toReal() > 0,
                  "a vertical wheel over the filmstrip did not scroll it");
+    const qreal afterOneNotch = strip->property("contentX").toReal();
+    QVERIFY2(afterOneNotch >= 78,
+             qPrintable(QStringLiteral("one notch moved only %1 px").arg(afterOneNotch)));
+
+    // A notch *up* goes back towards the first images. Without this half, a
+    // handler that ignores the sign would still pass while scrolling the wrong
+    // way from an offset other than zero.
+    injectWheel(mouseDevice(), over, QPoint(0, 0), QPoint(0, 120));
+    QTRY_VERIFY2(strip->property("contentX").toReal() < afterOneNotch,
+                 "a wheel notch the other way did not scroll back");
+
     // And the strip scrolls instead of zooming the canvas underneath.
+    QCOMPARE(zoom(), zoomBefore);
+  }
+
+  /// A touchpad reports `pixelDelta` rather than `angleDelta`, and the strip
+  /// must follow it 1:1 instead of ignoring the gesture.
+  void theFilmstripFollowsATouchpad()
+  {
+    QStringList images;
+    for (int index = 0; index < 40; ++index) {
+      images.append(m_fixtures.path() + QStringLiteral("/strip-%1.png").arg(index));
+    }
+    m_viewer->setProperty("viewerImages", images);
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    m_viewer->setProperty("state", state);
+
+    QQuickItem* strip = item("viewerFilmstrip");
+    QVERIFY(strip != nullptr);
+    QTRY_VERIFY2(strip->property("contentWidth").toReal() > strip->width(),
+                 "the filmstrip does not overflow");
+    const QPointF over = strip->mapToScene(QPointF(strip->width() / 2.0,
+                                                   strip->height() / 2.0));
+
+    static auto* touchpad = new QPointingDevice(
+      QStringLiteral("test touchpad"), 1003, QInputDevice::DeviceType::TouchPad,
+      QPointingDevice::PointerType::Finger,
+      QInputDevice::Capability::Scroll | QInputDevice::Capability::PixelScroll, 1, 3);
+    const qreal zoomBefore = zoom();
+    // A finger moving down the pad reports a negative `y`: the strip advances,
+    // exactly as it does for a notch down.
+    injectWheel(touchpad, over, QPoint(0, -40), QPoint(0, 0));
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 40.0, 2000);
+    // And a finger moving up reports a positive `y`, which goes back.
+    injectWheel(touchpad, over, QPoint(0, 15), QPoint(0, 0));
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 25.0, 2000);
     QCOMPARE(zoom(), zoomBefore);
   }
 
