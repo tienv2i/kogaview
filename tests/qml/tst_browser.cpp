@@ -12,6 +12,7 @@
 
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QPointingDevice>
 #include <QQmlEngine>
 #include <QQmlExpression>
 #include <QQuickItem>
@@ -19,6 +20,8 @@
 #include <QScopedPointer>
 #include <QSignalSpy>
 #include <QTest>
+
+#include <qpa/qwindowsysteminterface.h>
 
 #include "stubthumbnailcache.h"
 
@@ -68,6 +71,8 @@ private:
   QQmlEngine m_engine;
   QQuickView* m_switcher = nullptr;
   QQuickView* m_browser = nullptr;
+  /// Monotonic timestamp for injected wheel events, like a QPA plugin's.
+  int m_timestamp = 0;
 
   /// Recursively collect every item that carries `objectName: name`.
   static void collect(QQuickItem* root, const QString& name, QList<QQuickItem*>* out)
@@ -280,6 +285,30 @@ private:
     QTest::mouseRelease(view, Qt::LeftButton, Qt::NoModifier, QPoint(from.x() + dx, from.y()));
     QCoreApplication::processEvents();
     settle();
+  }
+
+  /// Inject a wheel event over `scene`, the way a QPA plugin delivers real
+  /// input. `QWindowSystemInterface` refuses `ScrollUpdate` phases on Qt 6.12, so
+  /// this covers the `NoScrollPhase` events a mouse wheel produces.
+  void injectWheel(const QPoint& scene, QPoint pixelDelta, QPoint angleDelta)
+  {
+    const bool queued = QWindowSystemInterface::handleWheelEvent(
+      m_browser, ++m_timestamp, mouseDevice(), QPointF(scene),
+      QPointF(m_browser->mapToGlobal(scene)), pixelDelta, angleDelta, Qt::NoModifier,
+      Qt::NoScrollPhase);
+    QVERIFY2(queued, "the wheel event was not queued");
+    QWindowSystemInterface::flushWindowSystemEvents();
+    QCoreApplication::processEvents();
+  }
+
+  /// A wheel-reporting mouse, so the event is not mistaken for a touchpad.
+  static QPointingDevice* mouseDevice()
+  {
+    static QPointingDevice* device = new QPointingDevice(
+      QStringLiteral("test mouse"), 1002, QInputDevice::DeviceType::Mouse,
+      QPointingDevice::PointerType::Generic,
+      QInputDevice::Capability::Scroll | QInputDevice::Capability::PixelScroll, 1, 3);
+    return device;
   }
 
   QVariantMap baseState() const
@@ -900,6 +929,69 @@ private slots:
     view->setProperty("state", state);
     QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
                  "the tree did not reload when the revision changed");
+  }
+
+  /// Dragging the splitter keeps the panel under the pointer on every frame.
+  ///
+  /// The handle itself moves as the panel grows, so reading the pointer in the
+  /// handle's own coordinates feeds back into the drag: the panel advances by
+  /// part of the pointer's travel and alternates between two widths as frames
+  /// go by — felt as a lagging sidebar and seen as the highlight line jumping.
+  void splitterFollowsThePointerAcrossFrames()
+  {
+    QQuickItem* splitter = findItem(QStringLiteral("leftSplitter"));
+    QVERIFY(splitter != nullptr);
+    const qreal before = browserItem()->property("leftPanelWidth").toReal();
+    const QPoint from = centreOf(splitter);
+
+    QTest::mousePress(m_browser, Qt::LeftButton, Qt::NoModifier, from);
+    QCoreApplication::processEvents();
+    for (int step = 1; step <= 8; ++step) {
+      const int travel = step * 10;
+      QTest::mouseMove(m_browser, QPoint(from.x() + travel, from.y()));
+      // One frame, so the layout really moves the handle before the next move
+      // arrives. Without it the handle never moves during the drag and the
+      // feedback this test is about cannot happen — that is why the older
+      // `leftSidebarIsResizable` never saw it.
+      QTest::qWait(16);
+      QTRY_COMPARE_WITH_TIMEOUT(browserItem()->property("leftPanelWidth").toReal(),
+                                before + travel, 1000);
+    }
+    QTest::mouseRelease(m_browser, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(from.x() + 80, from.y()));
+    QCoreApplication::processEvents();
+    settle();
+  }
+
+  /// One wheel notch moves the grid by about a row. Qt's own handling moves it
+  /// by ~72 px whatever the cell size, which on the ~194 px cells measured here
+  /// is a third of a row and reads as "the wheel barely works".
+  void oneWheelNotchScrollsTheGrid()
+  {
+    QVariantMap state = baseState();
+    QVariantList many;
+    for (int index = 0; index < 200; ++index) {
+      many.append(entry(QStringLiteral("photo-%1.jpg").arg(index),
+                        QStringLiteral("/root/photo-%1.jpg").arg(index), false, true));
+    }
+    state.insert(QStringLiteral("entries"), many);
+    browserItem()->setProperty("state", state);
+    settle();
+
+    QQuickItem* grid = findItem(QStringLiteral("fileGrid"));
+    QVERIFY(grid != nullptr);
+    QTRY_VERIFY2(grid->property("contentHeight").toReal() > grid->height(),
+                 "the grid does not scroll, so the wheel cannot be measured");
+    const qreal row = grid->property("cellHeight").toReal();
+    QCOMPARE(grid->property("contentY").toReal(), 0.0);
+
+    // One notch down: a mouse wheel reports 120 eighths of a degree.
+    injectWheel(centreOf(grid), QPoint(0, 0), QPoint(0, -120));
+    QTRY_VERIFY2(grid->property("contentY").toReal() >= row * 0.9,
+                 qPrintable(QStringLiteral("one wheel notch moved the grid by %1 px, "
+                                           "less than one row of %2 px")
+                              .arg(grid->property("contentY").toReal())
+                              .arg(row)));
   }
 
   // --------------------------------------------------------- thumbnails

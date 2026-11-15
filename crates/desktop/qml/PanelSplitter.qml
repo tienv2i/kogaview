@@ -41,18 +41,33 @@ Item {
         anchors.fill: parent
         cursorShape: Qt.SplitHCursor
 
-        property real pressX: 0
+        property real pressSceneX: 0
         property real startValue: 0
 
+        /// The pointer in scene coordinates.
+        ///
+        /// This handle *moves* as the panel grows, so `mouse.x` — measured
+        /// inside the handle — shifts back by exactly the amount the drag just
+        /// added. Feeding that back into the next move made the panel advance by
+        /// half the pointer's travel and alternate between two widths as frames
+        /// went by: the sidebar lagged behind the cursor and its highlight line
+        /// flickered between two positions. Scene coordinates belong to the
+        /// window, not to the handle, so the drag is simply "where is the
+        /// pointer now, compared to where it grabbed".
+        function sceneX(mouse) {
+            return splitter.mapToItem(null, mouse.x, mouse.y).x;
+        }
+
         onPressed: function(mouse) {
-            pressX = mouse.x;
+            pressSceneX = sceneX(mouse);
             startValue = splitter.value;
         }
-        // The sidebar is resized by the *delta* since the press, so a drag that
-        // starts anywhere on the handle keeps following the pointer.
+        // Resized by the *delta* since the press, so a drag that starts anywhere
+        // on the handle keeps following the pointer.
         onPositionChanged: function(mouse) {
             if (!pressed) return;
-            splitter.moved(splitter.clamp(startValue + splitter.direction * (mouse.x - pressX)));
+            splitter.moved(
+                splitter.clamp(startValue + splitter.direction * (sceneX(mouse) - pressSceneX)));
         }
         onDoubleClicked: splitter.moved(splitter.clamp(splitter.defaultValue))
     }

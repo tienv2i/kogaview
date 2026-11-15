@@ -10,6 +10,7 @@ fn main() {
         "qml/Theme.qml",
         "qml/PanelSplitter.qml",
         "qml/ThumbnailBook.qml",
+        "qml/WheelScroll.qml",
         "qml/CachedThumbnail.qml",
         "qml/BrowserView.qml",
         "qml/Viewer.qml",

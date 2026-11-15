@@ -318,6 +318,56 @@ private slots:
     fitAndReset();
   }
 
+  /// A vertical wheel over the horizontal filmstrip must scroll it.
+  ///
+  /// The strip is a horizontal `ListView`, and Qt only moves the axis the wheel
+  /// reports: a mouse wheel scrolling up/down does nothing at all to a
+  /// horizontal list, which is why the filmstrip looked frozen.
+  void theFilmstripScrollsWithTheWheel()
+  {
+    QStringList images;
+    QVariantList entries;
+    for (int index = 0; index < 40; ++index) {
+      const QString path =
+        m_fixtures.path() + QStringLiteral("/strip-%1.png").arg(index);
+      images.append(path);
+      QVariantMap entry;
+      entry.insert(QStringLiteral("name"), QFileInfo(path).fileName());
+      entry.insert(QStringLiteral("path"), path);
+      entry.insert(QStringLiteral("isDir"), false);
+      entry.insert(QStringLiteral("isImage"), true);
+      entry.insert(QStringLiteral("size"), qint64(4242));
+      entry.insert(QStringLiteral("modified"), qint64(1731000001));
+      entries.append(entry);
+    }
+
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerImages"), images);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    state.insert(QStringLiteral("entries"), entries);
+    m_viewer->setProperty("state", state);
+
+    QQuickItem* strip = item("viewerFilmstrip");
+    QVERIFY2(strip != nullptr, "the viewer has no filmstrip");
+    QTRY_VERIFY2(strip->width() > 0 && strip->height() > 0,
+                 "the filmstrip was never laid out");
+    QTRY_VERIFY2(strip->property("contentWidth").toReal() > strip->width(),
+                 "the filmstrip does not overflow, so the wheel cannot be measured");
+    QCOMPARE(strip->property("contentX").toReal(), 0.0);
+
+    const qreal zoomBefore = zoom();
+    const QPointF over = strip->mapToScene(QPointF(strip->width() / 2.0,
+                                                   strip->height() / 2.0));
+    injectWheel(mouseDevice(), over, QPoint(0, 0), QPoint(0, -120));
+
+    QTRY_VERIFY2(strip->property("contentX").toReal() > 0,
+                 "a vertical wheel over the filmstrip did not scroll it");
+    // And the strip scrolls instead of zooming the canvas underneath.
+    QCOMPARE(zoom(), zoomBefore);
+  }
+
   /// The filmstrip draws cached tiles instead of the originals. `viewerImages`
   /// carries paths only, so the size and mtime the cache keys on come from the
   /// folder listing — and a tile only draws once its thumbnail is there.

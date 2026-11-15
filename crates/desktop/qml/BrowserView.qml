@@ -187,6 +187,11 @@ Item {
                     clip: true
                     interactive: contentHeight > height
                     model: view.state.favorites || []
+                    /// Three 32 px rows per notch.
+                    WheelScroll {
+                        view: quickList
+                        step: 96
+                    }
 
                     delegate: Rectangle {
                         objectName: "quickAccessItem"
@@ -247,6 +252,12 @@ Item {
                     contentHeight: treeRoot.height
                     boundsBehavior: Flickable.StopAtBounds
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    /// Five 24 px rows per notch, like a tree in any other file
+                    /// manager — Qt's own 72 px is three.
+                    WheelScroll {
+                        view: treeScroll
+                        step: 120
+                    }
 
                     Loader {
                         id: treeRoot
@@ -455,6 +466,12 @@ Item {
                 cellHeight: Math.round(cellWidth * 0.78) + 32
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                /// A notch moves exactly one row of cells, so the wheel keeps
+                /// the grid under the pointer instead of crawling by 72 px.
+                WheelScroll {
+                    view: grid
+                    step: grid.cellHeight
+                }
 
                 delegate: Item {
                     id: cell

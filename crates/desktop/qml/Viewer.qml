@@ -261,6 +261,7 @@ Item {
 
             ListView {
                 id: strip
+                objectName: "viewerFilmstrip"
                 anchors.fill: parent
                 anchors.margins: 8
                 orientation: ListView.Horizontal
@@ -269,6 +270,16 @@ Item {
                 model: view.images
                 currentIndex: view.imageIndex
                 boundsBehavior: Flickable.StopAtBounds
+                /// The strip is horizontal, and Qt only scrolls the axis the
+                /// wheel reports — a mouse wheel reports vertical, so without
+                /// this the filmstrip ignores it entirely.
+                WheelScroll {
+                    view: strip
+                    horizontal: true
+                    /// Three 78 px tiles plus their 6 px gaps per notch, so one
+                    /// wheel notch nudges the strip instead of paging it.
+                    step: 252
+                }
 
                 delegate: Item {
                     width: 78

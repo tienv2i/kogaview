@@ -60,6 +60,30 @@
   pane, and hiding a panel hides its splitter.
 - The width belongs to the view, the splitter only reports the dragged value, so
   nothing here writes state or persists to disk yet.
+- The drag is measured in scene coordinates, never in the handle's own. The
+  handle moves as the panel grows, so a handle-local `mouse.x` shrinks by exactly
+  what the drag just added; fed back into the next move the panel advances by
+  half the pointer's travel and alternates between two widths every frame
+  (measured: 10/20/30/40 px of travel → 10/10/20/20 px of width), which the user
+  sees as a lagging sidebar and a highlight line flickering in two places.
+
+## Wheel scrolling
+- Wheel scrolling goes through `WheelScroll.qml`, a `WheelHandler` subclass
+  that takes the event before the view does and maps it deliberately: one notch
+  (120 eighths of a degree) is `step` pixels, and a `horizontal` view scrolls
+  from a vertical wheel.
+- Two Qt defaults are wrong for a photo browser and are therefore replaced: Qt
+  moves a view by ~72 px per notch whatever the item size (a third of a 194 px
+  grid row, and the same 72 px for a 24 px tree row), and it only moves the axis
+  the wheel reports, so a mouse wheel never moves a horizontal filmstrip at all.
+- Steps are per view and set where the view is wired: the grid uses
+  `cellHeight` (one row per notch), the folder tree 120 px, the quick-access
+  list 96 px, the filmstrip 252 px (three tiles).
+- A wheel event carrying `pixelDelta` (trackpad, touchscreen) is passed through
+  unchanged, so continuous scrolling keeps its 1:1 feel; `angleDelta` is only
+  used when there is no pixel delta.
+- A handler cannot infer its view, so `view:` is set explicitly: a missing view
+  scrolls nothing rather than silently scrolling the wrong item.
 
 ## Explorer refresh contract
 - Every operation that can change the folder tree on disk (copy, move, trash,
