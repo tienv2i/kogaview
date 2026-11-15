@@ -71,6 +71,8 @@ private:
   QQmlEngine m_engine;
   QQuickView* m_switcher = nullptr;
   QQuickView* m_browser = nullptr;
+  /// `baseState()`'s listings; a test puts them on the view with `showState`.
+  QVariantList entryList;
   /// Monotonic timestamp for injected wheel events, like a QPA plugin's.
   int m_timestamp = 0;
 
@@ -301,6 +303,14 @@ private:
     QCoreApplication::processEvents();
   }
 
+  /// Install a snapshot the way `Main.qml` does: the listing as the view's own
+  /// `entries`, and the metadata as `state` (the two are published apart).
+  void showState(QObject* object, const QVariantMap& state)
+  {
+    object->setProperty("entries", entryList);
+    object->setProperty("state", state);
+  }
+
   /// A wheel-reporting mouse, so the event is not mistaken for a touchpad.
   static QPointingDevice* mouseDevice()
   {
@@ -311,7 +321,7 @@ private:
     return device;
   }
 
-  QVariantMap baseState() const
+  QVariantMap baseState()
   {
     QVariantList entries;
     entries.append(entry(QStringLiteral("dirA"), QStringLiteral("/root/dirA"), true, false));
@@ -322,11 +332,12 @@ private:
     crumbs.append(crumb(QStringLiteral("root"), QStringLiteral("/root")));
     crumbs.append(crumb(QStringLiteral("sub"), QStringLiteral("/root/sub")));
 
+    entryList = entries;
+
     QVariantMap state;
     state.insert(QStringLiteral("rootFolder"), QStringLiteral("/root"));
     state.insert(QStringLiteral("currentFolder"), QStringLiteral("/root/sub"));
     state.insert(QStringLiteral("favorites"), QStringList{ QStringLiteral("/fav") });
-    state.insert(QStringLiteral("entries"), entries);
     state.insert(QStringLiteral("breadcrumbs"), crumbs);
     state.insert(QStringLiteral("selection"), QStringList{});
     state.insert(QStringLiteral("leftPanel"), true);
@@ -377,7 +388,7 @@ private slots:
     view->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 0);
-    view->setProperty("state", state);
+    showState(view, state);
     QCoreApplication::processEvents();
 
     // Rebuild the tree from the stub just installed and wait out the coalesced
@@ -469,7 +480,7 @@ private slots:
   {
     QVariantMap state = baseState();
     state.insert(QStringLiteral("rightPanel"), true);
-    browserItem()->setProperty("state", state);
+    showState(browserItem(), state);
     settle();
 
     QQuickItem* panel = findItem(QStringLiteral("rightPanel"));
@@ -511,13 +522,13 @@ private slots:
 
     QVariantMap state = baseState();
     state.insert(QStringLiteral("leftPanel"), false);
-    browserItem()->setProperty("state", state);
+    showState(browserItem(), state);
     settle();
     QCOMPARE(splitter->isVisible(), false);
     QCOMPARE(panel->isVisible(), false);
 
     state.insert(QStringLiteral("leftPanel"), true);
-    browserItem()->setProperty("state", state);
+    showState(browserItem(), state);
     settle();
     QCOMPARE(splitter->isVisible(), true);
   }
@@ -688,7 +699,7 @@ private slots:
     QCOMPARE(node->property("expanded").toBool(), false);
     QVariantMap state = baseState();
     state.insert(QStringLiteral("currentFolder"), QStringLiteral("/root/sub/deeper"));
-    m_browser->rootObject()->setProperty("state", state);
+    showState(m_browser->rootObject(), state);
     QCoreApplication::processEvents();
     QCOMPARE(node->property("expanded").toBool(), false);
 
@@ -785,7 +796,7 @@ private slots:
     // Baseline revision: recording it must not reload anything by itself.
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 7);
-    state0->setProperty("state", state);
+    showState(state0, state);
     QTest::qWait(250); // let the refresh this baseline change scheduled land
 
     // Expand a node that the current folder does not sit in, so only the
@@ -799,7 +810,7 @@ private slots:
     // The filesystem gains a folder, and Core announces the change.
     installFolderStub(true);
     state.insert(QStringLiteral("treeRevision"), 8);
-    state0->setProperty("state", state);
+    showState(state0, state);
 
     QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
                  "the tree did not refresh after the tree revision changed");
@@ -829,7 +840,7 @@ private slots:
 
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 11);
-    view->setProperty("state", state);
+    showState(view, state);
     QTest::qWait(250); // let the refresh this baseline change scheduled land
 
     // `/root/sub` is the current folder, so auto-reveal opened it.
@@ -843,7 +854,7 @@ private slots:
     // unchanged, which is exactly the case delegate re-creation cannot cover.
     installFolderStub(false, true);
     state.insert(QStringLiteral("treeRevision"), 12);
-    view->setProperty("state", state);
+    showState(view, state);
 
     QTRY_VERIFY2(findNode(QStringLiteral("/root/sub/born")) != nullptr,
                  "the refresh did not reach the expanded child node");
@@ -865,7 +876,7 @@ private slots:
     QQuickItem* view = browserItem();
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 2);
-    view->setProperty("state", state);
+    showState(view, state);
     QCoreApplication::processEvents();
 
     // `followCurrent` opened /root/sub because it is the current folder.
@@ -891,7 +902,7 @@ private slots:
 
     installFolderStub(true);
     state.insert(QStringLiteral("treeRevision"), 3);
-    view->setProperty("state", state);
+    showState(view, state);
     QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
                  "the tree did not refresh after the tree revision changed");
 
@@ -907,7 +918,7 @@ private slots:
     QQuickItem* view = browserItem();
     QVariantMap state = baseState();
     state.insert(QStringLiteral("treeRevision"), 4);
-    view->setProperty("state", state);
+    showState(view, state);
     QCoreApplication::processEvents();
     QVERIFY(findNode(QStringLiteral("/root/fresh")) == nullptr);
 
@@ -920,13 +931,13 @@ private slots:
 
     installFolderStub(true);
     state.insert(QStringLiteral("selection"), QStringList{ QStringLiteral("/root/img.png") });
-    view->setProperty("state", state);
+    showState(view, state);
     QTest::qWait(400);
     QVERIFY2(findNode(QStringLiteral("/root/fresh")) == nullptr,
              "the tree reloaded without a tree revision change");
 
     state.insert(QStringLiteral("treeRevision"), 5);
-    view->setProperty("state", state);
+    showState(view, state);
     QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
                  "the tree did not reload when the revision changed");
   }
@@ -974,8 +985,8 @@ private slots:
       many.append(entry(QStringLiteral("photo-%1.jpg").arg(index),
                         QStringLiteral("/root/photo-%1.jpg").arg(index), false, true));
     }
-    state.insert(QStringLiteral("entries"), many);
-    browserItem()->setProperty("state", state);
+    entryList = many;
+    showState(browserItem(), state);
     settle();
 
     QQuickItem* grid = findItem(QStringLiteral("fileGrid"));
@@ -1072,7 +1083,7 @@ private slots:
     info.insert(QStringLiteral("size"), qint64(4096));
     info.insert(QStringLiteral("modified"), qint64(1731000000));
     state.insert(QStringLiteral("selectionInfo"), info);
-    browserItem()->setProperty("state", state);
+    showState(browserItem(), state);
     settle();
 
     QQuickItem* preview = findItem(QStringLiteral("previewThumbnail"));
@@ -1119,7 +1130,7 @@ private slots:
     QTRY_COMPARE(image->property("source").toString(), QStringLiteral("file:///root/img.png"));
     // Every later evaluation takes the remembered failure: no new request.
     const int requests = cache.calls.size();
-    browserItem()->setProperty("state", baseState());
+    showState(browserItem(), baseState());
     settle();
     QCOMPARE(cache.calls.size(), requests);
   }

@@ -30,6 +30,7 @@ QML_TEST_SUITES = {
         "kogaview_browser_cache_tests",
         BUILD_DIR / "bin" / "kogaview_browser_cache_tests",
     ),
+    "state": ("kogaview_state_tests", BUILD_DIR / "bin" / "kogaview_state_tests"),
 }
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"
@@ -239,7 +240,7 @@ def run_app(args: list[str]) -> int:
     return 1  # unreachable
 
 
-TEST_USAGE = "usage: just test [cargo|qml|viewer|browser|cache]"
+TEST_USAGE = "usage: just test [cargo|qml|viewer|browser|cache|state]"
 
 
 def rust_tests() -> int:

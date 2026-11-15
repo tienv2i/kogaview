@@ -16,7 +16,7 @@ use crate::config::Config;
 use crate::journal::{Journal, JournalEntry};
 use crate::ops;
 use crate::paths::AppPaths;
-use crate::state::{Crumb, SelectionInfo, UiState};
+use crate::state::{Crumb, FolderListing, SelectionInfo, UiState};
 use crate::AppIdentity;
 
 struct ScanResult {
@@ -43,6 +43,10 @@ pub struct Core {
     cancel_op: Option<Arc<AtomicBool>>,
     pending_viewer: Option<String>,
     pending_selection: Option<Vec<String>>,
+    /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
+    /// listing on its own and only re-sends it when this changes, because it is
+    /// the one part of the snapshot that grows with the folder.
+    listing_epoch: u64,
 }
 
 impl Core {
@@ -78,6 +82,7 @@ impl Core {
             cancel_op: None,
             pending_viewer: None,
             pending_selection: None,
+            listing_epoch: 0,
         };
 
         core.restore_last_session();
@@ -155,6 +160,7 @@ impl Core {
             cancel_op: None,
             pending_viewer: None,
             pending_selection: None,
+            listing_epoch: 0,
         }
     }
 
@@ -165,10 +171,54 @@ impl Core {
         (config.tree_root, config.last_folder)
     }
 
+    /// The complete snapshot: the metadata the window renders *and* the folder
+    /// listing. Used by `Query::State`, the CLI and the tests, where 200 KB is
+    /// not on anybody's critical path. Built by splicing the two halves, so it is
+    /// the same object a window that has both would render.
     pub fn snapshot_json(&self) -> String {
-        serde_json::to_string(&self.state).unwrap_or_else(|error| {
+        let meta = self.meta_json();
+        let listing = self.folder_json();
+        let mut full: serde_json::Map<String, Value> = match serde_json::from_str(&meta) {
+            Ok(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        let listing: serde_json::Map<String, Value> = match serde_json::from_str(&listing) {
+            Ok(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        for (key, value) in listing {
+            full.insert(key, value);
+        }
+        Value::Object(full).to_string()
+    }
+
+    /// The same snapshot without the folder listing, which is shipped
+    /// separately by [`Core::folder_json`]. Around a kilobyte, so the window can
+    /// re-render it after every command — every click, every arrow key — without
+    /// touching the listing.
+    pub fn meta_json(&self) -> String {
+        self.serialize(&self.state.meta())
+    }
+
+    /// The folder listing — the entries and the filmstrip's image paths — and
+    /// nothing else. Re-serialised only when [`Core::listing_epoch`] moves.
+    pub fn folder_json(&self) -> String {
+        self.serialize(&FolderListing {
+            entries: &self.state.entries,
+            viewer_images: &self.state.viewer_images,
+        })
+    }
+
+    /// Changes exactly when the folder listing is replaced (a scan landing, a
+    /// failed scan clearing it, a new folder starting to load).
+    pub fn listing_epoch(&self) -> u64 {
+        self.listing_epoch
+    }
+
+    fn serialize<T: serde::Serialize>(&self, value: &T) -> String {
+        serde_json::to_string(value).unwrap_or_else(|error| {
             tracing::error!(target: "kogaview::core", %error, "cannot serialize state");
-            "{}".to_owned()
+            String::from("{}")
         })
     }
 
@@ -534,6 +584,7 @@ impl Core {
         self.state.breadcrumbs = breadcrumbs(&folder);
         if clear_entries {
             self.state.entries.clear();
+            self.listing_epoch += 1;
             self.state.selection.clear();
             self.state.selection_info = None;
         }
@@ -567,6 +618,7 @@ impl Core {
                     .map(|entry| entry.path.clone())
                     .collect::<HashSet<_>>();
                 self.state.entries = entries;
+                self.listing_epoch += 1;
                 self.state.item_count = self.state.entries.len();
                 self.state.image_count = self
                     .state
@@ -601,6 +653,7 @@ impl Core {
             }
             Err(error) => {
                 self.state.entries.clear();
+                self.listing_epoch += 1;
                 self.state.item_count = 0;
                 self.state.image_count = 0;
                 self.state.busy = false;
@@ -1123,6 +1176,123 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Wait for the background folder scan to land, the way the UI's poll timer
+    /// does. Returns false if it never does.
+    fn settle_scan(core: &mut Core) -> bool {
+        for _ in 0..2000 {
+            if core.poll() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    fn select_json(path: &Path) -> String {
+        format!(
+            r#"{{"id":"select-1","protocol":1,"command":{{"type":"select","paths":["{}"]}}}}"#,
+            path.display()
+        )
+    }
+
+    /// The point of the split: the only part of the snapshot that grows with the
+    /// folder — the listing and the filmstrip's image paths — is published under
+    /// its own epoch, so a select does not pay to re-serialise a thousand
+    /// entries, and it is still shipped exactly when the listing changes.
+    #[test]
+    fn the_folder_listing_travels_apart_from_the_metadata() {
+        let base = temp_dir();
+        let folder = base.join("Photos");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("one.png"), b"png").unwrap();
+        std::fs::write(folder.join("two.png"), b"png").unwrap();
+        let runtime = base.join("runtime");
+
+        let mut core = Core::for_test(&runtime);
+        // With the scan in flight — even with two images, the worker thread has
+        // probably not answered yet — a select must not move the epoch: the
+        // window would then re-parse a listing it already has, and would take the
+        // empty one if the select came between the clear and the landing.
+        core.open_folder(folder.clone(), true).unwrap();
+        let while_loading = core.listing_epoch();
+        // The open itself cleared the previous listing, which is epoch movement
+        // of its own; the select must leave that number alone.
+        assert!(while_loading > 0, "the open did not clear the listing");
+        core.dispatch(&select_json(&folder.join("one.png")));
+        assert_eq!(
+            core.listing_epoch(),
+            while_loading,
+            "a select while the folder was loading re-published the listing"
+        );
+        assert!(settle_scan(&mut core), "the folder scan never landed");
+        // And the landing itself is epoch movement: it is the only signal the
+        // window gets that its entries are stale.
+        assert!(
+            core.listing_epoch() > while_loading,
+            "the scan replaced the listing without moving the epoch"
+        );
+        let mut last = core.listing_epoch();
+        let listing: Value = serde_json::from_str(&core.folder_json()).unwrap();
+        assert_eq!(listing["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(listing["viewerImages"].as_array().unwrap().len(), 2);
+        let meta: Value = serde_json::from_str(&core.meta_json()).unwrap();
+        assert_eq!(meta["itemCount"], 2);
+        // The metadata alone does not carry the listing at all — not even an
+        // empty array, which would still be a field the window had to overwrite.
+        assert!(
+            meta.get("entries").is_none(),
+            "the metadata carried the listing"
+        );
+        assert!(meta.get("viewerImages").is_none());
+        // …so a select, which cannot change the listing, leaves the epoch alone.
+        core.dispatch(&select_json(&folder.join("two.png")));
+        let after_select: Value = serde_json::from_str(&core.meta_json()).unwrap();
+        assert_eq!(
+            after_select["selection"].as_array().unwrap(),
+            &vec![Value::from(folder.join("two.png").to_string_lossy())]
+        );
+        assert_eq!(after_select["selectionInfo"]["name"], "two.png");
+        assert_eq!(
+            core.listing_epoch(),
+            last,
+            "a select re-published the listing"
+        );
+
+        // …while navigating elsewhere does ship the new one.
+        let other = base.join("Other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("three.png"), b"png").unwrap();
+        core.open_folder(other.clone(), false).unwrap();
+        assert!(settle_scan(&mut core), "the folder scan never landed");
+        assert!(
+            core.listing_epoch() > last,
+            "navigation did not move the epoch"
+        );
+        let listing: Value = serde_json::from_str(&core.folder_json()).unwrap();
+        assert_eq!(listing["entries"][0]["name"], "three.png");
+        assert_eq!(
+            listing["viewerImages"][0],
+            Value::from(other.join("three.png").to_string_lossy().as_ref())
+        );
+
+        // Snapshot and the two halves describe the same state field for field.
+        let full: Value = serde_json::from_str(&core.snapshot_json()).unwrap();
+        let meta: Value = serde_json::from_str(&core.meta_json()).unwrap();
+        let listing: Value = serde_json::from_str(&core.folder_json()).unwrap();
+        assert_eq!(full["entries"], listing["entries"]);
+        assert_eq!(full["viewerImages"], listing["viewerImages"]);
+        let mut merged = meta.as_object().unwrap().clone();
+        merged.insert("entries".to_owned(), listing["entries"].clone());
+        merged.insert("viewerImages".to_owned(), listing["viewerImages"].clone());
+        assert_eq!(
+            Value::Object(merged),
+            full,
+            "the metadata and the listing did not add up to the snapshot"
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

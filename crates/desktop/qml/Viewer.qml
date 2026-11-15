@@ -7,6 +7,10 @@ Item {
 
     property Theme theme: Theme {}
     property var state: ({})
+    /// The folder listing, published apart from `state` so that an unchanged
+    /// listing keeps the same arrays between snapshots.
+    property var entries: []
+    property var viewerImages: []
     /// The `Thumbnails` context object (C++ `ThumbnailCache`). Null in the QML
     /// test harness, where the filmstrip decodes the originals as before.
     property var thumbnails: null
@@ -16,7 +20,7 @@ Item {
     /// come from the folder listing. Rebuilt once per state update.
     property var imageMeta: {
         var map = {};
-        var list = view.state.entries || [];
+        var list = view.entries || [];
         for (var index = 0; index < list.length; ++index) {
             var entry = list[index];
             if (entry && entry.isImage) map[entry.path] = entry;
@@ -42,7 +46,7 @@ Item {
     signal command(var command)
 
     property string currentPath: view.state.viewerPath || ""
-    property var images: view.state.viewerImages || []
+    property var images: view.viewerImages || []
     property int imageIndex: (view.state.viewerIndex === undefined
                               || view.state.viewerIndex === null)
                              ? -1 : view.state.viewerIndex

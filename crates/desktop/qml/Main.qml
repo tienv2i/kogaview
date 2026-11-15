@@ -45,22 +45,22 @@ ApplicationWindow {
         objectName: "bridge"
     }
 
-    property var state: ({})
+    // Everything the window paints except the folder listing, which travels as
+    // the snapshot's own `entries`/`viewerImages` so an unchanged listing keeps
+    // its identity between snapshots.
+    property var state: snapshot.state
     property string toastText: ""
     property var pendingDestination: null
     property var pendingDelete: null
     property string folderDialogPurpose: "open"
 
-    function applyState(jsonText) {
-        if (!jsonText) return;
-        try {
-            var parsed = JSON.parse(jsonText);
-            if (parsed && typeof parsed === "object") {
-                root.state = parsed;
-            }
-        } catch (error) {
-            console.warn("KogaView: cannot parse state snapshot:", error);
-        }
+    /// The bridge publishes the folder listing apart from everything else; this
+    /// assembles the two back into the snapshot the views render.
+    StateSnapshot {
+        id: snapshot
+        metaJson: bridge.stateJson
+        listingJson: bridge.listingJson
+        epoch: bridge.listingEpoch
     }
 
     function showToast(message) {
@@ -82,7 +82,6 @@ ApplicationWindow {
         } catch (error) {
             console.warn("KogaView: cannot parse command result:", text);
         }
-        root.applyState(bridge.stateJson);
         if (result) {
             if (!result.ok && result.error) {
                 root.showToast(result.error.message);
@@ -169,15 +168,8 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        root.applyState(bridge.stateJson);
+        snapshot.apply();
         root.processLaunchArguments();
-    }
-
-    Connections {
-        target: bridge
-        function onStateJsonChanged() {
-            root.applyState(bridge.stateJson);
-        }
     }
 
     Connections {
@@ -213,7 +205,7 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             if (bridge.poll()) {
-                root.applyState(bridge.stateJson);
+                snapshot.apply();
             }
         }
     }
@@ -361,6 +353,7 @@ ApplicationWindow {
             objectName: "browser"
             theme: appTheme
             state: root.state
+            entries: snapshot.entries
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             listFolders: root.listFolders
             onCommand: function(command) { root.send(command); }
@@ -385,6 +378,8 @@ ApplicationWindow {
             objectName: "viewer"
             theme: appTheme
             state: root.state
+            entries: snapshot.entries
+            viewerImages: snapshot.viewerImages
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             onCommand: function(command) { root.send(command); }
         }

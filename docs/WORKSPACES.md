@@ -149,6 +149,14 @@
 - Input parsing, drag/drop, shortcuts, IPC and MCP translate to the SAME typed commands.
 - Handle Unicode, spaces, missing paths, unsupported formats, symlinks and permissions with structured errors.
 - UI observes committed state revision; Qt may own hover/focus/animation only.
+- The window renders one snapshot, published in two halves because they change
+  at different rates: the metadata (workspace, folders, selection, counts,
+  status — around a kilobyte, no listing fields) after every command, and the
+  folder listing (`entries`, `viewerImages` — ~200 bytes per item) only when its
+  `listingEpoch` moves. Both come from Core; `crates/desktop/qml/StateSnapshot.qml`
+  keeps the parsed listing between snapshots, so a `select` is one small parse
+  and the grid keeps its delegates. A broken half is refused without blanking
+  the other.
 
 ## Single instance
 - A second invocation forwards open request to active app instance and activates the window when permitted.

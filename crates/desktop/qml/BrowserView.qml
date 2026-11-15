@@ -7,6 +7,9 @@ Item {
 
     property Theme theme: Theme {}
     property var state: ({})
+    /// The folder listing, published apart from `state` so that an unchanged
+    /// listing keeps the same array (and the grid keeps its delegates).
+    property var entries: []
     /// The `Thumbnails` context object (C++ `ThumbnailCache`). Null in the QML
     /// test harness, where the views decode the originals as before.
     property var thumbnails: null
@@ -461,7 +464,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                model: view.state.entries || []
+                model: view.entries || []
                 cellWidth: Math.max(132, Math.floor(width / Math.max(1, Math.floor(width / 178))))
                 cellHeight: Math.round(cellWidth * 0.78) + 32
                 boundsBehavior: Flickable.StopAtBounds

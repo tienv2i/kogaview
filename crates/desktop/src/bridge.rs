@@ -2,8 +2,8 @@
 //! gateway. QML never mutates domain state directly.
 //!
 //! Commands are submitted as serialized protocol envelopes and results are
-//! returned as JSON. The whole state snapshot is re-published after every
-//! command or completed background task so QML has one authoritative source.
+//! returned as JSON. The state snapshot is re-published after every command or
+//! completed background task so QML has one authoritative source.
 
 use core::pin::Pin;
 
@@ -40,6 +40,13 @@ pub mod qobject {
         #[qproperty(QString, gitSha)]
         #[qproperty(u32, protocolVersion)]
         #[qproperty(QString, stateJson)]
+        /// The folder listing on its own — `{ entries, viewerImages }` — shipped
+        /// only when `listingEpoch` moves. It is the only part of the snapshot
+        /// that grows with the folder (a thousand photos is a 200 KB string), so
+        /// re-publishing it on every selection change would cost every command a
+        /// full serialise, a 200 KB copy and a 200 KB JSON parse in QML.
+        #[qproperty(QString, listingJson)]
+        #[qproperty(u64, listingEpoch)]
         #[qproperty(QString, statusMessage)]
         #[qproperty(bool, busy)]
         #[qproperty(u64, revision)]
@@ -71,6 +78,8 @@ pub struct KogaViewBridgeRust {
     gitSha: QString,
     protocolVersion: u32,
     stateJson: QString,
+    listingJson: QString,
+    listingEpoch: u64,
     statusMessage: QString,
     busy: bool,
     revision: u64,
@@ -88,7 +97,9 @@ impl Default for KogaViewBridgeRust {
             profile: identity.profile.as_str().into(),
             gitSha: identity.git_sha.into(),
             protocolVersion: PROTOCOL_VERSION,
-            stateJson: core.snapshot_json().into(),
+            stateJson: core.meta_json().into(),
+            listingJson: core.folder_json().into(),
+            listingEpoch: core.listing_epoch(),
             statusMessage: core.status().into(),
             busy: core.busy(),
             revision: core.revision(),
@@ -124,15 +135,32 @@ impl qobject::KogaViewBridge {
     }
 
     fn refresh_properties(mut self: Pin<&mut Self>) {
-        let (state, status, busy, revision) = {
+        // The listing is only re-serialised when its epoch moved, which is what
+        // keeps a `select` — one click, one arrow key — as cheap in a folder of
+        // five thousand photos as in a folder of five.
+        let (listing_changed, listing_epoch, listing_json, state, status, busy, revision) = {
             let this = self.as_mut().rust_mut().get_mut();
+            let epoch = this.core.listing_epoch();
+            let changed = epoch != this.listingEpoch;
             (
-                this.core.snapshot_json(),
+                changed,
+                epoch,
+                if changed {
+                    this.core.folder_json()
+                } else {
+                    String::new()
+                },
+                this.core.meta_json(),
                 this.core.status().to_owned(),
                 this.core.busy(),
                 this.core.revision(),
             )
         };
+
+        if listing_changed {
+            self.as_mut().set_listingJson(listing_json.into());
+            self.as_mut().set_listingEpoch(listing_epoch);
+        }
         self.as_mut().set_stateJson(state.into());
         self.as_mut().set_statusMessage(status.into());
         self.as_mut().set_busy(busy);

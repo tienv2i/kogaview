@@ -112,4 +112,81 @@ impl UiState {
     pub fn bump(&mut self) {
         self.revision += 1;
     }
+
+    /// The snapshot without its folder listing.
+    ///
+    /// The listing is published apart ([`FolderListing`]), because it is the one
+    /// part that grows with the folder — roughly 170 bytes per item and 30 per
+    /// image path, so a thousand photos serialise to a 200 KB string — while
+    /// everything here stays around a kilobyte and can travel on every state
+    /// change. `entries`/`viewerImages` are simply absent from the result: the
+    /// window splices in the listing it already parsed.
+    pub fn meta(&self) -> StateMeta<'_> {
+        StateMeta {
+            revision: self.revision,
+            workspace: &self.workspace,
+            theme: &self.theme,
+            current_folder: &self.current_folder,
+            root_folder: &self.root_folder,
+            tree_revision: self.tree_revision,
+            breadcrumbs: &self.breadcrumbs,
+            selection: &self.selection,
+            selection_info: &self.selection_info,
+            favorites: &self.favorites,
+            left_panel: self.left_panel,
+            right_panel: self.right_panel,
+            filmstrip: self.filmstrip,
+            viewer_index: self.viewer_index,
+            viewer_path: &self.viewer_path,
+            busy: self.busy,
+            status: &self.status,
+            config_path: &self.config_path,
+            home: &self.home,
+            item_count: self.item_count,
+            image_count: self.image_count,
+        }
+    }
+}
+
+/// Everything in the snapshot that grows with the folder, and nothing else.
+///
+/// Shipped by the Qt adapter under its own epoch, because it changes only when
+/// the folder listing does: a click or an arrow key in the grid must not pay for
+/// a thousand entries.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderListing<'a> {
+    pub entries: &'a [Entry],
+    pub viewer_images: &'a [String],
+}
+
+/// Everything a Browser or Viewer paints that does not grow with the folder.
+///
+/// The folder listing itself has no field here at all: serialising it into the
+/// metadata only to be thrown away on the other side would make every command
+/// cost as much as the folder is big.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateMeta<'a> {
+    pub revision: u64,
+    pub workspace: &'a Workspace,
+    pub theme: &'a Theme,
+    pub current_folder: &'a Option<String>,
+    pub root_folder: &'a Option<String>,
+    pub tree_revision: u64,
+    pub breadcrumbs: &'a [Crumb],
+    pub selection: &'a [String],
+    pub selection_info: &'a Option<SelectionInfo>,
+    pub favorites: &'a [String],
+    pub left_panel: bool,
+    pub right_panel: bool,
+    pub filmstrip: bool,
+    pub viewer_index: Option<usize>,
+    pub viewer_path: &'a Option<String>,
+    pub busy: bool,
+    pub status: &'a str,
+    pub config_path: &'a str,
+    pub home: &'a str,
+    pub item_count: usize,
+    pub image_count: usize,
 }

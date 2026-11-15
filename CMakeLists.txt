@@ -68,7 +68,8 @@ if(KOGAVIEW_BUILD_TESTS)
   set(KOGAVIEW_QML_TEST_SUITES
     "kogaview_qml_tests:tst_viewer.cpp"
     "kogaview_browser_qml_tests:tst_browser.cpp"
-    "kogaview_browser_cache_tests:tst_thumbnails.cpp")
+    "kogaview_browser_cache_tests:tst_thumbnails.cpp"
+    "kogaview_state_tests:tst_statesnapshot.cpp")
 
   foreach(suite IN LISTS KOGAVIEW_QML_TEST_SUITES)
     string(REPLACE ":" ";" parts "${suite}")

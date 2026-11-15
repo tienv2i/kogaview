@@ -11,6 +11,7 @@ fn main() {
         "qml/PanelSplitter.qml",
         "qml/ThumbnailBook.qml",
         "qml/WheelScroll.qml",
+        "qml/StateSnapshot.qml",
         "qml/CachedThumbnail.qml",
         "qml/BrowserView.qml",
         "qml/Viewer.qml",

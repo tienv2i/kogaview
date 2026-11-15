@@ -251,9 +251,10 @@ private:
 
   void loadImage(const QString& path)
   {
+    m_viewer->setProperty("viewerImages", QStringList{ path });
+    m_viewer->setProperty("entries", QVariantList());
     QVariantMap state;
     state.insert(QStringLiteral("viewerPath"), path);
-    state.insert(QStringLiteral("viewerImages"), QStringList{ path });
     state.insert(QStringLiteral("viewerIndex"), 0);
     m_viewer->setProperty("state", state);
     // Wait for *this* image. A bare "the canvas has a size" check is satisfied by
@@ -341,12 +342,12 @@ private slots:
       entries.append(entry);
     }
 
+    m_viewer->setProperty("viewerImages", images);
+    m_viewer->setProperty("entries", entries);
     QVariantMap state;
     state.insert(QStringLiteral("viewerPath"), m_landscape);
-    state.insert(QStringLiteral("viewerImages"), images);
     state.insert(QStringLiteral("viewerIndex"), 0);
     state.insert(QStringLiteral("filmstrip"), true);
-    state.insert(QStringLiteral("entries"), entries);
     m_viewer->setProperty("state", state);
 
     QQuickItem* strip = item("viewerFilmstrip");
@@ -396,12 +397,12 @@ private slots:
       entries.append(entry);
     }
 
+    m_viewer->setProperty("viewerImages", QStringList{ first, second });
+    m_viewer->setProperty("entries", entries);
     QVariantMap state;
     state.insert(QStringLiteral("viewerPath"), first);
-    state.insert(QStringLiteral("viewerImages"), QStringList{ first, second });
     state.insert(QStringLiteral("viewerIndex"), 0);
     state.insert(QStringLiteral("filmstrip"), true);
-    state.insert(QStringLiteral("entries"), entries);
     m_viewer->setProperty("state", state);
 
     QQuickItem* tile = nullptr;
