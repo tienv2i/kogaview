@@ -26,7 +26,8 @@ Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implem
    - Watch out for Qt 6 PointerHandler pitfalls: `WheelHandler.acceptedDevices` defaults to `PointerDevice.Mouse` only (ignoring Wayland/touchpad events unless set to `PointerDevice.AllDevices`).
    - Watch out for Qt Quick transforms: `Item.scale` transforms around `Item.Center` by default; do not bake `scale` into `x`/`y` item coordinates.
 7. Fix in the owning layer -> re-verify isolated unit -> re-verify real UI scenario.
-8. Report what was actually run, OS/session, evidence, limitations and unverified areas.
+8. Mutation-check the fix selectively: revert the fix (or plant one small fault in a code path the fix owns), rebuild, confirm the new test **fails**, restore it and confirm it **passes**. A few targeted mutations, not the whole file — never a mutation framework or a batch script that walks the tree. Report what was mutated and what each mutation did to the suite.
+9. Report what was actually run, OS/session, evidence, limitations and unverified areas.
 
 ## First implementation milestone
 - Bootstrap Cargo workspace and CMake/Qt/CXX-Qt desktop shell.

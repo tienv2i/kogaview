@@ -19,6 +19,7 @@
 3. Replay the smallest safe command sequence in an isolated workspace, or reproduce with real UI/Agent IPC; minimize the sequence when possible.
 4. Compare before/after snapshots, expected/actual state, file output and visual result; identify root cause and fix in the owning layer.
 5. Re-run the same real scenario, check logs for new errors and test one adjacent failure case. Add focused regression tests where useful, not as a substitute for real verification.
+6. Mutation-check the fix before calling it done: revert the fix, or plant one small fault in a code path the fix owns, rebuild, and confirm the new test fails; then restore and confirm it passes. Keep it selective — the few mutations that prove the test can see the bug, not a sweep over every line, and never a mutation framework or a generator script. Name each mutation and its result in the report (`/tmp` scripts are scratch, not artefacts).
 
 ## Diagnostics CLI targets (to implement, not assumed present)
 ```sh
@@ -41,10 +42,12 @@ kogactl debug replay --journal bug-001.jsonl --sandbox
 - CLI/MCP actions actually performed:
 - Journal/log/state/screenshot/file evidence:
 - Failures found and fixes verified:
+- Mutation check (each mutation and what the suite did):
 - Not verified / blockers:
 
 ## Hard rules
 - Green tests are insufficient. No mock-only validation.
+- A regression test nobody has seen failing is unproven: revert the fix once and watch it fail before trusting it. Mutation checks stay selective (the code path the fix owns, a handful of faults), never a sweep and never a framework.
 - Assertions must verify meaningful state transitions (`after != before`); a test asserting invariant stability where no state changed (e.g. `zoom 1.0 -> 1.0`) is a false positive and does not constitute proof.
 - Do not silently substitute API calls for a UI interaction requirement.
 - Do not jump to OS/compositor level input debugging before verifying that the QML Handler accepted the pointing device.
