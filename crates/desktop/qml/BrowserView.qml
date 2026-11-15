@@ -22,6 +22,50 @@ Item {
     property bool menuIsDir: false
     property string newFolderParent: ""
 
+    // Expansion lives outside the tree nodes so the tree can be rebuilt after a
+    // file operation without collapsing what the user had open.
+    property var expandedPaths: ({})
+    property var collapsedPaths: ({})
+    property int lastTreeRevision: -1
+
+    /// Reload the tree after Core reports that the folder tree may have changed
+    /// (copy, move, trash, delete, new folder, explicit refresh). Coalesced so a
+    /// burst of state updates rebuilds the tree once.
+    function requestTreeRefresh() {
+        treeRefreshTimer.restart();
+    }
+
+    function reloadTree() {
+        var root = treeRoot.item;
+        if (!root) return;
+        var savedY = treeScroll.contentY;
+        root.reloadChildren();
+        // Rebuilding the nodes changes the content height, so the scroll offset
+        // is restored afterwards and clamped to the new content.
+        Qt.callLater(function() {
+            var limit = Math.max(0, treeScroll.contentHeight - treeScroll.height);
+            treeScroll.contentY = Math.min(savedY, limit);
+        });
+    }
+
+    Timer {
+        id: treeRefreshTimer
+        interval: 120
+        onTriggered: view.reloadTree()
+    }
+
+    Connections {
+        target: view
+        function onStateChanged() {
+            var revision = view.state.treeRevision;
+            if (typeof revision !== "number") return;
+            if (view.lastTreeRevision === revision) return;
+            var isFirstState = view.lastTreeRevision < 0;
+            view.lastTreeRevision = revision;
+            if (!isFirstState) view.requestTreeRefresh();
+        }
+    }
+
     property var selectionInfo: view.state.selectionInfo || null
 
     function parentPath(path) {
@@ -176,6 +220,7 @@ Item {
                 }
 
                 Flickable {
+                    id: treeScroll
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
@@ -604,7 +649,6 @@ Item {
             property string nodeName: ""
             property int depth: 0
             property bool expanded: false
-            property bool collapsedByUser: false
             property var children: []
 
             spacing: 0
@@ -616,9 +660,10 @@ Item {
                 depth = level;
                 children = [];
                 expanded = false;
-                collapsedByUser = false;
                 if (path) {
                     expanded = true;
+                    view.expandedPaths[path] = true;
+                    delete view.collapsedPaths[path];
                     load();
                 }
             }
@@ -634,7 +679,6 @@ Item {
             /// quick access and "Open folder" do.
             function activate() {
                 if (!nodePath) return;
-                collapsedByUser = false;
                 expand();
                 view.command({ type: "navigate", path: nodePath });
             }
@@ -642,19 +686,25 @@ Item {
             function expand() {
                 if (!nodePath || expanded) return;
                 expanded = true;
+                view.expandedPaths[nodePath] = true;
+                delete view.collapsedPaths[nodePath];
                 load();
+            }
+
+            function collapse() {
+                if (!nodePath || !expanded) return;
+                expanded = false;
+                delete view.expandedPaths[nodePath];
+                // Remember the collapse so auto-reveal does not undo it.
+                view.collapsedPaths[nodePath] = true;
             }
 
             /// Collapse/expand from the disclosure arrow; the arrow only changes
             /// the tree, it does not navigate.
             function toggleExpanded() {
-                if (!nodePath) return;
                 if (expanded) {
-                    expanded = false;
-                    // Remember the collapse so auto-reveal does not undo it.
-                    collapsedByUser = true;
+                    collapse();
                 } else {
-                    collapsedByUser = false;
                     expand();
                 }
             }
@@ -663,11 +713,33 @@ Item {
             /// navigating from the grid, breadcrumbs or the toolbar reveals the
             /// node. A node the user collapsed on purpose is left alone.
             function followCurrent() {
-                if (collapsedByUser) return;
+                if (!nodePath || view.collapsedPaths[nodePath]) return;
                 var current = view.state.currentFolder || "";
-                if (!current || !nodePath) return;
+                if (!current) return;
                 if (current !== nodePath && current.indexOf(nodePath + "/") !== 0) return;
                 expand();
+            }
+
+            /// Restore the expansion recorded before the tree was rebuilt.
+            function restoreExpansion() {
+                if (!nodePath) return;
+                if (view.expandedPaths[nodePath] === true) expand();
+            }
+
+            /// Rebuild this node's children from the filesystem, then refresh the
+            /// already-loaded subtree below it. A change deeper in the tree
+            /// leaves this listing identical, so no delegate would be recreated
+            /// and the stale grandchild rows would survive; recursing into the
+            /// live child nodes (which each reload their own children) reaches
+            /// every open level. The current folder and the expansion stay put.
+            function reloadChildren() {
+                if (!expanded) return;
+                load();
+                for (var i = 0; i < childRepeater.count; ++i) {
+                    var loader = childRepeater.itemAt(i);
+                    var child = loader ? loader.item : null;
+                    if (child) child.reloadChildren();
+                }
             }
 
             Rectangle {
@@ -722,6 +794,7 @@ Item {
             }
 
             Repeater {
+                id: childRepeater
                 model: node.expanded ? node.children : []
 
                 delegate: Loader {
@@ -732,6 +805,7 @@ Item {
                         item.nodeName = modelData.name;
                         item.depth = node.depth + 1;
                         item.expanded = false;
+                        item.restoreExpansion();
                         item.followCurrent();
                     }
                 }

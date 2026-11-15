@@ -12,6 +12,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlExpression>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
@@ -50,7 +51,7 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
     ++index;
     // Background file operations take time; stagger so each command is not
     // rejected with `busy` by the previous one.
-    QTimer::singleShot(delay, &app, [bridge, command, index]() {
+    QTimer::singleShot(delay, &app, [bridge, rootObject, command, index]() {
       const QString envelope =
         QStringLiteral(R"({"id":"dev-%1","protocol":1,"command":%2})")
           .arg(index)
@@ -72,7 +73,19 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
                           << "currentFolder"
                           << state.value(QStringLiteral("currentFolder")).toString()
                           << "workspace"
-                          << state.value(QStringLiteral("workspace")).toString();
+                          << state.value(QStringLiteral("workspace")).toString()
+                          << "treeRevision"
+                          << static_cast<qint64>(
+                               state.value(QStringLiteral("treeRevision")).toDouble());
+        // The tree keeps its own expansion (it outlives the nodes), so read it
+        // from the view: a refresh after a file operation must keep both these
+        // paths and the current folder above.
+        if (QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"))) {
+          QQmlExpression expression(QQmlEngine::contextForObject(browser), browser,
+                                    QStringLiteral("Object.keys(expandedPaths).sort().join(' ')"));
+          qInfo().noquote() << "KogaView dev tree: expanded"
+                            << expression.evaluate().toString();
+        }
       }
     });
   }

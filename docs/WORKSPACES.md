@@ -28,6 +28,22 @@
 - Only an explicit open moves the root: it is the one action that also persists
   `last_folder`.
 
+## Explorer refresh contract
+- Every operation that can change the folder tree on disk (copy, move, trash,
+  delete, new folder, explicit refresh) bumps `treeRevision` once it completes.
+  Merely selecting, navigating or switching workspace does not.
+- When `UiState.tree_revision` changes the explorer rebuilds its rows from
+  `list_folders` — including the already-expanded levels below the root — and
+  keeps two things: the node expansion the user chose (a node they collapsed
+  stays collapsed) and the folder currently on screen. The tree never navigates
+  or re-roots itself as a side effect of a refresh.
+- The reborn rows restore their expansion from the view-level `expandedPaths` /
+  `collapsedPaths` maps, which outlive the nodes, and `followCurrent()` re-opens
+  the path towards the current folder without overriding a manual collapse.
+- Rationale: a change two levels down leaves the parent listing byte-identical,
+  so no delegate is recreated and a one-level reload would keep showing stale
+  grandchild rows while the grid was already fresh.
+
 ## Command contracts
 - `app.open_files { paths: Vec<PathOrUri>, activation: bool }` -> viewer state and navigation context.
 - `app.open_folder { path: PathOrUri, activation: bool }` -> browser state.

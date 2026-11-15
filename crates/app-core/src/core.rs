@@ -249,6 +249,9 @@ impl Core {
                     self.cancel_op = None;
                     self.state.busy = false;
                     self.state.status = result.message;
+                    // An operation finished: the tree on disk may differ now
+                    // even when the refreshed listing looks the same.
+                    self.state.tree_revision += 1;
                     if result.ok && result.refresh {
                         self.refresh_current();
                     }
@@ -277,6 +280,7 @@ impl Core {
             Command::OpenFolder { path } => self.open_folder(PathBuf::from(path), true),
             Command::Navigate { path } => self.open_folder(PathBuf::from(path), false),
             Command::Refresh => {
+                self.state.tree_revision += 1;
                 self.refresh_current();
                 Ok(Some("Refreshed".to_owned()))
             }
@@ -661,6 +665,7 @@ impl Core {
             .map_err(|error| ProtocolError::new("not_found", format!("{error}")))?;
         let created = ops::create_folder(&parent, name)
             .map_err(|error| ProtocolError::new("io_error", error))?;
+        self.state.tree_revision += 1;
         self.refresh_current();
         Ok(Some(format!("Created {}", created.display())))
     }

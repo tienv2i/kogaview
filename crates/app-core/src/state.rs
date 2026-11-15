@@ -48,6 +48,10 @@ pub struct UiState {
     /// access, "Open folder", launch argument) moves it; plain navigation
     /// inside the tree or the grid leaves it alone.
     pub root_folder: Option<String>,
+    /// Bumped whenever an operation may have changed the folder tree (copy,
+    /// move, trash, delete, new folder, explicit refresh). The explorer reloads
+    /// its nodes when this changes and keeps its expansion and current folder.
+    pub tree_revision: u64,
     pub breadcrumbs: Vec<Crumb>,
     pub entries: Vec<Entry>,
     pub selection: Vec<String>,
@@ -82,6 +86,7 @@ impl UiState {
             theme,
             current_folder: None,
             root_folder: None,
+            tree_revision: 0,
             breadcrumbs: Vec::new(),
             entries: Vec::new(),
             selection: Vec::new(),

@@ -99,9 +99,13 @@ private:
     return found;
   }
 
+  /// Let Qt Quick finish the pending layout pass before measuring an item.
+  static void settle() { QTest::qWait(20); }
+
   /// Click the centre of `item` with the left button, in window coordinates.
   void click(QQuickView* view, QQuickItem* item, bool doubleClick = false)
   {
+    settle();
     const QPointF centre = item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0));
     if (doubleClick) {
       QTest::mouseDClick(view, Qt::LeftButton, Qt::NoModifier, centre.toPoint());
@@ -172,6 +176,51 @@ private:
     return parts.join(QStringLiteral(", "));
   }
 
+  /// Install the stub folder lister. `extraRoot` adds a folder that only
+  /// appears after the "file operation", which is how a tree refresh is
+  /// observed; `extraSub` instead adds one inside `/root/sub` so the root
+  /// listing stays identical and the refresh has to reach a grandchild.
+  void installFolderStub(bool extraRoot = false, bool extraSub = false)
+  {
+    const QString rootBody =
+      extraRoot ? QStringLiteral("[ { name: 'dirA', path: '/root/dirA' },"
+                                 "  { name: 'sub', path: '/root/sub' },"
+                                 "  { name: 'fresh', path: '/root/fresh' } ]")
+                : QStringLiteral("[ { name: 'dirA', path: '/root/dirA' },"
+                                 "  { name: 'sub', path: '/root/sub' } ]");
+    const QString subBody =
+      extraSub ? QStringLiteral("[ { name: 'deep', path: '/root/sub/deep' },"
+                                "  { name: 'born', path: '/root/sub/born' } ]")
+               : QStringLiteral("[ { name: 'deep', path: '/root/sub/deep' } ]");
+    QQmlExpression expression(
+      m_engine.rootContext(), nullptr,
+      QStringLiteral("(function(path) {\n"
+                     "  if (path === '/root') return { ok: true, folders: %1 };\n"
+                     "  if (path === '/root/sub') return { ok: true, folders: %2 };\n"
+                     "  return { ok: true, folders: [] };\n"
+                     "})")
+        .arg(rootBody, subBody));
+    m_browser->rootObject()->setProperty("listFolders", expression.evaluate());
+  }
+
+  /// The tree node for `path`, or nullptr when the tree does not show it.
+  QQuickItem* findNode(const QString& path)
+  {
+    QQuickItem* root =
+      items(browserItem(), QStringLiteral("folderTreeRoot")).first()->property("item").value<QQuickItem*>();
+    if (root == nullptr) {
+      return nullptr;
+    }
+    QList<QQuickItem*> nodes;
+    collectNodes(root, &nodes);
+    for (QQuickItem* candidate : nodes) {
+      if (candidate->property("nodePath").toString() == path) {
+        return candidate;
+      }
+    }
+    return nullptr;
+  }
+
   QVariantMap baseState() const
   {
     QVariantList entries;
@@ -223,19 +272,26 @@ private slots:
   {
     // Fresh BrowserView state for every test, with a stub folder lister so the
     // tree can populate without touching the filesystem.
-    QQmlExpression expression(
-      m_engine.rootContext(), nullptr,
-      QStringLiteral("(function(path) {\n"
-                     "  if (path === '/root') {\n"
-                     "    return { ok: true, folders: ["
-                     "      { name: 'dirA', path: '/root/dirA' },"
-                     "      { name: 'sub', path: '/root/sub' } ] };\n"
-                     "  }\n"
-                     "  return { ok: true, folders: [] };\n"
-                     "})"));
-    m_browser->rootObject()->setProperty("listFolders", expression.evaluate());
-    m_browser->rootObject()->setProperty("state", baseState());
+    installFolderStub();
+    QQuickItem* view = browserItem();
+    // Expansion bookkeeping and the revision baseline live on the view, so a
+    // previous test would otherwise leak its expanded paths (and a folder it
+    // invented) into the next one.
+    view->setProperty("expandedPaths", QVariantMap());
+    view->setProperty("collapsedPaths", QVariantMap());
+    view->setProperty("lastTreeRevision", -1);
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("treeRevision"), 0);
+    view->setProperty("state", state);
     QCoreApplication::processEvents();
+
+    // Rebuild the tree from the stub just installed and wait out the coalesced
+    // refresh, so every test starts from a settled tree built from its own
+    // folder lister and no reload fires in the middle of a test.
+    QMetaObject::invokeMethod(view, "reloadTree", Qt::DirectConnection);
+    QTest::qWait(200);
+    QVERIFY(findNode(QStringLiteral("/root/fresh")) == nullptr);
+    QVERIFY(findNode(QStringLiteral("/root/dirA")) != nullptr);
   }
 
   // ---------------------------------------------------------------- switcher
@@ -488,6 +544,163 @@ private slots:
     }
     QVERIFY2(opened, qPrintable(QStringLiteral("no open_file for the image, got: %1")
                                   .arg(describe(commands(spy)))));
+  }
+
+  /// A file operation (copy, move, trash, delete, new folder) bumps
+  /// `treeRevision`; the tree then rebuilds itself from the filesystem but keeps
+  /// the expansion and the folder that is currently open.
+  void treeRefreshRebuildsNodesAndKeepsPosition()
+  {
+    QQuickItem* state0 = browserItem();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+
+    // Baseline revision: recording it must not reload anything by itself.
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("treeRevision"), 7);
+    state0->setProperty("state", state);
+    QTest::qWait(250); // let the refresh this baseline change scheduled land
+
+    // Expand a node that the current folder does not sit in, so only the
+    // restore logic can keep it open.
+    QQuickItem* dirA = findNode(QStringLiteral("/root/dirA"));
+    QVERIFY(dirA != nullptr);
+    click(m_browser, items(dirA, QStringLiteral("folderTreeRow")).first());
+    QCOMPARE(dirA->property("expanded").toBool(), true);
+    QCOMPARE(spy.count(), 1);
+
+    // The filesystem gains a folder, and Core announces the change.
+    installFolderStub(true);
+    state.insert(QStringLiteral("treeRevision"), 8);
+    state0->setProperty("state", state);
+
+    QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
+                 "the tree did not refresh after the tree revision changed");
+    QQuickItem* dirAfter = findNode(QStringLiteral("/root/dirA"));
+    QVERIFY(dirAfter != nullptr);
+    QCOMPARE(dirAfter->property("expanded").toBool(), true);
+    QVERIFY2(findNode(QStringLiteral("/root/sub")) != nullptr, "the sub folder disappeared");
+
+    // The root and the folder on screen are untouched, and the refresh itself
+    // must not send any command.
+    QCOMPARE(items(state0, QStringLiteral("folderTreeRoot")).first()
+               ->property("folderPath").toString(),
+             QStringLiteral("/root"));
+    QCOMPARE(state0->property("state").toMap().value(QStringLiteral("currentFolder")).toString(),
+             QStringLiteral("/root/sub"));
+    QCOMPARE(spy.count(), 1);
+  }
+
+  /// A change two levels down must reach the tree too. The root listing is
+  /// unchanged, so no root delegate is recreated: the refresh has to walk into
+  /// the already-expanded child nodes. Before that recursion existed the tree
+  /// kept showing the stale grandchild rows while the grid was already fresh.
+  void treeRefreshReachesAnUnchangedParent()
+  {
+    QQuickItem* view = browserItem();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("treeRevision"), 11);
+    view->setProperty("state", state);
+    QTest::qWait(250); // let the refresh this baseline change scheduled land
+
+    // `/root/sub` is the current folder, so auto-reveal opened it.
+    QQuickItem* sub = findNode(QStringLiteral("/root/sub"));
+    QVERIFY(sub != nullptr);
+    QCOMPARE(sub->property("expanded").toBool(), true);
+    QVERIFY2(findNode(QStringLiteral("/root/sub/deep")) != nullptr, "sub is not expanded");
+    QVERIFY(findNode(QStringLiteral("/root/sub/born")) == nullptr);
+
+    // A folder is created inside the open sub folder; `/root` itself is
+    // unchanged, which is exactly the case delegate re-creation cannot cover.
+    installFolderStub(false, true);
+    state.insert(QStringLiteral("treeRevision"), 12);
+    view->setProperty("state", state);
+
+    QTRY_VERIFY2(findNode(QStringLiteral("/root/sub/born")) != nullptr,
+                 "the refresh did not reach the expanded child node");
+    QVERIFY2(findNode(QStringLiteral("/root/sub/deep")) != nullptr, "a sibling row disappeared");
+
+    QQuickItem* subAfter = findNode(QStringLiteral("/root/sub"));
+    QVERIFY(subAfter != nullptr);
+    QCOMPARE(subAfter->property("expanded").toBool(), true);
+    QCOMPARE(items(view, QStringLiteral("folderTreeRoot")).first()->property("folderPath").toString(),
+             QStringLiteral("/root"));
+    QCOMPARE(view->property("state").toMap().value(QStringLiteral("currentFolder")).toString(),
+             QStringLiteral("/root/sub"));
+    QCOMPARE(spy.count(), 0);
+  }
+
+  /// A node the user collapsed stays collapsed across a refresh.
+  void treeRefreshRespectsUserCollapse()
+  {
+    QQuickItem* view = browserItem();
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("treeRevision"), 2);
+    view->setProperty("state", state);
+    QCoreApplication::processEvents();
+
+    // `followCurrent` opened /root/sub because it is the current folder.
+    QQuickItem* sub = findNode(QStringLiteral("/root/sub"));
+    QVERIFY(sub != nullptr);
+    QCOMPARE(sub->property("expanded").toBool(), true);
+
+    QQuickItem* row = items(sub, QStringLiteral("folderTreeRow")).first();
+    click(m_browser, row); // navigate, still expanded
+    QCOMPARE(sub->property("expanded").toBool(), true);
+
+    QQuickItem* chevron = nullptr;
+    for (QQuickItem* candidate : allDescendants(row)) {
+      const QString text = candidate->property("text").toString();
+      if (text == QStringLiteral("\u25be") || text == QStringLiteral("\u25b8")) {
+        chevron = candidate;
+        break;
+      }
+    }
+    QVERIFY(chevron != nullptr);
+    click(m_browser, chevron);
+    QCOMPARE(sub->property("expanded").toBool(), false);
+
+    installFolderStub(true);
+    state.insert(QStringLiteral("treeRevision"), 3);
+    view->setProperty("state", state);
+    QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
+                 "the tree did not refresh after the tree revision changed");
+
+    QQuickItem* subAfter = findNode(QStringLiteral("/root/sub"));
+    QVERIFY(subAfter != nullptr);
+    QCOMPARE(subAfter->property("expanded").toBool(), false);
+  }
+
+  /// Without a revision bump nothing is reloaded, so ordinary state updates
+  /// (selection, workspace, status) do not rebuild the tree.
+  void treeIsNotReloadedWithoutATreeRevision()
+  {
+    QQuickItem* view = browserItem();
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("treeRevision"), 4);
+    view->setProperty("state", state);
+    QCoreApplication::processEvents();
+    QVERIFY(findNode(QStringLiteral("/root/fresh")) == nullptr);
+
+    // Recording the baseline revision schedules one refresh (coalesced by a
+    // timer); let it land before the "filesystem" changes, otherwise that
+    // already-pending reload would pick up the new folder and this control
+    // would no longer be about the revision bump below.
+    QTest::qWait(250);
+    QVERIFY(findNode(QStringLiteral("/root/fresh")) == nullptr);
+
+    installFolderStub(true);
+    state.insert(QStringLiteral("selection"), QStringList{ QStringLiteral("/root/img.png") });
+    view->setProperty("state", state);
+    QTest::qWait(400);
+    QVERIFY2(findNode(QStringLiteral("/root/fresh")) == nullptr,
+             "the tree reloaded without a tree revision change");
+
+    state.insert(QStringLiteral("treeRevision"), 5);
+    view->setProperty("state", state);
+    QTRY_VERIFY2(findNode(QStringLiteral("/root/fresh")) != nullptr,
+                 "the tree did not reload when the revision changed");
   }
 
   /// Breadcrumbs navigate like the tree: they do not re-root anything.

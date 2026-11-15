@@ -69,6 +69,8 @@ did not change the evidence.
 | 25 | Workspace switcher shows icon *and* text | `tests/qml/tst_browser.cpp` (run by `just test`) loading the real `WorkspaceSwitcher.qml`, asserting `display == AbstractButton.TextBesideIcon`, non-empty `icon.name`, the label, a content width wider than the icon alone and a button at least as wide as its content; plus `docs/evidence/M1-explorer-root.png` | Browser/Viewer/Editor each render as `<icon> <text>`; clicking Viewer emits `selected("viewer")` and the checked state follows the workspace Core reports |
 | 26 | Explorer keeps its root | `tests/qml/tst_browser.cpp` driving real mouse events (`QTest::mouseClick`/`mouseDClick`) on the tree row, the disclosure arrow, the grid cell, a quick-access entry and a breadcrumb; plus `KOGAVIEW_DEV_COMMANDS` + `KOGAVIEW_DEV_STATE` on the real binary | tree row → `navigate:/root/dirA` (never `open_folder`) and the node expands; disclosure arrow toggles without emitting a command; grid double-click on a folder → `navigate`, on an image → `open_file`; quick access → `open_folder:/fav`. Real binary: `open_folder photos` → `rootFolder photos / currentFolder photos`; `navigate photos/sub` → `rootFolder photos / currentFolder photos/sub` — the tree stayed rooted at `photos` while the grid showed `sub` (`docs/evidence/M1-explorer-root.png`) |
 | 27 | Explorer regression check | reintroduced each old behaviour in turn (tree click and grid double-click sending `open_folder`, tree rooted at `currentFolder`, icon-only mode buttons) and re-ran `kogaview_browser_qml_tests` | each mutation is caught: `treeClickNavigatesWithoutRerooting`, `gridDoubleClickOnFolderNavigates`, `treeIsRootedAtTheOpenedFolder` and `switcherShowsIconAndText` fail respectively; the restored sources pass 11/11 |
+| 28 | Tree refreshes after a right-click file operation | `tests/qml/tst_browser.cpp` (`treeRefreshRebuildsNodesAndKeepsPosition`, `treeRefreshReachesAnUnchangedParent`, `treeRefreshRespectsUserCollapse`, `treeIsNotReloadedWithoutATreeRevision`) loading the real `BrowserView.qml` with a stub `listFolders` that gains a folder mid-test; plus `KOGAVIEW_DEV_COMMANDS` + `KOGAVIEW_DEV_STATE` on the real binary | a folder created inside the open `sub` folder appears under the same still-expanded `sub` row, a sibling row survives, the root row stays `photos`, `currentFolder` stays `photos/sub` and the refresh emits no command; a node the user collapsed stays collapsed; selection/status-only state changes reload nothing. Real binary: `new_folder` in `photos/sub` → `treeRevision 0 → 1`, tree row `after-refresh` appears under `sub`, breadcrumbs and grid still on `photos/sub`, root still `photos` (`docs/evidence/M1-tree-refresh.png`, which is the `move_to` case: the moved folder leaves `sub` and appears at the `photos` level while `sub` stays open) |
+| 29 | Tree refresh regression check | reintroduced each failure mode in turn (no `treeRevision` watcher, no `expandedPaths` restore on recreated nodes, auto-reveal ignoring a deliberate collapse, a non-recursive reload) and re-ran `kogaview_browser_qml_tests` | each mutation is caught: the two refresh tests time out, `treeRefreshRebuildsNodesAndKeepsPosition` loses the expansion, `treeRefreshRespectsUserCollapse` and `treeChevronOnlyTogglesTheNode` re-expand, and `treeRefreshReachesAnUnchangedParent` still shows the stale children; the restored sources pass 15/15 |
 
 ### Dev harness used for evidence
 
@@ -82,9 +84,10 @@ window to observe scroll-to-zoom on the real shell). The geometry log relies on
 the stable `objectName`s `viewer`, `viewerViewport`, `viewerCanvas` and
 `viewerWheelHandler`.
 
-`KOGAVIEW_DEV_STATE` prints `rootFolder`/`currentFolder`/`workspace` after every
-dev command, which is how "navigation must not re-root the explorer" is checked
-from a log.
+`KOGAVIEW_DEV_STATE` prints `rootFolder`/`currentFolder`/`workspace`/`treeRevision`
+after every dev command, plus the paths the tree currently has expanded, which is
+how "navigation must not re-root the explorer" and "a file operation refreshes
+the tree without losing the open position" are checked from a log.
 
 The repeatable part of this is not the hooks: `just test` runs two Qt Quick
 suites that load the unchanged QML sources and assert on what Qt Quick actually
@@ -189,6 +192,7 @@ regressions fail the pipeline instead of only showing up on screen.
 - `docs/evidence/M1-viewer.png`
 - `docs/evidence/M1-viewer-scroll-zoom.png` (injected touchpad scroll: zoom 0.77175 → 0.895978, anchored on the cursor)
 - `docs/evidence/M1-explorer-root.png` (current folder `photos/sub` in the grid and the breadcrumbs while the tree stays rooted at `photos`)
+- `docs/evidence/M1-tree-refresh.png` (after `move_to`: the tree row `after-refresh` left `photos/sub` and appeared at the `photos` level, with `sub` still expanded and still the folder on screen)
 
 The browser and viewer screenshots above were captured before rows 25–27, so
 they still show the icon-only mode buttons; `M1-explorer-root.png` shows the

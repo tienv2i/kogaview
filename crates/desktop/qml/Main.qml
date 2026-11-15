@@ -358,6 +358,7 @@ ApplicationWindow {
     Component {
         id: browserComponent
         BrowserView {
+            objectName: "browser"
             theme: appTheme
             state: root.state
             listFolders: root.listFolders
