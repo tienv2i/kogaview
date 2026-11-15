@@ -61,6 +61,7 @@ did not change the evidence.
 | 18 | Structured logs | `~/.local/state/kogaview-dev/logs/kogaview.jsonl.*` | startup record with app ID, profile, version, git SHA, protocol version, state/log dirs, boot ID |
 | 19 | Deep breadcrumbs | `open-folder` of a seven-level path under `/tmp/opencode/deep/` | breadcrumbs stay on one row: `/ › … › third-long…ment-gamma › … › leaf`; the root stays visible and `…` opens the hidden parents — `docs/evidence/M1-browser-deep-crumbs.png` |
 | 20 | Viewer navigation | dev hook `viewer_next` twice from `sunset.png` | moved to `mono.bmp` at `1 / 5`, wrapping the ordered set (`mono, portrait, square, sunset, wide`); revisions 3 and 4 |
+| 21 | Scroll-to-zoom | synthetic `QWheelEvent`s into the real `Viewer.qml` (PySide6 harness) | mouse `angleDelta` 120: `1.0 → 1.1971 → 1.0`; touchpad `pixelDelta` 15: `1.0 → 1.1610`; the point under the cursor stayed fixed, including with a 50 px toolbar offset and 90° rotation |
 
 ### Bugs found and fixed during verification
 
@@ -76,6 +77,12 @@ did not change the evidence.
   `ToolbarSeparator`.
 - Collapsing the breadcrumbs hid the filesystem root, so a long path offered no
   anchor. The root now always stays visible and the middle elides behind `…`.
+- Scroll-to-zoom ignored touchpad scrolling: the handler only read
+  `angleDelta`, while Wayland delivers two-finger scrolling as continuous
+  `pixelDelta` with `angleDelta` zero. Both are now supported, and zoom is
+  anchored at the cursor.
+- The QML `WheelEvent` exposes `x`/`y`, not `position`; anchoring now uses the
+  actual properties.
 - Qt logs (including QML warnings) are routed to journald when stderr is not a
   TTY; evidence runs set `QT_ASSUME_STDERR_HAS_CONSOLE=1`.
 
@@ -90,8 +97,12 @@ did not change the evidence.
   A second simultaneous instance cannot register the same portal app ID (`Could
   not register app ID: Connection already associated with an application ID`), so
   the portal dialog was not exercised while the owner's instance was running.
-- Panning and scroll-to-zoom were not driven with synthetic input; the handlers
-  are in `Viewer.qml` and the image transform is applied.
+- Panning was not driven with synthetic input; the handler is in `Viewer.qml`.
+  Scroll-to-zoom was verified by dispatching synthetic `QWheelEvent`s into the
+  real `Viewer.qml` (via PySide6), both mouse-style `angleDelta` and the
+  touchpad-style `pixelDelta` that Wayland emits; anchoring under the cursor was
+  checked with and without a toolbar offset. Physical mouse/touchpad input was
+  not driven in this session.
 - Thumbnails are decoded by Qt's `Image` element per delegate; there is no
   thumbnail cache, downscale pipeline or EXIF orientation yet (M2/M3).
 - Viewer rotate/flip are presentation-only and reset when the image changes.

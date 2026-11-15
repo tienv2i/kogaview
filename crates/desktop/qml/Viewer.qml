@@ -30,6 +30,23 @@ Item {
         view.zoom = Math.max(0.05, Math.min(16, value));
     }
 
+    // Zoom while keeping the image point under the cursor fixed.
+    // `pointX`/`pointY` are in viewport coordinates.
+    function zoomAt(factor, pointX, pointY) {
+        var previous = view.zoom > 0 ? view.zoom : 1;
+        var next = Math.max(0.05, Math.min(16, previous * factor));
+        if (Math.abs(next - previous) < 0.000001) {
+            return;
+        }
+        var centerX = viewport.width / 2 + view.offsetX;
+        var centerY = viewport.height / 2 + view.offsetY;
+        var shift = 1 - next / previous;
+        view.offsetX += (pointX - centerX) * shift;
+        view.offsetY += (pointY - centerY) * shift;
+        view.zoom = next;
+        view.autoFit = false;
+    }
+
     function zoomIn() {
         view.autoFit = false;
         view.setZoom(view.zoom * 1.25);
@@ -41,7 +58,8 @@ Item {
     }
 
     function fit() {
-        if (image.implicitWidth > 0 && image.implicitHeight > 0) {
+        if (viewport.width > 0 && viewport.height > 0
+                && image.implicitWidth > 0 && image.implicitHeight > 0) {
             view.zoom = Math.min(viewport.width / image.implicitWidth,
                                  viewport.height / image.implicitHeight) * 0.98;
             view.offsetX = 0;
@@ -131,9 +149,21 @@ Item {
             WheelHandler {
                 onWheel: function(event) {
                     if (!view.currentPath) return;
-                    var factor = Math.pow(1.0015, event.angleDelta.y);
-                    view.autoFit = false;
-                    view.setZoom(view.zoom * factor);
+                    // A mouse wheel reports `angleDelta`; Wayland touchpads
+                    // report continuous `pixelDelta` with angleDelta 0, so both
+                    // must be supported or scrolling does nothing on a laptop.
+                    var factor = 1;
+                    if (event.angleDelta.y !== 0) {
+                        factor = Math.pow(1.0015, event.angleDelta.y);
+                    } else if (event.pixelDelta.y !== 0) {
+                        factor = Math.pow(1.01, event.pixelDelta.y);
+                    } else {
+                        return;
+                    }
+                    // Keep a single event from jumping wildly on high-resolution
+                    // wheels or very fast trackpad gestures.
+                    factor = Math.max(0.5, Math.min(2, factor));
+                    view.zoomAt(factor, event.x, event.y);
                     event.accepted = true;
                 }
             }
