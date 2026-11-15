@@ -107,6 +107,7 @@ Item {
 
         Item {
             id: viewport
+            objectName: "viewerViewport"
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
@@ -118,14 +119,24 @@ Item {
 
             Item {
                 id: canvas
+                objectName: "viewerCanvas"
                 width: Math.max(1, image.implicitWidth)
                 height: Math.max(1, image.implicitHeight)
+                // `scale` and `rotation` pivot on the item centre, so the
+                // position is the unscaled top-left that centres the item in
+                // the viewport. Multiplying `width` by `scale` here would
+                // count the scale twice and push the image down/right.
                 scale: view.zoom
                 rotation: view.rotationAngle
-                x: viewport.width / 2 - width * scale / 2 + view.offsetX
-                y: viewport.height / 2 - height * scale / 2 + view.offsetY
+                x: (viewport.width - width) / 2 + view.offsetX
+                y: (viewport.height - height) / 2 + view.offsetY
 
+                // A `Scale` transform pivots on its `origin`, which defaults to
+                // the item's top-left corner; mirroring there would throw the
+                // image out of the viewport, so flip around the centre.
                 transform: Scale {
+                    origin.x: canvas.width / 2
+                    origin.y: canvas.height / 2
                     xScale: view.flipH ? -1 : 1
                     yScale: view.flipV ? -1 : 1
                 }
@@ -147,6 +158,7 @@ Item {
             }
 
             WheelHandler {
+                acceptedDevices: PointerDevice.AllDevices
                 onWheel: function(event) {
                     if (!view.currentPath) return;
                     // A mouse wheel reports `angleDelta`; Wayland touchpads

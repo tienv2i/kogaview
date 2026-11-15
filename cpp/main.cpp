@@ -65,6 +65,33 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
 // The permission-checked `debug.screenshot` command replaces this later.
 void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper& platform)
 {
+  // QA hook: print the Viewer canvas geometry so layout and centring
+  // regressions can be caught without pixel measurements. Geometry only; it
+  // never injects input events.
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_GEOM")) {
+    auto* timer = new QTimer(&app);
+    timer->setInterval(400);
+    QObject::connect(timer, &QTimer::timeout, &app, [rootObject]() {
+      QObject* viewer = rootObject->findChild<QObject*>(QStringLiteral("viewer"));
+      QObject* viewport = rootObject->findChild<QObject*>(QStringLiteral("viewerViewport"));
+      QObject* canvas = rootObject->findChild<QObject*>(QStringLiteral("viewerCanvas"));
+      if (viewer == nullptr || viewport == nullptr || canvas == nullptr) {
+        return;
+      }
+      qInfo() << "KogaView dev geom: viewport" << viewport->property("width").toDouble()
+              << viewport->property("height").toDouble() << "canvas"
+              << canvas->property("x").toDouble() << canvas->property("y").toDouble()
+              << canvas->property("width").toDouble()
+              << canvas->property("height").toDouble() << "scale"
+              << canvas->property("scale").toDouble() << "rotation"
+              << canvas->property("rotation").toDouble() << "offset"
+              << viewer->property("offsetX").toDouble()
+              << viewer->property("offsetY").toDouble() << "zoom"
+              << viewer->property("zoom").toDouble();
+    });
+    timer->start();
+  }
+
   // Exercise the platform image clipboard without synthetic input events.
   const QString copyImage = qEnvironmentVariable("KOGAVIEW_DEV_COPY_IMAGE");
   if (!copyImage.isEmpty()) {

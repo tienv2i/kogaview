@@ -404,6 +404,7 @@ ApplicationWindow {
     Component {
         id: viewerComponent
         Viewer {
+            objectName: "viewer"
             theme: appTheme
             state: root.state
             onCommand: function(command) { root.send(command); }

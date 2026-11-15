@@ -61,7 +61,17 @@ did not change the evidence.
 | 18 | Structured logs | `~/.local/state/kogaview-dev/logs/kogaview.jsonl.*` | startup record with app ID, profile, version, git SHA, protocol version, state/log dirs, boot ID |
 | 19 | Deep breadcrumbs | `open-folder` of a seven-level path under `/tmp/opencode/deep/` | breadcrumbs stay on one row: `/ › … › third-long…ment-gamma › … › leaf`; the root stays visible and `…` opens the hidden parents — `docs/evidence/M1-browser-deep-crumbs.png` |
 | 20 | Viewer navigation | dev hook `viewer_next` twice from `sunset.png` | moved to `mono.bmp` at `1 / 5`, wrapping the ordered set (`mono, portrait, square, sunset, wide`); revisions 3 and 4 |
-| 21 | Scroll-to-zoom | synthetic `QWheelEvent`s into the real `Viewer.qml` (PySide6 harness) | mouse `angleDelta` 120: `1.0 → 1.1971 → 1.0`; touchpad `pixelDelta` 15: `1.0 → 1.1610`; the point under the cursor stayed fixed, including with a 50 px toolbar offset and 90° rotation |
+| 21 | Viewer layout and centring | Qt Quick harness loading the real `Viewer.qml` (`offscreen` QPA) that asserts `canvas.mapToItem(viewport, …)` corners, plus pixel measurement of the runtime screenshots | bbox centre equals viewport centre within 1 px for fit, 100 %, 3× (clipped on all sides) and 90°/180°/270° rotation, flipped H/V, for both a 1200×800 and a 600×900 image; panning by (40, −25) moves the image by exactly (40, −25); `zoomAt` keeps the image point under the cursor fixed (measured drift 0.00 px at three cursor positions). Real binary: image spans x 177–1102 (centre 639.5) of a 1280-wide viewport, y 57–674 = 617 px = 800 × 0.77175, unclipped |
+
+### Dev harness used for evidence
+
+The Debug binary enables `KOGAVIEW_DEV_*` hooks; every hook is inert unless its
+environment variable is set. Used here: `KOGAVIEW_DEV_COMMANDS` (dispatch
+protocol commands), `KOGAVIEW_DEV_SCREENSHOT*` (grab the window),
+`KOGAVIEW_DEV_COPY_IMAGE`, `KOGAVIEW_DEV_EXIT_AFTER_MS` and `KOGAVIEW_DEV_GEOM`
+(log the viewer canvas geometry behind the centring measurements). The geometry
+log relies on the stable `objectName`s `viewer`, `viewerViewport` and
+`viewerCanvas`.
 
 ### Bugs found and fixed during verification
 
@@ -77,10 +87,23 @@ did not change the evidence.
   `ToolbarSeparator`.
 - Collapsing the breadcrumbs hid the filesystem root, so a long path offered no
   anchor. The root now always stays visible and the middle elides behind `…`.
+- The viewer canvas was positioned with `x: viewport.width / 2 - width * scale / 2`.
+  `scale` and `rotation` already pivot on the item centre, so multiplying by
+  `scale` counted the zoom twice: the first image of a session was drawn down
+  and to the right (measured image centre x = 776 in a 1280-wide viewport) with
+  its bottom edge clipped, and the wrong position was never recomputed. The
+  position now uses the unscaled size,
+  `x: (viewport.width - width) / 2 + view.offsetX`, which is scale-invariant
+  because the pivot is the centre.
+- Flip mirrored the image about the `Scale` transform's default origin, the
+  item's top-left corner, so "flip horizontal" moved it out of the viewport
+  (bbox centre went to x = −560). The flip transform now pivots on the canvas
+  centre.
 - Scroll-to-zoom ignored touchpad scrolling: the handler only read
   `angleDelta`, while Wayland delivers two-finger scrolling as continuous
   `pixelDelta` with `angleDelta` zero. Both are now supported, and zoom is
-  anchored at the cursor.
+  anchored at the cursor (the anchoring maths is verified; the input path is
+  not, see below).
 - The QML `WheelEvent` exposes `x`/`y`, not `position`; anchoring now uses the
   actual properties.
 - Qt logs (including QML warnings) are routed to journald when stderr is not a
@@ -97,12 +120,21 @@ did not change the evidence.
   A second simultaneous instance cannot register the same portal app ID (`Could
   not register app ID: Connection already associated with an application ID`), so
   the portal dialog was not exercised while the owner's instance was running.
-- Panning was not driven with synthetic input; the handler is in `Viewer.qml`.
-  Scroll-to-zoom was verified by dispatching synthetic `QWheelEvent`s into the
-  real `Viewer.qml` (via PySide6), both mouse-style `angleDelta` and the
-  touchpad-style `pixelDelta` that Wayland emits; anchoring under the cursor was
-  checked with and without a toolbar offset. Physical mouse/touchpad input was
-  not driven in this session.
+- Panning and scroll-to-zoom were **not** driven with input events. Panning is
+  verified only through the transform maths (offsets move the image by exactly
+  the offset). Scroll-to-zoom is **deferred**: the handler supports mouse
+  `angleDelta` and touchpad `pixelDelta` with cursor anchoring, and the anchored
+  zoom itself is verified by calling `zoomAt` directly, but no wheel event ever
+  reached a QML `WheelHandler` in this session from any injection path —
+  `QTest.wheelEvent()` and `QGuiApplication::sendEvent(window, QWheelEvent)`
+  reported delivery while the handler stayed silent on this Wayland session, and
+  GNOME's RemoteDesktop `NotifyPointerAxisDiscrete` arrived at the app as a
+  drag/pan (`DragHandler` became active) rather than as a wheel event on the
+  fullscreen test window, so that harness cannot be trusted either. `QTest`
+  wheel injection does reach `WheelHandler` under the `offscreen` QPA plugin,
+  which is why an earlier revision of this report wrongly claimed on-device
+  verification; that claim is withdrawn. Confirming scroll-to-zoom needs a real
+  mouse/touchpad or a `uinput`-backed injector, neither of which was available.
 - Thumbnails are decoded by Qt's `Image` element per delegate; there is no
   thumbnail cache, downscale pipeline or EXIF orientation yet (M2/M3).
 - Viewer rotate/flip are presentation-only and reset when the image changes.
