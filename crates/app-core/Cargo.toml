@@ -7,7 +7,17 @@ rust-version.workspace = true
 build = "build.rs"
 
 [dependencies]
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+    "tiff",
+] }
 kogaview-protocol = { path = "../app-protocol" }
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true

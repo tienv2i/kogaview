@@ -2,8 +2,8 @@
 
 use crate::build_info;
 
-pub const PROD_APP_ID: &str = "io.github.huynhat.KogaView";
-pub const DEV_APP_ID: &str = "io.github.huynhat.KogaView.Dev";
+pub const PROD_APP_ID: &str = "io.github.tienv2i.KogaView";
+pub const DEV_APP_ID: &str = "io.github.tienv2i.KogaView.Dev";
 pub const BASE_DISPLAY_NAME: &str = "KogaView";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +41,18 @@ impl Profile {
         match self {
             Self::Dev => DEV_APP_ID,
             Self::Prod => PROD_APP_ID,
+        }
+    }
+
+    /// Directory name used under the XDG roots.
+    ///
+    /// Deliberately the short application name (`kogaview`, `kogaview-dev`)
+    /// rather than the reverse-DNS ID: the user-facing config lives at
+    /// `$XDG_CONFIG_HOME/kogaview[-dev]/config.json`.
+    pub const fn dir_name(self) -> &'static str {
+        match self {
+            Self::Dev => "kogaview-dev",
+            Self::Prod => "kogaview",
         }
     }
 
@@ -86,11 +98,13 @@ mod tests {
         assert_ne!(Profile::Dev.display_name(), Profile::Prod.display_name());
         assert!(Profile::Dev.display_name().ends_with("(Dev)"));
         assert_eq!(Profile::Prod.display_name(), BASE_DISPLAY_NAME);
+        assert_ne!(Profile::Dev.dir_name(), Profile::Prod.dir_name());
     }
 
     #[test]
     fn app_ids_share_the_project_namespace() {
         assert!(DEV_APP_ID.starts_with(PROD_APP_ID));
         assert!(Profile::Dev.app_id().ends_with(".Dev"));
+        assert!(PROD_APP_ID.starts_with("io.github.tienv2i."));
     }
 }

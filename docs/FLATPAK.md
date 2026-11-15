@@ -4,7 +4,7 @@
 Develop native-first, remain sandbox-compatible, package Flatpak later. This document defines design constraints, **not** a claim that a Flatpak package already exists or works.
 
 ## Identity and desktop metadata
-- Choose one stable reverse-DNS application ID before publishing (placeholder: `io.github.huynhat.KogaView`; replace with an ID you control).
+- Choose one stable reverse-DNS application ID before publishing (placeholder: `io.github.tienv2i.KogaView`; replace with an ID you control).
 - Align the ID across Flatpak manifest, `.desktop` file, AppStream metadata and installed icon names.
 - Prepare MIME associations, desktop integration and localization metadata.
 

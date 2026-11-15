@@ -10,7 +10,7 @@ Milestone: M0 (see `docs/IMPLEMENTATION_PLAN.md`)
   `kogaview-core`, `kogaview_desktop` (CXX-Qt static library) plus the
   `kogaview` CMake/Qt executable.
 - CXX-Qt 0.10 + CMake (Corrosion) + Qt 6.12 shell; QML module
-  `io.github.huynhat.KogaView`, Browser placeholder with header/footer identity.
+  `io.github.tienv2i.KogaView`, Browser placeholder with header/footer identity.
 - Core identity: dev/prod app IDs, display names, XDG state/cache/config/data
   paths, build version and git SHA, protocol version constant.
 - Structured JSON logging to the XDG state directory plus compact stderr, with
@@ -42,7 +42,7 @@ Milestone: M0 (see `docs/IMPLEMENTATION_PLAN.md`)
 - OS: Arch Linux (rolling), kernel 7.2.15.
 - Session: GNOME on Wayland (`wayland-0`), Qt 6.12.0.
 - Window showed `KogaView (Dev)`, version `0.1.0`, git SHA `70c4a6cc1402`,
-  profile `dev`, app ID `io.github.huynhat.KogaView.Dev`, workspace `browser`,
+  profile `dev`, app ID `io.github.tienv2i.KogaView.Dev`, workspace `browser`,
   state revision `0`, protocol `v1`.
 
 ## UI actions actually performed
@@ -69,11 +69,11 @@ those are M1+ behavior and were not claimed.
 - Screenshot (Browser): `docs/evidence/M0-browser.png`
 - Screenshot (bridge probe, count 10): `docs/evidence/M0-bridge-probe.png`
 - Log directory:
-  `$XDG_STATE_HOME/io.github.huynhat.KogaView.Dev/logs/kogaview.jsonl.2026-11-15`
+  `$XDG_STATE_HOME/io.github.tienv2i.KogaView.Dev/logs/kogaview.jsonl.2026-11-15`
 - Startup record (abridged):
 
 ```json
-{"timestamp":"2026-11-15T06:50:46.374214Z","level":"INFO","fields":{"message":"application starting","app_id":"io.github.huynhat.KogaView.Dev","display_name":"KogaView (Dev)","profile":"dev","version":"0.1.0","git_sha":"70c4a6cc1402","protocol_version":1,"state_dir":"/home/huynhat/.local/state/io.github.huynhat.KogaView.Dev","log_dir":"/home/huynhat/.local/state/io.github.huynhat.KogaView.Dev/logs","boot_id":"boot-1794725446374-723513"},"target":"kogaview::startup"}
+{"timestamp":"2026-11-15T06:50:46.374214Z","level":"INFO","fields":{"message":"application starting","app_id":"io.github.tienv2i.KogaView.Dev","display_name":"KogaView (Dev)","profile":"dev","version":"0.1.0","git_sha":"70c4a6cc1402","protocol_version":1,"state_dir":"/home/huynhat/.local/state/io.github.tienv2i.KogaView.Dev","log_dir":"/home/huynhat/.local/state/io.github.tienv2i.KogaView.Dev/logs","boot_id":"boot-1794725446374-723513"},"target":"kogaview::startup"}
 ```
 
 - Probe record:

@@ -1,7 +1,10 @@
-//! Sandbox-compatible XDG paths, namespaced by application ID.
+//! Sandbox-compatible XDG paths, namespaced by the application's short name.
 //!
 //! Paths are derived from environment variables so the Core stays independent
 //! of Qt. Packaging and Flatpak must be able to redirect every root.
+//!
+//! Runtime directory names are `kogaview` (production) and `kogaview-dev`
+//! (development); see `docs/adr/0002-runtime-directories-and-config.md`.
 
 use std::path::PathBuf;
 
@@ -20,15 +23,15 @@ pub struct AppPaths {
 
 impl AppPaths {
     pub fn for_identity(identity: &AppIdentity) -> Self {
-        let app_id = identity.app_id;
-        let state_dir = state_home().join(app_id);
+        let dir_name = identity.profile.dir_name();
+        let state_dir = state_home().join(dir_name);
         let log_dir = state_dir.join("logs");
         let journal_dir = state_dir.join("journal");
         let screenshot_dir = state_dir.join("screenshots");
         Self {
-            cache_dir: cache_home().join(app_id),
-            config_dir: config_home().join(app_id),
-            data_dir: data_home().join(app_id),
+            cache_dir: cache_home().join(dir_name),
+            config_dir: config_home().join(dir_name),
+            data_dir: data_home().join(dir_name),
             state_dir,
             log_dir,
             journal_dir,
@@ -49,10 +52,12 @@ impl AppPaths {
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from)
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
-fn home_dir() -> PathBuf {
+pub fn home_dir() -> PathBuf {
     env_path("HOME")
         .or_else(|| env_path("USERPROFILE"))
         .unwrap_or_else(std::env::temp_dir)
@@ -102,7 +107,6 @@ fn data_home() -> PathBuf {
 mod tests {
     use super::*;
     use crate::identity::Profile;
-    use std::path::Path;
 
     fn identity(profile: Profile) -> AppIdentity {
         AppIdentity {
@@ -116,12 +120,17 @@ mod tests {
     }
 
     #[test]
-    fn paths_are_namespaced_by_app_id() {
-        let paths = AppPaths::for_identity(&identity(Profile::Dev));
-        assert!(paths.state_dir.ends_with(Profile::Dev.app_id()));
-        assert!(paths.log_dir.ends_with("logs"));
-        assert!(paths.journal_dir.ends_with("journal"));
-        assert!(paths.screenshot_dir.ends_with("screenshots"));
+    fn paths_use_the_short_application_name() {
+        let dev = AppPaths::for_identity(&identity(Profile::Dev));
+        assert!(dev.state_dir.ends_with("kogaview-dev"));
+        assert!(dev.config_dir.ends_with("kogaview-dev"));
+        assert!(dev.log_dir.ends_with("logs"));
+        assert!(dev.journal_dir.ends_with("journal"));
+        assert!(dev.screenshot_dir.ends_with("screenshots"));
+
+        let prod = AppPaths::for_identity(&identity(Profile::Prod));
+        assert!(prod.state_dir.ends_with("kogaview"));
+        assert!(!prod.config_dir.ends_with("kogaview-dev"));
     }
 
     #[test]
@@ -135,12 +144,11 @@ mod tests {
     }
 
     #[test]
-    fn app_id_is_a_single_path_component() {
-        let paths = AppPaths::for_identity(&identity(Profile::Dev));
-        assert_eq!(
-            paths.state_dir.file_name(),
-            Some(std::ffi::OsStr::new(Profile::Dev.app_id()))
-        );
-        assert_eq!(Path::new(Profile::Dev.app_id()).components().count(), 1);
+    fn directory_names_are_single_path_components() {
+        for profile in [Profile::Dev, Profile::Prod] {
+            let name = profile.dir_name();
+            assert_eq!(std::path::Path::new(name).components().count(), 1);
+            assert!(!name.contains('/'));
+        }
     }
 }

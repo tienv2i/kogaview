@@ -10,24 +10,25 @@ and `photoctl` as placeholder executable names, and `io.github.example.PhotoApp`
 as a placeholder reverse-DNS application ID. The project owner chose
 **KogaView** as the product name and asked for the whole project to be renamed.
 
-The application ID is used for XDG state/cache/config directories, desktop file
-names, MIME registration, Flatpak metadata, single-instance coordination and the
-future IPC endpoint. It must be stable and owned by the project before
-distribution.
+The application ID is used for desktop file names, MIME registration, Flatpak
+metadata, single-instance coordination and the future IPC endpoint. It must be
+stable and owned by the project before distribution. Runtime XDG directories use
+the short name instead; see ADR 0002.
 
 ## Decision
 
 - Product/display name: **KogaView**.
 - Desktop executable: **`kogaview`**.
 - Control client (from M5): **`kogactl`**.
-- QML module URI: `io.github.huynhat.KogaView`.
-- Production app ID: `io.github.huynhat.KogaView`.
-- Development app ID: `io.github.huynhat.KogaView.Dev`.
+- QML module URI: `io.github.tienv2i.KogaView`.
+- Production app ID: `io.github.tienv2i.KogaView`.
+- Development app ID: `io.github.tienv2i.KogaView.Dev`.
 - Development identity is selected by the build profile: debug builds are Dev,
   release builds are production. A `KOGAVIEW_PROFILE` environment override is
   accepted only in debug builds for tests.
-- XDG roots are namespaced by app ID, e.g.
-  `$XDG_STATE_HOME/io.github.huynhat.KogaView.Dev/logs/`.
+- XDG runtime directories are namespaced by the short application name, not the
+  app ID: `$XDG_STATE_HOME/kogaview-dev/logs/` in development and
+  `$XDG_STATE_HOME/kogaview/logs/` in production. See ADR 0002.
 - Crate names use the `kogaview-` prefix (`kogaview-protocol`,
   `kogaview-core`, `kogaview-desktop`).
 
@@ -35,7 +36,7 @@ distribution.
 
 - All repository docs, scripts and packaging templates are renamed accordingly,
   deviating from the `photoapp`/`photoctl` names in the original bundle.
-- The reverse-DNS ID is **provisional**: `io.github.huynhat` must be confirmed
+- The reverse-DNS ID is **provisional**: `io.github.tienv2i` must be confirmed
   as an owned namespace before M6 packaging. If it is not, change the ID in one
   place per layer (Rust identity module, CMake desktop metadata, packaging) and
   update this ADR.

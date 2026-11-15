@@ -1,7 +1,7 @@
 # Desktop integration and MIME contract
 
 ## Linux
-- Use one stable reverse-DNS production App ID owned by the project; `io.github.huynhat.KogaView` is a PLACEHOLDER and must be changed before shipping.
+- Use one stable reverse-DNS production App ID owned by the project; `io.github.tienv2i.KogaView` is a PLACEHOLDER and must be changed before shipping.
 - Ship `.desktop` named `${APP_ID}.desktop`, icon `${APP_ID}`, AppStream metadata and image MIME associations.
 - Desktop `Exec=kogaview open %F` requires support for multiple positional file arguments after `open`.
 - Declare only supported codecs (initial JPEG, PNG, WebP, GIF, TIFF, BMP subject to actual build support).

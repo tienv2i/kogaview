@@ -18,8 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = ROOT / "build" / "dev"
 BINARY = BUILD_DIR / "bin" / "kogaview"
-APP_ID_DEV = "io.github.huynhat.KogaView.Dev"
-APP_ID_PROD = "io.github.huynhat.KogaView"
+APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
+APP_ID_PROD = "io.github.tienv2i.KogaView"
+APP_DIR_DEV = "kogaview-dev"
+APP_DIR_PROD = "kogaview"
 PROJECT = "KogaView"
 
 
@@ -63,8 +65,15 @@ def xdg_state_home() -> Path:
     return Path.home() / ".local" / "state"
 
 
+def xdg_config_home() -> Path:
+    value = os.environ.get("XDG_CONFIG_HOME")
+    if value:
+        return Path(value)
+    return Path.home() / ".config"
+
+
 def log_dir() -> Path:
-    return xdg_state_home() / APP_ID_DEV / "logs"
+    return xdg_state_home() / APP_DIR_DEV / "logs"
 
 
 def required_tools() -> list[tuple[str, str, str]]:
@@ -89,7 +98,9 @@ def doctor() -> int:
           f"(DISPLAY={os.environ.get('DISPLAY', '-')}, "
           f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')})")
     print(f"XDG_STATE_HOME    : {xdg_state_home()}")
+    print(f"XDG_CONFIG_HOME   : {xdg_config_home()}")
     print(f"Log directory     : {log_dir()}")
+    print(f"Config file       : {xdg_config_home() / APP_DIR_DEV / 'config.json'}")
     print()
 
     print("Toolchain")
@@ -116,6 +127,8 @@ def doctor() -> int:
     print("-" * 60)
     print(f"{'Dev app ID':18}: {APP_ID_DEV}")
     print(f"{'Prod app ID':18}: {APP_ID_PROD}")
+    print(f"{'Dev data dir':18}: {APP_DIR_DEV}")
+    print(f"{'Prod data dir':18}: {APP_DIR_PROD}")
     print(f"{'Build mode':18}: dev (Debug preset) -> KogaView (Dev) identity")
     print(f"{'Canonical binary':18}: {BINARY}")
     if BINARY.exists():

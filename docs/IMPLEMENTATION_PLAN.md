@@ -50,8 +50,8 @@ These are the constraints the implementation must satisfy; they drive the plan's
 
 | # | Gap / inconsistency | Why it matters | Proposed resolution |
 |---|---|---|---|
-| D1 | ~~Product naming inconsistent~~ | App ID leaks into desktop file, Flatpak, XDG dirs, socket names, DB path | **Resolved in ADR 0001**: KogaView, `kogaview`/`kogactl`, `io.github.huynhat.KogaView` (+ `.Dev`) |
-| D2 | App ID namespace ownership is unconfirmed | Cannot ship MIME/Flatpak metadata if the namespace is not owned | Using `io.github.huynhat.KogaView` provisionally; confirm ownership before M6 |
+| D1 | ~~Product naming inconsistent~~ | App ID leaks into desktop file, Flatpak, XDG dirs, socket names, DB path | **Resolved in ADR 0001**: KogaView, `kogaview`/`kogactl`, `io.github.tienv2i.KogaView` (+ `.Dev`) |
+| D2 | App ID namespace ownership is unconfirmed | Cannot ship MIME/Flatpak metadata if the namespace is not owned | Using `io.github.tienv2i.KogaView` provisionally; confirm ownership before M6 |
 | D3 | `justfile` shell portability | Target includes Windows | **Resolved**: recipes use the default shell and only call `python3 scripts/dev.py`; Windows verification still pending |
 | D4 | ~~`scripts/dev.py` placeholder~~ | `doctor` must detect Qt/QML modules, compiler, display, IDs, conflicts | **Resolved in M0**; sqlite/index checks arrive with M2 |
 | D5 | `app.open_files { activation }` semantics are undefined | In-process UI vs forwarded request differ | Define: `activation=true` means "raise/focus the window if permitted"; forwarding preserves the flag; in-process UI always sets it |
@@ -115,14 +115,17 @@ Initial crate set is deliberately **three**: `app-protocol`, `app-core`, `deskto
 | Aspect | Dev | Production |
 |---|---|---|
 | App name | `KogaView (Dev)` | `KogaView` |
-| App ID | `io.github.huynhat.KogaView.Dev` | `io.github.huynhat.KogaView` |
-| State/log/journal | `$XDG_STATE_HOME/io.github.huynhat.KogaView.Dev/` | `$XDG_STATE_HOME/io.github.huynhat.KogaView/` |
-| Cache | `$XDG_CACHE_HOME/io.github.huynhat.KogaView.Dev/` | `$XDG_CACHE_HOME/io.github.huynhat.KogaView/` |
-| Config/data | `$XDG_CONFIG_HOME/io.github.huynhat.KogaView.Dev/` | production equivalent |
-| IPC endpoint (M5) | `$XDG_RUNTIME_DIR/io.github.huynhat.KogaView.Dev/control.sock` | `io.github.huynhat.KogaView/control.sock` |
+| App ID | `io.github.tienv2i.KogaView.Dev` | `io.github.tienv2i.KogaView` |
+| State/log/journal | `$XDG_STATE_HOME/kogaview-dev/` | `$XDG_STATE_HOME/kogaview/` |
+| Cache | `$XDG_CACHE_HOME/kogaview-dev/` | `$XDG_CACHE_HOME/kogaview/` |
+| Config/data | `$XDG_CONFIG_HOME/kogaview-dev/config.json` | `$XDG_CONFIG_HOME/kogaview/config.json` |
+| IPC endpoint (M5) | `$XDG_RUNTIME_DIR/io.github.tienv2i.KogaView.Dev/control.sock` | `io.github.tienv2i.KogaView/control.sock` |
 | Protocol version | same v1 | same v1 |
 
-The build emits a compile-time profile constant; runtime env override is allowed only for tests, never for installed binaries.
+Runtime directories use the short application name while the reverse-DNS app ID stays
+responsible for desktop identity; see ADR 0002. The build emits a compile-time
+profile constant; runtime env override is allowed only for tests, never for
+installed binaries.
 
 ## 6. Delivery milestones
 
@@ -154,13 +157,13 @@ M0-only harness: `KOGAVIEW_DEV_SCREENSHOT` uses `QQuickWindow::grabWindow` after
 
 Fallback not needed: CXX-Qt 0.10 built successfully with Qt 6.12.
 
-### M1 — Protocol, state, gateway, `OpenImage` vertical slice (effort M) — **the AGENTS first milestone**
+### M1 — Protocol, state, gateway, browsing vertical slice (effort M) — **in progress**
 
 Goal: `kogaview`, `kogaview open FILE`, `kogaview open-folder DIR`, and UI-driven navigation all produce one observable Core state transition and render.
 
 Work:
 - `app-protocol` v1: `Envelope`, `Command` (`app.open_files`, `app.open_folder`, `workspace.switch`, `workspace.back`, `editor.enter` stub), `Query`, `Event`, `Result`, `ErrorCode`, `ImageId`, `PathOrUri`, `Context`, `protocol_version = 1`.
-- ADR 0002: wire JSON shape, revision rules (every mutation carries optional `expected_revision`; UI sends the last observed revision; stale -> typed `STALE_REVISION`), idempotency key scope, event sequencing, error taxonomy, timestamps excluded from semantic equality.
+- Future ADR: wire JSON shape, revision rules (every mutation carries optional `expected_revision`; UI sends the last observed revision; stale -> typed `STALE_REVISION`), idempotency key scope, event sequencing, error taxonomy, timestamps excluded from semantic equality.
 - `app-core`: `AppState` (revision, active workspace, browser {folder, entries, selection}, viewer {images, current}, status), reducer-style handlers, single ordered command queue (one owner task, not scattered mutexes), journal writer (sanitized, append-only JSONL), event bus (sequence IDs) with backpressure policy, task registry placeholder.
 - Startup/activation mapping: CLI args -> the same `Envelope` commands as UI. No-arg -> Browser; `open` -> Viewer with deterministic navigation set; alias positional files; `open-folder` -> Browser; typing `kogaview FILE` works; invalid input -> structured error + non-zero exit + no GUI state change.
 - Image open: validate path/format, canonicalize while preserving a stable identity placeholder, read metadata, commit Viewer state. Phase 1 rendering may use Qt's image provider via a `file://` URL supplied by Core, but **Core decides** what is open; QML only displays it. Unsafe/unsupported/missing paths surface typed errors.
@@ -254,7 +257,7 @@ No milestone is closed on green tests or CI alone.
 
 ## 10. Immediate next actions (M1, ordered)
 
-1. Write ADR 0002 (Envelope shape, revision rules, error taxonomy, event sequencing, idempotency).
+1. Write the wire-format ADR (Envelope shape, revision rules, error taxonomy, event sequencing, idempotency).
 2. Implement `app-protocol` v1 types and contract tests.
 3. Implement the Core `AppState`, single ordered gateway, journal sink and event bus.
 4. Add CLI argument mapping for `kogaview`, `kogaview open FILE...`, positional files and `kogaview open-folder DIR`.

@@ -1,8 +1,16 @@
+//! Qt adapter: exposes Core state as a JSON snapshot plus the single command
+//! gateway. QML never mutates domain state directly.
+//!
+//! Commands are submitted as serialized protocol envelopes and results are
+//! returned as JSON. The whole state snapshot is re-published after every
+//! command or completed background task so QML has one authoritative source.
+
 use core::pin::Pin;
 
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
-use kogaview_core::AppIdentity;
-use kogaview_protocol::Workspace;
+use kogaview_core::{AppIdentity, Core};
+use kogaview_protocol::PROTOCOL_VERSION;
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -28,16 +36,26 @@ pub mod qobject {
         #[qproperty(QString, profile)]
         #[qproperty(QString, gitSha)]
         #[qproperty(u32, protocolVersion)]
-        #[qproperty(u64, stateRevision)]
-        #[qproperty(QString, workspace)]
+        #[qproperty(QString, stateJson)]
         #[qproperty(QString, statusMessage)]
-        #[qproperty(u32, probeCount)]
+        #[qproperty(bool, busy)]
+        #[qproperty(u64, revision)]
         type KogaViewBridge = super::KogaViewBridgeRust;
 
-        /// Temporary M0 probe: proves QML -> Rust invokable and property update.
+        /// Submit one typed command envelope. Returns a JSON result.
         #[qinvokable]
-        #[cxx_name = "devProbe"]
-        fn dev_probe(self: Pin<&mut Self>, message: &QString);
+        #[cxx_name = "dispatch"]
+        fn dispatch(self: Pin<&mut Self>, command_json: &QString) -> QString;
+
+        /// Run one read-only query. Returns a JSON result.
+        #[qinvokable]
+        #[cxx_name = "query"]
+        fn query(self: Pin<&mut Self>, query_json: &QString) -> QString;
+
+        /// Deliver completed background work. True when state changed.
+        #[qinvokable]
+        #[cxx_name = "poll"]
+        fn poll(self: Pin<&mut Self>) -> bool;
     }
 }
 
@@ -49,40 +67,73 @@ pub struct KogaViewBridgeRust {
     profile: QString,
     gitSha: QString,
     protocolVersion: u32,
-    stateRevision: u64,
-    workspace: QString,
+    stateJson: QString,
     statusMessage: QString,
-    probeCount: u32,
+    busy: bool,
+    revision: u64,
+    core: Core,
 }
 
 impl Default for KogaViewBridgeRust {
     fn default() -> Self {
         let identity = AppIdentity::current();
+        let core = Core::new();
         Self {
             appName: identity.display_name.into(),
             appId: identity.app_id.into(),
             appVersion: identity.version.into(),
             profile: identity.profile.as_str().into(),
             gitSha: identity.git_sha.into(),
-            protocolVersion: identity.protocol_version,
-            stateRevision: 0,
-            workspace: Workspace::Browser.as_str().into(),
-            statusMessage: "M0 shell: command bus and image workspaces arrive in M1".into(),
-            probeCount: 0,
+            protocolVersion: PROTOCOL_VERSION,
+            stateJson: core.snapshot_json().into(),
+            statusMessage: core.status().into(),
+            busy: core.busy(),
+            revision: core.revision(),
+            core,
         }
     }
 }
 
 impl qobject::KogaViewBridge {
-    pub fn dev_probe(mut self: Pin<&mut Self>, message: &QString) {
-        let next = *self.probeCount() + 1;
-        self.as_mut().set_probeCount(next);
-        tracing::info!(
-            target: "kogaview::bridge",
-            probe_message = %message,
-            probe_count = next,
-            "M0 bridge probe"
-        );
+    pub fn dispatch(mut self: Pin<&mut Self>, command_json: &QString) -> QString {
+        let command = command_json.to_string();
+        let result = self.as_mut().rust_mut().get_mut().core.dispatch(&command);
+        self.refresh_properties();
+        result.into()
+    }
+
+    pub fn query(mut self: Pin<&mut Self>, query_json: &QString) -> QString {
+        let query = query_json.to_string();
+        self.as_mut()
+            .rust_mut()
+            .get_mut()
+            .core
+            .query_json(&query)
+            .into()
+    }
+
+    pub fn poll(mut self: Pin<&mut Self>) -> bool {
+        let changed = self.as_mut().rust_mut().get_mut().core.poll();
+        if changed {
+            self.refresh_properties();
+        }
+        changed
+    }
+
+    fn refresh_properties(mut self: Pin<&mut Self>) {
+        let (state, status, busy, revision) = {
+            let this = self.as_mut().rust_mut().get_mut();
+            (
+                this.core.snapshot_json(),
+                this.core.status().to_owned(),
+                this.core.busy(),
+                this.core.revision(),
+            )
+        };
+        self.as_mut().set_stateJson(state.into());
+        self.as_mut().set_statusMessage(status.into());
+        self.as_mut().set_busy(busy);
+        self.as_mut().set_revision(revision);
     }
 }
 

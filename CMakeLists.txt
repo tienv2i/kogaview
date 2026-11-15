@@ -10,7 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Single canonical artifact location for `just run` and `just doctor`.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 DBus Concurrent)
 
 find_package(CxxQt 0.10 QUIET)
 if(NOT CxxQt_FOUND)
@@ -28,17 +28,17 @@ cxx_qt_import_crate(
   MANIFEST_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
   CRATES kogaview_desktop
   LOCKED
-  QT_MODULES Qt::Core Qt::Gui Qt::Qml Qt::Quick
+  QT_MODULES Qt::Core Qt::Gui Qt::Qml Qt::Quick Qt::QuickControls2
 )
 
 cxx_qt_import_qml_module(
   kogaview_qml_module
-  URI "io.github.huynhat.KogaView"
+  URI "io.github.tienv2i.KogaView"
   SOURCE_CRATE kogaview_desktop
 )
 
-add_executable(kogaview cpp/main.cpp)
-target_link_libraries(kogaview PRIVATE kogaview_qml_module)
+add_executable(kogaview cpp/main.cpp cpp/platform.cpp)
+target_link_libraries(kogaview PRIVATE kogaview_qml_module Qt6::DBus Qt6::Concurrent)
 
 set_target_properties(
   kogaview
@@ -53,5 +53,5 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_compile_definitions(kogaview PRIVATE KOGAVIEW_DEV_HARNESS)
 endif()
 
-message(STATUS "KogaView app ID: io.github.huynhat.KogaView.Dev (debug) / io.github.huynhat.KogaView (release)")
+message(STATUS "KogaView app ID: io.github.tienv2i.KogaView.Dev (debug) / io.github.tienv2i.KogaView (release)")
 message(STATUS "KogaView runtime artifact: ${CMAKE_BINARY_DIR}/bin/kogaview")
