@@ -18,12 +18,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = ROOT / "build" / "dev"
 BINARY = BUILD_DIR / "bin" / "kogaview"
-# QML suites: (target, binary). Every suite loads the real `.qml` sources.
-QML_TEST_SUITES = (
-    ("kogaview_qml_tests", BUILD_DIR / "bin" / "kogaview_qml_tests"),
-    ("kogaview_browser_qml_tests", BUILD_DIR / "bin" / "kogaview_browser_qml_tests"),
-    ("kogaview_browser_cache_tests", BUILD_DIR / "bin" / "kogaview_browser_cache_tests"),
-)
+# QML suites the developer can select by name; every one loads the real `.qml`
+# sources. The order is the order `test` builds and runs them in.
+QML_TEST_SUITES = {
+    "viewer": ("kogaview_qml_tests", BUILD_DIR / "bin" / "kogaview_qml_tests"),
+    "browser": (
+        "kogaview_browser_qml_tests",
+        BUILD_DIR / "bin" / "kogaview_browser_qml_tests",
+    ),
+    "cache": (
+        "kogaview_browser_cache_tests",
+        BUILD_DIR / "bin" / "kogaview_browser_cache_tests",
+    ),
+}
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"
 APP_DIR_DEV = "kogaview-dev"
@@ -232,17 +239,49 @@ def run_app(args: list[str]) -> int:
     return 1  # unreachable
 
 
-def test() -> int:
-    """Rust tests, then the Qt Quick regression tests."""
-    cargo = run(["cargo", "test", "--workspace"])
-    if cargo.returncode != 0:
+TEST_USAGE = "usage: just test [cargo|qml|viewer|browser|cache]"
+
+
+def rust_tests() -> int:
+    result = run(["cargo", "test", "--workspace"])
+    if result.returncode != 0:
         print("test: cargo tests failed", file=sys.stderr)
-        return cargo.returncode
-    return qml_tests()
+    return result.returncode
 
 
-def qml_tests() -> int:
-    """Run the Qt Quick suites against the real QML sources.
+def test(selection: list[str]) -> int:
+    """Rust tests, the Qt Quick suites, or a named one of them.
+
+    Bare `just test` is the pre-commit gate: everything. `just test cargo` and
+    `just test <suite>` exist because that gate is ~19 s warm and ~45 s when a
+    change forces a rebuild, most of it in suites the edit cannot affect — too
+    slow to sit through while editing one file.
+    """
+    if len(selection) > 1:
+        print(f"test: expected at most one selection\n{TEST_USAGE}", file=sys.stderr)
+        return 2
+    choice = selection[0] if selection else "all"
+    if choice in ("all", "qml"):
+        suites = dict(QML_TEST_SUITES)
+    elif choice == "cargo":
+        suites = {}
+    elif choice in QML_TEST_SUITES:
+        suites = {choice: QML_TEST_SUITES[choice]}
+    else:
+        print(f"test: unknown selection '{choice}'\n{TEST_USAGE}", file=sys.stderr)
+        return 2
+
+    if choice in ("all", "cargo"):
+        cargo_result = rust_tests()
+        if cargo_result != 0:
+            return cargo_result
+    if not suites:
+        return 0
+    return qml_tests(suites)
+
+
+def qml_tests(suites: dict[str, tuple[str, Path]]) -> int:
+    """Run the selected Qt Quick suites against the real QML sources.
 
     The tests load `crates/desktop/qml/*.qml` unchanged and assert on what Qt
     Quick actually does: viewer transforms (centring, zoom, flip) and the
@@ -254,24 +293,34 @@ def qml_tests() -> int:
         print("test: refusing to run the QML tests without prerequisites", file=sys.stderr)
         return setup_result
 
-    configure = run(["cmake", "--preset", "dev"])
-    if configure.returncode != 0:
-        print("test: CMake configure failed; QML tests were not run", file=sys.stderr)
-        return configure.returncode
+    # CMake reconfigures itself when `CMakeLists.txt` or the preset changes, so
+    # configuring on every run only bought 0.9 s of latency. Configure once, when
+    # there is no build tree yet.
+    if not (BUILD_DIR / "CMakeCache.txt").is_file():
+        configure = run(["cmake", "--preset", "dev"])
+        if configure.returncode != 0:
+            print("test: CMake configure failed; QML tests were not run", file=sys.stderr)
+            return configure.returncode
 
-    for target, _binary in QML_TEST_SUITES:
-        compile_result = run(["cmake", "--build", "--preset", "dev", "--target", target])
-        if compile_result.returncode != 0:
-            print(f"test: QML test build failed ({target})", file=sys.stderr)
-            return compile_result.returncode
+    # One invocation for every selected target: CMake then overlaps what it can,
+    # instead of paying the (single-threaded, CXX-Qt-linked) dependency walk once
+    # per suite. Measured on this tree: 14.7 s in three calls, 11.5 s in one.
+    targets: list[str] = []
+    for target, _binary in suites.values():
+        targets.extend(["--target", target])
+    compile_result = run(["cmake", "--build", "--preset", "dev", *targets])
+    if compile_result.returncode != 0:
+        print("test: QML test build failed; no suite was run", file=sys.stderr)
+        return compile_result.returncode
 
     # `offscreen` keeps the suites out of the desktop session; the input tests
     # drive explicit mouse/wheel events, so nothing depends on real input.
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    for target, binary in QML_TEST_SUITES:
+    for name, (target, binary) in suites.items():
         if not binary.is_file():
             print(f"test: expected QML test binary missing: {binary}", file=sys.stderr)
             return 1
+        print(f"+ {name}: {binary}", flush=True)
         result = run([str(binary)], env=env)
         if result.returncode != 0:
             print(f"test: QML suite failed ({target})", file=sys.stderr)
@@ -316,14 +365,15 @@ def not_implemented(command: str, milestone: str) -> int:
 
 def main() -> int:
     command = sys.argv[1] if len(sys.argv) > 1 else "doctor"
-    if command in ("setup", "doctor", "build", "test", "logs"):
+    if command in ("setup", "doctor", "build", "logs"):
         return {
             "setup": setup,
             "doctor": doctor,
             "build": build,
-            "test": test,
             "logs": logs,
         }[command]()
+    if command == "test":
+        return test(sys.argv[2:])
     if command == "run":
         return run_app(sys.argv[2:])
     if command in ("install", "uninstall", "package"):

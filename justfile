@@ -15,8 +15,10 @@ build:
 run *args:
     @python3 scripts/dev.py run {{args}}
 
-test:
-    @python3 scripts/dev.py test
+# `just test` = everything (the pre-commit gate). Narrow it while iterating:
+#   just test cargo | viewer | browser | cache | qml
+test *args:
+    @python3 scripts/dev.py test {{args}}
 
 logs:
     @python3 scripts/dev.py logs

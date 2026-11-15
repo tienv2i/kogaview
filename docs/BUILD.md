@@ -8,12 +8,28 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
 | `just setup` | Check Rust, CMake, Qt6, C++ toolchain, just and platform requirements |
 | `just build` | Build debug app into a known output directory; fail on any error |
 | `just run [ARGS]` | Build first; execute exact artifact just built; forward all args |
-| `just test` | Run tests: Cargo workspace tests, then the Qt Quick suites that load the real `crates/desktop/qml/*.qml` (offscreen QPA) and assert on what Qt Quick does — viewer transforms plus the commands the browser/explorer emit for real clicks. Still not proof the interactive UI is usable |
+| `just test [SELECT]` | Run tests: Cargo workspace tests, then the Qt Quick suites that load the real `crates/desktop/qml/*.qml` (offscreen QPA) and assert on what Qt Quick does — viewer transforms plus the commands the browser/explorer emit for real clicks. Still not proof the interactive UI is usable. Bare `just test` is the pre-commit gate; `cargo`, `qml`, `viewer`, `browser` or `cache` narrow it to one part so the feedback loop stays seconds long |
 | `just doctor` | Print versions, app ID, binary paths, build mode, runtime mode and installation conflicts |
 | `just logs` | Locate/read current dev instance structured logs |
 | `just install` / `uninstall` | Native install/remove without silently deleting user data |
 | `just package` | Produce native distributable |
 | `just flatpak-build` / `flatpak-run` | Later: sandbox build and actual runtime verification |
+
+### Two-tier feedback loop
+- While editing, run only what the edit can break: `just test cargo` (`~0.3 s`,
+  or the length of a Rust rebuild), `just test viewer` (`~1 s`),
+  `just test browser` (`~7 s`), `just test cache` (`~11 s`). Same suites, same
+  assertions — just not the other ones.
+- Before a commit, run bare `just test`: that is the gate, and a green single
+  suite says nothing about the suites it did not run. It costs whatever its
+  suites cost — `~19 s` when nothing has to be rebuilt, `~45 s` when a change
+  forces one (measured on this tree; the builds are the variable part, not the
+  orchestration).
+- The gate configures CMake only when `build/dev/CMakeCache.txt` is missing and
+  otherwise lets `cmake --build` regenerate (it does, inside the build), and it
+  builds every selected target in one `cmake --build` invocation instead of one
+  call per suite — worth `~3 s` (`14.7 s → 11.5 s`) on a run that rebuilds all
+  three.
 
 ## Isolation and identity
 - Dev app name `KogaView (Dev)`, production `KogaView`; distinct app IDs, config/data/cache, socket endpoints and database by default.
