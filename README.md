@@ -33,6 +33,7 @@ Read `AGENTS.md` first, then:
 - `docs/DESKTOP.md` — MIME / Open With integration
 - `docs/FLATPAK.md` — sandbox constraints
 - `docs/IMPLEMENTATION_PLAN.md` — milestones and gates
+- `docs/M0-REPORT.md` — what was actually built, run and verified
 - `docs/adr/` — recorded decisions
 
 ## Identity
