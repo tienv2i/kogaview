@@ -491,24 +491,20 @@ Item {
                             color: view.theme.thumb
                             clip: true
 
-                            Image {
+                            CachedThumbnail {
                                 id: thumbImage
                                 objectName: "gridThumbnail"
                                 anchors.fill: parent
                                 anchors.margins: 2
-                                /// The cache key's size component: one bucket
-                                /// for the tile, not one per pixel width.
-                                readonly property int edge:
-                                    thumbs.edgeFor(Math.max(thumbFrame.width, thumbFrame.height))
-                                /// Cached thumbnail for this bucket; the call
-                                /// asks for it, so the tile draws exactly what
-                                /// it requested (see `ThumbnailBook.url`).
-                                source: cell.entry.isImage
-                                        ? thumbs.url(cell.entry.path, edge,
-                                                     cell.entry.modified, cell.entry.size)
-                                        : ""
+                                book: thumbs
+                                path: cell.entry.path
+                                /// The size bucket is the cache key's size
+                                /// component: one per tile shape, not one per
+                                /// pixel width.
+                                thumbnailable: cell.entry.isImage
+                                modified: cell.entry.modified
+                                fileSize: cell.entry.size
                                 asynchronous: true
-                                cache: false
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize.width: Math.max(64, Math.ceil(thumbFrame.width * 2))
                                 sourceSize.height: Math.max(64, Math.ceil(thumbFrame.height * 2))
@@ -610,15 +606,17 @@ Item {
                     color: view.theme.thumb
                     clip: true
 
-                    Image {
+                    CachedThumbnail {
                         id: previewImage
                         objectName: "previewThumbnail"
                         anchors.fill: parent
                         anchors.margins: 4
                         readonly property var info: view.selectionInfo
-                        readonly property int edge: thumbs.edgeFor(Math.max(width, height))
-                        source: (info && info.isImage)
-                                ? thumbs.url(info.path, edge, info.modified, info.size) : ""
+                        book: thumbs
+                        path: info ? info.path : ""
+                        thumbnailable: !!(info && info.isImage)
+                        modified: info ? info.modified : 0
+                        fileSize: info ? info.size : 0
                         asynchronous: true
                         fillMode: Image.PreserveAspectFit
                         sourceSize.width: Math.ceil(width * 2)

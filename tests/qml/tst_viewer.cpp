@@ -26,6 +26,8 @@
 #include <qpa/qwindowsysteminterface.h>
 
 namespace {
+/// `Image.Ready`; spelled out so the wait below reads as what it is.
+constexpr int KogaImageReady = 1;
 
 constexpr int kViewWidth = 1280;
 constexpr int kViewHeight = 820;
@@ -254,6 +256,14 @@ private:
     state.insert(QStringLiteral("viewerImages"), QStringList{ path });
     state.insert(QStringLiteral("viewerIndex"), 0);
     m_viewer->setProperty("state", state);
+    // Wait for *this* image. A bare "the canvas has a size" check is satisfied by
+    // whatever was loaded before it — the decode is asynchronous, so the canvas
+    // keeps the previous image's size until the new one is ready, and the test
+    // would then measure the old canvas.
+    QQuickItem* image = m_canvas->findChild<QQuickItem*>(QStringLiteral("viewerImage"));
+    QVERIFY2(image != nullptr, "the viewer canvas has no image");
+    QTRY_COMPARE(image->property("source").toUrl().toLocalFile(), path);
+    QTRY_COMPARE_WITH_TIMEOUT(image->property("status").toInt(), int(KogaImageReady), 5000);
     QTRY_VERIFY2(m_canvas->width() > 1 && m_canvas->height() > 1,
                  "the image never reported an implicit size");
   }

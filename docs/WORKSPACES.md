@@ -81,8 +81,7 @@
 - The grid, the preview panel and the filmstrip never decode a full image to
   draw a small one. `ThumbnailCache` (C++) turns each image into one small file
   per (path, size, mtime, requested edge) under
-  `$XDG_CACHE_HOME/kogaview[-dev]/thumbnails`, generated on the thread pool and
-  handed back as a url through `thumbnailReady`.
+  `$XDG_CACHE_HOME/kogaview[-dev]/thumbnails` and answers each tile directly.
 - The key is a stable FNV-1a hash of `v3|path|edge|modified|size`, not
   `std::hash`/`QHash` (both are salted per process and would orphan every file
   after a restart). It carries mtime and size, so an edited image simply misses:
@@ -94,16 +93,29 @@
   resizing the window reuses a neighbouring bucket instead of minting an entry
   per pixel width. `Qt::KeepAspectRatio` fit, EXIF orientation honoured, atomic
   write through `QSaveFile`.
-- Eviction keeps the directory under a byte budget (256 MB, aims at 90% when it
-  runs) and drops the least recently **used** entry first: a hit refreshes the
-  file's modification time. Failure markers are evicted by the same clock but
-  count as zero bytes.
-- The views ask through `ThumbnailBook.qml`, whose `url()` is bound to
-  `Image.source`: the binding requests exactly the thumbnail it is about to
-  draw (a recycled delegate, a new bucket and a late-arriving cache object all
-  ask again) and returns empty until the file exists, so a tile shows its
-  placeholder rather than decoding the original twice. Without a cache object
-  the views fall back to `file://<path>`.
+- **Answers are targeted, not broadcast.** `request()` names the object that
+  wants the thumbnail (`CachedThumbnail.qml`, the tile's `Image`); when the entry
+  is ready only that object's `setThumbnail(key, url)` is called, on its own
+  thread. There is no shared key → url map in QML: a map has to live in an
+  observable property, reassigning it re-evaluates every binding that read it,
+  and that turned one finished thumbnail into a re-evaluation of every tile on
+  screen — 159 244 `keyFor` calls in a 12 s scroll through a 1 200-image folder.
+- A tile asks **once per (entry, bucket)**: it waits until it has a drawn size and
+  the version it keys on, then asks (`CachedThumbnail`'s settle timer), so a cold
+  visit writes one entry per bucket actually drawn instead of one per
+  intermediate layout state, and a tile recycled before the timer fires never
+  mints a thumbnail for an image that already scrolled past.
+- Decoding is rate-limited: half the cores, at most three threads, newest request
+  first. Serving the queue in arrival order — or on every core — answers tiles
+  that already left the screen and starves the thread that draws the window.
+- A hit costs a hash lookup: known entries live in memory (`key → file`), so a
+  hit neither stats the filesystem nor rewrites the entry. Eviction keeps the
+  directory under a byte budget (256 MB, aims at 90% when it runs) and drops the
+  least recently **used** entry first; use is tracked in memory and written back
+  to the entry's mtime only on its first use in a session, which is what makes the
+  order survive a restart without a file rewrite per tile per scroll. Failure
+  markers count as zero bytes.
+- Without a cache object the views fall back to `file://<path>`.
 
 ## Command contracts
 - `app.open_files { paths: Vec<PathOrUri>, activation: bool }` -> viewer state and navigation context.

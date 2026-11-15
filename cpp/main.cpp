@@ -46,7 +46,8 @@ void logDevState(QObject* rootObject, QObject* bridge, ThumbnailCache* thumbnail
   if (thumbnails != nullptr) {
     qInfo().noquote() << "KogaView dev thumbnails: entries" << thumbnails->entryCount() << "bytes"
                       << thumbnails->bytesUsed() << "hits" << thumbnails->hits() << "generated"
-                      << thumbnails->generated() << "dir" << thumbnails->directory();
+                      << thumbnails->generated() << "queued" << thumbnails->queued() << "dir"
+                      << thumbnails->directory();
   }
   // The tree keeps its own expansion (it outlives the nodes), so read it from
   // the view: a refresh after a file operation must keep both these paths and

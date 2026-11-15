@@ -935,6 +935,34 @@ private slots:
              "the folder entry was sent to the thumbnail cache");
   }
 
+  /// A recycled tile must only accept the answer for the entry it is showing
+  /// now. Without that check a cell that scrolled onto another image would draw
+  /// the previous image's thumbnail.
+  void aRecycledTileIgnoresTheAnswerForAnotherEntry()
+  {
+    StubThumbnailCache cache;
+    installThumbnailCache(&cache);
+
+    QQuickItem* cell = findCell(QStringLiteral("/root/img.png"));
+    QVERIFY2(cell != nullptr, "no grid cell for the image");
+    QQuickItem* image = findImage(cell, QStringLiteral("gridThumbnail"));
+    QVERIFY2(image != nullptr, "the grid cell has no thumbnail image");
+    QTRY_VERIFY2(!cache.calls.isEmpty(), "the grid never asked for a thumbnail");
+
+    // The answer to a key this tile is not showing must be dropped.
+    QVERIFY(QMetaObject::invokeMethod(image, "setThumbnail",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("someone-else"))),
+                                      Q_ARG(QVariant,
+                                            QVariant(QStringLiteral("file:///cache/wrong.jpg")))));
+    settle();
+    QCOMPARE(image->property("source").toString(), QString());
+
+    // And its own answer still lands.
+    cache.deliverAllFor(QStringLiteral("/root/img.png"),
+                        QStringLiteral("file:///cache/right.jpg"));
+    QTRY_COMPARE(image->property("source").toString(), QStringLiteral("file:///cache/right.jpg"));
+  }
+
   /// The preview panel is thumbnailed too, and dropping the cache object puts
   /// the views back on the original file.
   void previewDrawsTheCachedThumbnail()

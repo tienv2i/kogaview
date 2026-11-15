@@ -12,6 +12,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 #include <QImage>
 #include <QImageReader>
 
@@ -104,6 +105,30 @@ void countDecodeFailures(QtMsgType type, const QMessageLogContext& context, cons
 
 } // namespace
 
+/// Stands in for one QML tile: the cache answers by calling `setThumbnail` on the
+/// object that asked, so a test needs a requester per tile to see who was told
+/// and what they were told.
+class Requester : public QObject
+{
+  Q_OBJECT
+
+public:
+  QString lastKey;
+  QString lastUrl;
+  int answers = 0;
+
+  Q_INVOKABLE void setThumbnail(const QVariant& key, const QVariant& url)
+  {
+    lastKey = key.toString();
+    lastUrl = url.toString();
+    ++answers;
+    emit answered();
+  }
+
+signals:
+  void answered();
+};
+
 class TestThumbnails : public QObject
 {
   Q_OBJECT
@@ -112,20 +137,26 @@ private:
   QTemporaryDir m_root;
   QTemporaryDir m_cacheDir;
   ThumbnailCache* m_cache = nullptr;
+  Requester m_tile;
 
   QString sourcePath(const QString& name) const { return m_root.filePath(name); }
 
-  /// One request, waited for; returns the ready url (empty when it failed).
+  /// One request, waited for; returns the answered url (empty when it failed).
   QString requestAndWait(const QString& path, int edge, qint64 modified = 1, qint64 size = 0)
   {
-    QSignalSpy ready(m_cache, &ThumbnailCache::thumbnailReady);
-    QSignalSpy failed(m_cache, &ThumbnailCache::thumbnailFailed);
-    m_cache->request(path, edge, modified, size);
-    const bool answered = ready.wait(10000) || failed.count() > 0;
-    if (!answered) {
-      return QString();
+    const int before = m_tile.answers;
+    m_cache->request(&m_tile, path, edge, modified, size);
+    return waitForAnswer(before) ? m_tile.lastUrl : QString();
+  }
+
+  /// Block until the cache has answered `forCount + 1` times in total.
+  bool waitForAnswer(int forCount, int timeout = 10000)
+  {
+    if (m_tile.answers != forCount) {
+      return true;
     }
-    return ready.isEmpty() ? QString() : ready.last().at(1).toString();
+    QSignalSpy answered(&m_tile, &Requester::answered);
+    return answered.wait(timeout) || m_tile.answers != forCount;
   }
 
 private slots:
@@ -137,6 +168,9 @@ private slots:
 
   void init()
   {
+    m_tile.lastKey.clear();
+    m_tile.lastUrl.clear();
+    m_tile.answers = 0;
     g_decodeFailures = 0;
     g_previousHandler = qInstallMessageHandler(countDecodeFailures);
     m_cache = new ThumbnailCache(m_cacheDir.filePath(QStringLiteral("thumbs")));
@@ -192,12 +226,10 @@ private slots:
     QVERIFY(bytes > 0);
 
     QVERIFY(QFile::remove(source));
-    QSignalSpy ready(m_cache, &ThumbnailCache::thumbnailReady);
-    QSignalSpy failed(m_cache, &ThumbnailCache::thumbnailFailed);
-    m_cache->request(source, 192, 1, 0);
-    QVERIFY(ready.wait(5000));
-    QCOMPARE(ready.last().at(1).toString(), first);
-    QCOMPARE(failed.count(), 0);
+    const int before = m_tile.answers;
+    m_cache->request(&m_tile, source, 192, 1, 0);
+    QVERIFY(waitForAnswer(before, 5000));
+    QCOMPARE(m_tile.lastUrl, first);
     QCOMPARE(m_cache->entryCount(), 1);
     QCOMPARE(m_cache->bytesUsed(), bytes);
     // Not one decode was attempted for the hit.
@@ -247,11 +279,11 @@ private slots:
     // Second request: answered from the marker. Still no url, nothing new
     // generated, and — the part that matters while scrolling — not decoded
     // again.
-    QSignalSpy ready(m_cache, &ThumbnailCache::thumbnailReady);
-    QSignalSpy failed(m_cache, &ThumbnailCache::thumbnailFailed);
-    m_cache->request(broken, 128, 1, 0);
-    QVERIFY(failed.wait(5000) || failed.count() > 0);
-    QCOMPARE(ready.count(), 0);
+    const int before = m_tile.answers;
+    m_tile.lastUrl = QStringLiteral("sentinel");
+    m_cache->request(&m_tile, broken, 128, 1, 0);
+    QVERIFY(waitForAnswer(before, 5000));
+    QCOMPARE(m_tile.lastUrl, QString());
     QCOMPARE(m_cache->entryCount(), 0);
     QCOMPARE(g_decodeFailures, 1);
   }
@@ -376,6 +408,64 @@ private slots:
     QVERIFY2(QFileInfo::exists(pathC), "the entry that was just created was evicted");
     QVERIFY2(!QFileInfo::exists(pathB), "the least recently used entry survived");
     QCOMPARE(m_cache->entryCount(), 2);
+  }
+
+  /// Decoding never takes every core: the thread that draws the window has to
+  /// keep running at the same time, or the whole application stutters while a
+  /// folder fills in.
+  void decodingNeverUsesTheWholeMachine()
+  {
+    const int cores = QThread::idealThreadCount();
+    QVERIFY2(m_cache->decodeThreads() >= 1, "nothing would ever be decoded");
+    QVERIFY2(m_cache->decodeThreads() <= 3, "more decoders than the cap");
+    if (cores > 1) {
+      QVERIFY2(m_cache->decodeThreads() < cores,
+               "decoding took every core, leaving the GUI thread without one");
+    }
+  }
+
+  /// The answer goes to the objects that asked for that key, and to nobody else.
+  /// "Only to them" is what keeps one finished thumbnail from re-evaluating every
+  /// tile on screen.
+  void answersOnlyTheObjectsThatAsked()
+  {
+    const QString shared = sourcePath(QStringLiteral("shared.jpg"));
+    QVERIFY(writeImage(shared, QSize(900, 700)));
+
+    Requester first;
+    Requester second;
+    Requester bystander;
+    const QString url = requestAndWait(shared, 192);
+    QVERIFY(!url.isEmpty());
+
+    // A hit: both tiles that ask are answered, the one that never asked is not.
+    m_cache->request(&first, shared, 192, 1, 0);
+    m_cache->request(&second, shared, 192, 1, 0);
+    QTRY_COMPARE_WITH_TIMEOUT(first.answers, 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(second.answers, 1, 5000);
+    QCOMPARE(first.lastUrl, url);
+    QCOMPARE(second.lastUrl, url);
+    QTest::qWait(50);
+    QCOMPARE(bystander.answers, 0);
+  }
+
+  /// A tile that scrolls past must not keep the entry's file being rewritten:
+  /// a hit is a hash lookup, not a filesystem update. The first use of a session
+  /// is written back, because that is what makes the LRU order survive a restart.
+  void aHitDoesNotRewriteTheEntry()
+  {
+    const QString source = sourcePath(QStringLiteral("touch.jpg"));
+    QVERIFY(writeImage(source, QSize(1200, 900)));
+    const QString url = requestAndWait(source, 256);
+    QVERIFY(!url.isEmpty());
+
+    const QString file = QUrl(url).toLocalFile();
+    const QDateTime generated = QFileInfo(file).lastModified();
+    QTest::qWait(50);
+    for (int index = 0; index < 5; ++index) {
+      QCOMPARE(requestAndWait(source, 256), url);
+    }
+    QCOMPARE(QFileInfo(file).lastModified(), generated);
   }
 
   /// Clearing the cache removes both thumbnails and failure markers.

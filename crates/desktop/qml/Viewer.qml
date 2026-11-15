@@ -164,6 +164,7 @@ Item {
 
                 Image {
                     id: image
+                    objectName: "viewerImage"
                     anchors.fill: parent
                     source: view.currentPath ? "file://" + view.currentPath : ""
                     asynchronous: true
@@ -282,21 +283,18 @@ Item {
                                       ? view.theme.accent : view.theme.border
                         clip: true
 
-                        Image {
+                        CachedThumbnail {
                             id: stripThumb
                             objectName: "stripThumbnail"
                             anchors.fill: parent
                             anchors.margins: 3
                             /// Entry of this image, for the cache key.
                             readonly property var meta: view.imageMeta[modelData] || null
-                            readonly property int edge: thumbs.edgeFor(Math.max(width, height))
-                            /// Cached tile; the call also requests it, so the
-                            /// strip never decodes the originals itself.
-                            source: meta
-                                    ? thumbs.url(modelData, edge, meta.modified, meta.size)
-                                    : "file://" + modelData
+                            book: thumbs
+                            path: modelData
+                            modified: meta ? meta.modified : 0
+                            fileSize: meta ? meta.size : 0
                             asynchronous: true
-                            cache: false
                             fillMode: Image.PreserveAspectCrop
                             sourceSize.width: 160
                             sourceSize.height: 160
