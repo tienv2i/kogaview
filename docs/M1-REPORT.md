@@ -43,7 +43,7 @@ did not change the evidence.
 | # | Scenario | Command (abridged) | Result |
 |---|---|---|---|
 | 1 | Build | `just build` | PASS, artifact `build/dev/bin/kogaview` |
-| 2 | Tests | `just test` | PASS: 22 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests and 21 Qt Quick browser/explorer tests |
+| 2 | Tests | `just test` | PASS: 34 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests and 21 Qt Quick browser/explorer tests |
 | 3 | Formatting | `cargo fmt --all -- --check` | PASS |
 | 4 | Version | `kogaview --version` | `KogaView (Dev) 0.1.0 (io.github.tienv2i.KogaView.Dev)` |
 | 5 | Config creation | first run, then `cat ~/.config/kogaview-dev/config.json` | file created with dark theme, `~/Pictures` + `~` quick access, panels and filmstrip on |
@@ -77,6 +77,9 @@ did not change the evidence.
 | 33 | Toolbar "Open folder" button and resizable sidebars | `tests/qml/tst_browser.cpp` (`toolbarOffersAnOpenFolderButton`, `leftSidebarIsResizable`, `sidebarResizeIsClamped`, `rightSidebarResizesInward`, `splitterDoubleClickRestoresTheDefault`, `splitterFollowsPanelVisibility`) instantiating the real toolbar component and dragging the real `PanelSplitter` handles with `QTest::mousePress`/`mouseMove`/`mouseRelease`; plus the real binary | the toolbar button is icon-only (`folder-open-symbolic`), a click emits `requestOpenFolder()` and no `command`, which `Main.qml` turns into the shell's folder dialog; a +80 px drag moves `leftPanelWidth` *and* the panel's actual `width` by 80; a −600 px / +4000 px drag clamps at the splitter's `minimum`/`maximum`; dragging the right handle inward by 90 px widens the right panel by 90; double-click restores the theme width; hiding a panel hides its handle. Real binary: `docs/evidence/M1-symlink-folder.png` shows the open-folder icon between refresh and new-folder and both splitter bars at the sidebar edges |
 | 34 | Sidebar/toolbar regression check | reintroduced four failure modes in turn (drop `onMoved` from the left splitter, make `PanelSplitter.clamp` the identity, flip the right splitter's `direction` to +1, leave the open-folder button's `onClicked` empty) and re-ran `kogaview_browser_qml_tests` | each mutation is caught by exactly one test — `leftSidebarIsResizable`, `sidebarResizeIsClamped`, `rightSidebarResizesInward` and `toolbarOffersAnOpenFolderButton` respectively; the restored sources pass 21/21 |
 
+| 35 | Explorer root and open folder restored separately | `cargo test -p kogaview-core` (`the_root_and_the_open_folder_are_saved_apart`, `walking_out_of_the_tree_re_roots_the_saved_value`, `restoring_a_session_keeps_the_tree_above_the_open_folder`, `restoring_derives_the_value_that_is_missing`, `restoring_deleted_folders_opens_nothing`, plus the policy tests `the_root_survives_navigation_inside_the_tree`, `a_sibling_with_a_common_prefix_is_outside_the_tree`, `leaving_the_subtree_moves_the_root`, `both_saved_folders_are_restored_separately`, `a_missing_folder_is_derived_from_the_surviving_one`, `a_folder_outside_the_saved_root_is_repaired`); plus `KOGAVIEW_DEV_COMMANDS`/`KOGAVIEW_DEV_STATE` on the real binary | the tree root and the open folder are two persisted values (`config.json` → `"tree_root": "…/photos"`, `"last_folder": "…/photos/sub"`); restarting restores `rootFolder …/photos` with `currentFolder …/photos/sub` and the tree expanded down to `sub` (`docs/evidence/M1-root-vs-open.png`). Live sequence, root/current after each command: `open_folder photos` → `photos/photos`; explicit `open_folder photos/sub` (inside the tree) → `photos/photos/sub`; `navigate photos/sub/deep` → `photos/photos/sub/deep`; `navigate /tmp/opencode` (leaves the subtree) → `/tmp/opencode//tmp/opencode`; `navigate /tmp/opencode/photos` (inside again) → `/tmp/opencode//tmp/opencode/photos`. `navigate` now persists the open folder too, and only when the value really changed |
+| 36 | Root/list regression check | reintroduced four failure modes in turn (make `open_folder` always re-root, restore the tree collapsed into the open folder, persist only `last_folder`, persist only on explicit open) and re-ran `cargo test -p kogaview-core` | each mutation is caught — `the_root_and_the_open_folder_are_saved_apart` for three of them and `restoring_a_session_keeps_the_tree_above_the_open_folder` for the restore; the restored sources pass 34/34 |
+
 ### Dev harness used for evidence
 
 The Debug binary enables `KOGAVIEW_DEV_*` hooks; every hook is inert unless its
@@ -90,9 +93,10 @@ the stable `objectName`s `viewer`, `viewerViewport`, `viewerCanvas` and
 `viewerWheelHandler`.
 
 `KOGAVIEW_DEV_STATE` prints `rootFolder`/`currentFolder`/`workspace`/`treeRevision`
-after every dev command, plus the paths the tree currently has expanded, which is
-how "navigation must not re-root the explorer" and "a file operation refreshes
-the tree without losing the open position" are checked from a log.
+once at startup and after every dev command, plus the paths the tree currently
+has expanded, which is how "the sidebar root and the open folder are two values",
+"navigation only re-roots when it leaves the subtree" and "a file operation
+refreshes the tree without losing the open position" are checked from a log.
 
 Three hooks exist for the platform paths that normally need a click:
 `KOGAVIEW_DEV_UI_REQUEST=open-folder|open-external` invokes the browser's
@@ -178,6 +182,11 @@ regressions fail the pipeline instead of only showing up on screen.
   Folders now use `OpenFile` + `directory: true`, the handle is read with its
   own accessor, and `Response` is subscribed on the predicted handle before the
   call so an early answer is not lost.
+- The explorer root and the open folder were stored as one value
+  (`config.last_folder`), and startup assigned it to both, so a session left with
+  `~/Pictures` in the sidebar and `~/Pictures/Child` open reopened with the tree
+  re-rooted at `Child`. They are now separate (`tree_root` + `last_folder`), and
+  the tree follows the list only when the list leaves its subtree.
 - `QTest::mouseMove` does keep the implicit grab taken by `mousePress`, so it
   drives a `MouseArea` drag; whole `QWindowSystemInterface::handleMouseEvent`
   moves injected that way never reached the item. The splitter tests use the

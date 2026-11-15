@@ -27,6 +27,30 @@ namespace {
 constexpr auto kMainQml = "qrc:/qt/qml/io/github/tienv2i/KogaView/qml/Main.qml";
 
 #ifdef KOGAVIEW_DEV_HARNESS
+/// Print the two folders that decide where the explorer is rooted, so
+/// "the tree root is not the open folder" is checkable from a log.
+void logDevState(QObject* rootObject, QObject* bridge)
+{
+  if (!qEnvironmentVariableIsSet("KOGAVIEW_DEV_STATE") || bridge == nullptr) {
+    return;
+  }
+  const QString snapshot = bridge->property("stateJson").toString();
+  const QJsonObject state = QJsonDocument::fromJson(snapshot.toUtf8()).object();
+  qInfo().noquote() << "KogaView dev state: rootFolder"
+                    << state.value(QStringLiteral("rootFolder")).toString() << "currentFolder"
+                    << state.value(QStringLiteral("currentFolder")).toString() << "workspace"
+                    << state.value(QStringLiteral("workspace")).toString() << "treeRevision"
+                    << static_cast<qint64>(state.value(QStringLiteral("treeRevision")).toDouble());
+  // The tree keeps its own expansion (it outlives the nodes), so read it from
+  // the view: a refresh after a file operation must keep both these paths and
+  // the current folder above.
+  if (QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"))) {
+    QQmlExpression expression(QQmlEngine::contextForObject(browser), browser,
+                              QStringLiteral("Object.keys(expandedPaths).sort().join(' ')"));
+    qInfo().noquote() << "KogaView dev tree: expanded" << expression.evaluate().toString();
+  }
+}
+
 // Debug-only QA hook: dispatch protocol commands through the same gateway the
 // UI uses so workspaces and panels can be exercised for screenshots without
 // synthetic input events. `KOGAVIEW_DEV_COMMANDS` holds `;`-separated command
@@ -63,30 +87,7 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
       if (!invoked) {
         qCritical() << "KogaView dev commands: dispatch failed";
       }
-      // QA hook: print the folders that decide where the explorer is rooted, so
-      // "navigation must not re-root the tree" is checkable from a log.
-      if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_STATE")) {
-        const QString snapshot = bridge->property("stateJson").toString();
-        const QJsonObject state = QJsonDocument::fromJson(snapshot.toUtf8()).object();
-        qInfo().noquote() << "KogaView dev state: rootFolder"
-                          << state.value(QStringLiteral("rootFolder")).toString()
-                          << "currentFolder"
-                          << state.value(QStringLiteral("currentFolder")).toString()
-                          << "workspace"
-                          << state.value(QStringLiteral("workspace")).toString()
-                          << "treeRevision"
-                          << static_cast<qint64>(
-                               state.value(QStringLiteral("treeRevision")).toDouble());
-        // The tree keeps its own expansion (it outlives the nodes), so read it
-        // from the view: a refresh after a file operation must keep both these
-        // paths and the current folder above.
-        if (QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"))) {
-          QQmlExpression expression(QQmlEngine::contextForObject(browser), browser,
-                                    QStringLiteral("Object.keys(expandedPaths).sort().join(' ')"));
-          qInfo().noquote() << "KogaView dev tree: expanded"
-                            << expression.evaluate().toString();
-        }
-      }
+      logDevState(rootObject, bridge);
     });
   }
 }
@@ -242,6 +243,15 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
     QTimer::singleShot(dismissAfter, &app, [&platform]() {
       QMetaObject::invokeMethod(&platform, "dismissActiveDialog");
       qInfo() << "KogaView dev portal dismiss: requested";
+    });
+  }
+
+  // What did the app restore? Logged before any command runs, so "the sidebar
+  // root and the open folder came back as two separate values" is visible.
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_STATE")) {
+    QTimer::singleShot(0, &app, [rootObject]() {
+      logDevState(rootObject,
+                  rootObject->findChild<QObject*>(QStringLiteral("bridge")));
     });
   }
 

@@ -20,13 +20,20 @@
 | Back from Editor | Viewer, honoring unsaved edit/draft policy |
 
 ## Explorer root contract
-- The explorer tree is rooted at the folder an explicit open selected (quick
-  access, `Open folder`, launch argument, or the restored `last_folder`).
-- Clicking a folder in the tree expands it and shows that folder in the grid;
-  double-clicking a folder in the grid, using a breadcrumb or going up navigates
-  the same way. None of these re-root the tree.
-- Only an explicit open moves the root: it is the one action that also persists
-  `last_folder`.
+- The tree root and the folder that is open are two different values, persisted
+  as `tree_root` and `last_folder`. A session left with `~/Pictures` in the
+  sidebar and `~/Pictures/Child` in the list comes back exactly like that: the
+  two are restored independently, never collapsed into the deeper folder.
+- The tree follows the list only when the list leaves the tree's subtree — a
+  breadcrumb to an ancestor, the up button past the root, or any navigation to a
+  folder outside it moves the root to that folder.
+- Everything inside the subtree leaves the root alone: tree clicks, grid
+  double-clicks and breadcrumbs down the tree, and also an explicit open (quick
+  access, `Open folder`, launch argument) of a folder that is already in the
+  tree. Opening the tree's own root is inside it, so it does not re-root either.
+- On startup each saved path is validated on its own: the one that still exists
+  wins and the other is derived from it (root → open, or open → root). Two
+  missing folders mean nothing is open, like a first run.
 - The toolbar exposes the same explicit open as the burger menu: an icon-only
   "Open folder" button. It asks the shell for the dialog (it never opens one
   itself) and the chosen folder re-roots the explorer, exactly like

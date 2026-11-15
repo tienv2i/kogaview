@@ -19,7 +19,14 @@ use crate::paths;
 pub struct Config {
     pub theme: Theme,
     pub quick_access: Vec<String>,
+    /// Folder the file list showed when the app last saved. Restored on the
+    /// next start, independently from the explorer root below.
     pub last_folder: Option<String>,
+    /// Folder the explorer tree was rooted at when the app last saved. It is
+    /// **not** the folder that was open: the tree may be rooted higher up, so
+    /// the user gets the same two-level view back (`~/Pictures` open in the
+    /// sidebar, `~/Pictures/Child` in the list).
+    pub tree_root: Option<String>,
     pub left_panel: bool,
     pub right_panel: bool,
     pub filmstrip: bool,
@@ -31,6 +38,7 @@ impl Default for Config {
             theme: Theme::Dark,
             quick_access: default_quick_access(),
             last_folder: None,
+            tree_root: None,
             left_panel: true,
             right_panel: true,
             filmstrip: true,

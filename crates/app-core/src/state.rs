@@ -44,9 +44,11 @@ pub struct UiState {
     pub workspace: Workspace,
     pub theme: Theme,
     pub current_folder: Option<String>,
-    /// Folder the explorer tree is rooted at. Only an explicit open (quick
-    /// access, "Open folder", launch argument) moves it; plain navigation
-    /// inside the tree or the grid leaves it alone.
+    /// Folder the explorer tree is rooted at. It is kept apart from
+    /// `current_folder`: the tree may stay at a parent while the list shows a
+    /// child. Navigation moves it only when the folder leaves its subtree
+    /// (breadcrumbs to an ancestor, "up" past the root); opening a folder that
+    /// is already inside the tree leaves it alone.
     pub root_folder: Option<String>,
     /// Bumped whenever an operation may have changed the folder tree (copy,
     /// move, trash, delete, new folder, explicit refresh). The explorer reloads

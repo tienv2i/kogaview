@@ -80,15 +80,89 @@ impl Core {
             pending_selection: None,
         };
 
-        if let Some(folder) = core.config.last_folder.clone() {
-            let path = PathBuf::from(folder);
-            if path.is_dir() {
-                core.state.root_folder = Some(path.to_string_lossy().into_owned());
-                core.start_scan(path, false, true);
-            }
-        }
-
+        core.restore_last_session();
         core
+    }
+
+    /// Re-open the folders the previous session left behind.
+    ///
+    /// The tree root and the folder the list showed are separate pieces of
+    /// state, so a session left with `~/Pictures` in the sidebar and
+    /// `~/Pictures/Child` open comes back the same way instead of collapsing
+    /// both into the deeper folder.
+    fn restore_last_session(&mut self) {
+        let saved_root = self.config.tree_root.clone();
+        let saved_folder = self.config.last_folder.clone();
+        let (root, folder) =
+            restored_folders(saved_root.as_deref(), saved_folder.as_deref(), |path| {
+                path.is_dir()
+            });
+        let (Some(root), Some(folder)) = (root, folder) else {
+            return;
+        };
+
+        let root_label = root.to_string_lossy().into_owned();
+        let folder_label = folder.to_string_lossy().into_owned();
+        self.state.root_folder = Some(root_label.clone());
+        self.start_scan(folder, false, true);
+        // Persist what startup actually resolved, so a root derived from the
+        // surviving folder is not re-derived (or lost) on every start.
+        if self.config.tree_root.as_deref() != Some(root_label.as_str())
+            || self.config.last_folder.as_deref() != Some(folder_label.as_str())
+        {
+            self.config.tree_root = Some(root_label);
+            self.config.last_folder = Some(folder_label);
+            self.save_config();
+        }
+    }
+
+    /// Build a Core whose configuration, journal and state directories live in
+    /// `base`, so a test can drive real commands without touching the user's
+    /// files. Test-only: production always goes through `Core::new()`.
+    #[cfg(test)]
+    fn for_test(base: &Path) -> Self {
+        let config_path = base.join("config.json");
+        // Load like startup does, so a test can save a config and build the
+        // "next run" on top of it.
+        let (config, _) = Config::load_or_create(&config_path);
+        let paths = AppPaths {
+            state_dir: base.join("state"),
+            cache_dir: base.join("cache"),
+            config_dir: base.join("config"),
+            data_dir: base.join("data"),
+            log_dir: base.join("state/logs"),
+            journal_dir: base.join("state/journal"),
+            screenshot_dir: base.join("state/screenshots"),
+        };
+        let journal = Journal::new(&paths.journal_dir);
+        let state = UiState::new(
+            config.theme,
+            config.quick_access.clone(),
+            config.left_panel,
+            config.right_panel,
+            config.filmstrip,
+            config_path.to_string_lossy().into_owned(),
+        );
+        Self {
+            paths,
+            config,
+            config_path,
+            state,
+            journal,
+            scan_rx: None,
+            scan_generation: 0,
+            op_rx: None,
+            cancel_op: None,
+            pending_viewer: None,
+            pending_selection: None,
+        }
+    }
+
+    /// The folders to restore, read back the way startup reads them.
+    #[cfg(test)]
+    fn saved_folders(&self) -> (Option<String>, Option<String>) {
+        let (config, _) = Config::load_or_create(&self.config_path);
+        (config.tree_root, config.last_folder)
     }
 
     pub fn snapshot_json(&self) -> String {
@@ -412,15 +486,30 @@ impl Core {
 
         if set_browser_workspace {
             self.state.workspace = Workspace::Browser;
-            // Only an explicit open re-roots the explorer; `Navigate` (tree
-            // clicks, double-clicking a folder in the grid, breadcrumbs) keeps
-            // the tree where the user opened it.
-            self.state.root_folder = Some(path.to_string_lossy().into_owned());
         }
+        // The tree root and the open folder are two different things. This is
+        // the one place that decides the root for a *navigation*: it stays put
+        // while the folder is inside the tree and follows it as soon as the
+        // folder leaves (breadcrumbs to an ancestor, "up" past the root). An
+        // explicit open inside the tree therefore does not re-root either.
+        let root = root_after_navigation(self.state.root_folder.as_deref().map(Path::new), &path);
+        let root_label = root.to_string_lossy().into_owned();
+        let folder_label = path.to_string_lossy().into_owned();
+        self.state.root_folder = Some(root_label.clone());
         self.pending_viewer = None;
         self.pending_selection = None;
-        self.config.last_folder = Some(path.to_string_lossy().into_owned());
-        self.save_config();
+
+        // `Navigate` now has to persist too: it is the only command that moves
+        // the folder the list shows. Only write when something really changed,
+        // so a refresh or a repeated click does not rewrite the file.
+        let changed = self.config.tree_root.as_deref() != Some(root_label.as_str())
+            || self.config.last_folder.as_deref() != Some(folder_label.as_str());
+        self.config.tree_root = Some(root_label);
+        self.config.last_folder = Some(folder_label);
+        if changed {
+            self.save_config();
+        }
+
         self.start_scan(path.clone(), true, false);
         Ok(Some(format!("Opened {}", path.display())))
     }
@@ -945,6 +1034,55 @@ impl Core {
     }
 }
 
+/// Does `path` live inside `root`, or is it `root` itself?
+fn is_within(root: &Path, path: &Path) -> bool {
+    // `Path::starts_with` compares whole components, so `/a/bc` is not inside
+    // `/a/b`; a plain string prefix check would get that wrong.
+    path == root || path.starts_with(root)
+}
+
+/// The explorer root to use once the user is looking at `folder`.
+///
+/// The tree follows the file list only when the folder leaves the root's
+/// subtree. An open of something already inside the tree (a quick-access entry
+/// pointing at a child, a launcher argument) keeps the tree where it is, so
+/// browsing one tree never re-roots it, while a breadcrumb to an ancestor or
+/// "up" past the root does.
+fn root_after_navigation(current_root: Option<&Path>, folder: &Path) -> PathBuf {
+    match current_root {
+        Some(root) if is_within(root, folder) => root.to_path_buf(),
+        _ => folder.to_path_buf(),
+    }
+}
+
+/// Resolve the two folders saved in the configuration into the pair to restore.
+///
+/// Each value is validated on its own, so a folder that disappeared does not
+/// cost the user the other one: whatever is still on disk wins and the second
+/// value is derived from it.
+fn restored_folders(
+    saved_root: Option<&str>,
+    saved_folder: Option<&str>,
+    is_dir: impl Fn(&Path) -> bool,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    let root = saved_root.map(PathBuf::from).filter(|path| is_dir(path));
+    let folder = saved_folder.map(PathBuf::from).filter(|path| is_dir(path));
+    match (root, folder) {
+        (Some(root), Some(folder)) => {
+            // Never restore an open folder outside the tree: the tree would
+            // show nothing and the first click in it would re-root anyway.
+            if is_within(&root, &folder) {
+                (Some(root), Some(folder))
+            } else {
+                (Some(folder.clone()), Some(folder))
+            }
+        }
+        (Some(root), None) => (Some(root.clone()), Some(root)),
+        (None, Some(folder)) => (Some(folder.clone()), Some(folder)),
+        (None, None) => (None, None),
+    }
+}
+
 fn breadcrumbs(path: &Path) -> Vec<Crumb> {
     let mut result = Vec::new();
     let mut current = PathBuf::new();
@@ -1004,5 +1142,266 @@ mod tests {
         let created = ops::create_folder(&dir, "New folder").unwrap();
         assert!(created.is_dir());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // ------------------------------------------------- explorer root vs list
+
+    /// The tree keeps its root while the folder stays inside it, so browsing
+    /// one tree never re-roots it.
+    #[test]
+    fn the_root_survives_navigation_inside_the_tree() {
+        let root = Path::new("/home/user/Pictures");
+        for folder in ["/home/user/Pictures", "/home/user/Pictures/Child"] {
+            assert_eq!(
+                root_after_navigation(Some(root), Path::new(folder)),
+                root,
+                "{} re-rooted the tree",
+                folder
+            );
+        }
+    }
+
+    /// A sibling whose name merely starts with the root's name is *outside* it.
+    #[test]
+    fn a_sibling_with_a_common_prefix_is_outside_the_tree() {
+        assert!(!is_within(
+            Path::new("/home/user/Pictures"),
+            Path::new("/home/user/Pictures-old")
+        ));
+        assert_eq!(
+            root_after_navigation(
+                Some(Path::new("/home/user/Pictures")),
+                Path::new("/Pictures-old")
+            ),
+            PathBuf::from("/Pictures-old")
+        );
+    }
+
+    /// Leaving the subtree — breadcrumbs to an ancestor, "up" past the root —
+    /// moves the tree with the list.
+    #[test]
+    fn leaving_the_subtree_moves_the_root() {
+        let root = Path::new("/home/user/Pictures");
+        for folder in ["/home/user", "/", "/mnt/photos"] {
+            assert_eq!(
+                root_after_navigation(Some(root), Path::new(folder)),
+                PathBuf::from(folder)
+            );
+        }
+        // Nothing open yet: the first folder becomes the root.
+        assert_eq!(
+            root_after_navigation(None, Path::new("/tmp")),
+            PathBuf::from("/tmp")
+        );
+    }
+
+    /// The two saved values come back as two values: the sidebar keeps the
+    /// parent while the list shows the child.
+    #[test]
+    fn both_saved_folders_are_restored_separately() {
+        let (root, folder) = restored_folders(
+            Some("/home/user/Pictures"),
+            Some("/home/user/Pictures/Child"),
+            |_| true,
+        );
+        assert_eq!(root.unwrap(), PathBuf::from("/home/user/Pictures"));
+        assert_eq!(folder.unwrap(), PathBuf::from("/home/user/Pictures/Child"));
+    }
+
+    /// One missing folder must not cost the other one.
+    #[test]
+    fn a_missing_folder_is_derived_from_the_surviving_one() {
+        let existing = ["/home/user/Pictures"];
+
+        // Only the tree root survived: the list opens it.
+        let (root, folder) = restored_folders(Some("/gone"), Some("/home/user/Pictures"), |path| {
+            existing.contains(&path.to_string_lossy().as_ref())
+        });
+        assert_eq!(root.unwrap(), PathBuf::from("/home/user/Pictures"));
+        assert_eq!(folder.unwrap(), PathBuf::from("/home/user/Pictures"));
+
+        // Only the open folder survived: it becomes the root.
+        let (root, folder) = restored_folders(Some("/home/user/Pictures"), Some("/gone"), |path| {
+            existing.contains(&path.to_string_lossy().as_ref())
+        });
+        assert_eq!(root.unwrap(), PathBuf::from("/home/user/Pictures"));
+        assert_eq!(folder.unwrap(), PathBuf::from("/home/user/Pictures"));
+    }
+
+    /// A config that would restore the list outside the tree is repaired instead
+    /// of showing an empty tree.
+    #[test]
+    fn a_folder_outside_the_saved_root_is_repaired() {
+        let (root, folder) = restored_folders(Some("/home/user"), Some("/mnt/photos"), |_| true);
+        assert_eq!(root.unwrap(), PathBuf::from("/mnt/photos"));
+        assert_eq!(folder.unwrap(), PathBuf::from("/mnt/photos"));
+    }
+
+    /// Drive the real commands: the two values must survive as two values, both
+    /// in the state the UI renders and in the configuration written to disk.
+    #[test]
+    fn the_root_and_the_open_folder_are_saved_apart() {
+        let base = temp_dir();
+        let root = base.join("Pictures");
+        let child = root.join("Child");
+        std::fs::create_dir_all(&child).unwrap();
+        let runtime = base.join("runtime");
+
+        let grandchild = child.join("Grand");
+        std::fs::create_dir_all(&grandchild).unwrap();
+
+        let mut core = Core::for_test(&runtime);
+        core.open_folder(root.clone(), true).unwrap();
+        // An explicit open of a folder that is already inside the tree — quick
+        // access, "Open folder", a launcher argument — keeps the tree root.
+        core.open_folder(child.clone(), true).unwrap();
+        // A plain navigation (`Navigate`: tree click, grid double-click,
+        // breadcrumb) inside the tree changes the list only.
+        core.open_folder(grandchild.clone(), false).unwrap();
+
+        let root_label = root.to_string_lossy().into_owned();
+        let grandchild_label = grandchild.to_string_lossy().into_owned();
+        assert_eq!(core.state.root_folder.as_deref(), Some(root_label.as_str()));
+        assert_eq!(
+            core.state.current_folder.as_deref(),
+            Some(grandchild_label.as_str())
+        );
+        assert_eq!(
+            core.saved_folders(),
+            (Some(root_label), Some(grandchild_label)),
+            "the sidebar root and the open folder were written as one value"
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// Walking out of the tree ("up" past the root, a breadcrumb to an ancestor)
+    /// takes the tree with it, and that move is persisted too.
+    #[test]
+    fn walking_out_of_the_tree_re_roots_the_saved_value() {
+        let base = temp_dir();
+        let root = base.join("Pictures");
+        let child = root.join("Child");
+        std::fs::create_dir_all(&child).unwrap();
+        let runtime = base.join("runtime");
+
+        let mut core = Core::for_test(&runtime);
+        core.open_folder(child.clone(), true).unwrap();
+        assert_eq!(
+            core.state.root_folder.as_deref(),
+            Some(child.to_string_lossy().as_ref())
+        );
+
+        core.open_folder(base.clone(), false).unwrap();
+        let base_label = base.to_string_lossy().into_owned();
+        assert_eq!(core.state.root_folder.as_deref(), Some(base_label.as_str()));
+        assert_eq!(core.saved_folders().0, Some(base_label));
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A restored session comes back with the tree above the open folder, not
+    /// with both collapsed into the deeper folder (the bug this fixes).
+    #[test]
+    fn restoring_a_session_keeps_the_tree_above_the_open_folder() {
+        let base = temp_dir();
+        let root = base.join("Pictures");
+        let child = root.join("Child");
+        std::fs::create_dir_all(&child).unwrap();
+        let runtime = base.join("runtime");
+
+        {
+            let mut core = Core::for_test(&runtime);
+            core.config.tree_root = Some(root.to_string_lossy().into_owned());
+            core.config.last_folder = Some(child.to_string_lossy().into_owned());
+            core.save_config();
+        }
+
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+
+        let root_label = root.to_string_lossy().into_owned();
+        let child_label = child.to_string_lossy().into_owned();
+        assert_eq!(core.state.root_folder.as_deref(), Some(root_label.as_str()));
+        assert_eq!(
+            core.state.current_folder.as_deref(),
+            Some(child_label.as_str())
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// Only the open folder was saved (or only the root): the other value is
+    /// derived instead of leaving the window half empty.
+    #[test]
+    fn restoring_derives_the_value_that_is_missing() {
+        let base = temp_dir();
+        let child = base.join("Pictures/Child");
+        std::fs::create_dir_all(&child).unwrap();
+        let runtime = base.join("runtime");
+        let child_label = child.to_string_lossy().into_owned();
+
+        {
+            let mut core = Core::for_test(&runtime);
+            core.config.last_folder = Some(child_label.clone());
+            core.save_config();
+        }
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+        assert_eq!(
+            core.state.root_folder.as_deref(),
+            Some(child_label.as_str())
+        );
+        assert_eq!(
+            core.state.current_folder.as_deref(),
+            Some(child_label.as_str())
+        );
+
+        // Now save a tree root only.
+        std::fs::remove_file(runtime.join("config.json")).unwrap();
+        {
+            let mut core = Core::for_test(&runtime);
+            core.config.tree_root = Some(child_label.clone());
+            core.save_config();
+        }
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+        assert_eq!(
+            core.state.root_folder.as_deref(),
+            Some(child_label.as_str())
+        );
+        assert_eq!(
+            core.state.current_folder.as_deref(),
+            Some(child_label.as_str())
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// Folders that no longer exist open nothing, exactly like a first run.
+    #[test]
+    fn restoring_deleted_folders_opens_nothing() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+        {
+            let mut core = Core::for_test(&runtime);
+            core.config.tree_root = Some("/definitely/gone".to_owned());
+            core.config.last_folder = Some("/also/gone".to_owned());
+            core.save_config();
+        }
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+        assert!(core.state.root_folder.is_none());
+        assert!(core.state.current_folder.is_none());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn nothing_opens_when_no_saved_folder_survives() {
+        let (root, folder) = restored_folders(Some("/gone"), Some("/gone-too"), |_| false);
+        assert!(root.is_none());
+        assert!(folder.is_none());
+        let (root, folder) = restored_folders(None, None, |_| true);
+        assert!(root.is_none() && folder.is_none());
     }
 }
