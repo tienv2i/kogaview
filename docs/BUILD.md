@@ -8,7 +8,7 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
 | `just setup` | Check Rust, CMake, Qt6, C++ toolchain, just and platform requirements |
 | `just build` | Build debug app into a known output directory; fail on any error |
 | `just run [ARGS]` | Build first; execute exact artifact just built; forward all args |
-| `just test` | Run tests; NOT proof UI works |
+| `just test` | Run tests: Cargo workspace tests, then the Qt Quick suite that loads the real `crates/desktop/qml/*.qml` (offscreen QPA) and asserts on the transforms Qt Quick applies. Still not proof the interactive UI is usable |
 | `just doctor` | Print versions, app ID, binary paths, build mode, runtime mode and installation conflicts |
 | `just logs` | Locate/read current dev instance structured logs |
 | `just install` / `uninstall` | Native install/remove without silently deleting user data |

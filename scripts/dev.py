@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = ROOT / "build" / "dev"
 BINARY = BUILD_DIR / "bin" / "kogaview"
+QML_TEST_BINARY = BUILD_DIR / "bin" / "kogaview_qml_tests"
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"
 APP_DIR_DEV = "kogaview-dev"
@@ -227,7 +228,44 @@ def run_app(args: list[str]) -> int:
 
 
 def test() -> int:
-    return run(["cargo", "test", "--workspace"]).returncode
+    """Rust tests, then the Qt Quick regression tests."""
+    cargo = run(["cargo", "test", "--workspace"])
+    if cargo.returncode != 0:
+        print("test: cargo tests failed", file=sys.stderr)
+        return cargo.returncode
+    return qml_tests()
+
+
+def qml_tests() -> int:
+    """Run the Qt Quick suite against the real QML sources.
+
+    The tests load `crates/desktop/qml/Viewer.qml` unchanged and assert on the
+    transforms Qt Quick actually applies, so a binding that centres or scales the
+    image incorrectly fails here instead of only being visible on screen.
+    """
+    setup_result = setup()
+    if setup_result != 0:
+        print("test: refusing to run the QML tests without prerequisites", file=sys.stderr)
+        return setup_result
+
+    configure = run(["cmake", "--preset", "dev"])
+    if configure.returncode != 0:
+        print("test: CMake configure failed; QML tests were not run", file=sys.stderr)
+        return configure.returncode
+
+    compile_result = run(["cmake", "--build", "--preset", "dev", "--target", "kogaview_qml_tests"])
+    if compile_result.returncode != 0:
+        print("test: QML test build failed", file=sys.stderr)
+        return compile_result.returncode
+
+    if not QML_TEST_BINARY.is_file():
+        print(f"test: expected QML test binary missing: {QML_TEST_BINARY}", file=sys.stderr)
+        return 1
+
+    # `offscreen` keeps the suite out of the desktop session; the wheel tests
+    # inject explicit pointing devices, so nothing depends on real input.
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    return run([str(QML_TEST_BINARY)], env=env).returncode
 
 
 def latest_log() -> Path | None:

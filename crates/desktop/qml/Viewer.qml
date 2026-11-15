@@ -158,6 +158,7 @@ Item {
             }
 
             WheelHandler {
+                objectName: "viewerWheelHandler"
                 acceptedDevices: PointerDevice.AllDevices
                 onWheel: function(event) {
                     if (!view.currentPath) return;

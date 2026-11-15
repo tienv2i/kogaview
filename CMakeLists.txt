@@ -15,6 +15,10 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 DBus 
 find_package(CxxQt 0.10 QUIET)
 if(NOT CxxQt_FOUND)
   include(FetchContent)
+  # Skip the per-configure `git fetch` step: it fails intermittently in this
+  # environment ("_ep_write_gitupdate_script: No such file or directory") and the
+  # pinned sources do not change between builds.
+  set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
   FetchContent_Declare(
     CxxQt
     GIT_REPOSITORY https://github.com/kdab/cxx-qt-cmake.git
@@ -51,6 +55,17 @@ set_target_properties(
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   # M0-only window-grab evidence harness, never part of a release build.
   target_compile_definitions(kogaview PRIVATE KOGAVIEW_DEV_HARNESS)
+endif()
+
+# QML regression tests: load the real Viewer.qml and assert on the transforms
+# Qt Quick applies. Built for `just test`; never installed or packaged.
+option(KOGAVIEW_BUILD_TESTS "Build the Qt Quick regression tests" ON)
+if(KOGAVIEW_BUILD_TESTS)
+  find_package(Qt6 REQUIRED COMPONENTS Test GuiPrivate)
+  add_executable(kogaview_qml_tests tests/qml/tst_viewer.cpp)
+  target_link_libraries(kogaview_qml_tests PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate)
+  target_compile_definitions(kogaview_qml_tests
+    PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml")
 endif()
 
 message(STATUS "KogaView app ID: io.github.tienv2i.KogaView.Dev (debug) / io.github.tienv2i.KogaView (release)")

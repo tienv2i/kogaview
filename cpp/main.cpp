@@ -1,16 +1,19 @@
 #include "platform.h"
 
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QPointingDevice>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QUrl>
+#include <QWheelEvent>
 
 #include <cstdio>
 
@@ -90,6 +93,39 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
               << viewer->property("zoom").toDouble();
     });
     timer->start();
+  }
+
+  // QA hook: inject one touchpad-typed wheel event into the running window so
+  // the scroll-to-zoom path can be observed on the real shell (toolbars,
+  // filmstrip, bridge-owned state) without physical input. The event is
+  // constructed exactly like a Wayland touchpad scroll: a touchpad pointing
+  // device carrying `pixelDelta` and no `angleDelta`.
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_WHEEL")) {
+    QTimer::singleShot(2500, &app, [rootObject]() {
+      auto* window = qobject_cast<QQuickWindow*>(rootObject);
+      QObject* viewer = rootObject->findChild<QObject*>(QStringLiteral("viewer"));
+      if (window == nullptr || viewer == nullptr) {
+        qWarning() << "KogaView dev wheel: window or viewer not found";
+        return;
+      }
+      const QPointF local(window->width() / 2.0, window->height() / 2.0);
+      static auto* touchpad =
+        new QPointingDevice(QStringLiteral("kogaview qa touchpad"), 9001,
+                            QInputDevice::DeviceType::TouchPad,
+                            QPointingDevice::PointerType::Finger,
+                            QInputDevice::Capability::Scroll
+                              | QInputDevice::Capability::PixelScroll,
+                            1, 3);
+      const double before = viewer->property("zoom").toDouble();
+      const double offsetBefore = viewer->property("offsetY").toDouble();
+      QWheelEvent event(local, QPointF(window->mapToGlobal(local.toPoint())), QPoint(0, 15),
+                        QPoint(0, 0), Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false,
+                        Qt::MouseEventNotSynthesized, touchpad);
+      QCoreApplication::sendEvent(window, &event);
+      qInfo() << "KogaView dev wheel: zoom" << before << "->"
+              << viewer->property("zoom").toDouble() << "offsetY" << offsetBefore << "->"
+              << viewer->property("offsetY").toDouble();
+    });
   }
 
   // Exercise the platform image clipboard without synthetic input events.
