@@ -54,4 +54,4 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 message(STATUS "KogaView app ID: io.github.huynhat.KogaView.Dev (debug) / io.github.huynhat.KogaView (release)")
-message(STATUS "KogaView runtime artifact: $<TARGET_FILE:kogaview>")
+message(STATUS "KogaView runtime artifact: ${CMAKE_BINARY_DIR}/bin/kogaview")
