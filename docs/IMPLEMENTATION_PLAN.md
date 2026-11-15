@@ -142,7 +142,7 @@ Work:
 - Build canonical artifact at a fixed path (e.g. `build/dev/bin/kogaview`); `CMAKE_RUNTIME_OUTPUT_DIRECTORY` or preset controls it.
 - Minimal QML shell: Browser placeholder window, system palette/font, high-DPI untouched.
 - Rewrite `scripts/dev.py`: `build`, `run`, `test`, `logs`, `install` (still refusing until implemented), strict fail-fast, no fallback binary.
-- Logging skeleton: `tracing` JSON to XDG state dir, one startup record with identity/version/SHA/profile/protocol version. Qt version is reported by `just doctor`. No journal yet.
+- Logging skeleton: `tracing` JSON to XDG state dir (`logs/kogaview.jsonl.<date>`), one startup record with identity/version/SHA/profile/protocol version. Qt version is reported by `just doctor`. No journal yet (M1 adds `journal/commands.jsonl`).
 - `.gitignore`, MIT LICENSE, initial commit. CI is deferred until a remote/runner exists and is not claimed as present.
 - **Spike check:** CXX-Qt generated QObject with one invokable + one property, bound to QML.
 
@@ -221,7 +221,7 @@ Evidence gate (all must be shown):
 | Track | Minimum commitment | Detailed in |
 |---|---|---|
 | Security | path/URI validation, no QML I/O, sanitized journal, no secrets in logs, capability gate before screenshots/writes over IPC, IPC permissions | M5 ADRs, `docs/FLATPAK.md` |
-| Observability | structured JSON logs, request/correlation ids, journal from M1, events from M1, screenshots from M1, bundle from M5 | M1, M5 |
+| Observability | structured JSON logs (`logs/kogaview.jsonl.<date>`), request/correlation ids, command journal from M1 (`journal/commands.jsonl`), events from M1, screenshots from M1, bundle from M5 | M1, M5 |
 | Performance | decode/scan/thumbnail/export off GUI thread; bounded caches; image dimension/memory limits; virtualized grid; measure before optimizing | M2–M4 |
 | Correctness | revision conflicts, idempotent retries, atomic saves, recovery records, reconciliation | M1, M2, M4 |
 | i18n/a11y | externalized strings, system fonts/palette/DPI, keyboard navigation, accessible names; no fake GNOME Adwaita fidelity claims | M3/M6 |
@@ -233,7 +233,7 @@ Evidence gate (all must be shown):
 2. Launch the real app in the current session; read startup logs before touching the UI.
 3. Perform the scenario by mouse/keyboard (and drag-and-drop/file manager where relevant).
 4. Capture a screenshot after render readiness; inspect the actual visible result.
-5. Inspect journal, state revision, events and task status; open output files from disk.
+5. Inspect the command journal (`$XDG_STATE_HOME/kogaview[-dev]/journal/commands.jsonl`), state revision, events and task status; open output files from disk. The structured log (`logs/kogaview.jsonl.<date>`) is a separate file and does not contain journal or event records, so read both.
 6. Repeat via CLI, then MCP when available; compare semantic state/results.
 7. Exercise failure paths: missing file, permission denied, cancellation, repeated clicks, restart.
 8. Fill the `WORKFLOW.md` completion report; list unverified items explicitly.

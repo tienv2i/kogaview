@@ -164,7 +164,7 @@
 - IPC identity and data directories must be separated between dev and production.
 
 ## Acceptance scenarios
-1. Launch with no args: Browser visible; journal shows startup; no implicit Editor.
+1. Launch with no args: Browser visible; the startup record (`kogaview::startup`, in `logs/kogaview.jsonl.<date>`) shows the app starting and no `journal/commands.jsonl` line sets a workspace (`set_workspace`), so there is no implicit Editor.
 2. Launch with JPEG path: Viewer visible with correct image; file manager Open With works.
 3. Launch with directory: Browser displays folder contents; double-click opens Viewer; back restores browser context.
 4. Viewer -> Editor -> back: source image unchanged; draft/unsaved behavior explicit.

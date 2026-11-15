@@ -28,6 +28,7 @@ kogactl debug bundle --output report.zip
 kogactl debug replay --journal report.jsonl --sandbox
 ```
 - `kogactl` is a separate executable; commands above are design targets, not currently implemented.
+- What exists today, for reading evidence by hand: the command journal at `$XDG_STATE_HOME/kogaview[-dev]/journal/commands.jsonl` (one JSON line per command, with `id`/`ok`/`revision`) and the daily-rolled log at `…/logs/kogaview.jsonl.<date>` (readable with `just logs`). `debug replay --journal` will read the command journal, not the log.
 - Shared typed Envelope, response semantics, error codes, authorization and revision checks with UI/MCP.
 - `accepted` with `task_id` differs from `completed`; progress and cancellation are observable.
 - For Flatpak, external CLI connectivity needs a separately designed, permission-aware transport. Do not assume sandbox-private socket is accessible.
