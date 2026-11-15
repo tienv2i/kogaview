@@ -1,0 +1,13 @@
+[package]
+name = "kogaview-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+kogaview-protocol = { path = "../app-protocol" }
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true

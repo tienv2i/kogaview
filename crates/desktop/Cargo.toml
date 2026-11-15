@@ -1,0 +1,22 @@
+[package]
+name = "kogaview_desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[lib]
+name = "kogaview_desktop"
+crate-type = ["staticlib"]
+
+[dependencies]
+cxx.workspace = true
+cxx-qt.workspace = true
+cxx-qt-lib.workspace = true
+kogaview-core = { path = "../app-core" }
+kogaview-protocol = { path = "../app-protocol" }
+tracing.workspace = true
+
+[build-dependencies]
+cxx-qt-build.workspace = true

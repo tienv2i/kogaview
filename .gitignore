@@ -1,0 +1,12 @@
+target/
+build/
+.cache/
+*.user
+compile_commands.json
+.cmake/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+__pycache__/
+*.pyc
+.qmlls.ini
