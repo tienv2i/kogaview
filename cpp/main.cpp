@@ -6,6 +6,8 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointingDevice>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -59,6 +61,18 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app)
       qInfo().noquote() << "KogaView dev command" << command << "->" << result;
       if (!invoked) {
         qCritical() << "KogaView dev commands: dispatch failed";
+      }
+      // QA hook: print the folders that decide where the explorer is rooted, so
+      // "navigation must not re-root the tree" is checkable from a log.
+      if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_STATE")) {
+        const QString snapshot = bridge->property("stateJson").toString();
+        const QJsonObject state = QJsonDocument::fromJson(snapshot.toUtf8()).object();
+        qInfo().noquote() << "KogaView dev state: rootFolder"
+                          << state.value(QStringLiteral("rootFolder")).toString()
+                          << "currentFolder"
+                          << state.value(QStringLiteral("currentFolder")).toString()
+                          << "workspace"
+                          << state.value(QStringLiteral("workspace")).toString();
       }
     });
   }

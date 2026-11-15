@@ -23,7 +23,8 @@
   it performs no domain mutation.
 - `PlatformHelper` (C++): XDG portal `FileChooser` dialogs with a Qt fallback,
   image and text clipboard, external open and folder reveal.
-- QML shell: three icon mode buttons, per-workspace toolbar, burger menu
+- QML shell: three `<icon> <text>` workspace switcher buttons (Browser, Viewer,
+  Editor), per-workspace toolbar, burger menu
   (open file, open folder, theme toggle, exit), centred content and a status bar.
 - Browser: quick access + explorer-style folder tree, collapsible one-row
   breadcrumbs, responsive async thumbnail grid, preview/metadata sidebar with a
@@ -42,7 +43,7 @@ did not change the evidence.
 | # | Scenario | Command (abridged) | Result |
 |---|---|---|---|
 | 1 | Build | `just build` | PASS, artifact `build/dev/bin/kogaview` |
-| 2 | Tests | `just test` | PASS: 17 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests |
+| 2 | Tests | `just test` | PASS: 17 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests and 11 Qt Quick browser/explorer tests |
 | 3 | Formatting | `cargo fmt --all -- --check` | PASS |
 | 4 | Version | `kogaview --version` | `KogaView (Dev) 0.1.0 (io.github.tienv2i.KogaView.Dev)` |
 | 5 | Config creation | first run, then `cat ~/.config/kogaview-dev/config.json` | file created with dark theme, `~/Pictures` + `~` quick access, panels and filmstrip on |
@@ -65,6 +66,9 @@ did not change the evidence.
 | 22 | Scroll-to-zoom | `tests/qml/tst_viewer.cpp` (run by `just test`) injecting a touchpad-typed wheel event (`pixelDelta` 15, `angleDelta` 0) and a mouse wheel (`angleDelta` ±120) into the real `Viewer.qml`; plus one injection into the running app window (`KOGAVIEW_DEV_WHEEL=1`) | touchpad: `0.6000 → 0.6966` (`1.01^15`), mouse: `0.6000 → 0.7182` and back (`1.0015^120`); the image point under the cursor stayed within 0.5 px at three cursor positions, with and without an explicit scroll phase. In the running app the injected touchpad scroll gave `zoom 0.77175 → 0.895978` with `offsetY 0 → −7.08`, i.e. anchored on the cursor rather than on the viewport centre |
 | 23 | Pointer-device gating (negative control) | same suite with `acceptedDevices` forced to `PointerDevice.Mouse` | touchpad-typed wheel events are dropped (zoom stays `0.6`) and zoom again as soon as the handler accepts all devices; mouse wheels work either way. This confirms that `acceptedDevices: PointerDevice.AllDevices` is what makes touchpad scroll-to-zoom work |
 | 24 | Regression check of the suite itself | temporarily restored `x: viewport.width / 2 - width * scale / 2 …` and re-ran the suite | 13 failures, including a cursor-anchor drift of −96.6 px, so the suite does fail when the bug returns |
+| 25 | Workspace switcher shows icon *and* text | `tests/qml/tst_browser.cpp` (run by `just test`) loading the real `WorkspaceSwitcher.qml`, asserting `display == AbstractButton.TextBesideIcon`, non-empty `icon.name`, the label, a content width wider than the icon alone and a button at least as wide as its content; plus `docs/evidence/M1-explorer-root.png` | Browser/Viewer/Editor each render as `<icon> <text>`; clicking Viewer emits `selected("viewer")` and the checked state follows the workspace Core reports |
+| 26 | Explorer keeps its root | `tests/qml/tst_browser.cpp` driving real mouse events (`QTest::mouseClick`/`mouseDClick`) on the tree row, the disclosure arrow, the grid cell, a quick-access entry and a breadcrumb; plus `KOGAVIEW_DEV_COMMANDS` + `KOGAVIEW_DEV_STATE` on the real binary | tree row → `navigate:/root/dirA` (never `open_folder`) and the node expands; disclosure arrow toggles without emitting a command; grid double-click on a folder → `navigate`, on an image → `open_file`; quick access → `open_folder:/fav`. Real binary: `open_folder photos` → `rootFolder photos / currentFolder photos`; `navigate photos/sub` → `rootFolder photos / currentFolder photos/sub` — the tree stayed rooted at `photos` while the grid showed `sub` (`docs/evidence/M1-explorer-root.png`) |
+| 27 | Explorer regression check | reintroduced each old behaviour in turn (tree click and grid double-click sending `open_folder`, tree rooted at `currentFolder`, icon-only mode buttons) and re-ran `kogaview_browser_qml_tests` | each mutation is caught: `treeClickNavigatesWithoutRerooting`, `gridDoubleClickOnFolderNavigates`, `treeIsRootedAtTheOpenedFolder` and `switcherShowsIconAndText` fail respectively; the restored sources pass 11/11 |
 
 ### Dev harness used for evidence
 
@@ -78,11 +82,16 @@ window to observe scroll-to-zoom on the real shell). The geometry log relies on
 the stable `objectName`s `viewer`, `viewerViewport`, `viewerCanvas` and
 `viewerWheelHandler`.
 
-The repeatable part of this is not the hooks: `just test` runs
-`tests/qml/tst_viewer.cpp`, which loads the unchanged `Viewer.qml`, asserts on
-the transforms Qt Quick applies and injects explicit mouse/touchpad wheel
-events, so these regressions fail the pipeline instead of only showing up on
-screen.
+`KOGAVIEW_DEV_STATE` prints `rootFolder`/`currentFolder`/`workspace` after every
+dev command, which is how "navigation must not re-root the explorer" is checked
+from a log.
+
+The repeatable part of this is not the hooks: `just test` runs two Qt Quick
+suites that load the unchanged QML sources and assert on what Qt Quick actually
+does — `tests/qml/tst_viewer.cpp` (transform maths and injected mouse/touchpad
+wheel events) and `tests/qml/tst_browser.cpp` (real clicks on the workspace
+switcher and the explorer, asserted through the commands the views emit). These
+regressions fail the pipeline instead of only showing up on screen.
 
 ### Bugs found and fixed during verification
 
@@ -119,16 +128,28 @@ screen.
   `PointerDevice.AllDevices`; the regression test in row 23 fails without it.
 - The QML `WheelEvent` exposes `x`/`y`, not `position`; anchoring now uses the
   actual properties.
+- The workspace mode buttons were icon-only, so Browser, Viewer and Editor could
+  not be told apart without hovering for the tooltip. They now render
+  `<icon> <text>`, and `ToolbarButton` grows beyond its 34 px square instead of
+  clipping the label.
+- Every click in the folder tree sent `open_folder`, which persisted the folder
+  as the new root and re-rooted the tree on itself: browsing the tree destroyed
+  the folder the user had opened. `UiState.root_folder` now records the folder an
+  explicit open selected; tree clicks, grid double-clicks, breadcrumbs and the
+  up button send `navigate`, which changes `current_folder` only. Quick access
+  and "Open folder" remain the only actions that re-root the explorer.
 - Qt logs (including QML warnings) are routed to journald when stderr is not a
   TTY; evidence runs set `QT_ASSUME_STDERR_HAS_CONSOLE=1`.
 
 ## Not verified here (honest gaps)
 
-- Pointer and keyboard interaction was not driven by this session: the project
-  owner was exercising the app interactively in parallel. Clicking the workspace
-  buttons, opening context menus, choosing menu entries and the "copy image
-  content" menu item are wired to the same commands and functions verified above,
-  but the click paths themselves were not captured as evidence by this report.
+- No *physical* click was generated by this session, and keyboard interaction
+  was not driven at all. Clicks on the workspace switcher, the explorer tree, the
+  disclosure arrow, a grid cell and a breadcrumb are covered by
+  `tests/qml/tst_browser.cpp`, which sends real `QTest` mouse events into the
+  real QML sources and asserts on the emitted commands (rows 25–27); context
+  menus, menu entries and the "copy image content" item are wired to the same
+  commands but their click paths are not captured as evidence here.
 - Portal dialogs: only availability is logged and the Qt fallback exists.
   A second simultaneous instance cannot register the same portal app ID (`Could
   not register app ID: Connection already associated with an application ID`), so
@@ -167,4 +188,9 @@ screen.
 - `docs/evidence/M1-browser-deep-crumbs.png`
 - `docs/evidence/M1-viewer.png`
 - `docs/evidence/M1-viewer-scroll-zoom.png` (injected touchpad scroll: zoom 0.77175 → 0.895978, anchored on the cursor)
+- `docs/evidence/M1-explorer-root.png` (current folder `photos/sub` in the grid and the breadcrumbs while the tree stays rooted at `photos`)
+
+The browser and viewer screenshots above were captured before rows 25–27, so
+they still show the icon-only mode buttons; `M1-explorer-root.png` shows the
+current `<icon> <text>` toolbar.
 - `docs/evidence/M1-editor.png`

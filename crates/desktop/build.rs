@@ -6,6 +6,7 @@ fn main() {
         "qml/Icon.qml",
         "qml/ToolbarButton.qml",
         "qml/ToolbarSeparator.qml",
+        "qml/WorkspaceSwitcher.qml",
         "qml/Theme.qml",
         "qml/BrowserView.qml",
         "qml/Viewer.qml",

@@ -57,15 +57,27 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_compile_definitions(kogaview PRIVATE KOGAVIEW_DEV_HARNESS)
 endif()
 
-# QML regression tests: load the real Viewer.qml and assert on the transforms
-# Qt Quick applies. Built for `just test`; never installed or packaged.
+# QML regression tests: load the real `.qml` sources and assert on what Qt Quick
+# actually does (viewer transforms, explorer commands). Built for `just test`;
+# never installed or packaged.
 option(KOGAVIEW_BUILD_TESTS "Build the Qt Quick regression tests" ON)
 if(KOGAVIEW_BUILD_TESTS)
   find_package(Qt6 REQUIRED COMPONENTS Test GuiPrivate)
-  add_executable(kogaview_qml_tests tests/qml/tst_viewer.cpp)
-  target_link_libraries(kogaview_qml_tests PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate)
-  target_compile_definitions(kogaview_qml_tests
-    PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml")
+
+  # Suite sources are paired with the target that runs them.
+  set(KOGAVIEW_QML_TEST_SUITES
+    "kogaview_qml_tests:tst_viewer.cpp"
+    "kogaview_browser_qml_tests:tst_browser.cpp")
+
+  foreach(suite IN LISTS KOGAVIEW_QML_TEST_SUITES)
+    string(REPLACE ":" ";" parts "${suite}")
+    list(GET parts 0 target)
+    list(GET parts 1 source)
+    add_executable(${target} tests/qml/${source})
+    target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate)
+    target_compile_definitions(${target}
+      PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml")
+  endforeach()
 endif()
 
 message(STATUS "KogaView app ID: io.github.tienv2i.KogaView.Dev (debug) / io.github.tienv2i.KogaView (release)")

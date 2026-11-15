@@ -83,6 +83,7 @@ impl Core {
         if let Some(folder) = core.config.last_folder.clone() {
             let path = PathBuf::from(folder);
             if path.is_dir() {
+                core.state.root_folder = Some(path.to_string_lossy().into_owned());
                 core.start_scan(path, false, true);
             }
         }
@@ -402,6 +403,10 @@ impl Core {
 
         if set_browser_workspace {
             self.state.workspace = Workspace::Browser;
+            // Only an explicit open re-roots the explorer; `Navigate` (tree
+            // clicks, double-clicking a folder in the grid, breadcrumbs) keeps
+            // the tree where the user opened it.
+            self.state.root_folder = Some(canonical.to_string_lossy().into_owned());
         }
         self.pending_viewer = None;
         self.pending_selection = None;

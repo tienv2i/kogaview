@@ -18,7 +18,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = ROOT / "build" / "dev"
 BINARY = BUILD_DIR / "bin" / "kogaview"
-QML_TEST_BINARY = BUILD_DIR / "bin" / "kogaview_qml_tests"
+# QML suites: (target, binary). Every suite loads the real `.qml` sources.
+QML_TEST_SUITES = (
+    ("kogaview_qml_tests", BUILD_DIR / "bin" / "kogaview_qml_tests"),
+    ("kogaview_browser_qml_tests", BUILD_DIR / "bin" / "kogaview_browser_qml_tests"),
+)
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"
 APP_DIR_DEV = "kogaview-dev"
@@ -237,11 +241,12 @@ def test() -> int:
 
 
 def qml_tests() -> int:
-    """Run the Qt Quick suite against the real QML sources.
+    """Run the Qt Quick suites against the real QML sources.
 
-    The tests load `crates/desktop/qml/Viewer.qml` unchanged and assert on the
-    transforms Qt Quick actually applies, so a binding that centres or scales the
-    image incorrectly fails here instead of only being visible on screen.
+    The tests load `crates/desktop/qml/*.qml` unchanged and assert on what Qt
+    Quick actually does: viewer transforms (centring, zoom, flip) and the
+    commands the browser/explorer emit for real clicks. A binding or gesture
+    that regresses fails here instead of only being visible on screen.
     """
     setup_result = setup()
     if setup_result != 0:
@@ -253,19 +258,24 @@ def qml_tests() -> int:
         print("test: CMake configure failed; QML tests were not run", file=sys.stderr)
         return configure.returncode
 
-    compile_result = run(["cmake", "--build", "--preset", "dev", "--target", "kogaview_qml_tests"])
-    if compile_result.returncode != 0:
-        print("test: QML test build failed", file=sys.stderr)
-        return compile_result.returncode
+    for target, _binary in QML_TEST_SUITES:
+        compile_result = run(["cmake", "--build", "--preset", "dev", "--target", target])
+        if compile_result.returncode != 0:
+            print(f"test: QML test build failed ({target})", file=sys.stderr)
+            return compile_result.returncode
 
-    if not QML_TEST_BINARY.is_file():
-        print(f"test: expected QML test binary missing: {QML_TEST_BINARY}", file=sys.stderr)
-        return 1
-
-    # `offscreen` keeps the suite out of the desktop session; the wheel tests
-    # inject explicit pointing devices, so nothing depends on real input.
+    # `offscreen` keeps the suites out of the desktop session; the input tests
+    # drive explicit mouse/wheel events, so nothing depends on real input.
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    return run([str(QML_TEST_BINARY)], env=env).returncode
+    for target, binary in QML_TEST_SUITES:
+        if not binary.is_file():
+            print(f"test: expected QML test binary missing: {binary}", file=sys.stderr)
+            return 1
+        result = run([str(binary)], env=env)
+        if result.returncode != 0:
+            print(f"test: QML suite failed ({target})", file=sys.stderr)
+            return result.returncode
+    return 0
 
 
 def latest_log() -> Path | None:

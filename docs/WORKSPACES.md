@@ -19,6 +19,15 @@
 | Back from Viewer | Restore Browser selection, filter, scroll |
 | Back from Editor | Viewer, honoring unsaved edit/draft policy |
 
+## Explorer root contract
+- The explorer tree is rooted at the folder an explicit open selected (quick
+  access, `Open folder`, launch argument, or the restored `last_folder`).
+- Clicking a folder in the tree expands it and shows that folder in the grid;
+  double-clicking a folder in the grid, using a breadcrumb or going up navigates
+  the same way. None of these re-root the tree.
+- Only an explicit open moves the root: it is the one action that also persists
+  `last_folder`.
+
 ## Command contracts
 - `app.open_files { paths: Vec<PathOrUri>, activation: bool }` -> viewer state and navigation context.
 - `app.open_folder { path: PathOrUri, activation: bool }` -> browser state.

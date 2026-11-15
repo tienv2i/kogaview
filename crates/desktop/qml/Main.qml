@@ -249,38 +249,13 @@ ApplicationWindow {
             anchors.rightMargin: 8
             spacing: 4
 
-            ToolbarButton {
+            WorkspaceSwitcher {
+                objectName: "workspaceSwitcher"
                 theme: appTheme
-                checkable: true
-                checked: root.state.workspace === "browser"
-                icon.name: "view-grid-symbolic"
-                text: "Browser"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: "Browser workspace"
-                onClicked: root.send({ type: "set_workspace", workspace: "browser" })
-            }
-            ToolbarButton {
-                theme: appTheme
-                checkable: true
-                checked: root.state.workspace === "viewer"
-                icon.name: "image-x-generic-symbolic"
-                text: "Viewer"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: "Viewer workspace"
-                onClicked: root.send({ type: "set_workspace", workspace: "viewer" })
-            }
-            ToolbarButton {
-                theme: appTheme
-                checkable: true
-                checked: root.state.workspace === "editor"
-                icon.name: "document-edit-symbolic"
-                text: "Editor"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: "Editor workspace"
-                onClicked: root.send({ type: "set_workspace", workspace: "editor" })
+                workspace: root.state.workspace || "browser"
+                onSelected: function(workspace) {
+                    root.send({ type: "set_workspace", workspace: workspace });
+                }
             }
 
             ToolbarSeparator { theme: appTheme }

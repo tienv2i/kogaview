@@ -10,8 +10,14 @@ ToolButton {
     property Theme theme: Theme {}
 
     display: AbstractButton.IconOnly
-    implicitWidth: 34
+    // 34 px is the icon-only square; when a label is shown the button grows to
+    // fit `<icon> <text>` instead of clipping the text.
+    implicitWidth: Math.max(34, contentItem
+                            ? contentItem.implicitWidth + leftPadding + rightPadding
+                            : 34)
     implicitHeight: 34
+    leftPadding: 8
+    rightPadding: 8
     focusPolicy: Qt.NoFocus
     activeFocusOnTab: false
     icon.width: 18

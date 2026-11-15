@@ -51,7 +51,9 @@ Item {
 
     function openEntry(entry) {
         if (entry.isDir) {
-            view.command({ type: "open_folder", path: entry.path });
+            // Browsing into a folder from the grid navigates; only quick access
+            // and "Open folder" re-root the explorer tree.
+            view.command({ type: "navigate", path: entry.path });
         } else if (entry.isImage) {
             view.command({ type: "open_file", paths: [entry.path] });
         } else {
@@ -95,7 +97,7 @@ Item {
 
         // ------------------------------------------------------- left sidebar
         Rectangle {
-            visible: view.state.leftPanel
+            visible: !!view.state.leftPanel
             Layout.preferredWidth: view.theme.panelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
@@ -116,6 +118,7 @@ Item {
 
                 ListView {
                     id: quickList
+                    objectName: "quickAccessList"
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(contentHeight, 190)
                     clip: true
@@ -123,6 +126,7 @@ Item {
                     model: view.state.favorites || []
 
                     delegate: Rectangle {
+                        objectName: "quickAccessItem"
                         width: quickList.width
                         height: 32
                         radius: view.theme.radius
@@ -182,10 +186,17 @@ Item {
 
                     Loader {
                         id: treeRoot
+                        objectName: "folderTreeRoot"
                         width: parent.width
                         height: item ? item.implicitHeight : 0
-                        property string folderPath: view.state.currentFolder || ""
-                        sourceComponent: folderNode
+                        // The tree is rooted at the folder the user opened, not
+                        // at whatever folder was navigated to, so browsing the
+                        // tree or the grid never moves its root.
+                        property string folderPath: view.state.rootFolder
+                                                   || view.state.currentFolder || ""
+                        // No root node at all when nothing is open, instead of
+                        // an empty row in the tree.
+                        sourceComponent: folderPath ? folderNode : null
                         onLoaded: if (item) item.reset(folderPath, view.folderLabel(folderPath), 0)
                         onFolderPathChanged: if (item) item.reset(folderPath, view.folderLabel(folderPath), 0)
                     }
@@ -261,6 +272,7 @@ Item {
                     spacing: 2
 
                     Label {
+                        objectName: "crumbLabel"
                         visible: crumbBar.crumbs.length > 0
                         text: crumbBar.crumbs.length > 0 ? crumbBar.crumbs[0].name : ""
                         color: view.theme.text
@@ -306,6 +318,7 @@ Item {
                             spacing: 2
 
                             Label {
+                                objectName: "crumbLabel"
                                 text: modelData.name
                                 color: view.theme.text
                                 elide: Text.ElideMiddle
@@ -331,7 +344,7 @@ Item {
                     Item { Layout.fillWidth: true }
 
                     Label {
-                        visible: view.state.busy
+                        visible: !!view.state.busy
                         text: "Loading…"
                         color: view.theme.textMuted
                     }
@@ -356,6 +369,7 @@ Item {
 
             GridView {
                 id: grid
+                objectName: "fileGrid"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
@@ -367,6 +381,7 @@ Item {
 
                 delegate: Item {
                     id: cell
+                    objectName: "fileCell"
                     width: grid.cellWidth
                     height: grid.cellHeight
 
@@ -466,7 +481,7 @@ Item {
 
         // --------------------------------------------------- right sidebar
         Rectangle {
-            visible: view.state.rightPanel
+            visible: !!view.state.rightPanel
             Layout.preferredWidth: view.theme.previewWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
@@ -589,6 +604,7 @@ Item {
             property string nodeName: ""
             property int depth: 0
             property bool expanded: false
+            property bool collapsedByUser: false
             property var children: []
 
             spacing: 0
@@ -600,6 +616,7 @@ Item {
                 depth = level;
                 children = [];
                 expanded = false;
+                collapsedByUser = false;
                 if (path) {
                     expanded = true;
                     load();
@@ -612,7 +629,49 @@ Item {
                 children = (response && response.ok) ? response.folders : [];
             }
 
+            /// Click or double-click: expand the node and show that folder in
+            /// the grid. This navigates — it never re-roots the tree, which only
+            /// quick access and "Open folder" do.
+            function activate() {
+                if (!nodePath) return;
+                collapsedByUser = false;
+                expand();
+                view.command({ type: "navigate", path: nodePath });
+            }
+
+            function expand() {
+                if (!nodePath || expanded) return;
+                expanded = true;
+                load();
+            }
+
+            /// Collapse/expand from the disclosure arrow; the arrow only changes
+            /// the tree, it does not navigate.
+            function toggleExpanded() {
+                if (!nodePath) return;
+                if (expanded) {
+                    expanded = false;
+                    // Remember the collapse so auto-reveal does not undo it.
+                    collapsedByUser = true;
+                } else {
+                    collapsedByUser = false;
+                    expand();
+                }
+            }
+
+            /// Expand (never collapse) towards the folder shown in the grid, so
+            /// navigating from the grid, breadcrumbs or the toolbar reveals the
+            /// node. A node the user collapsed on purpose is left alone.
+            function followCurrent() {
+                if (collapsedByUser) return;
+                var current = view.state.currentFolder || "";
+                if (!current || !nodePath) return;
+                if (current !== nodePath && current.indexOf(nodePath + "/") !== 0) return;
+                expand();
+            }
+
             Rectangle {
+                objectName: "folderTreeRow"
                 width: node.width
                 height: 30
                 radius: 4
@@ -631,14 +690,7 @@ Item {
                         implicitHeight: 20
                         text: node.expanded ? "▾" : "▸"
                         display: AbstractButton.TextOnly
-                        onClicked: {
-                            if (node.expanded) {
-                                node.expanded = false;
-                            } else {
-                                node.expanded = true;
-                                node.load();
-                            }
-                        }
+                        onClicked: node.toggleExpanded()
                     }
 
                     Icon {
@@ -658,10 +710,10 @@ Item {
                 HoverHandler { id: nodeHover }
                 TapHandler {
                     acceptedButtons: Qt.LeftButton
-                    onSingleTapped: view.command({
-                        type: "open_folder",
-                        path: node.nodePath
-                    })
+                    // Both a click and a double-click expand the node; the tree
+                    // root and the grid folder stay where the user opened them.
+                    onSingleTapped: node.activate()
+                    onDoubleTapped: node.activate()
                 }
                 TapHandler {
                     acceptedButtons: Qt.RightButton
@@ -680,8 +732,14 @@ Item {
                         item.nodeName = modelData.name;
                         item.depth = node.depth + 1;
                         item.expanded = false;
+                        item.followCurrent();
                     }
                 }
+            }
+
+            Connections {
+                target: view
+                function onStateChanged() { node.followCurrent() }
             }
         }
     }

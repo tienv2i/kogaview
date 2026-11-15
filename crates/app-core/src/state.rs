@@ -44,6 +44,10 @@ pub struct UiState {
     pub workspace: Workspace,
     pub theme: Theme,
     pub current_folder: Option<String>,
+    /// Folder the explorer tree is rooted at. Only an explicit open (quick
+    /// access, "Open folder", launch argument) moves it; plain navigation
+    /// inside the tree or the grid leaves it alone.
+    pub root_folder: Option<String>,
     pub breadcrumbs: Vec<Crumb>,
     pub entries: Vec<Entry>,
     pub selection: Vec<String>,
@@ -77,6 +81,7 @@ impl UiState {
             workspace: Workspace::Browser,
             theme,
             current_folder: None,
+            root_folder: None,
             breadcrumbs: Vec::new(),
             entries: Vec::new(),
             selection: Vec::new(),
