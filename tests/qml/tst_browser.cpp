@@ -16,6 +16,7 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QScopedPointer>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -221,6 +222,38 @@ private:
     return nullptr;
   }
 
+  /// The first item with `objectName: name`, or nullptr.
+  QQuickItem* findItem(const QString& name)
+  {
+    const QList<QQuickItem*> found = items(browserItem(), name);
+    return found.isEmpty() ? nullptr : found.first();
+  }
+
+  static QPoint centreOf(QQuickItem* item)
+  {
+    return item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
+  }
+
+  /// Drag the pointer `dx` pixels horizontally with the left button held down.
+  ///
+  /// The moves arrive as a drag (Qt Quick keeps the implicit grab the press
+  /// took), which is what makes the splitter follow the pointer; several small
+  /// steps keep it realistic instead of teleporting the cursor.
+  void dragBy(QQuickView* view, QQuickItem* handle, int dx, int steps = 6)
+  {
+    settle();
+    const QPoint from = centreOf(handle);
+    QTest::mousePress(view, Qt::LeftButton, Qt::NoModifier, from);
+    QCoreApplication::processEvents();
+    for (int step = 1; step <= steps; ++step) {
+      QTest::mouseMove(view, QPoint(from.x() + dx * step / steps, from.y()));
+      QCoreApplication::processEvents();
+    }
+    QTest::mouseRelease(view, Qt::LeftButton, Qt::NoModifier, QPoint(from.x() + dx, from.y()));
+    QCoreApplication::processEvents();
+    settle();
+  }
+
   QVariantMap baseState() const
   {
     QVariantList entries;
@@ -288,10 +321,143 @@ private slots:
     // Rebuild the tree from the stub just installed and wait out the coalesced
     // refresh, so every test starts from a settled tree built from its own
     // folder lister and no reload fires in the middle of a test.
+    // Sidebar widths live as long as the view does, so a drag in one test would
+    // otherwise decide where the next test starts.
+    if (QQuickItem* left = findItem(QStringLiteral("leftSplitter"))) {
+      view->setProperty("leftPanelWidth", left->property("defaultValue"));
+    }
+    if (QQuickItem* right = findItem(QStringLiteral("rightSplitter"))) {
+      view->setProperty("rightPanelWidth", right->property("defaultValue"));
+    }
+
     QMetaObject::invokeMethod(view, "reloadTree", Qt::DirectConnection);
     QTest::qWait(200);
     QVERIFY(findNode(QStringLiteral("/root/fresh")) == nullptr);
     QVERIFY(findNode(QStringLiteral("/root/dirA")) != nullptr);
+  }
+
+  // ------------------------------------------------------------ toolbar/sidebars
+
+  /// The browser toolbar must offer an icon-only "open folder" button. It only
+  /// asks the shell for a dialog; the folder that comes back re-roots the tree
+  /// through `open_folder`, which is the shell's job, not the view's.
+  void toolbarOffersAnOpenFolderButton()
+  {
+    QQuickItem* viewItem = browserItem();
+    auto* component = qobject_cast<QQmlComponent*>(viewItem->property("toolbar").value<QObject*>());
+    QVERIFY2(component != nullptr, "the browser has no toolbar component");
+    QScopedPointer<QObject> created(component->create(component->creationContext()));
+    QVERIFY2(created != nullptr, qPrintable(component->errorString()));
+    auto* row = qobject_cast<QQuickItem*>(created.data());
+    QVERIFY(row != nullptr);
+    row->setParentItem(viewItem);
+    row->setWidth(560);
+    row->setHeight(44);
+    settle();
+
+    QQuickItem* button = nullptr;
+    for (QQuickItem* candidate : items(row, QStringLiteral("openFolderButton"))) {
+      button = candidate;
+    }
+    QVERIFY2(button != nullptr, "no open-folder button in the toolbar");
+    QCOMPARE(readQml(button, QStringLiteral("icon.name")).toString(),
+             QStringLiteral("folder-open-symbolic"));
+    QCOMPARE(readQml(button, QStringLiteral("display")).toInt(), kDisplayIconOnly);
+
+    QSignalSpy requested(browserRoot(), SIGNAL(requestOpenFolder()));
+    QSignalSpy commands(browserRoot(), SIGNAL(command(QVariant)));
+    click(m_browser, button);
+    QCOMPARE(requested.count(), 1);
+    // Opening a folder dialog is not a navigation: the view sends no command.
+    QCOMPARE(commands.count(), 0);
+  }
+
+  /// The quick-access/tree sidebar is resized by dragging its splitter, and the
+  /// panel really gets wider — not just a stored number.
+  void leftSidebarIsResizable()
+  {
+    QQuickItem* panel = findItem(QStringLiteral("leftPanel"));
+    QQuickItem* splitter = findItem(QStringLiteral("leftSplitter"));
+    QVERIFY(panel != nullptr && splitter != nullptr);
+    const qreal before = browserItem()->property("leftPanelWidth").toReal();
+    QVERIFY(before > 0);
+
+    dragBy(m_browser, splitter, 80);
+    QTRY_COMPARE_WITH_TIMEOUT(browserItem()->property("leftPanelWidth").toReal(), before + 80, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(panel->width(), before + 80, 2000);
+  }
+
+  /// A drag cannot shrink a panel into nothing or push it over the centre.
+  void sidebarResizeIsClamped()
+  {
+    QQuickItem* splitter = findItem(QStringLiteral("leftSplitter"));
+    QVERIFY(splitter != nullptr);
+
+    dragBy(m_browser, splitter, -600);
+    QTRY_COMPARE_WITH_TIMEOUT(browserItem()->property("leftPanelWidth").toReal(),
+                              splitter->property("minimum").toReal(), 2000);
+
+    dragBy(m_browser, splitter, 4000);
+    QTRY_COMPARE_WITH_TIMEOUT(browserItem()->property("leftPanelWidth").toReal(),
+                              splitter->property("maximum").toReal(), 2000);
+  }
+
+  /// The preview sidebar sits on the other side, so dragging left widens it.
+  void rightSidebarResizesInward()
+  {
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("rightPanel"), true);
+    browserItem()->setProperty("state", state);
+    settle();
+
+    QQuickItem* panel = findItem(QStringLiteral("rightPanel"));
+    QQuickItem* splitter = findItem(QStringLiteral("rightSplitter"));
+    QVERIFY(panel != nullptr && splitter != nullptr);
+    const qreal before = browserItem()->property("rightPanelWidth").toReal();
+
+    dragBy(m_browser, splitter, -90);
+    QTRY_COMPARE_WITH_TIMEOUT(browserItem()->property("rightPanelWidth").toReal(), before + 90, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(panel->width(), before + 90, 2000);
+  }
+
+  /// Double-clicking a splitter restores the width the theme suggests.
+  void splitterDoubleClickRestoresTheDefault()
+  {
+    QQuickItem* splitter = findItem(QStringLiteral("leftSplitter"));
+    QVERIFY(splitter != nullptr);
+    const qreal initial = splitter->property("defaultValue").toReal();
+    QCOMPARE(browserItem()->property("leftPanelWidth").toReal(), initial);
+
+    dragBy(m_browser, splitter, -60);
+    QTRY_VERIFY_WITH_TIMEOUT(browserItem()->property("leftPanelWidth").toReal() != initial, 2000);
+
+    QTest::mouseDClick(m_browser, Qt::LeftButton, Qt::NoModifier, centreOf(splitter));
+    QCoreApplication::processEvents();
+    settle();
+    // The handle restores the width it was first given, which is the theme's.
+    QTRY_COMPARE_WITH_TIMEOUT(browserItem()->property("leftPanelWidth").toReal(), initial, 2000);
+  }
+
+  /// A hidden sidebar takes its splitter with it, so no handle is left floating
+  /// against the window edge.
+  void splitterFollowsPanelVisibility()
+  {
+    QQuickItem* splitter = findItem(QStringLiteral("leftSplitter"));
+    QQuickItem* panel = findItem(QStringLiteral("leftPanel"));
+    QVERIFY(splitter != nullptr && panel != nullptr);
+    QCOMPARE(splitter->isVisible(), true);
+
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("leftPanel"), false);
+    browserItem()->setProperty("state", state);
+    settle();
+    QCOMPARE(splitter->isVisible(), false);
+    QCOMPARE(panel->isVisible(), false);
+
+    state.insert(QStringLiteral("leftPanel"), true);
+    browserItem()->setProperty("state", state);
+    settle();
+    QCOMPARE(splitter->isVisible(), true);
   }
 
   // ---------------------------------------------------------------- switcher

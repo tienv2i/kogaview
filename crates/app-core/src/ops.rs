@@ -3,7 +3,7 @@
 //! Everything here is Qt-independent. Trash uses the freedesktop trash
 //! specification through `gio trash` when available.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::state::Entry;
@@ -26,8 +26,47 @@ pub fn kind_label(path: &Path) -> String {
     }
 }
 
+/// Normalise a user-supplied path without resolving symbolic links.
+///
+/// `canonicalize` follows links, so a folder reached through a symlink would be
+/// reported under its target name — the explorer would then navigate away from
+/// the row the user clicked, and a symlinked folder would stop looking like an
+/// ordinary folder. This keeps the path the user opened (only `.`, `..` and a
+/// missing leading `/` are cleaned up) and leaves link resolution to the kernel.
+pub fn normalize_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Component::RootDir.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Never climb above the root.
+                if !normalized.pop() {
+                    normalized.push(Component::RootDir.as_os_str());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
 /// Read one directory. Hidden entries are skipped to match a normal file
 /// manager's default view.
+///
+/// Symbols links are followed for the "is this a folder?" decision, so a link
+/// to a folder is listed, sorted, expanded and navigated exactly like a real
+/// folder. The entry keeps the link's own path: browsing it stays inside the
+/// link instead of jumping to the target.
 pub fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
     let read_dir = std::fs::read_dir(dir)
         .map_err(|error| format!("cannot read directory {}: {error}", dir.display()))?;
@@ -46,8 +85,10 @@ pub fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
             continue;
         }
         let path = item.path();
-        let metadata = item.metadata();
-        let (is_dir, size, modified) = match &metadata {
+        // `DirEntry::metadata` never follows a link, which made every symlinked
+        // folder look like a file. Resolve it, and fall back to the link itself
+        // for a broken link so the entry still shows up as a file.
+        let (is_dir, size, modified) = match std::fs::metadata(&path) {
             Ok(metadata) => (
                 metadata.is_dir(),
                 metadata.len(),
@@ -58,7 +99,7 @@ pub fn read_entries(dir: &Path) -> Result<Vec<Entry>, String> {
                     .map(|duration| duration.as_secs())
                     .unwrap_or_default(),
             ),
-            Err(_) => (path.is_dir(), 0, 0),
+            Err(_) => (false, 0, 0),
         };
         let is_image = !is_dir && is_image_path(&path);
         entries.push(Entry {
@@ -162,6 +203,11 @@ pub fn copy_path(source: &Path, destination: &Path) -> Result<PathBuf, String> {
 fn copy_recursive(source: &Path, target: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(source)
         .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
+    // Copy the link, not what it points at: following it would duplicate the
+    // target's contents and silently turn one linked folder into a real one.
+    if metadata.file_type().is_symlink() {
+        return copy_symlink(source, target);
+    }
     if metadata.is_dir() {
         std::fs::create_dir(target)
             .map_err(|error| format!("cannot create {}: {error}", target.display()))?;
@@ -177,6 +223,27 @@ fn copy_recursive(source: &Path, target: &Path) -> Result<(), String> {
             .map(|_| ())
             .map_err(|error| format!("cannot copy {}: {error}", source.display()))
     }
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    let link = std::fs::read_link(source)
+        .map_err(|error| format!("cannot read link {}: {error}", source.display()))?;
+    std::os::unix::fs::symlink(&link, target).map_err(|error| {
+        format!(
+            "cannot link {} -> {}: {error}",
+            target.display(),
+            link.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    // No portable way to recreate a link; copy what it points at instead.
+    std::fs::copy(source, target)
+        .map(|_| ())
+        .map_err(|error| format!("cannot copy {}: {error}", source.display()))
 }
 
 pub fn move_path(source: &Path, destination: &Path) -> Result<PathBuf, String> {
@@ -287,6 +354,140 @@ mod tests {
         assert!(is_image_path(Path::new("/tmp/a.png")));
         assert!(!is_image_path(Path::new("/tmp/a.txt")));
         assert!(!is_image_path(Path::new("/tmp/folder")));
+    }
+
+    #[cfg(unix)]
+    fn symlink(link: &Path, target: &Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    /// A link to a folder must be listed, sorted and opened exactly like a real
+    /// folder; `DirEntry::metadata` used to report it as a file.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_folders_are_listed_as_folders() {
+        let dir = temp_dir();
+        std::fs::create_dir(dir.join("target")).unwrap();
+        std::fs::create_dir(dir.join("aaa")).unwrap();
+        std::fs::write(dir.join("target/inside.txt"), b"x").unwrap();
+        std::fs::write(dir.join("picture.png"), b"x").unwrap();
+        symlink(&dir.join("link"), &dir.join("target"));
+        symlink(&dir.join("image-link.png"), &dir.join("picture.png"));
+        symlink(&dir.join("broken"), &dir.join("nowhere"));
+
+        let folders = list_folders(&dir).unwrap();
+        let names = folders
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        // Sorted with the real folders, not pushed to the file section.
+        assert_eq!(names, vec!["aaa", "link", "target"]);
+
+        let entries = read_entries(&dir).unwrap();
+        let link = entries.iter().find(|entry| entry.name == "link").unwrap();
+        assert!(link.is_dir, "a symlinked folder is not a folder");
+        assert!(!link.is_image);
+        assert_eq!(link.path, dir.join("link").to_string_lossy());
+
+        // A link to an image keeps behaving as an image, and a broken link is a
+        // plain (unopenable) file rather than a hidden entry.
+        let image = entries
+            .iter()
+            .find(|entry| entry.name == "image-link.png")
+            .unwrap();
+        assert!(!image.is_dir);
+        assert!(image.is_image);
+        let broken = entries.iter().find(|entry| entry.name == "broken");
+        assert!(
+            broken.is_some(),
+            "a broken link disappeared from the listing"
+        );
+        assert!(!broken.unwrap().is_dir);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Copying a link copies the link: following it would duplicate the whole
+    /// target and turn one linked folder into a real second copy.
+    #[cfg(unix)]
+    #[test]
+    fn copying_a_symlink_copies_the_link_only() {
+        let dir = temp_dir();
+        let target = dir.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("inside.txt"), b"payload").unwrap();
+        let link = dir.join("link");
+        symlink(&link, &target);
+        let destination = dir.join("dest");
+        std::fs::create_dir(&destination).unwrap();
+
+        let copy = copy_path(&link, &destination).unwrap();
+        assert!(copy.file_name().unwrap() == "link");
+        let metadata = std::fs::symlink_metadata(&copy).unwrap();
+        assert!(metadata.file_type().is_symlink(), "the copy is not a link");
+        assert!(!metadata.is_dir());
+        assert_eq!(std::fs::read_link(&copy).unwrap(), target);
+        // Nothing was duplicated: the only `inside.txt` is the original one.
+        let copies = read_entries(&destination).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert!(copies[0].name == "link");
+
+        // Moving the link moves the link, and leaves the target alone.
+        let moved = move_path(&link, &destination).unwrap();
+        assert!(std::fs::symlink_metadata(&moved)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!link.exists());
+        assert!(target.join("inside.txt").is_file());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Deleting a link removes the link, never what it points at.
+    #[cfg(unix)]
+    #[test]
+    fn deleting_a_symlinked_folder_keeps_its_target() {
+        let dir = temp_dir();
+        let target = dir.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("inside.txt"), b"payload").unwrap();
+        let link = dir.join("link");
+        symlink(&link, &target);
+
+        remove_path(&link).unwrap();
+        assert!(!link.exists());
+        assert!(target.join("inside.txt").is_file());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn normalize_path_cleans_segments_but_keeps_links() {
+        assert_eq!(
+            normalize_path(Path::new("/a/./b/../c")),
+            PathBuf::from("/a/c")
+        );
+        assert_eq!(normalize_path(Path::new("/../..")), PathBuf::from("/"));
+        assert_eq!(
+            normalize_path(Path::new("/a//b/")).to_string_lossy(),
+            "/a/b"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalize_path_does_not_resolve_a_symlink() {
+        let dir = temp_dir();
+        std::fs::create_dir(dir.join("real")).unwrap();
+        let link = dir.join("link");
+        symlink(&link, &dir.join("real"));
+
+        // `canonicalize` would answer ".../real"; the explorer keeps the link.
+        assert_eq!(normalize_path(&link), link);
+        assert_eq!(normalize_path(&link), normalize_path(&link.join(".")));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

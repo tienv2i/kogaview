@@ -192,18 +192,18 @@ impl Core {
         match query {
             Query::State => self.snapshot_json(),
             Query::ListFolders { path } => {
-                let path = PathBuf::from(path);
-                let canonical = match path.canonicalize() {
-                    Ok(path) if path.is_dir() => path,
-                    _ => {
-                        return json!({
-                            "ok": false,
-                            "error": { "code": "not_found", "message": format!("{} is not a directory", path.display()) }
-                        })
-                        .to_string();
-                    }
-                };
-                match ops::list_folders(&canonical) {
+                // Normalise without resolving links: the tree is built from the
+                // paths the user sees, so a folder reached through a symlink
+                // must hand back children under that same path.
+                let path = ops::normalize_path(Path::new(&path));
+                if !path.is_dir() {
+                    return json!({
+                        "ok": false,
+                        "error": { "code": "not_found", "message": format!("{} is not a directory", path.display()) }
+                    })
+                    .to_string();
+                }
+                match ops::list_folders(&path) {
                     Ok(folders) => json!({
                         "ok": true,
                         "folders": folders
@@ -355,9 +355,13 @@ impl Core {
         let first = paths.first().ok_or_else(|| {
             ProtocolError::new("invalid_path", "open_file requires at least one path")
         })?;
-        let first = PathBuf::from(first)
-            .canonicalize()
-            .map_err(|error| ProtocolError::new("not_found", format!("{error}")))?;
+        let first = ops::normalize_path(&PathBuf::from(first));
+        if !first.exists() {
+            return Err(ProtocolError::new(
+                "not_found",
+                format!("{} does not exist", first.display()),
+            ));
+        }
 
         if first.is_dir() {
             return self.open_folder(first, true);
@@ -368,9 +372,9 @@ impl Core {
             .ok_or_else(|| ProtocolError::new("invalid_path", "file has no parent folder"))?
             .to_path_buf();
 
-        let canonical_paths = paths
+        let scanned_paths = paths
             .iter()
-            .filter_map(|path| PathBuf::from(path).canonicalize().ok())
+            .map(|path| ops::normalize_path(&PathBuf::from(path)))
             .filter(|path| path.is_file())
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
@@ -378,10 +382,10 @@ impl Core {
         self.state.workspace = Workspace::Viewer;
         self.state.viewer_path = Some(first.to_string_lossy().into_owned());
         self.pending_viewer = self.state.viewer_path.clone();
-        self.pending_selection = Some(if canonical_paths.is_empty() {
+        self.pending_selection = Some(if scanned_paths.is_empty() {
             vec![first.to_string_lossy().into_owned()]
         } else {
-            canonical_paths
+            scanned_paths
         });
         self.start_scan(parent, true, false);
         Ok(Some(format!(
@@ -395,13 +399,14 @@ impl Core {
         path: PathBuf,
         set_browser_workspace: bool,
     ) -> Result<Option<String>, ProtocolError> {
-        let canonical = path
-            .canonicalize()
-            .map_err(|error| ProtocolError::new("not_found", format!("{error}")))?;
-        if !canonical.is_dir() {
+        // A symlinked folder opens like any other folder: the path the user
+        // asked for stays in the breadcrumbs, the tree root and the grid, so
+        // navigating into the link does not teleport to its target.
+        let path = ops::normalize_path(&path);
+        if !path.is_dir() {
             return Err(ProtocolError::new(
                 "not_a_directory",
-                format!("{} is not a directory", canonical.display()),
+                format!("{} is not a directory", path.display()),
             ));
         }
 
@@ -410,14 +415,14 @@ impl Core {
             // Only an explicit open re-roots the explorer; `Navigate` (tree
             // clicks, double-clicking a folder in the grid, breadcrumbs) keeps
             // the tree where the user opened it.
-            self.state.root_folder = Some(canonical.to_string_lossy().into_owned());
+            self.state.root_folder = Some(path.to_string_lossy().into_owned());
         }
         self.pending_viewer = None;
         self.pending_selection = None;
-        self.config.last_folder = Some(canonical.to_string_lossy().into_owned());
+        self.config.last_folder = Some(path.to_string_lossy().into_owned());
         self.save_config();
-        self.start_scan(canonical.clone(), true, false);
-        Ok(Some(format!("Opened {}", canonical.display())))
+        self.start_scan(path.clone(), true, false);
+        Ok(Some(format!("Opened {}", path.display())))
     }
 
     fn refresh_current(&mut self) {
@@ -660,9 +665,7 @@ impl Core {
     }
 
     fn new_folder(&mut self, parent: PathBuf, name: &str) -> Result<Option<String>, ProtocolError> {
-        let parent = parent
-            .canonicalize()
-            .map_err(|error| ProtocolError::new("not_found", format!("{error}")))?;
+        let parent = ops::normalize_path(&parent);
         let created = ops::create_folder(&parent, name)
             .map_err(|error| ProtocolError::new("io_error", error))?;
         self.state.tree_revision += 1;
@@ -682,9 +685,7 @@ impl Core {
                 "another background operation is still running",
             ));
         }
-        let destination = destination
-            .canonicalize()
-            .map_err(|error| ProtocolError::new("not_found", format!("{error}")))?;
+        let destination = ops::normalize_path(&destination);
         if !destination.is_dir() {
             return Err(ProtocolError::new(
                 "not_a_directory",
@@ -701,13 +702,14 @@ impl Core {
             return Err(ProtocolError::new("not_found", "no source files exist"));
         }
         for source in &sources {
-            let canonical = source.canonicalize().unwrap_or_else(|_| source.clone());
-            if canonical.is_dir()
-                && (destination.starts_with(&canonical) || canonical == destination)
+            // `canonicalize` only here: folding a symlink lets a folder be
+            // copied into itself through a link to it.
+            let resolved = source.canonicalize().unwrap_or_else(|_| source.clone());
+            if resolved.is_dir() && (destination.starts_with(&resolved) || resolved == destination)
             {
                 return Err(ProtocolError::new(
                     "invalid_destination",
-                    format!("cannot copy or move {} into itself", canonical.display()),
+                    format!("cannot copy or move {} into itself", resolved.display()),
                 ));
             }
         }
@@ -863,25 +865,20 @@ impl Core {
     }
 
     fn add_favorite(&mut self, path: PathBuf) -> Result<Option<String>, ProtocolError> {
-        let canonical = path
-            .canonicalize()
-            .map_err(|error| ProtocolError::new("not_found", format!("{error}")))?;
-        if !canonical.is_dir() {
+        let path = ops::normalize_path(&path);
+        if !path.is_dir() {
             return Err(ProtocolError::new(
                 "not_a_directory",
                 "only folders can be added to quick access",
             ));
         }
-        let label = canonical.to_string_lossy().into_owned();
+        let label = path.to_string_lossy().into_owned();
         if !self.config.quick_access.contains(&label) {
             self.config.quick_access.push(label);
             self.state.favorites = self.config.quick_access.clone();
             self.save_config();
         }
-        Ok(Some(format!(
-            "Added {} to quick access",
-            canonical.display()
-        )))
+        Ok(Some(format!("Added {} to quick access", path.display())))
     }
 
     fn remove_favorite(&mut self, path: &str) -> Result<Option<String>, ProtocolError> {

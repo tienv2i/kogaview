@@ -374,6 +374,7 @@ ApplicationWindow {
                 root.pendingDelete = paths;
                 deleteDialog.open();
             }
+            onRequestOpenFolder: root.chooseFolder()
         }
     }
 

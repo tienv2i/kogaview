@@ -19,3 +19,24 @@
 - Verify MIME registration after install and after uninstall; check desktop launcher icon/name.
 - Verify existing running instance receives new file/folder requests.
 - Verify native and Flatpak installs independently, never assume desktop integration works because unit tests pass.
+
+## XDG portal usage
+- `FileChooser` has **no** `OpenFolder` method. A folder dialog is `OpenFile`
+  with `directory: true` (interface version 3+); when the version is lower the
+  caller must fall back to the Qt dialog instead of sending an unknown method.
+- D-Bus replies carry request handles as `QDBusObjectPath`. Reading one with
+  `QVariant::toString()` yields an empty string, which is indistinguishable from
+  a failed call — use the object-path accessor.
+- `Response` must be subscribed to *before* the method call, on the request path
+  predicted from `QDBusConnection::sessionBus().baseService()` plus the
+  `handle_token`. A portal may answer immediately (cancel, denial, synchronous
+  backend); a subscription installed after the reply would miss it. If the
+  portal returns a different path, move the subscription there.
+- `parent_window` is `x11:<window id>` where that can be expressed (xcb) and
+  empty otherwise, which only makes the dialog non-modal. Wayland would need an
+  xdg-foreign export that is not implemented yet.
+- A timed-out or abandoned request must be closed (`Request.Close`) so no dialog
+  outlives the request; the client also closes it when the window goes away.
+- Opening files/folders with their default handler goes through
+  `OpenURI.OpenURI` so it keeps working inside a sandbox, with
+  `QDesktopServices::openUrl` as the non-portal fallback.

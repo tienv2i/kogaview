@@ -27,6 +27,32 @@
   the same way. None of these re-root the tree.
 - Only an explicit open moves the root: it is the one action that also persists
   `last_folder`.
+- The toolbar exposes the same explicit open as the burger menu: an icon-only
+  "Open folder" button. It asks the shell for the dialog (it never opens one
+  itself) and the chosen folder re-roots the explorer, exactly like
+  `kogaview open-folder DIR`.
+
+## Symlinked folders
+- A symbolic link to a folder is a folder everywhere: it is listed with the
+  other folders, sorted with them, expanded, navigated and opened. Core decides
+  this by resolving the link (`fs::metadata`), and a broken link stays a plain,
+  unopenable file rather than disappearing from the listing.
+- The link's *own* path is the path the app shows and remembers. Opening
+  `photoslink` puts `photoslink` in the breadcrumbs, the tree root and the grid;
+  it does not teleport to `photos`. This is why Core normalises user paths
+  lexically (`ops::normalize_path`) instead of canonicalising them.
+- Copying or moving a link copies or moves the link, and deleting it removes the
+  link; the target and its contents are never touched. `canonicalize` survives
+  only where folding the link is the point: refusing to copy a folder into
+  itself through a link to it.
+
+## Sidebar widths
+- Both browser sidebars and both editor sidebars are resized by dragging the
+  splitter at their inner edge (double-click restores the theme width). Each
+  side has its own bounds so a panel can neither vanish nor swallow the centre
+  pane, and hiding a panel hides its splitter.
+- The width belongs to the view, the splitter only reports the dragged value, so
+  nothing here writes state or persists to disk yet.
 
 ## Explorer refresh contract
 - Every operation that can change the folder tree on disk (copy, move, trash,

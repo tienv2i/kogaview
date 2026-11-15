@@ -16,11 +16,18 @@ Item {
     signal openExternal(string path)
     signal requestDestination(string action, var paths)
     signal requestDelete(var paths)
+    /// "Open folder": the shell owns the dialog, so the view only asks for it.
+    signal requestOpenFolder()
 
     property string menuPath: ""
     property bool menuIsImage: false
     property bool menuIsDir: false
     property string newFolderParent: ""
+
+    // Sidebar widths. Seeded from the theme, then owned by the drag handles so
+    // both panels are resizable; nothing is persisted yet.
+    property real leftPanelWidth: theme.panelWidth
+    property real rightPanelWidth: theme.previewWidth
 
     // Expansion lives outside the tree nodes so the tree can be rebuilt after a
     // file operation without collapsing what the user had open.
@@ -141,8 +148,9 @@ Item {
 
         // ------------------------------------------------------- left sidebar
         Rectangle {
+            objectName: "leftPanel"
             visible: !!view.state.leftPanel
-            Layout.preferredWidth: view.theme.panelWidth
+            Layout.preferredWidth: view.leftPanelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
             border.width: 1
@@ -247,6 +255,19 @@ Item {
                     }
                 }
             }
+        }
+
+        PanelSplitter {
+            objectName: "leftSplitter"
+            visible: !!view.state.leftPanel
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.leftPanelWidth
+            defaultValue: view.theme.panelWidth
+            direction: 1
+            minimum: 180
+            maximum: 560
+            onMoved: function(width) { view.leftPanelWidth = width }
         }
 
         // ------------------------------------------------------------ center
@@ -524,10 +545,24 @@ Item {
             }
         }
 
+        PanelSplitter {
+            objectName: "rightSplitter"
+            visible: !!view.state.rightPanel
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.rightPanelWidth
+            defaultValue: view.theme.previewWidth
+            direction: -1
+            minimum: 200
+            maximum: 640
+            onMoved: function(width) { view.rightPanelWidth = width }
+        }
+
         // --------------------------------------------------- right sidebar
         Rectangle {
+            objectName: "rightPanel"
             visible: !!view.state.rightPanel
-            Layout.preferredWidth: view.theme.previewWidth
+            Layout.preferredWidth: view.rightPanelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
             border.width: 1
@@ -1045,6 +1080,17 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: "Refresh"
                 onClicked: view.command({ type: "refresh" })
+            }
+            ToolbarButton {
+                theme: view.theme
+                objectName: "openFolderButton"
+                icon.name: "folder-open-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: "Open folder…"
+                // The dialog lives in the shell, like "Open folder" in the menu,
+                // and the chosen folder re-roots the tree (open_folder).
+                onClicked: view.requestOpenFolder()
             }
             ToolbarButton {
                 theme: view.theme

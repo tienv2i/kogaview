@@ -10,12 +10,17 @@ Item {
 
     signal command(var command)
 
+    // Sidebar widths, dragged through the two PanelSplitter handles below.
+    property real leftPanelWidth: 240
+    property real rightPanelWidth: 240
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
 
         Rectangle {
-            Layout.preferredWidth: 240
+            objectName: "leftPanel"
+            Layout.preferredWidth: view.leftPanelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
             border.width: 1
@@ -56,6 +61,18 @@ Item {
 
                 Item { Layout.fillHeight: true }
             }
+        }
+
+        PanelSplitter {
+            objectName: "leftSplitter"
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.leftPanelWidth
+            defaultValue: 240
+            direction: 1
+            minimum: 180
+            maximum: 460
+            onMoved: function(width) { view.leftPanelWidth = width }
         }
 
         ColumnLayout {
@@ -99,8 +116,21 @@ Item {
             }
         }
 
+        PanelSplitter {
+            objectName: "rightSplitter"
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.rightPanelWidth
+            defaultValue: 240
+            direction: -1
+            minimum: 180
+            maximum: 460
+            onMoved: function(width) { view.rightPanelWidth = width }
+        }
+
         Rectangle {
-            Layout.preferredWidth: 240
+            objectName: "rightPanel"
+            Layout.preferredWidth: view.rightPanelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
             border.width: 1

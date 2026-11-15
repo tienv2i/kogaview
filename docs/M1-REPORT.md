@@ -43,7 +43,7 @@ did not change the evidence.
 | # | Scenario | Command (abridged) | Result |
 |---|---|---|---|
 | 1 | Build | `just build` | PASS, artifact `build/dev/bin/kogaview` |
-| 2 | Tests | `just test` | PASS: 17 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests and 11 Qt Quick browser/explorer tests |
+| 2 | Tests | `just test` | PASS: 22 core + 3 protocol Rust tests, then 14 Qt Quick viewer tests and 21 Qt Quick browser/explorer tests |
 | 3 | Formatting | `cargo fmt --all -- --check` | PASS |
 | 4 | Version | `kogaview --version` | `KogaView (Dev) 0.1.0 (io.github.tienv2i.KogaView.Dev)` |
 | 5 | Config creation | first run, then `cat ~/.config/kogaview-dev/config.json` | file created with dark theme, `~/Pictures` + `~` quick access, panels and filmstrip on |
@@ -71,6 +71,11 @@ did not change the evidence.
 | 27 | Explorer regression check | reintroduced each old behaviour in turn (tree click and grid double-click sending `open_folder`, tree rooted at `currentFolder`, icon-only mode buttons) and re-ran `kogaview_browser_qml_tests` | each mutation is caught: `treeClickNavigatesWithoutRerooting`, `gridDoubleClickOnFolderNavigates`, `treeIsRootedAtTheOpenedFolder` and `switcherShowsIconAndText` fail respectively; the restored sources pass 11/11 |
 | 28 | Tree refreshes after a right-click file operation | `tests/qml/tst_browser.cpp` (`treeRefreshRebuildsNodesAndKeepsPosition`, `treeRefreshReachesAnUnchangedParent`, `treeRefreshRespectsUserCollapse`, `treeIsNotReloadedWithoutATreeRevision`) loading the real `BrowserView.qml` with a stub `listFolders` that gains a folder mid-test; plus `KOGAVIEW_DEV_COMMANDS` + `KOGAVIEW_DEV_STATE` on the real binary | a folder created inside the open `sub` folder appears under the same still-expanded `sub` row, a sibling row survives, the root row stays `photos`, `currentFolder` stays `photos/sub` and the refresh emits no command; a node the user collapsed stays collapsed; selection/status-only state changes reload nothing. Real binary: `new_folder` in `photos/sub` → `treeRevision 0 → 1`, tree row `after-refresh` appears under `sub`, breadcrumbs and grid still on `photos/sub`, root still `photos` (`docs/evidence/M1-tree-refresh.png`, which is the `move_to` case: the moved folder leaves `sub` and appears at the `photos` level while `sub` stays open) |
 | 29 | Tree refresh regression check | reintroduced each failure mode in turn (no `treeRevision` watcher, no `expandedPaths` restore on recreated nodes, auto-reveal ignoring a deliberate collapse, a non-recursive reload) and re-ran `kogaview_browser_qml_tests` | each mutation is caught: the two refresh tests time out, `treeRefreshRebuildsNodesAndKeepsPosition` loses the expansion, `treeRefreshRespectsUserCollapse` and `treeChevronOnlyTogglesTheNode` re-expand, and `treeRefreshReachesAnUnchangedParent` still shows the stale children; the restored sources pass 15/15 |
+| 30 | Symlinked folders behave like folders | `cargo test -p kogaview-core` (`symlinked_folders_are_listed_as_folders`, `copying_a_symlink_copies_the_link_only`, `deleting_a_symlinked_folder_keeps_its_target`, `normalize_path_cleans_segments_but_keeps_links`, `normalize_path_does_not_resolve_a_symlink`) on a scratch tree holding `target/`, `aaa/`, `picture.png` and three links (`link → target`, `image-link.png → picture.png`, `broken → nowhere`); plus `KOGAVIEW_DEV_COMMANDS` + `KOGAVIEW_DEV_STATE` on the real binary with `/tmp/opencode/photoslink → /tmp/opencode/photos` | `list_folders` returns `aaa, link, target` — the link sorts with the real folders instead of falling into the file section; `link` has `is_dir` and its own path, `image-link.png` stays an image and `broken` still appears as a plain file (not hidden). Copying/moving the link recreates a link with the same target and duplicates nothing; deleting it keeps `target/inside.txt`. Real binary: `open_folder /tmp/opencode/photoslink` → `rootFolder /tmp/opencode/photoslink`, `navigate …/photoslink/sub` → `currentFolder /tmp/opencode/photoslink/sub`, tree expanded `…/photoslink …/photoslink/sub` — the link's path survives, where `canonicalize` used to replace it with `/tmp/opencode/photos`; breadcrumbs read `/ › tmp › opencode › photoslink › sub` and the tree renders `photoslink` with a folder icon (`docs/evidence/M1-symlink-folder.png`) |
+| 31 | Symlink regression check | reverted `read_entries` to `DirEntry::metadata()` (never follows the link) and `copy_recursive` to following links, then re-ran `cargo test -p kogaview-core` | 2 failures (`symlinked_folders_are_listed_as_folders`, `copying_a_symlink_copies_the_link_only`) out of 22; the restored sources pass 22/22 |
+| 32 | XDG portal open mechanism | `gdbus introspect` of `org.freedesktop.portal.Desktop`, a PyGObject probe (`scripts/portal_probe.py`) that mimics the client, and the real binary driven through `KOGAVIEW_DEV_UI_REQUEST=open-folder` / `open-external` | three real defects fixed. (a) `FileChooser` has no `OpenFolder` method — every folder dialog failed with `No such method “OpenFolder”` and silently fell back to the Qt dialog; folder picking is now `OpenFile` with `directory: true`, and the caller falls back when `FileChooser` version < 3. (b) The reply handle is a `QDBusObjectPath`; `QVariant::toString()` returns an empty string for it, so every request was logged as `empty request path for "OpenFile"` after the portal had opened it — read it with its own accessor now. (c) `Response` is now subscribed on the predicted handle (`/…/request/<our bus name>/<token>`, derived from `baseService()`) *before* the method call, so a fast cancel or denial is not missed. Also `parent_window` is `x11:<winId>` on xcb (empty elsewhere, dialogs then non-modal), `Request.Close` dismisses a timed-out/abandoned dialog (also from the destructor), and "open with the system application"/reveal go through `org.freedesktop.portal.OpenURI.OpenURI` with `QDesktopServices` as fallback. Old binary log: `portal: "OpenFolder" failed: "No such method “OpenFolder”"` then `portal: empty request path for "OpenFile"`; new log: `portal: "OpenFile" requested at "/org/freedesktop/portal/desktop/request/1_286/kogaview_<pid>_1" parent "<none>"`, `portal: closed "…/kogaview_<pid>_1"` on dismissal, and `portal: OpenURI "file:///tmp/opencode/photos" (directory) handle "/org/…/kogaview_<pid>_1"`. The probe printed `returned handle … matches prediction: True`. Dismissal was observed end to end with `KOGAVIEW_DEV_PORTAL_DISMISS_MS` plus a repeated request: `closed "…/kogaview_<pid>_1"` → `no answer after dismissal, request dropped` → `requested at "…/kogaview_<pid>_2"`, i.e. a dismissed dialog does not block the next one |
+| 33 | Toolbar "Open folder" button and resizable sidebars | `tests/qml/tst_browser.cpp` (`toolbarOffersAnOpenFolderButton`, `leftSidebarIsResizable`, `sidebarResizeIsClamped`, `rightSidebarResizesInward`, `splitterDoubleClickRestoresTheDefault`, `splitterFollowsPanelVisibility`) instantiating the real toolbar component and dragging the real `PanelSplitter` handles with `QTest::mousePress`/`mouseMove`/`mouseRelease`; plus the real binary | the toolbar button is icon-only (`folder-open-symbolic`), a click emits `requestOpenFolder()` and no `command`, which `Main.qml` turns into the shell's folder dialog; a +80 px drag moves `leftPanelWidth` *and* the panel's actual `width` by 80; a −600 px / +4000 px drag clamps at the splitter's `minimum`/`maximum`; dragging the right handle inward by 90 px widens the right panel by 90; double-click restores the theme width; hiding a panel hides its handle. Real binary: `docs/evidence/M1-symlink-folder.png` shows the open-folder icon between refresh and new-folder and both splitter bars at the sidebar edges |
+| 34 | Sidebar/toolbar regression check | reintroduced four failure modes in turn (drop `onMoved` from the left splitter, make `PanelSplitter.clamp` the identity, flip the right splitter's `direction` to +1, leave the open-folder button's `onClicked` empty) and re-ran `kogaview_browser_qml_tests` | each mutation is caught by exactly one test — `leftSidebarIsResizable`, `sidebarResizeIsClamped`, `rightSidebarResizesInward` and `toolbarOffersAnOpenFolderButton` respectively; the restored sources pass 21/21 |
 
 ### Dev harness used for evidence
 
@@ -88,6 +93,16 @@ the stable `objectName`s `viewer`, `viewerViewport`, `viewerCanvas` and
 after every dev command, plus the paths the tree currently has expanded, which is
 how "navigation must not re-root the explorer" and "a file operation refreshes
 the tree without losing the open position" are checked from a log.
+
+Three hooks exist for the platform paths that normally need a click:
+`KOGAVIEW_DEV_UI_REQUEST=open-folder|open-external` invokes the browser's
+`requestOpenFolder`/`openExternal` signal after `KOGAVIEW_DEV_UI_REQUEST_DELAY_MS`
+(argument in `KOGAVIEW_DEV_UI_REQUEST_ARG`, optional `…_REPEAT_MS` to fire it
+again), `KOGAVIEW_DEV_PORTAL_DISMISS_MS` closes the portal dialog through
+`PlatformHelper::dismissActiveDialog`, and `KOGAVIEW_DEV_SCREENSHOT` captures the
+window. They go through the same signals
+and helpers the UI uses, so a log line proves the real path was taken — but they
+are still synthetic triggers, not a person clicking (see the gaps).
 
 The repeatable part of this is not the hooks: `just test` runs two Qt Quick
 suites that load the unchanged QML sources and assert on what Qt Quick actually
@@ -143,6 +158,30 @@ regressions fail the pipeline instead of only showing up on screen.
   and "Open folder" remain the only actions that re-root the explorer.
 - Qt logs (including QML warnings) are routed to journald when stderr is not a
   TTY; evidence runs set `QT_ASSUME_STDERR_HAS_CONSOLE=1`.
+- Symlinked folders were invisible as folders: `DirEntry::metadata()` never
+  follows a link, so a link to a folder was listed as a file — it had no
+  disclosure arrow, could not be expanded and was not navigable. The listing now
+  resolves the link (`fs::metadata`, falling back to a plain file for a broken
+  link) while keeping the link's own path.
+- `canonicalize` on every user-visible path defeated the above: opening
+  `photoslink` reported `photos` in the breadcrumbs, the tree root and the grid,
+  so browsing a link teleported the user to its target. `ops::normalize_path`
+  now cleans `.`/`..` lexically and leaves link resolution to the kernel;
+  `canonicalize` is kept only for the copy-into-itself guard, where folding the
+  link is exactly what is wanted.
+- Copying a symlinked folder duplicated the whole target and produced a real
+  folder in the destination; `copy_recursive` now recreates the link.
+- The portal "Open folder" dialog never worked: the client called a
+  non-existent `FileChooser.OpenFolder` method and, even for `OpenFile`, read
+  the returned `QDBusObjectPath` with `QVariant::toString()` (always empty), so
+  every request was treated as failed and silently replaced by the Qt dialog.
+  Folders now use `OpenFile` + `directory: true`, the handle is read with its
+  own accessor, and `Response` is subscribed on the predicted handle before the
+  call so an early answer is not lost.
+- `QTest::mouseMove` does keep the implicit grab taken by `mousePress`, so it
+  drives a `MouseArea` drag; whole `QWindowSystemInterface::handleMouseEvent`
+  moves injected that way never reached the item. The splitter tests use the
+  former.
 
 ## Not verified here (honest gaps)
 
@@ -153,10 +192,22 @@ regressions fail the pipeline instead of only showing up on screen.
   real QML sources and asserts on the emitted commands (rows 25–27); context
   menus, menu entries and the "copy image content" item are wired to the same
   commands but their click paths are not captured as evidence here.
-- Portal dialogs: only availability is logged and the Qt fallback exists.
-  A second simultaneous instance cannot register the same portal app ID (`Could
-  not register app ID: Connection already associated with an application ID`), so
-  the portal dialog was not exercised while the owner's instance was running.
+- Portal dialogs are still not realised in this environment, so *user
+  interaction* with them is unverified. What was verified is the client side:
+  the portal service is present (`FileChooser` v4, `OpenURI` v5), it accepts our
+  `OpenFile`/`OpenURI` calls and answers with the predicted request handle
+  (`scripts/portal_probe.py` reproduces this independently of the app),
+  and our own `Request.Close` is issued on dismissal. What was **not** seen: no
+  dialog appeared and no `Response` was ever emitted — `dbus-monitor` recorded
+  none, and the request object is gone immediately after the reply (a `Close`
+  answers `UnknownMethod: Object does not exist`). This session has no user
+  journal for `xdg-desktop-portal` (`journalctl --user` shows no entries), and a
+  second instance cannot register the portal app ID (`Could not register app ID:
+  Connection already associated with an application ID`), so the cause could not
+  be attributed. The Qt fallback therefore still carries the real workload here.
+- Resizable sidebars: the widths are memory-only. Nothing is persisted and no
+  minimum window width is enforced, so a very wide left panel simply squeezes
+  the grid; the drag itself is driven by `QTest` mouse events, not by a person.
 - Scroll-to-zoom is now verified with injected events (rows 21–24), but no
   physical input was driven by this session: no mouse wheel or touchpad gesture
   was generated by hand, so the last centimetre — a compositor delivering a real

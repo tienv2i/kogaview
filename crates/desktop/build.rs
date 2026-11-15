@@ -8,6 +8,7 @@ fn main() {
         "qml/ToolbarSeparator.qml",
         "qml/WorkspaceSwitcher.qml",
         "qml/Theme.qml",
+        "qml/PanelSplitter.qml",
         "qml/BrowserView.qml",
         "qml/Viewer.qml",
         "qml/EditorView.qml",

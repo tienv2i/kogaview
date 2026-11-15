@@ -196,6 +196,55 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
     QTimer::singleShot(delay > 0 ? delay : 1500, &app, grab);
   }
 
+  // QA hook: drive a real interface path that normally needs a click. Only the
+  // two shell requests are supported, and they are invoked through the same
+  // signals the toolbar button and the menu emit.
+  //   KOGAVIEW_DEV_UI_REQUEST=open-folder       -> browser `requestOpenFolder`
+  //   KOGAVIEW_DEV_UI_REQUEST=open-external     -> browser `openExternal`
+  //     (`KOGAVIEW_DEV_UI_REQUEST_ARG` is the path to hand over)
+  //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
+  //   "a dismissed dialog does not block the next one" path is observed.
+  const QString uiRequest = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST");
+  if (!uiRequest.isEmpty()) {
+    const int requestDelay = qEnvironmentVariableIntValue("KOGAVIEW_DEV_UI_REQUEST_DELAY_MS");
+    auto fire = [rootObject, uiRequest]() {
+      QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"));
+      if (browser == nullptr) {
+        qWarning() << "KogaView dev ui request: browser view not found";
+        return;
+      }
+      bool emitted = false;
+      if (uiRequest == QLatin1String("open-folder")) {
+        emitted = QMetaObject::invokeMethod(browser, "requestOpenFolder");
+      } else if (uiRequest == QLatin1String("open-external")) {
+        const QString path = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG");
+        emitted = !path.isEmpty() &&
+                  QMetaObject::invokeMethod(browser, "openExternal", Q_ARG(QString, path));
+      }
+      qInfo().noquote() << "KogaView dev ui request" << uiRequest
+                        << (emitted ? "emitted" : "not supported");
+    };
+    QTimer::singleShot(requestDelay > 0 ? requestDelay : 1500, &app, fire);
+
+    const int repeat = qEnvironmentVariableIntValue("KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS");
+    if (repeat > 0) {
+      auto* timer = new QTimer(&app);
+      timer->setInterval(repeat);
+      QObject::connect(timer, &QTimer::timeout, &app, fire);
+      timer->start();
+    }
+  }
+
+  // QA hook: close a portal dialog that a `KOGAVIEW_DEV_UI_REQUEST` opened, so
+  // the response path can be observed in a log without touching the desktop.
+  const int dismissAfter = qEnvironmentVariableIntValue("KOGAVIEW_DEV_PORTAL_DISMISS_MS");
+  if (dismissAfter > 0) {
+    QTimer::singleShot(dismissAfter, &app, [&platform]() {
+      QMetaObject::invokeMethod(&platform, "dismissActiveDialog");
+      qInfo() << "KogaView dev portal dismiss: requested";
+    });
+  }
+
   const int exitAfter = qEnvironmentVariableIntValue("KOGAVIEW_DEV_EXIT_AFTER_MS");
   if (exitAfter > 0) {
     QTimer::singleShot(exitAfter, &app, [&app]() { app.exit(0); });
