@@ -8,10 +8,10 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
 | `just setup` | Check Rust, CMake, Qt6, C++ toolchain, just and platform requirements |
 | `just build` | Build debug app into a known output directory; fail on any error |
 | `just run [ARGS]` | Build first; execute exact artifact just built; forward all args |
-| `just test [SELECT]` | Run tests: Cargo workspace tests, then the Qt Quick suites that load the real `crates/desktop/qml/*.qml` (offscreen QPA) and assert on what Qt Quick does — viewer transforms plus the commands the browser/explorer emit for real clicks. Still not proof the interactive UI is usable. Bare `just test` is the pre-commit gate; `cargo`, `qml`, `viewer`, `browser` or `cache` narrow it to one part so the feedback loop stays seconds long |
+| `just test [SELECT]` | Run tests: the translation and packaging checks, the Cargo workspace tests, then the Qt Quick suites that load the real `crates/desktop/qml/*.qml` (offscreen QPA) and assert on what Qt Quick does — viewer transforms plus the commands the browser/explorer emit for real clicks. Still not proof the interactive UI is usable. Bare `just test` is the pre-commit gate; `cargo`, `translations`, `packaging`, `qml`, `viewer`, `browser`, `cache`, `state`, `settings`, `editor` or `language` narrow it to one part so the feedback loop stays seconds long |
 | `just doctor` | Print versions, app ID, binary paths, build mode, runtime mode and installation conflicts |
 | `just logs` | Locate/read current dev instance structured logs |
-| `just install` / `uninstall` | Native install/remove without silently deleting user data |
+| `just install` / `uninstall` | Native install/remove into `KOGAVIEW_PREFIX` (`/usr/local` by default) without silently deleting user data, and without changing the default image viewer — see "Install contract" below |
 | `just package` | Produce native distributable |
 | `just flatpak-build` / `flatpak-run` | Later: sandbox build and actual runtime verification |
 
@@ -58,6 +58,35 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
 - Avoid embedding business logic in `justfile`; it orchestrates scripts/build system only.
 - `install` is a separate explicit action; `run` must not install.
 - For Flatpak, use the same production app ID/desktop metadata; do not grant broad filesystem or D-Bus permissions merely to make development IPC work.
+
+## Install contract
+
+`just install` always builds the optimized `release` preset before installing;
+it never copies `build/dev` or a stale artifact. The default prefix is
+`/usr/local`; set `KOGAVIEW_PREFIX` to install elsewhere, for example:
+
+```sh
+KOGAVIEW_PREFIX="$HOME/.local" just install
+```
+
+The native Linux install owns exactly these files:
+
+- `${prefix}/bin/kogaview`
+- `${prefix}/share/applications/io.github.tienv2i.KogaView.desktop`
+- `${prefix}/share/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg`
+- `${prefix}/share/metainfo/io.github.tienv2i.KogaView.metainfo.xml`
+
+It refreshes the desktop database and, when the local hicolor theme provides
+an `index.theme`, its icon cache. `just uninstall` removes only those files;
+it keeps the user's config, state/journal/logs and cache. The install registers
+supported image MIME types for **Open With** but does not run `xdg-mime default`;
+the existing default viewer is never changed silently.
+
+`just test packaging` runs `scripts/check_packaging.py`. The check keeps the
+desktop MIME list synchronized with the protocol's advertised extensions and
+shared-mime-info, requires the `Graphics;Viewer;` menu categories, validates
+the desktop entry and AppStream metadata, and checks the application ID across
+the desktop file, icon and metadata.
 
 ## Completion gate
 Build success -> launch real app -> exercise Browser/Viewer/Editor -> inspect logs/journal -> inspect screenshots and output files -> report actual platforms verified. A green test suite is never the final gate.

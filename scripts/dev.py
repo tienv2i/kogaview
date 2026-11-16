@@ -43,6 +43,16 @@ APP_ID_PROD = "io.github.tienv2i.KogaView"
 APP_DIR_DEV = "kogaview-dev"
 APP_DIR_PROD = "kogaview"
 PROJECT = "KogaView"
+# `just install` writes into the system prefix: /usr/local by default, which is
+# outside every package manager's ownership. `KOGAVIEW_PREFIX` moves it (a
+# per-user install is `KOGAVIEW_PREFIX=$HOME/.local just install`).
+PREFIX = Path(os.environ.get("KOGAVIEW_PREFIX", "/usr/local"))
+RELEASE_DIR = ROOT / "build" / "release"
+RELEASE_BINARY = RELEASE_DIR / "bin" / "kogaview"
+PACKAGING_DIR = ROOT / "packaging" / "linux"
+DESKTOP_TEMPLATE = PACKAGING_DIR / f"{APP_ID_PROD}.desktop.in"
+ICON_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.svg"
+METAINFO_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.metainfo.xml"
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -115,6 +125,24 @@ def required_tools() -> list[tuple[str, str, str]]:
     ]
 
 
+def installed_identity(binary: Path) -> str:
+    """Which identity a `kogaview` on PATH is, by where it lives.
+
+    The identity follows the build profile (ADR 0001): the Debug preset is
+    `…​.Dev`, the Release preset is the production ID. A binary from anywhere
+    else cannot be identified from its path, and saying so is better than
+    guessing.
+    """
+    for path, label in (
+        (BINARY, f"dev build, {APP_ID_DEV}"),
+        (RELEASE_BINARY, f"release build, {APP_ID_PROD}"),
+        (PREFIX / "bin" / "kogaview", f"installed release build, {APP_ID_PROD}"),
+    ):
+        if binary == path.resolve():
+            return label
+    return "unknown binary (not built here)"
+
+
 def doctor() -> int:
     print(f"{PROJECT} doctor")
     print("=" * 60)
@@ -173,17 +201,28 @@ def doctor() -> int:
     if installed:
         resolved = Path(installed).resolve()
         if resolved != BINARY.resolve():
-            print(f"WARNING: `kogaview` on PATH resolves to {resolved}, not {BINARY}")
+            print(f"`kogaview` on PATH resolves to {resolved} (not the dev artifact)")
+            print(f"  installed identity: {installed_identity(resolved)}")
         else:
             print(f"`kogaview` on PATH is the dev artifact: {resolved}")
     else:
         print("No kogaview on PATH (no installed conflict).")
 
     data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    for app_id in (APP_ID_DEV, APP_ID_PROD):
-        desktop = data_home / "applications" / f"{app_id}.desktop"
-        if desktop.exists():
-            print(f"Desktop entry present: {desktop} (verify identity before claiming install)")
+    for base in (PREFIX / "share" / "applications", data_home / "applications"):
+        for app_id in (APP_ID_DEV, APP_ID_PROD):
+            desktop = base / f"{app_id}.desktop"
+            if desktop.exists():
+                print(f"Desktop entry present: {desktop} ({app_id})")
+    installed_binary = PREFIX / "bin" / "kogaview"
+    if installed_binary.is_file():
+        stat = installed_binary.stat()
+        print(
+            f"Installed binary  : {installed_binary}, {stat.st_size} bytes, "
+            f"mtime {datetime.fromtimestamp(stat.st_mtime).isoformat(timespec='seconds')}"
+        )
+    else:
+        print(f"Installed binary  : none under {PREFIX} (run `just install`)")
 
     latest = latest_log()
     if latest:
@@ -258,9 +297,211 @@ def run_app(args: list[str]) -> int:
     return 1  # unreachable
 
 
+# --- install / uninstall -----------------------------------------------------
+#
+# The install is the release build with the production identity (ADR 0001), so
+# an installed KogaView never shares config, state, cache, log or journal with
+# the dev build. It writes four files and refreshes two desktop caches:
+#
+#   ${prefix}/bin/kogaview
+#   ${prefix}/share/applications/io.github.tienv2i.KogaView.desktop
+#   ${prefix}/share/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg
+#   ${prefix}/share/metainfo/io.github.tienv2i.KogaView.metainfo.xml
+#
+# It does not make KogaView the default image viewer: the MIME list only puts it
+# in "Open With", and `xdg-mime default` stays the user's decision (docs/DESKTOP.md).
+
+
+def build_release() -> int:
+    """Configure and build the release preset; refuse to install anything else.
+
+    A release build is what an installed app must be: the dev harness is
+    compiled only into Debug (`CMakeLists.txt`), and the identity follows the
+    profile, so this binary is `io.github.tienv2i.KogaView`, not `…​.Dev`.
+    """
+    setup_result = setup()
+    if setup_result != 0:
+        print("install: refusing to build with missing prerequisites", file=sys.stderr)
+        return setup_result
+
+    environment = os.environ.copy()
+    linguist = lrelease()
+    if linguist:
+        environment["KOGAVIEW_LRELEASE"] = linguist
+    for step in (
+        ["cmake", "--preset", "release"],
+        ["cmake", "--build", "--preset", "release"],
+    ):
+        result = run(step, env=environment)
+        if result.returncode != 0:
+            print(f"install: {' '.join(step)} failed; nothing was installed", file=sys.stderr)
+            return result.returncode
+
+    if not RELEASE_BINARY.is_file() or not os.access(RELEASE_BINARY, os.X_OK):
+        print(f"install: expected executable missing: {RELEASE_BINARY}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def installed_files() -> dict[str, Path]:
+    """Every path `just install` owns. Nothing else is written or removed."""
+    return {
+        "binary": PREFIX / "bin" / "kogaview",
+        "desktop entry": PREFIX / "share" / "applications" / f"{APP_ID_PROD}.desktop",
+        "icon": PREFIX
+        / "share"
+        / "icons"
+        / "hicolor"
+        / "scalable"
+        / "apps"
+        / f"{APP_ID_PROD}.svg",
+        "AppStream metadata": PREFIX / "share" / "metainfo" / f"{APP_ID_PROD}.metainfo.xml",
+    }
+
+
+def render_desktop_entry() -> str:
+    """The desktop template with the install prefix filled in.
+
+    The template is the source of truth (and what `check_packaging.py` reads);
+    only the binary directory depends on where the app is being installed.
+    """
+    text = DESKTOP_TEMPLATE.read_text(encoding="utf-8")
+    return text.replace("@BINDIR@", str(PREFIX / "bin"))
+
+
+def sudo_is_passwordless() -> bool:
+    if os.geteuid() == 0:
+        return True
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "true"], capture_output=True, check=False, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def privileged(cmd: list[str]) -> list[str]:
+    """Run `cmd` as root, without prompting when the password is not needed.
+
+    `sudo -n` first: an agent has no terminal to type into, and a silent failure
+    is better than a command that hangs waiting for a password. A human running
+    `just install` by hand gets the normal prompt when `-n` is refused.
+    """
+    if os.geteuid() == 0:
+        return cmd
+    if sudo_is_passwordless():
+        return ["sudo", "-n", "--", *cmd]
+    return ["sudo", "--", *cmd]
+
+
+def refresh_desktop_caches() -> None:
+    applications = PREFIX / "share" / "applications"
+    if which("update-desktop-database"):
+        run(privileged(["update-desktop-database", str(applications)]))
+    theme_dir = PREFIX / "share" / "icons" / "hicolor"
+    if (theme_dir / "index.theme").is_file() and which("gtk-update-icon-cache"):
+        run(privileged(["gtk-update-icon-cache", "-f", "-t", str(theme_dir)]))
+    else:
+        # No local copy of the theme's index.theme: GTK still searches this
+        # directory through the hicolor search path, there is just no cache of
+        # it to rebuild.
+        print(f"{theme_dir} has no index.theme; icon cache not rebuilt")
+
+
+def current_image_handler() -> str:
+    return output(["xdg-mime", "query", "default", "image/jpeg"]) or "none"
+
+
+def install() -> int:
+    result = build_release()
+    if result != 0:
+        return result
+
+    rendered = RELEASE_DIR / f"{APP_ID_PROD}.desktop"
+    rendered.write_text(render_desktop_entry(), encoding="utf-8")
+    validator = which("desktop-file-validate")
+    if validator:
+        check = run([validator, str(rendered)])
+        if check.returncode != 0:
+            print("install: the desktop entry is invalid; nothing was installed", file=sys.stderr)
+            return check.returncode
+
+    targets = installed_files()
+    sources = {
+        "binary": (RELEASE_BINARY, "755"),
+        "desktop entry": (rendered, "644"),
+        "icon": (ICON_SOURCE, "644"),
+        "AppStream metadata": (METAINFO_SOURCE, "644"),
+    }
+    handler_before = current_image_handler()
+    for name, target in targets.items():
+        source, mode = sources[name]
+        result = run(privileged(["install", "-D", f"-m{mode}", str(source), str(target)]))
+        if result.returncode != 0:
+            print(f"install: cannot write {target}; stopping here", file=sys.stderr)
+            return result.returncode
+
+    refresh_desktop_caches()
+
+    print(f"install: {PROJECT} {APP_ID_PROD} installed under {PREFIX}")
+    for name, target in targets.items():
+        print(f"  {name:18} {target}")
+    print(f"  image viewer group  Categories={desktop_categories()}")
+    print(
+        "  default handler     unchanged: image/jpeg opens with "
+        f"'{handler_before}'. KogaView is offered in Open With; make it the "
+        "default yourself with `xdg-mime default "
+        f"{APP_ID_PROD}.desktop image/jpeg`."
+    )
+    print(f"  remove it with      just uninstall")
+    return 0
+
+
+def desktop_categories() -> str:
+    for line in render_desktop_entry().splitlines():
+        if line.startswith("Categories="):
+            return line.partition("=")[2]
+    return "(none)"
+
+
+def uninstall() -> int:
+    """Remove the installed files; never touch the user's own data.
+
+    The config, state (logs, journal) and cache directories belong to the user,
+    not to the package: an uninstall that deleted them would throw away their
+    settings and their unsaved session history.
+    """
+    targets = installed_files()
+    missing = [target for target in targets.values() if not target.exists()]
+    if len(missing) == len(targets):
+        print(f"uninstall: nothing of {APP_ID_PROD} is installed under {PREFIX}")
+        return 0
+
+    for name, target in targets.items():
+        result = run(privileged(["rm", "-f", str(target)]))
+        if result.returncode != 0:
+            print(f"uninstall: cannot remove {target}", file=sys.stderr)
+            return result.returncode
+        print(f"  removed {name:18} {target}")
+
+    refresh_desktop_caches()
+    print(f"uninstall: {APP_ID_PROD} removed from {PREFIX}")
+    for kept in (
+        xdg_config_home() / APP_DIR_PROD,
+        xdg_state_home() / APP_DIR_PROD,
+        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP_DIR_PROD,
+    ):
+        if kept.exists():
+            print(f"  kept (your data)   {kept}")
+    print("  the default image handler was never changed, so it stays as it is")
+    return 0
+
+
+
 TEST_USAGE = (
-    "usage: just test "
-    "[cargo|translations|qml|viewer|browser|cache|state|settings|editor|language]"
+    "usage: just test [cargo|translations|packaging|qml|viewer|browser|cache|"
+    "state|settings|editor|language]"
 )
 
 
@@ -272,6 +513,16 @@ def translation_tests() -> int:
     menu and a native dialog would show two translations of one English string.
     """
     return run([sys.executable, "scripts/check_translations.py"]).returncode
+
+
+def packaging_tests() -> int:
+    """The desktop entry, icon and AppStream metadata must match the code.
+
+    `just install` writes claims into the desktop's own databases — which image
+    types KogaView opens, which menu group it appears in — and nothing else in
+    the build notices when those drift from the decoders or from the app ID.
+    """
+    return run([sys.executable, "scripts/check_packaging.py"]).returncode
 
 
 def rust_tests() -> int:
@@ -295,7 +546,7 @@ def test(selection: list[str]) -> int:
     choice = selection[0] if selection else "all"
     if choice in ("all", "qml"):
         suites = dict(QML_TEST_SUITES)
-    elif choice in ("cargo", "translations"):
+    elif choice in ("cargo", "translations", "packaging"):
         suites = {}
     elif choice in QML_TEST_SUITES:
         suites = {choice: QML_TEST_SUITES[choice]}
@@ -307,6 +558,10 @@ def test(selection: list[str]) -> int:
         translation_result = translation_tests()
         if translation_result != 0:
             return translation_result
+    if choice in ("all", "packaging"):
+        packaging_result = packaging_tests()
+        if packaging_result != 0:
+            return packaging_result
     if choice in ("all", "cargo"):
         cargo_result = rust_tests()
         if cargo_result != 0:
@@ -412,7 +667,11 @@ def main() -> int:
         return test(sys.argv[2:])
     if command == "run":
         return run_app(sys.argv[2:])
-    if command in ("install", "uninstall", "package"):
+    if command == "install":
+        return install()
+    if command == "uninstall":
+        return uninstall()
+    if command == "package":
         return not_implemented(command, "M6")
     if command in ("flatpak-build", "flatpak-run"):
         return not_implemented(command, "M6 (after sandbox verification)")

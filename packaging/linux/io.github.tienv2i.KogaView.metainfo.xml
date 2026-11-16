@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata, installed to `${prefix}/share/metainfo/`. The `id` has
+     to match this file's name (minus `.metainfo.xml`), and the `launchable`
+     has to name the desktop entry that `just install` writes, or app centres
+     cannot pair the two. `scripts/check_packaging.py` enforces both. -->
+<component type="desktop-application">
+  <id>io.github.tienv2i.KogaView</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>KogaView</name>
+  <summary>Browse, view and edit photos</summary>
+
+  <description>
+    <p>
+      KogaView is a photo browser, viewer and editor. It scans a folder in the
+      background, shows a thumbnail grid with a preview, opens an image in a
+      viewer that zooms and pans, and edits a working copy of the picture.
+    </p>
+    <p>
+      Editing is non-destructive: the file you opened is never changed until you
+      press Save, and a save keeps the previous file next to it as a backup.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.tienv2i.KogaView.desktop</launchable>
+
+  <provides>
+    <binary>kogaview</binary>
+  </provides>
+
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+
+  <keywords>
+    <keyword>photo</keyword>
+    <keyword>image</keyword>
+    <keyword>picture</keyword>
+    <keyword>viewer</keyword>
+    <keyword>editor</keyword>
+    <keyword>browse</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/tienv2i/kogaview</url>
+  <url type="bugtracker">https://github.com/tienv2i/kogaview/issues</url>
+
+  <developer id="io.github.tienv2i">
+    <name>KogaView contributors</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-11-16"/>
+  </releases>
+</component>

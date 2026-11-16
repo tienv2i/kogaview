@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- KogaView's application icon. Installed as
+     `${prefix}/share/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg`
+     and named by `Icon=` in the desktop entry, so the file name has to stay the
+     application ID. The colours are the app's own: the blue is
+     `Theme.accent` (`#4a9eff` on the dark theme, `#0a66c2` on the light one). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>KogaView</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6fb6ff"/>
+      <stop offset="1" stop-color="#0a5cc2"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="22" y="30" width="84" height="68" rx="9"/>
+    </clipPath>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#sky)"/>
+  <rect x="22" y="30" width="84" height="68" rx="9" fill="#f7f9fc"/>
+  <g clip-path="url(#frame)">
+    <circle cx="86" cy="50" r="8" fill="#f5a623"/>
+    <path d="M14 98 L46 60 L64 80 L76 66 L110 98 Z" fill="#0a66c2"/>
+    <path d="M14 98 L46 60 L58 74 L40 98 Z" fill="#3f8fe0"/>
+  </g>
+  <rect x="22" y="30" width="84" height="68" rx="9" fill="none"
+        stroke="#0b1a2b" stroke-opacity="0.25" stroke-width="2"/>
+</svg>

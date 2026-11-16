@@ -20,10 +20,17 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
-#include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
+
+// Only the evidence harness drives real pointer sequences; the header is absent
+// from a release build, where Qt6::Test is not linked (`CMakeLists.txt` guards
+// both on the Debug build type). Including it unconditionally is what made the
+// first `just install` fail to compile.
+#ifdef KOGAVIEW_DEV_HARNESS
+#include <QTest>
+#endif
 
 #include <algorithm>
 #include <cstdio>
