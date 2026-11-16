@@ -3,15 +3,17 @@
 This handoff was written after the Editor grew Save/Save As and an unsaved-changes
 guard, the Editor/Browser/Viewer edit hand-off was repaired, the Editor's columns
 were split, the interface gained a live Vietnamese translation, and the decoder
-list was widened. That work is committed; this file is the handoff that follows it.
+list was widened, and native Linux installation was added. The editor work is
+committed in `82c982a`; the install work is committed in `02111d7`.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`, HEAD `82c982a`, 24 commits. The session's work is **committed**
-  in `82c982a` (`feat(editor): …`) and described in "What changed in this
-  session" below; the tree is clean apart from this handoff.
+- Branch `main`, HEAD `02111d7`, 25 commits. The earlier session's work is
+  **committed** in `82c982a` (`feat(editor): …`). The native-install work is
+  committed in `02111d7` (`feat(packaging): …`); this handoff is committed
+  separately afterward.
 - New files that commit added: `crates/app-core/src/editor.rs` (row 53 work,
   extended with save), `docs/adr/0003-editor-working-document.md`,
   `docs/adr/0004-saving-an-edited-image.md`,
@@ -29,6 +31,9 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   branches; `git push` answers `remote: No anonymous write access`. Credentials
   are needed before any of this leaves the machine.
 - Debug binary `build/dev/bin/kogaview`, built from that commit's tree.
+- Installed release binary `/usr/local/bin/kogaview`, currently present after
+  the uninstall/reinstall verification; the production desktop entry is
+  `io.github.tienv2i.KogaView.desktop`.
 
 ## Environment the evidence below was produced on
 
@@ -61,14 +66,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, cmake 4.5.0
 | 58 | i18n: `Language {system,en,vi}`, 132-string Vietnamese catalogue compiled into a `.rcc`, live switch, `tst_language`, `scripts/check_translations.py` | `just test language`, `just test translations`, four real-window screenshots in `docs/evidence/M1-*-vi.png` |
 | 59 | Formats: 15 decoders compiled in, no runtime download, `avif-native` rejected, `heic`/`heif` listed but undecodable | `every_advertised_extension_has_a_decoder`; `KOGAVIEW_DEV_FORMATS=1` output |
 | 60 | **Diagnosis only** — why the Editor takes seconds to open a photo | cause recorded, fix postponed at the owner's request |
+| 61 | Native Linux install as an image viewer, without changing the default handler | Release build installed under `/usr/local`; `gio launch`, no-args, `open-folder` and multi-file `open` exercised; uninstall verified removal and preservation of user data, then install restored the final installed state; packaging mutations and three real-window XWayland grabs are recorded in `docs/M1-REPORT.md` |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` runs the translation check, the
-Cargo workspace and seven Qt suites:
+packaging check, the Cargo workspace and seven Qt suites. `just test packaging`
+is the narrow packaging check:
 
 ```
 translations: 132 strings in kogaview_vi.ts, 104 of them compiled into C++
+packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 60 passed + 4 passed
 viewer 22 · browser 33 · cache 15 · state 7 · settings 7 · editor 16 · language 5
 ```
