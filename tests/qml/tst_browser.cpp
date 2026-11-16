@@ -11,6 +11,7 @@
 // the tree) and only quick access may emit `open_folder`.
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QPointingDevice>
@@ -18,6 +19,7 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QRegularExpression>
 #include <QScopedPointer>
 #include <QSignalSpy>
 #include <QTest>
@@ -40,6 +42,79 @@ constexpr int kDisplayTextBesideIcon = 2;
 QString qmlDir()
 {
   return QStringLiteral(KOGAVIEW_QML_SOURCE_DIR);
+}
+
+/// Every label a `MenuItem { … }` block literally shows, read from a QML source.
+///
+/// `Theme.menuEntryLabels` is a hand-kept list measured once in C++; it drifted
+/// from the shell menu once already ("Settings…" and "Library…" shipped without
+/// an entry, so the hamburger menu grew past the theme floor). `Main.qml`
+/// instantiates the real `KogaViewBridge`, so this suite cannot load it; the
+/// shell menu is guarded at the source instead, so adding an entry without
+/// measuring its label fails here. Braces are tracked so only text inside a
+/// `MenuItem` counts, and the caller checks the count is plausible so a parser
+/// that silently found nothing cannot pass.
+QStringList menuItemLabelsIn(const QString& path, const QStringList& catalogue = {})
+{
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return {};
+  }
+  const QRegularExpression literal(QStringLiteral("\"([^\"]*)\""));
+  QStringList labels;
+  int depth = 0;
+  bool inMenu = false;
+  const QStringList lines = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'));
+  for (const QString& raw : lines) {
+    const QString line = raw.trimmed();
+    if (!inMenu && line.contains(QStringLiteral("MenuItem {"))) {
+      inMenu = true;
+      depth = 0;
+    }
+    if (!inMenu) {
+      continue;
+    }
+    if (line.startsWith(QStringLiteral("text:"))) {
+      // A conditional label (`theme === "dark" ? "A" : "B"`) has quoted
+      // comparison operands that are not labels: drop those before reading.
+      QString stripped = line;
+      for (const QString& op : { QStringLiteral("=== \""), QStringLiteral("!== \""),
+                                 QStringLiteral("== \""), QStringLiteral("!= \"") }) {
+        int at = stripped.indexOf(op);
+        while (at >= 0) {
+          const int close = stripped.indexOf(QLatin1Char('"'), at + op.size());
+          if (close < 0) {
+            break;
+          }
+          stripped.remove(at, close - at + 1);
+          at = stripped.indexOf(op);
+        }
+      }
+      // A menu built from `Theme.menuEntries[n]` names no literal here: resolve
+      // the index back to the measured catalogue entry, which is what the menu
+      // really draws once the language is applied.
+      static const QRegularExpression indexed(
+        QStringLiteral("menuEntries\\s*\\[\\s*(\\d+)\\s*\\]"));
+      auto slotMatches = indexed.globalMatch(stripped);
+      while (slotMatches.hasNext()) {
+        const int slot = slotMatches.next().captured(1).toInt();
+        if (slot >= 0 && slot < catalogue.size()) {
+          labels.append(catalogue.at(slot));
+        } else {
+          labels.append(QStringLiteral("<slot %1>").arg(slot));
+        }
+      }
+      auto matches = literal.globalMatch(stripped);
+      while (matches.hasNext()) {
+        labels.append(matches.next().captured(1));
+      }
+    }
+    depth += line.count(QLatin1Char('{')) - line.count(QLatin1Char('}'));
+    if (depth <= 0) {
+      inMenu = false;
+    }
+  }
+  return labels;
 }
 
 QVariantMap entry(const QString& name, const QString& path, bool isDir, bool isImage)
@@ -1271,6 +1346,113 @@ private slots:
     }
   }
 
+  /// Every label a menu can show is measured, so no menu grows past the floor.
+  ///
+  /// `Theme.menuEntryLabels` is a fixed list measured once in C++: any label a
+  /// menu shows but the list does not know is drawn at whatever width the rest
+  /// of the labels produced. A menu that is wider than the theme floor is the
+  /// visible symptom — rows 48 and 49 of `docs/M1-REPORT.md` fixed a fixed-200 px
+  /// style; this test keeps the catalogue complete so the fix holds.
+  ///
+  /// The entries are read from the menus themselves (with the view's real
+  /// `menuLabelWidths`), not from the list under test, so a label missing from
+  /// the catalogue fails here instead of passing tautologically.
+  void everyMenuLabelIsMeasured()
+  {
+    QQuickItem* view = browserItem();
+    QObject* theme = view->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    QStringList catalogue;
+    for (const QVariant& label : theme->property("menuEntryLabels").value<QVariantList>()) {
+      catalogue.append(label.toString());
+    }
+    QVERIFY2(!catalogue.isEmpty(), "the theme lists no menu labels to measure");
+    const qreal minimum = theme->property("menuMinimumWidth").toReal();
+    const QFontMetricsF metrics(QGuiApplication::font());
+
+    for (const QString& name :
+         { QStringLiteral("fileMenu"), QStringLiteral("folderMenu"), QStringLiteral("quickMenu") }) {
+      QObject* menu = findPopup(name);
+      QVERIFY2(menu != nullptr, qPrintable(name + QStringLiteral(" is missing")));
+      QMetaObject::invokeMethod(menu, "popup");
+      QTRY_VERIFY2(menu->property("visible").toBool(),
+                   qPrintable(name + QStringLiteral(" did not open")));
+
+      const int count = menu->property("count").toInt();
+      for (int index = 0; index < count; ++index) {
+        QQuickItem* entry = nullptr;
+        QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                  Q_ARG(int, index));
+        if (entry == nullptr) {
+          continue;
+        }
+        const QString text = entry->property("text").toString();
+        if (text.isEmpty()) {
+          continue;  // a separator
+        }
+        // The theme-mode label is one of a pair; the list carries both.
+        QVERIFY2(catalogue.contains(text),
+                 qPrintable(QStringLiteral("%1 shows \"%2\", which Theme.menuEntryLabels does not "
+                                           "measure")
+                                .arg(name, text)));
+      }
+
+      // With the whole catalogue measured, a menu is as wide as its own longest
+      // real label needs and no wider than the floor requires.
+      qreal widest = 0;
+      for (const QVariant& label : theme->property("menuEntryLabels").value<QVariantList>()) {
+        widest = qMax(widest, metrics.horizontalAdvance(label.toString()));
+      }
+      const qreal width = menu->property("width").toReal();
+      const qreal floor = qMax(minimum, std::ceil(widest) + 12);
+      QVERIFY2(width <= floor,
+               qPrintable(QStringLiteral("%1 is %2 px; the measured labels need at most %3 px, "
+                                         "so a label in it is not in the catalogue")
+                            .arg(name)
+                            .arg(width)
+                            .arg(floor)));
+      QMetaObject::invokeMethod(menu, "close");
+      QTRY_VERIFY(!menu->property("visible").toBool());
+    }
+  }
+
+  /// No menu may show a label the theme does not measure.
+  ///
+  /// The browser menus are covered at render time by
+  /// `everyMenuLabelIsMeasured`; this covers the menus this suite cannot
+  /// instantiate — the shell menu in `Main.qml`, and `Viewer.qml`'s canvas
+  /// menu, whose actions are tested in `tst_viewer.cpp` but whose labels are
+  /// not measured there against the shell's catalogue. Both halves are needed:
+  /// the render check proves the width is applied, this one proves the list is
+  /// complete.
+  void everyShellMenuLabelIsMeasured()
+  {
+    QQuickItem* view = browserItem();
+    QObject* theme = view->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    QStringList catalogue;
+    for (const QVariant& label : theme->property("menuEntryLabels").value<QVariantList>()) {
+      catalogue.append(label.toString());
+    }
+    QVERIFY2(catalogue.size() > 10, "the theme's label catalogue is suspiciously small");
+
+    for (const QString& file :
+         { QStringLiteral("/Main.qml"), QStringLiteral("/BrowserView.qml"),
+           QStringLiteral("/Viewer.qml"), QStringLiteral("/EditorView.qml") }) {
+      const QStringList labels = menuItemLabelsIn(qmlDir() + file, catalogue);
+      QVERIFY2(labels.size() > 2,
+               qPrintable(QStringLiteral("%1: found only %2 menu labels; the scan is broken")
+                            .arg(file)
+                            .arg(labels.size())));
+      for (const QString& label : labels) {
+        QVERIFY2(catalogue.contains(label),
+                 qPrintable(QStringLiteral("%1 shows \"%2\", which Theme.menuEntryLabels does not "
+                                           "measure — its menu will outgrow the theme floor")
+                                .arg(file, label)));
+      }
+    }
+  }
+
   /// A menu follows a label that is longer than the style's fixed 200 px.
   ///
   /// Every real label fits the theme's 168 px floor at this font, so the
@@ -1368,6 +1550,44 @@ private slots:
     QCOMPARE(openWith.at(0).at(0).toString(), QStringLiteral("/root/img.png"));
     // The default-handler signal must not fire: it opens, it does not ask.
     QCOMPARE(openExternal.count(), 0);
+  }
+
+  /// "Edit" on a tile leaves for the Editor with the image already loaded into
+  /// the working document. The view only *asks* the shell (`editInEditor`), and
+  /// the shell batches `select` + `set_workspace` + `editor_open`: dispatching
+  /// all three from the menu handler dropped the last one, because each
+  /// republishes the state and the menu was rebuilt mid-batch.
+  void editOpensTheImageInTheWorkingDocument()
+  {
+    QObject* menu = findPopup(QStringLiteral("fileMenu"));
+    QVERIFY(menu != nullptr);
+    QSignalSpy commands(browserRoot(), SIGNAL(command(QVariant)));
+    QSignalSpy editInEditor(browserRoot(), SIGNAL(editInEditor(QString)));
+
+    browserRoot()->setProperty("menuPath", QStringLiteral("/root/img.png"));
+    browserRoot()->setProperty("menuIsImage", true);
+    browserRoot()->setProperty("menuIsDir", false);
+    QMetaObject::invokeMethod(menu, "popup");
+    QTRY_VERIFY(menu->property("visible").toBool());
+
+    QQuickItem* entry = nullptr;
+    const int count = menu->property("count").toInt();
+    for (int index = 0; index < count && entry == nullptr; ++index) {
+      QQuickItem* candidate = nullptr;
+      QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, candidate),
+                                Q_ARG(int, index));
+      if (candidate != nullptr && candidate->property("text").toString() == QStringLiteral("Edit")) {
+        entry = candidate;
+      }
+    }
+    QVERIFY2(entry != nullptr, "the file menu has no \"Edit\" entry");
+    QVERIFY(entry->isEnabled());
+    // Same activation route as the "Open with…" case above: the style's click.
+    QVERIFY(QMetaObject::invokeMethod(entry, "click"));
+
+    QCOMPARE(editInEditor.count(), 1);
+    QCOMPARE(editInEditor.at(0).at(0).toString(), QStringLiteral("/root/img.png"));
+    QCOMPARE(commands.count(), 0);
   }
 };
 

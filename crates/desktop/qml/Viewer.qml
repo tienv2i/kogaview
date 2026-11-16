@@ -44,6 +44,24 @@ Item {
     property bool autoFit: true
 
     signal command(var command)
+    /// The canvas menu's shell-side actions. The view only says *what* the user
+    /// asked for; the shell owns the platform calls (clipboard, application
+    /// chooser, destination picker, delete confirmation), exactly as it does for
+    /// the browser's menus.
+    signal copyImage(string path)
+    signal copyText(string text)
+    signal openWith(string path)
+    /// Open the current image in the Editor; the shell batches the three
+    /// commands (see `BrowserView.editInEditor`).
+    signal editInEditor(string path)
+    signal requestDestination(string action, var paths)
+    signal requestDelete(var paths)
+
+    /// The widths `Main.qml` measured for `Theme.menuEntryLabels`, so the canvas
+    /// menu is as wide as the longest label it can show instead of the style's
+    /// fixed 200 px. Empty in the QML harness, where the theme's floor applies.
+    property var menuLabelWidths: []
+    property real menuWidth: theme.menuWidth(menuLabelWidths)
 
     property string currentPath: view.state.viewerPath || ""
     property var images: view.viewerImages || []
@@ -233,10 +251,32 @@ Item {
                 }
             }
 
+            /// Right click anywhere in the viewing area opens the canvas menu
+            /// for the image on screen. It only takes the right button, so it
+            /// neither competes with the left-button double tap above nor with
+            /// the drag that pans.
+            TapHandler {
+                objectName: "viewerContextTap"
+                acceptedButtons: Qt.RightButton
+                onSingleTapped: function(point) {
+                    if (!view.currentPath) {
+                        return;
+                    }
+                    // Open at the click, not at the global pointer: `popup()` with
+                    // no arguments asks the compositor for the cursor position,
+                    // which is stale for a synthetic event (and not always
+                    // reported under Wayland). `point.position` is in the
+                    // handler's parent, the viewport.
+                    var local = viewport.mapToItem(view, point.position.x,
+                                                   point.position.y);
+                    canvasMenu.popup(view, local.x, local.y);
+                }
+            }
+
             Label {
                 anchors.centerIn: parent
                 visible: !view.currentPath
-                text: "Open an image to start viewing"
+                text: qsTr("Open an image to start viewing")
                 color: view.theme.textMuted
                 font.pixelSize: 16
             }
@@ -244,7 +284,7 @@ Item {
             Label {
                 anchors.centerIn: parent
                 visible: image.status === Image.Error
-                text: "This image cannot be decoded"
+                text: qsTr("This image cannot be decoded")
                 color: view.theme.danger
                 font.pixelSize: 15
             }
@@ -285,18 +325,22 @@ Item {
                     /// touchpads on Wayland.
                     acceptedDevices: PointerDevice.AllDevices
                     onWheel: function(event) {
-                        /// Three 78 px tiles plus their 6 px gaps per notch, so
-                        /// one wheel notch nudges the strip instead of paging it.
-                        var step = 252;
+                        event.accepted = true;
+                        /// Two groups of three 78 px tiles plus their 6 px gaps
+                        /// per mouse notch (504 px), so one notch moves the strip
+                        /// by a pair of tile groups instead of a single tile.
+                        var step = 504;
                         var maxX = Math.max(0, strip.contentWidth - strip.width);
                         var dx = 0;
                         if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
-                            /// Touchpad: the pixels it reported, 1:1. A finger
-                            /// moving down the pad reports a negative `y`, and
-                            /// that advances the strip — the same direction a
-                            /// notch down does, and the direction the grid
-                            /// already scrolls.
-                            dx = event.pixelDelta.x - event.pixelDelta.y;
+                            /// Touchpad: the pixels it reported, doubled the same
+                            /// way `WheelScroll` doubles them so the strip keeps
+                            /// up with the grid. A finger moving down the pad
+                            /// reports a negative `y`, and that advances the strip
+                            /// — the same direction a notch down does, and the
+                            /// direction the grid already scrolls.
+                            dx = (event.pixelDelta.x - event.pixelDelta.y)
+                                 * 2;
                         } else {
                             /// Mouse: a vertical wheel moves the strip sideways,
                             /// and a notch down (negative, "towards the user")
@@ -308,9 +352,22 @@ Item {
                             if (notches === 0) return;
                             dx = -notches * step;
                         }
-                        strip.contentX = Math.max(0, Math.min(maxX, strip.contentX + dx));
-                        event.accepted = true;
+                        // Accumulate on the *target*, not on the animated
+                        // position: a second notch that arrives while the strip
+                        // is still gliding would otherwise restart from where it
+                        // happens to be and lose the first notch's travel.
+                        var base = filmstripGlide.running ? filmstripGlide.to
+                                                          : strip.contentX;
+                        filmstripGlide.to = Math.max(0, Math.min(maxX, base + dx));
+                        filmstripGlide.restart();
                     }
+                }
+                NumberAnimation {
+                    id: filmstripGlide
+                    target: strip
+                    property: "contentX"
+                    duration: 150
+                    easing.type: Easing.OutCubic
                 }
 
                 delegate: Item {
@@ -356,6 +413,99 @@ Item {
         }
     }
 
+    // ------------------------------------------------------------- canvas menu
+    /// The right-click menu on the image itself. The first block is the file
+    /// actions the browser's file menu already offers (the image is on screen,
+    /// so there is no "Open" entry — it is already open); the last block is the
+    /// viewer's own presentation state, which Qt owns and which therefore runs
+    /// the same functions the toolbar buttons call.
+    Menu {
+        id: canvasMenu
+        objectName: "viewerMenu"
+        implicitWidth: view.menuWidth
+
+        MenuItem {
+            text: qsTr("Edit")
+            icon.name: "document-edit-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: {
+                // One batch: dispatching them back to back from this handler
+                // dropped `editor_open` (see `Main.sendSequence`).
+                view.editInEditor(view.currentPath);
+            }
+        }
+        MenuItem {
+            text: qsTr("Open with…")
+            icon.name: "application-x-executable-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.openWith(view.currentPath)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Copy image content")
+            icon.name: "edit-copy-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.copyImage(view.currentPath)
+        }
+        MenuItem {
+            text: qsTr("Copy file path")
+            icon.name: "edit-copy-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.copyText(view.currentPath)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Copy to…")
+            icon.name: "folder-copy-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.requestDestination("copy_to", [view.currentPath])
+        }
+        MenuItem {
+            text: qsTr("Move to…")
+            icon.name: "folder-move-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.requestDestination("move_to", [view.currentPath])
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Move to trash")
+            icon.name: "user-trash-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.command({ type: "trash", paths: [view.currentPath] })
+        }
+        MenuItem {
+            text: qsTr("Delete permanently…")
+            icon.name: "edit-delete-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.requestDelete([view.currentPath])
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Fit to window")
+            icon.name: "zoom-fit-best-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.fit()
+        }
+        MenuItem {
+            text: qsTr("Actual size")
+            icon.name: "zoom-original-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.actualSize()
+        }
+        MenuItem {
+            text: qsTr("Rotate left")
+            icon.name: "object-rotate-left-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.rotateLeft()
+        }
+        MenuItem {
+            text: qsTr("Rotate right")
+            icon.name: "object-rotate-right-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.rotateRight()
+        }
+    }
+
     Connections {
         target: view
         function onImageIndexChanged() {
@@ -380,7 +530,7 @@ Item {
                 icon.name: "go-previous-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Back to browser"
+                ToolTip.text: qsTr("Back to browser")
                 onClicked: view.command({ type: "set_workspace", workspace: "browser" })
             }
 
@@ -392,7 +542,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.images.length > 0
                 ToolTip.visible: hovered
-                ToolTip.text: "Previous image"
+                ToolTip.text: qsTr("Previous image")
                 onClicked: view.command({ type: "viewer_previous" })
             }
             Label {
@@ -407,7 +557,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.images.length > 0
                 ToolTip.visible: hovered
-                ToolTip.text: "Next image"
+                ToolTip.text: qsTr("Next image")
                 onClicked: view.command({ type: "viewer_next" })
             }
 
@@ -419,7 +569,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Zoom in (scroll wheel)"
+                ToolTip.text: qsTr("Zoom in (scroll wheel)")
                 onClicked: view.zoomIn()
             }
             ToolbarButton {
@@ -428,7 +578,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Zoom out (scroll wheel)"
+                ToolTip.text: qsTr("Zoom out (scroll wheel)")
                 onClicked: view.zoomOut()
             }
             ToolbarButton {
@@ -437,7 +587,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Fit to window"
+                ToolTip.text: qsTr("Fit to window")
                 onClicked: view.fit()
             }
             ToolbarButton {
@@ -446,7 +596,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Actual size (100%)"
+                ToolTip.text: qsTr("Actual size (100%)")
                 onClicked: view.actualSize()
             }
 
@@ -458,7 +608,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Rotate left"
+                ToolTip.text: qsTr("Rotate left")
                 onClicked: view.rotateLeft()
             }
             ToolbarButton {
@@ -467,7 +617,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Rotate right"
+                ToolTip.text: qsTr("Rotate right")
                 onClicked: view.rotateRight()
             }
             ToolbarButton {
@@ -476,7 +626,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Flip horizontally"
+                ToolTip.text: qsTr("Flip horizontally")
                 onClicked: view.toggleFlipH()
             }
             ToolbarButton {
@@ -485,7 +635,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: "Flip vertically"
+                ToolTip.text: qsTr("Flip vertically")
                 onClicked: view.toggleFlipV()
             }
 
@@ -498,7 +648,7 @@ Item {
                 icon.name: "view-list-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Toggle thumbnail filmstrip"
+                ToolTip.text: qsTr("Toggle thumbnail filmstrip")
                 onClicked: view.command({ type: "toggle_filmstrip" })
             }
         }

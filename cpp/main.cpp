@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "language.h"
 #include "thumbnailcache.h"
 
 #include <QCoreApplication>
@@ -7,8 +8,11 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QLibraryInfo>
 #include <QJsonObject>
+#include <QMouseEvent>
 #include <QPointingDevice>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -16,10 +20,12 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTest>
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <cstdio>
 
 #include <kogaview_desktop/src/bridge.cxxqt.h>
@@ -78,9 +84,21 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app, ThumbnailCac
   }
 
   const QStringList commands = raw.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+  // A fresh debug build spends seconds loading QML and the first paint, and
+  // async commands (editor_open decodes on a worker) need the poll loop up
+  // before the edits arrive. Both are why the batch can be postponed.
+  bool startOk = false;
+  const int startMs = qEnvironmentVariableIntValue("KOGAVIEW_DEV_COMMANDS_START_MS", &startOk);
+  const int baseDelay = startOk && startMs > 0 ? startMs : 600;
+  // The spacing between commands; a decode lands after the command that started
+  // it, so a batch that edits the document needs more than the 900 ms a
+  // screenshot-only batch needs.
+  const int stagger = qEnvironmentVariableIntValue("KOGAVIEW_DEV_COMMANDS_STAGGER_MS") > 0
+                        ? qEnvironmentVariableIntValue("KOGAVIEW_DEV_COMMANDS_STAGGER_MS")
+                        : 900;
   int index = 0;
   for (const QString& command : commands) {
-    const int delay = 600 + index * 900;
+    const int delay = baseDelay + index * stagger;
     ++index;
     // Background file operations take time; stagger so each command is not
     // rejected with `busy` by the previous one.
@@ -133,6 +151,38 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
     timer->start();
   }
 
+  // QA hook: a right click in the viewer's viewing area, delivered through the
+  // window like a real one, so the canvas menu can be photographed with the
+  // desktop's own font and icon theme. It goes through the same `TapHandler` a
+  // physical right click reaches; only the pointer is synthetic.
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_VIEWER_MENU")) {
+    QTimer::singleShot(2500, &app, [rootObject]() {
+      auto* window = qobject_cast<QQuickWindow*>(rootObject);
+      auto* viewport = rootObject->findChild<QQuickItem*>(QStringLiteral("viewerViewport"));
+      QObject* menu = rootObject->findChild<QObject*>(QStringLiteral("viewerMenu"));
+      if (window == nullptr || viewport == nullptr || menu == nullptr) {
+        qWarning() << "KogaView dev viewer menu: window, viewport or menu not found";
+        return;
+      }
+      const QPointF local =
+        viewport->mapToScene(QPointF(viewport->width() / 2.0, viewport->height() / 2.0));
+      const QPointF global = window->mapToGlobal(local.toPoint());
+      QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::RightButton,
+                        Qt::RightButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(window, &press);
+      QMouseEvent release(QEvent::MouseButtonRelease, local, global, Qt::RightButton,
+                          Qt::NoButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(window, &release);
+      // `menu.x`/`menu.y` are relative to the popup's parent (which `popup()`
+      // re-parents to the item it is given), so the window position is the
+      // picture's business; the click point below is in window coordinates.
+      qInfo() << "KogaView dev viewer menu: open" << menu->property("visible").toBool()
+              << "click(window)" << local << "menu x,y(parent)" << menu->property("x").toDouble()
+              << menu->property("y").toDouble() << "size"
+              << menu->property("width").toDouble() << menu->property("height").toDouble();
+    });
+  }
+
   // QA hook: inject one touchpad-typed wheel event into the running window so
   // the scroll-to-zoom path can be observed on the real shell (toolbars,
   // filmstrip, bridge-owned state) without physical input. The event is
@@ -163,6 +213,21 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       qInfo() << "KogaView dev wheel: zoom" << before << "->"
               << viewer->property("zoom").toDouble() << "offsetY" << offsetBefore << "->"
               << viewer->property("offsetY").toDouble();
+    });
+  }
+
+  // Record what the shell can offer a file dialog, so the format list is read
+  // from the running app rather than restated in a report.
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_FORMATS")) {
+    QTimer::singleShot(1200, &platform, [&platform]() {
+      qInfo().noquote() << "KogaView dev formats filter" << platform.imageNameFilter();
+      qInfo().noquote() << "KogaView dev formats save" << platform.saveNameFilters().join(";");
+      QVariantList languages = platform.languages();
+      QStringList codes;
+      for (const QVariant& language : languages) {
+        codes << language.toMap().value(QStringLiteral("code")).toString();
+      }
+      qInfo().noquote() << "KogaView dev formats languages" << codes.join(",");
     });
   }
 
@@ -213,23 +278,41 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //   KOGAVIEW_DEV_UI_REQUEST=open-folder       -> browser `requestOpenFolder`
   //   KOGAVIEW_DEV_UI_REQUEST=open-external     -> browser `openExternal`
   //   KOGAVIEW_DEV_UI_REQUEST=open-with         -> browser `openWith`
+  //   KOGAVIEW_DEV_UI_REQUEST=context-menu-trigger -> click one entry of a menu
+  //     of this window, so its `onTriggered` really runs: `_MENU` names the menu
+  //     object (`fileMenu` default, `viewerMenu` or `editorMenu`), `_ARG` is the
+  //     path for `fileMenu`, `_ARG2` the entry's text (default "Edit")
   //   KOGAVIEW_DEV_UI_REQUEST=context-menu      -> `fileMenu` on the entry at
   //     `KOGAVIEW_DEV_UI_REQUEST_ARG`, or `folderMenu` without one, for a
   //     screenshot of the menu a right click would open
   //     (`KOGAVIEW_DEV_UI_REQUEST_ARG` is the path to hand over)
+  //   KOGAVIEW_DEV_UI_REQUEST=settings          -> `openSettings()` on the shell,
+  //     the same function the "Settings…" menu entry calls, for a screenshot of
+  //     the dialog
   //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
   //   "a dismissed dialog does not block the next one" path is observed.
   const QString uiRequest = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST");
   if (!uiRequest.isEmpty()) {
     const int requestDelay = qEnvironmentVariableIntValue("KOGAVIEW_DEV_UI_REQUEST_DELAY_MS");
     const QString requestArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG");
-    auto fire = [rootObject, uiRequest, requestArg]() {
-      QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"));
-      if (browser == nullptr) {
-        qWarning() << "KogaView dev ui request: browser view not found";
+    auto fire = [rootObject, uiRequest, requestArg, requestDelay, &app]() {
+      if (uiRequest == QLatin1String("settings")) {
+        // The shell's own function, so the dialog receives the stored theme and
+        // checkbox values exactly as the menu entry hands them over.
+        const bool opened = QMetaObject::invokeMethod(rootObject, "openSettings");
+        qInfo().noquote() << "KogaView dev ui request settings"
+                          << (opened ? "emitted" : "not supported");
         return;
       }
       bool emitted = false;
+      QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"));
+      if (browser == nullptr && !uiRequest.startsWith(QLatin1String("editor-")) &&
+          uiRequest != QLatin1String("leave-guard") &&
+          !(uiRequest == QLatin1String("context-menu-trigger") &&
+            qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_MENU") == QLatin1String("viewerMenu"))) {
+        qWarning() << "KogaView dev ui request: browser view not found";
+        return;
+      }
       if (uiRequest == QLatin1String("open-folder")) {
         emitted = QMetaObject::invokeMethod(browser, "requestOpenFolder");
       } else if (uiRequest == QLatin1String("open-external")) {
@@ -252,6 +335,169 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           browser->setProperty("menuIsImage", true);
         }
         emitted = menu != nullptr && QMetaObject::invokeMethod(menu, "popup");
+      } else if (uiRequest == QLatin1String("context-menu-trigger")) {
+        // Activate one entry of `fileMenu` the way a click does, so the commands
+        // the entry emits (`select`, `set_workspace`, `editor_open`) really run.
+        // `KOGAVIEW_DEV_UI_REQUEST_ARG` is the path; `_ARG2` names the entry
+        // whose `text` matches (default "Edit").
+        const QString entryText = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const QString menuName = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_MENU");
+        const QString which = menuName.isEmpty() ? QStringLiteral("fileMenu") : menuName;
+        QObject* menu = rootObject->findChild<QObject*>(which);
+        if (menu == nullptr) {
+          qWarning() << "KogaView dev ui request:" << which << "missing";
+          return;
+        }
+        if (which == QLatin1String("fileMenu")) {
+          if (requestArg.isEmpty()) {
+            qWarning() << "KogaView dev ui request: fileMenu needs a path";
+            return;
+          }
+          browser->setProperty("menuPath", requestArg);
+          browser->setProperty("menuIsDir", false);
+          browser->setProperty("menuIsImage", true);
+        }
+        const QString wanted = entryText.isEmpty() ? QStringLiteral("Edit") : entryText;
+        // The items are QObject children of the Menu, declared in QML; a
+        // declared `MenuItem` is not in the `contentData` list.
+        // The items are QObject children of the Menu, declared in QML; a
+        // declared `MenuItem` is not in the `contentData` list. `click()` is
+        // what a press-and-release on the entry does, so `onTriggered` runs.
+        QObject* entry = nullptr;
+        for (QObject* candidate : menu->children()) {
+          if (candidate->property("text").toString() == wanted) {
+            entry = candidate;
+            break;
+          }
+        }
+        emitted = entry != nullptr && QMetaObject::invokeMethod(entry, "click");
+        // The three commands the entry sends in one turn, replayed for the log:
+        // if the entry's own `editor_open` is dropped, this shows whether the
+        // same three calls survive when made from outside the menu.
+        if (emitted) {
+          QJsonArray results;
+          const QJsonArray commands{QJsonObject{{"type", "select"},
+                                                {"paths", QJsonArray{requestArg}}},
+                                    QJsonObject{{"type", "set_workspace"},
+                                                {"workspace", "editor"}},
+                                    QJsonObject{{"type", "editor_open"}, {"path", requestArg}}};
+          for (const QJsonValue& value : commands) {
+            const QJsonObject command = value.toObject();
+            QVariant returned;
+            QMetaObject::invokeMethod(rootObject, "send", Q_RETURN_ARG(QVariant, returned),
+                                      Q_ARG(QVariant, QVariant(command.toVariantMap())));
+            results.append(QJsonValue::fromVariant(returned));
+          }
+          qInfo().noquote() << "KogaView dev ui request replay" << results;
+        }
+        qInfo().noquote() << "KogaView dev ui request context-menu-trigger" << wanted
+                          << (emitted ? "triggered" : "not found");
+      } else if (uiRequest == QLatin1String("leave-guard")) {
+        // The switcher's own path: `guardEditorLeave` is what a workspace click
+        // and the window close go through, so an unsaved document opens the
+        // three-answer dialog exactly as it would for a hand.
+        QVariantMap target;
+        target.insert(QStringLiteral("workspace"),
+                      requestArg.isEmpty() ? QStringLiteral("browser") : requestArg);
+        emitted = QMetaObject::invokeMethod(rootObject, "guardEditorLeave",
+                                            Q_ARG(QVariant, QVariant(target)));
+        // `_ARG2` answers the dialog the way its own buttons do, so a click that
+        // only exists in QML can be driven: `discard`, `cancel` or `save`.
+        const QString answer = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        if (!answer.isEmpty()) {
+          QTimer::singleShot(1500, rootObject, [rootObject, answer]() {
+            QObject* dialog = rootObject->findChild<QObject*>(QStringLiteral("unsavedDialog"));
+            QObject* button = rootObject->findChild<QObject*>(
+              QStringLiteral("unsaved") + answer.at(0).toUpper() + answer.mid(1));
+            if (button == nullptr || dialog == nullptr) {
+              qWarning() << "KogaView dev ui request: no unsaved dialog button" << answer;
+              return;
+            }
+            // The dialog's button `click()` runs the same handler a press does.
+            QMetaObject::invokeMethod(button, "click");
+            qInfo().noquote() << "KogaView dev ui request unsaved answer" << answer;
+          });
+        }
+        qInfo().noquote() << "KogaView dev ui request leave-guard"
+                          << (emitted ? "handled" : "not found");
+      } else if (uiRequest == QLatin1String("editor-fit") ||
+                 uiRequest == QLatin1String("editor-zoom") ||
+                 uiRequest == QLatin1String("editor-pan") ||
+                 uiRequest == QLatin1String("editor-pan-as")) {
+        // The Editor's presentation transforms, driven through the same view
+        // functions its toolbar and input handlers call. Logged before and
+        // after, because a zoom is invisible in the journal: it emits no
+        // command at all.
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        const char* names[] = {"zoom", "offsetX", "offsetY", "autoFit"};
+        auto log = [editor, &names](const char* when) {
+          qInfo().noquote() << "KogaView dev editor" << when << "zoom"
+                            << editor->property(names[0]) << "offsetX"
+                            << editor->property(names[1]) << "offsetY"
+                            << editor->property(names[2]) << "autoFit"
+                            << editor->property(names[3]);
+        };
+        log("before");
+        if (uiRequest == QLatin1String("editor-fit")) {
+          QMetaObject::invokeMethod(editor, "fit");
+        } else if (uiRequest == QLatin1String("editor-zoom")) {
+          QMetaObject::invokeMethod(editor, "zoomIn");
+          QMetaObject::invokeMethod(editor, "zoomIn");
+        } else if (uiRequest == QLatin1String("editor-pan") ||
+                   uiRequest == QLatin1String("editor-pan-as")) {
+          // `editor-pan` zooms until both axes overflow (the historical proof
+          // that a drag moves a big picture). `editor-pan-as` drags at the
+          // current zoom, which is how a picture *shorter* than the host is
+          // proven to move: it is clamped to the centre without a pan margin.
+          const bool zoomFirst = uiRequest == QLatin1String("editor-pan");
+          const double documentWidth = editor->property("documentWidth").toDouble();
+          const double documentHeight = editor->property("documentHeight").toDouble();
+          QObject* host = rootObject->findChild<QObject*>(QStringLiteral("editorCanvasHost"));
+          auto* item = qobject_cast<QQuickItem*>(host);
+          auto* window = qobject_cast<QQuickWindow*>(rootObject);
+          if (item == nullptr || window == nullptr || documentWidth <= 0 || documentHeight <= 0) {
+            qWarning() << "KogaView dev ui request: editor canvas host not found";
+            return;
+          }
+          if (zoomFirst) {
+            const double need = 1.4 * std::max(item->width() / documentWidth,
+                                               item->height() / documentHeight);
+            const double current = editor->property("zoom").toDouble();
+            if (current > 0 && need > current) {
+              QMetaObject::invokeMethod(editor, "zoomAt", Q_ARG(QVariant, QVariant(need / current)),
+                                        Q_ARG(QVariant, QVariant(item->width() / 2.0)),
+                                        Q_ARG(QVariant, QVariant(item->height() / 2.0)));
+            }
+          }
+          QCoreApplication::processEvents();
+          const QPointF local(item->width() / 2.0, item->height() / 2.0);
+          const QPointF release = local + QPointF(120, 90);
+          const QPoint pressScene = item->mapToScene(local).toPoint();
+          const QPoint releaseScene = item->mapToScene(release).toPoint();
+          auto logPan = [editor, &log](const char* when) {
+            log(when);
+            qInfo().noquote() << "KogaView dev editor pan" << when << "offsetX"
+                              << editor->property("offsetX") << "offsetY"
+                              << editor->property("offsetY");
+          };
+          logPan("before drag");
+          // `DragHandler` activates from the pointer sequence `QTest` produces;
+          // a hand-rolled `QMouseEvent` reaches it but never satisfies its grab,
+          // which is why the offsets used to stay at 0.
+          QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, pressScene);
+          QTest::mouseMove(window, (pressScene + releaseScene) / 2);
+          QTest::mouseMove(window, releaseScene);
+          QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, releaseScene);
+          QTest::qWait(50);
+          logPan("after drag");
+        }
+        QCoreApplication::processEvents();
+        log("after");
+        emitted = true;
       }
       qInfo().noquote() << "KogaView dev ui request" << uiRequest
                         << (emitted ? "emitted" : "not supported");
@@ -323,11 +569,90 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       notch(-120);
       notch(-120);
       notch(120);
+      // The strip glides, so the reads above are taken mid-animation. Log where
+      // it comes to rest, which is the distance the notches really moved.
+      QTimer::singleShot(400, &app, [strip]() {
+        qInfo() << "KogaView dev filmstrip: settled contentX"
+                << strip->property("contentX").toDouble();
+      });
       QObject* filmHandler = rootObject->findChild<QObject*>(QStringLiteral("filmstripWheelHandler"));
       qInfo() << "KogaView dev filmstrip: handler found" << (filmHandler != nullptr)
               << "zoom" << zoomBefore << "->" << (viewer ? viewer->property("zoom").toDouble() : -1);
     });
     wait->start();
+  }
+
+  // QA hook: wheel over the Editor canvas. It goes through the view's own
+  // `editorWheelHandler` (the same handler the real wheel reaches), so the
+  // logged zoom is what a hand would have produced, at a cursor point that
+  // intentionally is not the centre: the anchor being kept is what proves the
+  // zoom-at-cursor math.
+  if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_EDITOR_WHEEL")) {
+    QTimer::singleShot(qEnvironmentVariableIntValue("KOGAVIEW_DEV_EDITOR_WHEEL_DELAY_MS") > 0
+                         ? qEnvironmentVariableIntValue("KOGAVIEW_DEV_EDITOR_WHEEL_DELAY_MS")
+                         : 1500,
+                       &app, [rootObject]() {
+      auto* window = qobject_cast<QQuickWindow*>(rootObject);
+      QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+      auto* host =
+        qobject_cast<QQuickItem*>(rootObject->findChild<QObject*>(QStringLiteral("editorCanvasHost")));
+      if (window == nullptr || editor == nullptr || host == nullptr) {
+        qWarning() << "KogaView dev editor wheel: window, editor or canvas host not found";
+        return;
+      }
+      static auto* touchpad =
+        new QPointingDevice(QStringLiteral("kogaview qa touchpad"), 9003,
+                            QInputDevice::DeviceType::TouchPad,
+                            QPointingDevice::PointerType::Finger,
+                            QInputDevice::Capability::Scroll
+                              | QInputDevice::Capability::PixelScroll,
+                            1, 3);
+      const QPointF local(host->width() * 0.75, host->height() * 0.30);
+      const QPointF scene = host->mapToScene(local);
+      auto log = [editor](const char* when) {
+        qInfo().noquote() << "KogaView dev editor wheel" << when << "zoom"
+                          << editor->property("zoom") << "offsetX" << editor->property("offsetX")
+                          << "offsetY" << editor->property("offsetY") << "autoFit"
+                          << editor->property("autoFit");
+      };
+      log("before");
+      // The anchor is what proves the zoom-at-cursor math. It uses the same
+      // corner-mapping technique `tst_viewer` uses: the document pixel under
+      // the cursor is taken with `mapFromItem` on the unscaled document item,
+      // then mapped back after the wheel and compared with the cursor. Qt
+      // applies the item's `scale` in both directions, so the comparison is
+      // like-for-like.
+      auto* canvas = qobject_cast<QQuickItem*>(
+        rootObject->findChild<QObject*>(QStringLiteral("canvas")));
+      if (canvas == nullptr) {
+        qWarning() << "KogaView dev editor wheel: canvas not found";
+        return;
+      }
+      QCoreApplication::processEvents();
+      const QPointF sceneBefore = host->mapToScene(local);
+      const QPointF documentPoint = canvas->mapFromScene(sceneBefore);
+      bool eventAccepted = false;
+      // Four notches: a single one only widens the picture past the host on
+      // the horizontal axis, and `clampOffsets` correctly pins the vertical
+      // offset to 0 while the picture is still shorter than the viewport.
+      for (int notch = 0; notch < 4; ++notch) {
+        QWheelEvent event(sceneBefore, QPointF(window->mapToGlobal(sceneBefore.toPoint())),
+                          QPoint(0, 0), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                          Qt::ScrollUpdate, false, Qt::MouseEventNotSynthesized, touchpad);
+        QCoreApplication::sendEvent(window, &event);
+        QCoreApplication::processEvents();
+        eventAccepted = eventAccepted || event.isAccepted();
+      }
+      // Let the `canvas.x/y` and `scale` bindings settle before re-projecting,
+      // otherwise the anchor is compared against a half-applied layout.
+      QCoreApplication::processEvents();
+      const QPointF anchored = canvas->mapToScene(documentPoint);
+      log("after");
+      qInfo().noquote() << "KogaView dev editor wheel: handler saw"
+                        << editor->property("lastWheelX") << editor->property("lastWheelY")
+                        << "cursor at" << sceneBefore << "drift" << (anchored - sceneBefore)
+                        << "document" << documentPoint << "accepted" << eventAccepted;
+    });
   }
 
   // What did the app restore? Logged before any command runs, so "the sidebar
@@ -404,6 +729,11 @@ int main(int argc, char* argv[])
     qWarning() << "KogaView: structured logging is unavailable; continuing with stderr only";
   }
 
+  // Translations live inside the binary: the `.ts` sources are compiled to
+  // `.qm` at build time and registered as `:/i18n/`, so a Flatpak sandbox needs
+  // no files from the host. Which one is installed is `InterfaceLanguage`'s job
+  // (`cpp/language.cpp`), including a change made while the window is open.
+
   PlatformHelper platform;
   // Thumbnails live under the profile's cache root. Core owns that path, so the
   // naming rule is not duplicated here.
@@ -418,6 +748,14 @@ int main(int argc, char* argv[])
 
   QObject::connect(&engine, &QQmlEngine::quit, &app, &QGuiApplication::quit);
   QObject::connect(&engine, &QQmlEngine::exit, &app, &QCoreApplication::exit);
+
+  // The language is persisted state like the theme: the first snapshot carries
+  // it, and `Main.qml` applies every later change (a `set_settings` from the
+  // dialog). `KOGAVIEW_UI_LANG` overrides both for a harness run.
+  auto* language = new InterfaceLanguage(&engine, rootObject,
+                                         qEnvironmentVariable("KOGAVIEW_UI_LANG"), rootObject);
+  language->reapply();
+  engine.rootContext()->setContextProperty(QStringLiteral("LanguageInstaller"), language);
 
 #ifdef KOGAVIEW_DEV_HARNESS
   installDevHarness(rootObject, app, platform, thumbnails);

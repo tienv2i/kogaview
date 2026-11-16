@@ -12,7 +12,7 @@ ApplicationWindow {
     minimumWidth: 940
     minimumHeight: 560
     visible: true
-    title: "KogaView" + (bridge.profile === "dev" ? " (Dev)" : "")
+    title: qsTr("KogaView") + (bridge.profile === "dev" ? " " + qsTr("(Dev)") : "")
     color: appTheme.background
 
     Theme {
@@ -23,13 +23,12 @@ ApplicationWindow {
     /// Menus size themselves to their longest label, and the pixels have to come
     /// from C++: a `Menu`'s own `font` follows its width, so measuring text inside
     /// the menu whose width depends on it loops in QML. The widths depend on the
-    /// window font only, which does not change while the app runs; one
-    /// measurement at startup is therefore enough, and it is assigned rather than
-    /// bound because Qt 6.12 does not re-evaluate a binding whose value comes
-    /// from a function that writes state of its own.
+    /// window font and on the interface language, which changes while the app
+    /// runs, so the measurement is assigned rather than bound and re-run by
+    /// `applyInterfaceLanguage`.
     property bool menuWidthsMeasured: false
-    function measureMenuLabels() {
-        if (menuWidthsMeasured) return
+    function measureMenuLabels(force) {
+        if (menuWidthsMeasured && force !== true) return
         appTheme.menuLabelWidths =
             Platform.textWidths(appTheme.menuEntryLabels, Qt.application.font)
         menuWidthsMeasured = true
@@ -68,6 +67,49 @@ ApplicationWindow {
     property var pendingDestination: null
     property var pendingDelete: null
     property string folderDialogPurpose: "open"
+    /// The installer C++ exposed as the context property `Language`
+    /// (`cpp/language.cpp`). It is not named `Language` here: QML already has a
+    /// `Language` enum from QtQuick.Window, which shadows a context property of
+    /// that name and would make `Language.locale` undefined.
+    readonly property var languageInstaller: typeof LanguageInstaller === "undefined"
+                                              ? null : LanguageInstaller
+    /// The locale the interface is in now (`vi`), or empty for the desktop's
+    /// own language. Written by C++ and by `applyInterfaceLanguage` below, so a
+    /// label asks one property instead of a translator.
+    property string interfaceLanguage: ""
+    /// The last `bridge.language` applied here. QML can watch the bridge's
+    /// notifier; C++ cannot connect to it, because CXX-Qt declares those signals
+    /// private (`connect` returns false there).
+    property string appliedLanguage: ""
+    /// Install a language while the window is open.
+    function applyInterfaceLanguage(locale) {
+        if (!root.languageInstaller) return;
+        if (root.languageInstaller.locale === locale) return;
+        root.languageInstaller.apply(locale);
+        var now = root.languageInstaller.locale;
+        root.appliedLanguage = now === undefined || now === null ? "" : String(now);
+        // Menus fit their labels, and the labels just changed language.
+        root.measureMenuLabels(true);
+    }
+    /// Re-read the language after a snapshot. QML re-evaluates this binding on
+    /// every command, because `snapshot.state` is replaced then, so a
+    /// `set_settings` whose `language` field changed is applied even when the
+    /// bridge's own property emitted nothing the window saw.
+    function syncInterfaceLanguage() {
+        var stored = (snapshot.state && snapshot.state.language) ? snapshot.state.language : "";
+        if (stored !== root.appliedLanguage) root.applyInterfaceLanguage(stored);
+    }
+    Connections {
+        target: bridge
+        function onLanguageChanged() { root.applyInterfaceLanguage(bridge.language); }
+    }
+    Connections {
+        target: snapshot
+        function onStateChanged() { root.syncInterfaceLanguage(); }
+    }
+    /// True while the file chooser was opened from the Editor, so a chosen
+    /// file loads into the editor instead of replacing the Viewer.
+    property bool choosingForEditor: false
 
     /// The bridge publishes the folder listing apart from everything else; this
     /// assembles the two back into the snapshot the views render.
@@ -76,6 +118,12 @@ ApplicationWindow {
         metaJson: bridge.stateJson
         listingJson: bridge.listingJson
         epoch: bridge.listingEpoch
+    }
+
+    /// Called by C++ after it swapped translators: publishes a snapshot whose
+    /// strings are the new language, so the views rebuild from it.
+    function retranslateBridge() {
+        bridge.retranslate();
     }
 
     function showToast(message) {
@@ -107,6 +155,36 @@ ApplicationWindow {
         return result;
     }
 
+    /// Send several commands that belong to one user action (the Edit entries
+    /// send `select` + `set_workspace` + `editor_open`).
+    ///
+    /// They must not be dispatched back to back from inside a handler: each
+    /// `dispatch` publishes a new `state`, whose `onStateChanged` reloads the
+    /// folder tree, and that rebuild runs while the handler that opened the
+    /// context menu is still on the stack — the third command was silently
+    /// dropped and the Editor never received the image. Queuing the rest with
+    /// `Qt.callLater` lets the handler return first.
+    function sendSequence(commands) {
+        var pending = commands.slice();
+        function next() {
+            if (pending.length === 0) return;
+            root.send(pending.shift());
+            if (pending.length > 0) Qt.callLater(next);
+        }
+        next();
+    }
+
+    function openSettings() {
+        // Open on what is stored, not on a default: the snapshot carries the
+        // two checkboxes beside the theme, so the dialog shows the saved values.
+        settingsDialog.initialTheme = root.state.theme || "dark";
+        settingsDialog.initialRemember = root.state.rememberLastFolder !== false;
+        settingsDialog.initialBackground = root.state.backgroundThumbnails !== false;
+        settingsDialog.initialLanguage = root.state.language || "system";
+        settingsDialog.languageChoices = Platform.languages();
+        settingsDialog.open();
+    }
+
     function listFolders(path) {
         if (!path) return { ok: false, folders: [] };
         var text = bridge.query(JSON.stringify({ type: "list_folders", path: path }));
@@ -118,14 +196,103 @@ ApplicationWindow {
     }
 
     function chooseFiles() {
-        if (!Platform.requestOpenFile("Open images")) {
+        if (!Platform.requestOpenFile(qsTr("Open images"))) {
             fileFallback.open();
         }
     }
 
+    /// The Editor's chooser. It uses the same portal/fallback route as
+    /// `chooseFiles`, but the picked file becomes an `editor_open` command.
+    function chooseEditorImage() {
+        root.choosingForEditor = true;
+        if (!Platform.requestOpenFile(qsTr("Open an image for editing"))) {
+            fileFallback.open();
+        }
+    }
+
+    /// A chooser answered outside the Editor is an ordinary multi-file open;
+    /// one opened from the Editor loads exactly one file into the working
+    /// document. `open_file` would replace the Viewer instead.
+    function handleOpenedPaths(paths) {
+        if (!paths || paths.length === 0) {
+            root.choosingForEditor = false;
+            return;
+        }
+        if (root.choosingForEditor) {
+            root.choosingForEditor = false;
+            root.send({ type: "editor_open", path: paths[0] });
+        } else {
+            root.send({ type: "open_file", paths: paths });
+        }
+    }
+
+    /// True while the Editor holds edits that are not on disk. Every way out of
+    /// the Editor asks this first.
+    readonly property bool editorHasUnsavedChanges:
+        !!(root.state.editor && root.state.editor.modified && !root.state.editor.saved)
+
+    /// Save As: the chooser suggests where the document would go now. The
+    /// dialog is opened from the Editor's button; the chosen path becomes
+    /// `editor_save_as`.
+    function chooseEditorSaveAs() {
+        var editor = workspaceLoader.item;
+        saveFallback.currentFile = "file://" + (editor && editor.saveAsPath ? editor.saveAsPath : "")
+        saveFallback.open();
+    }
+
+    /// A request to leave the Editor while edits are unsaved. `action` is what
+    /// happens if the user says "Discard"; "quit" closes the window.
+    property var pendingLeave: null
+    function guardEditorLeave(action) {
+        if (root.state.workspace !== "editor" || !root.editorHasUnsavedChanges) {
+            root.runLeave(action);
+            return;
+        }
+        root.pendingLeave = action;
+        unsavedDialog.open();
+    }
+    /// The dialog's Save answer: write, then go. The save and the leave are
+    /// queued, because each command republishes the state and a leave sent in
+    /// the same turn as the save could be dropped.
+    function leaveAfterSave() {
+        var leave = root.pendingLeave;
+        root.pendingLeave = null;
+        unsavedDialog.close();
+        var following = leave === "quit"
+                ? null
+                : (leave && leave.workspace
+                   ? { type: "set_workspace", workspace: leave.workspace }
+                   : { type: "editor_close" });
+        var commands = [{ type: "editor_save" }];
+        if (following) commands.push(following);
+        root.sendSequence(commands);
+        if (leave === "quit") Qt.callLater(function() { root.runLeave("quit"); });
+    }
+    /// The dialog's Discard answer: drop the edits and go.
+    function leaveAfterDiscard() {
+        var leave = root.pendingLeave;
+        unsavedDialog.close();
+        root.runLeave(leave);
+    }
+
+    function runLeave(action) {
+        root.pendingLeave = null;
+        if (action === "quit") {
+            leavingForQuit = true;
+            Qt.quit();
+        } else if (action && action.workspace) {
+            root.send({ type: "set_workspace", workspace: action.workspace });
+        } else if (action && action.close) {
+            root.send({ type: "editor_close" });
+        }
+    }
+    /// Set right before the window is allowed to close, so `onClosing` does not
+    /// ask a second time.
+    property bool leavingForQuit: false
+
     function chooseFolder() {
         root.folderDialogPurpose = "open";
-        if (!Platform.requestOpenFolder("Open folder")) {
+        if (!Platform.requestOpenFolder(qsTr("Open folder"))) {
             folderFallback.open();
         }
     }
@@ -133,7 +300,7 @@ ApplicationWindow {
     function chooseDestination(action, paths) {
         root.pendingDestination = { action: action, paths: paths };
         root.folderDialogPurpose = "destination";
-        if (!Platform.requestOpenFolder("Choose destination folder")) {
+        if (!Platform.requestOpenFolder(qsTr("Choose destination folder"))) {
             folderFallback.open();
         }
     }
@@ -186,15 +353,17 @@ ApplicationWindow {
         // Before the first menu can open: they size themselves to the labels.
         root.measureMenuLabels();
         snapshot.apply();
+        // C++ applied the stored language before the window existed; this is
+        // the same value, adopted so a later change is a real difference.
+        var installed = root.languageInstaller ? root.languageInstaller.locale : "";
+        root.appliedLanguage = installed === undefined || installed === null ? "" : String(installed);
         root.processLaunchArguments();
     }
 
     Connections {
         target: Platform
         function onFilesSelected(paths) {
-            if (paths && paths.length > 0) {
-                root.send({ type: "open_file", paths: paths });
-            }
+            root.handleOpenedPaths(paths);
         }
         function onFolderSelected(path) {
             root.handleFolderSelected(path);
@@ -237,7 +406,23 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Ctrl+Q"
-        onActivated: Qt.quit()
+        onActivated: root.guardEditorLeave("quit")
+    }
+    Shortcut {
+        sequence: "Ctrl+S"
+        onActivated: {
+            if (root.state.workspace === "editor" && root.editorHasUnsavedChanges) {
+                root.send({ type: "editor_save" });
+            }
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+S"
+        onActivated: {
+            if (root.state.workspace === "editor") {
+                root.chooseEditorSaveAs();
+            }
+        }
     }
     Shortcut {
         sequence: "F5"
@@ -263,7 +448,9 @@ ApplicationWindow {
                 theme: appTheme
                 workspace: root.state.workspace || "browser"
                 onSelected: function(workspace) {
-                    root.send({ type: "set_workspace", workspace: workspace });
+                    // Leaving the Editor with unsaved edits asks first; any
+                    // other switch is immediate.
+                    root.guardEditorLeave({ workspace: workspace });
                 }
             }
 
@@ -289,10 +476,10 @@ ApplicationWindow {
             ToolbarButton {
                 theme: appTheme
                 icon.name: "open-menu-symbolic"
-                text: "Menu"
+                text: qsTr("Menu")
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Main menu"
+                ToolTip.text: qsTr("Main menu")
                 onClicked: mainMenu.popup()
             }
         }
@@ -331,8 +518,7 @@ ApplicationWindow {
             }
 
             Label {
-                text: (root.state.itemCount || 0) + " items · "
-                      + (root.state.imageCount || 0) + " images"
+                text: qsTr("%1 items · %2 images").arg(root.state.itemCount || 0).arg(root.state.imageCount || 0)
                 color: appTheme.textMuted
             }
 
@@ -342,13 +528,13 @@ ApplicationWindow {
             }
 
             Label {
-                text: "rev " + bridge.revision
+                text: qsTr("rev %1").arg(bridge.revision)
                 color: appTheme.textMuted
             }
 
             ToolButton {
                 visible: bridge.busy
-                text: "Cancel"
+                text: qsTr("Cancel")
                 onClicked: root.send({ type: "cancel_operation" })
             }
         }
@@ -380,6 +566,13 @@ ApplicationWindow {
             onCopyText: function(text) { Platform.copyText(text); }
             onOpenExternal: function(path) { Platform.openExternally(path); }
             onOpenWith: function(path) { Platform.openWith(path); }
+            onEditInEditor: function(path) {
+                root.sendSequence([
+                    { type: "select", paths: [path] },
+                    { type: "set_workspace", workspace: "editor" },
+                    { type: "editor_open", path: path }
+                ]);
+            }
             onRequestDestination: function(action, paths) {
                 root.chooseDestination(action, paths);
             }
@@ -396,20 +589,41 @@ ApplicationWindow {
         Viewer {
             objectName: "viewer"
             theme: appTheme
+            menuLabelWidths: appTheme.menuLabelWidths
             state: root.state
             entries: snapshot.entries
             viewerImages: snapshot.viewerImages
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             onCommand: function(command) { root.send(command); }
+            onCopyImage: function(path) { Platform.copyImage(path); }
+            onCopyText: function(text) { Platform.copyText(text); }
+            onOpenWith: function(path) { Platform.openWith(path); }
+            onEditInEditor: function(path) {
+                root.sendSequence([
+                    { type: "select", paths: [path] },
+                    { type: "set_workspace", workspace: "editor" },
+                    { type: "editor_open", path: path }
+                ]);
+            }
+            onRequestDestination: function(action, paths) {
+                root.chooseDestination(action, paths);
+            }
+            onRequestDelete: function(paths) {
+                root.pendingDelete = paths;
+                deleteDialog.open();
+            }
         }
     }
 
     Component {
         id: editorComponent
         EditorView {
+            objectName: "editor"
             theme: appTheme
             state: root.state
             onCommand: function(command) { root.send(command); }
+            onRequestOpen: root.chooseEditorImage()
+            onRequestSaveAs: root.chooseEditorSaveAs()
         }
     }
 
@@ -418,54 +632,75 @@ ApplicationWindow {
         implicitWidth: appTheme.menuWidth(appTheme.menuLabelWidths)
 
         MenuItem {
-            text: "Open file…"
+            text: appTheme.menuEntries[15]
             icon.name: "document-open-symbolic"
             onTriggered: root.chooseFiles()
         }
         MenuItem {
-            text: "Open folder…"
+            text: appTheme.menuEntries[16]
             icon.name: "folder-open-symbolic"
             onTriggered: root.chooseFolder()
         }
         MenuSeparator {}
         MenuItem {
-            text: root.state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+            text: root.state.theme === "dark" ? appTheme.menuEntries[18] : appTheme.menuEntries[19]
             icon.name: root.state.theme === "dark"
                        ? "weather-clear-symbolic"
                        : "weather-clear-night-symbolic"
             onTriggered: root.send({ type: "toggle_theme" })
         }
+        MenuItem {
+            text: appTheme.menuEntries[20]
+            icon.name: "preferences-system-symbolic"
+            onTriggered: root.openSettings()
+        }
         MenuSeparator {}
         MenuItem {
-            text: "Exit"
+            text: appTheme.menuEntries[21]
             icon.name: "application-exit-symbolic"
             onTriggered: Qt.quit()
         }
     }
 
+    SettingsDialog {
+        id: settingsDialog
+        theme: appTheme
+        onSaveRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
+            root.send({ type: "set_settings", theme: themeName,
+                        remember_last_folder: rememberLastFolder,
+                        background_thumbnails: backgroundThumbnails,
+                        language: language });
+        }
+        onResetRequested: {
+            root.send({ type: "set_theme", theme: "dark" });
+            settingsDialog.close();
+        }
+        onAccepted: settingsDialog.close()
+        onRejected: settingsDialog.close()
+    }
+
     FileDialog {
         id: fileFallback
-        title: "Open images"
+        title: qsTr("Open images")
         fileMode: FileDialog.OpenFiles
-        nameFilters: [
-            "Images (*.jpg *.jpeg *.png *.webp *.gif *.bmp *.tif *.tiff *.avif *.heic)"
-        ]
+        // One filter for every chooser, built in C++ from the protocol's list so
+        // the dialog, the browser and the Editor cannot drift apart.
+        nameFilters: [Platform.imageNameFilter()]
         onAccepted: {
             var paths = [];
             for (var index = 0; index < selectedFiles.length; index++) {
                 paths.push(root.toLocalPath(selectedFiles[index]));
             }
-            if (paths.length > 0) {
-                root.send({ type: "open_file", paths: paths });
-            }
+            root.handleOpenedPaths(paths);
         }
+        onRejected: root.choosingForEditor = false
     }
 
     FolderDialog {
         id: folderFallback
         title: root.folderDialogPurpose === "destination"
-               ? "Choose destination folder"
-               : "Open folder"
+               ? qsTr("Choose destination folder")
+               : qsTr("Open folder")
         onAccepted: {
             var path = root.toLocalPath(selectedFolder);
             if (root.folderDialogPurpose === "destination") {
@@ -481,10 +716,9 @@ ApplicationWindow {
 
     MessageDialog {
         id: deleteDialog
-        title: "Delete permanently?"
+        title: qsTr("Delete permanently?")
         text: root.pendingDelete
-              ? ("Permanently delete " + root.pendingDelete.length
-                 + " item(s)? This cannot be undone.")
+              ? (qsTr("Permanently delete %1 item(s)? This cannot be undone.").arg(root.pendingDelete.length))
               : ""
         buttons: MessageDialog.Yes | MessageDialog.Cancel
         onAccepted: {
@@ -492,6 +726,76 @@ ApplicationWindow {
             root.pendingDelete = null;
         }
         onRejected: root.pendingDelete = null
+    }
+
+    onClosing: function(close) {
+        if (root.leavingForQuit) return;
+        if (root.state.workspace === "editor" && root.editorHasUnsavedChanges) {
+            close.accepted = false;
+            root.guardEditorLeave("quit");
+        }
+    }
+
+    // The Save As chooser. It is a native dialog opened from the Editor's own
+    // button; the picked path becomes one `editor_save_as` command.
+    FileDialog {
+        id: saveFallback
+        title: qsTr("Save image as")
+        fileMode: FileDialog.SaveFile
+        nameFilters: Platform.saveNameFilters()
+        defaultSuffix: "png"
+        onAccepted: {
+            var path = root.toLocalPath(selectedFile);
+            if (path) root.send({ type: "editor_save_as", path: path });
+        }
+    }
+
+    // Asked before leaving the Editor with edits that are not on disk, and
+    // before closing the window. The answers a user needs are three — Save,
+    // Discard, Cancel — while `MessageDialog` offers only Accept/Reject, and
+    // `MessageDialog.Save`/`Discard` do not exist on this Qt. So the dialog is a
+    // plain `Dialog` with the three buttons placed by this file.
+    Dialog {
+        id: unsavedDialog
+        objectName: "unsavedDialog"
+        title: qsTr("Unsaved changes")
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+        anchors.centerIn: Overlay.overlay
+        width: 420
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("The editor has changes that are not saved to a file. Save them first?")
+                wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Item { Layout.fillWidth: true }
+                Button {
+                    objectName: "unsavedDiscard"
+                    text: qsTr("Discard")
+                    onClicked: root.leaveAfterDiscard()
+                }
+                Button {
+                    objectName: "unsavedCancel"
+                    text: qsTr("Cancel")
+                    onClicked: root.pendingLeave = null
+                }
+                Button {
+                    objectName: "unsavedSave"
+                    text: qsTr("Save")
+                    highlighted: true
+                    onClicked: root.leaveAfterSave()
+                }
+            }
+        }
     }
 
     Rectangle {

@@ -28,6 +28,9 @@ Item {
     signal openExternal(string path)
     /// Show the desktop's "Open With" chooser for the file.
     signal openWith(string path)
+    /// Open `path` in the Editor from the current state: the shell batches
+    /// `select` + `set_workspace` + `editor_open` so none is dropped.
+    signal editInEditor(string path)
     signal requestDestination(string action, var paths)
     signal requestDelete(var paths)
     /// "Open folder": the shell owns the dialog, so the view only asks for it.
@@ -106,7 +109,7 @@ Item {
 
     function folderLabel(path) {
         if (!path) return "";
-        if (path === view.state.home) return "Home";
+        if (path === view.state.home) return qsTr("Home");
         return view.baseName(path) || "/";
     }
 
@@ -184,7 +187,7 @@ Item {
                 spacing: 6
 
                 Label {
-                    text: "Quick access"
+                    text: qsTr("Quick access")
                     color: view.theme.textMuted
                     font.bold: true
                     font.pixelSize: 12
@@ -218,7 +221,7 @@ Item {
                             spacing: 6
 
                             Label {
-                                text: "★"
+                                text: qsTr("★")
                                 color: view.theme.accent
                             }
                             Label {
@@ -248,7 +251,7 @@ Item {
                 }
 
                 Label {
-                    text: "Folders"
+                    text: qsTr("Folders")
                     color: view.theme.textMuted
                     font.bold: true
                     font.pixelSize: 12
@@ -390,23 +393,23 @@ Item {
 
                     Label {
                         visible: crumbBar.crumbs.length > 1
-                        text: "›"
+                        text: qsTr("›")
                         color: view.theme.textMuted
                     }
 
                     ToolButton {
                         visible: crumbBar.hiddenCrumbs.length > 0
-                        text: "…"
+                        text: qsTr("…")
                         implicitWidth: 28
                         implicitHeight: 28
                         ToolTip.visible: hovered
-                        ToolTip.text: "Hidden parent folders"
+                        ToolTip.text: qsTr("Hidden parent folders")
                         onClicked: hiddenMenu.popup()
                     }
 
                     Label {
                         visible: crumbBar.hiddenCrumbs.length > 0
-                        text: "›"
+                        text: qsTr("›")
                         color: view.theme.textMuted
                     }
 
@@ -434,7 +437,7 @@ Item {
                             }
                             Label {
                                 visible: index < crumbBar.visibleCrumbs.length - 1
-                                text: "›"
+                                text: qsTr("›")
                                 color: view.theme.textMuted
                             }
                         }
@@ -444,7 +447,7 @@ Item {
 
                     Label {
                         visible: !!view.state.busy
-                        text: "Loading…"
+                        text: qsTr("Loading…")
                         color: view.theme.textMuted
                     }
                 }
@@ -586,8 +589,8 @@ Item {
                 Layout.bottomMargin: 8
                 visible: grid.count === 0 && !view.state.busy
                 text: view.state.currentFolder
-                      ? "This folder has no visible images or subfolders."
-                      : "Open a folder to start browsing your photos."
+                      ? qsTr("This folder has no visible images or subfolders.")
+                      : qsTr("Open a folder to start browsing your photos.")
                 color: view.theme.textMuted
             }
         }
@@ -621,7 +624,7 @@ Item {
                 spacing: 8
 
                 Label {
-                    text: "Preview"
+                    text: qsTr("Preview")
                     color: view.theme.textMuted
                     font.bold: true
                     font.pixelSize: 12
@@ -654,7 +657,7 @@ Item {
                     Label {
                         anchors.centerIn: parent
                         visible: !view.selectionInfo || !view.selectionInfo.isImage
-                        text: view.selectionInfo ? "No image preview" : "Nothing selected"
+                        text: view.selectionInfo ? qsTr("No image preview") : qsTr("Nothing selected")
                         color: view.theme.textMuted
                     }
                 }
@@ -673,7 +676,7 @@ Item {
                     columnSpacing: 10
                     rowSpacing: 4
 
-                    Label { text: "Type"; color: view.theme.textMuted; font.pixelSize: 12 }
+                    Label { text: qsTr("Type"); color: view.theme.textMuted; font.pixelSize: 12 }
                     Label {
                         text: view.selectionInfo ? view.selectionInfo.kind : "—"
                         color: view.theme.text
@@ -681,14 +684,14 @@ Item {
                         Layout.fillWidth: true
                     }
 
-                    Label { text: "Size"; color: view.theme.textMuted; font.pixelSize: 12 }
+                    Label { text: qsTr("Size"); color: view.theme.textMuted; font.pixelSize: 12 }
                     Label {
                         text: view.selectionInfo
                               ? view.theme.formatBytes(view.selectionInfo.size) : "—"
                         color: view.theme.text
                     }
 
-                    Label { text: "Dimensions"; color: view.theme.textMuted; font.pixelSize: 12 }
+                    Label { text: qsTr("Dimensions"); color: view.theme.textMuted; font.pixelSize: 12 }
                     Label {
                         text: (view.selectionInfo && view.selectionInfo.width)
                               ? (view.selectionInfo.width + " × " + view.selectionInfo.height)
@@ -696,7 +699,7 @@ Item {
                         color: view.theme.text
                     }
 
-                    Label { text: "Modified"; color: view.theme.textMuted; font.pixelSize: 12 }
+                    Label { text: qsTr("Modified"); color: view.theme.textMuted; font.pixelSize: 12 }
                     Label {
                         text: view.selectionInfo
                               ? view.theme.formatDate(view.selectionInfo.modified) : "—"
@@ -707,7 +710,7 @@ Item {
                 }
 
                 Label {
-                    text: "Path"
+                    text: qsTr("Path")
                     color: view.theme.textMuted
                     font.pixelSize: 12
                 }
@@ -913,7 +916,7 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
-            text: "Open"
+            text: qsTr("Open")
             icon.name: "document-open-symbolic"
             onTriggered: {
                 if (view.menuIsDir) {
@@ -926,50 +929,51 @@ Item {
             }
         }
         MenuItem {
-            text: "Edit"
+            text: qsTr("Edit")
             icon.name: "document-edit-symbolic"
             enabled: !view.menuIsDir
             onTriggered: {
-                view.command({ type: "select", paths: [view.menuPath] });
-                view.command({ type: "set_workspace", workspace: "editor" });
+                // One batch: dispatching them back to back from this handler
+                // dropped `editor_open` (see `Main.sendSequence`).
+                view.editInEditor(view.menuPath);
             }
         }
         MenuItem {
-            text: "Open with…"
+            text: qsTr("Open with…")
             icon.name: "application-x-executable-symbolic"
             onTriggered: view.openWith(view.menuPath)
         }
         MenuSeparator {}
         MenuItem {
-            text: "Copy image content"
+            text: qsTr("Copy image content")
             icon.name: "edit-copy-symbolic"
             enabled: view.menuIsImage
             onTriggered: view.copyImage(view.menuPath)
         }
         MenuItem {
-            text: "Copy file path"
+            text: qsTr("Copy file path")
             icon.name: "edit-copy-symbolic"
             onTriggered: view.copyText(view.menuPath)
         }
         MenuSeparator {}
         MenuItem {
-            text: "Copy to…"
+            text: qsTr("Copy to…")
             icon.name: "folder-copy-symbolic"
             onTriggered: view.requestDestination("copy_to", [view.menuPath])
         }
         MenuItem {
-            text: "Move to…"
+            text: qsTr("Move to…")
             icon.name: "folder-move-symbolic"
             onTriggered: view.requestDestination("move_to", [view.menuPath])
         }
         MenuSeparator {}
         MenuItem {
-            text: "Move to trash"
+            text: qsTr("Move to trash")
             icon.name: "user-trash-symbolic"
             onTriggered: view.command({ type: "trash", paths: [view.menuPath] })
         }
         MenuItem {
-            text: "Delete permanently…"
+            text: qsTr("Delete permanently…")
             icon.name: "edit-delete-symbolic"
             onTriggered: view.requestDelete([view.menuPath])
         }
@@ -981,29 +985,29 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
-            text: "Open"
+            text: qsTr("Open")
             icon.name: "folder-open-symbolic"
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
         }
         MenuItem {
-            text: "Explore here"
+            text: qsTr("Explore here")
             icon.name: "folder-symbolic"
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
         }
         MenuItem {
-            text: "New folder…"
+            text: qsTr("New folder…")
             icon.name: "folder-new-symbolic"
             onTriggered: view.promptNewFolder(view.menuPath)
         }
         MenuSeparator {}
         MenuItem {
-            text: "Copy path"
+            text: qsTr("Copy path")
             icon.name: "edit-copy-symbolic"
             onTriggered: view.copyText(view.menuPath)
         }
         MenuItem {
             text: view.isFavorite(view.menuPath)
-                  ? "Remove from quick access" : "Add to quick access"
+                  ? qsTr("Remove from quick access") : qsTr("Add to quick access")
             icon.name: view.isFavorite(view.menuPath) ? "starred-symbolic" : "non-starred-symbolic"
             onTriggered: {
                 view.command(view.isFavorite(view.menuPath)
@@ -1013,23 +1017,23 @@ Item {
         }
         MenuSeparator {}
         MenuItem {
-            text: "Copy to…"
+            text: qsTr("Copy to…")
             icon.name: "folder-copy-symbolic"
             onTriggered: view.requestDestination("copy_to", [view.menuPath])
         }
         MenuItem {
-            text: "Move to…"
+            text: qsTr("Move to…")
             icon.name: "folder-move-symbolic"
             onTriggered: view.requestDestination("move_to", [view.menuPath])
         }
         MenuSeparator {}
         MenuItem {
-            text: "Move to trash"
+            text: qsTr("Move to trash")
             icon.name: "user-trash-symbolic"
             onTriggered: view.command({ type: "trash", paths: [view.menuPath] })
         }
         MenuItem {
-            text: "Delete permanently…"
+            text: qsTr("Delete permanently…")
             icon.name: "edit-delete-symbolic"
             onTriggered: view.requestDelete([view.menuPath])
         }
@@ -1041,18 +1045,18 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
-            text: "Open"
+            text: qsTr("Open")
             icon.name: "folder-open-symbolic"
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
         }
         MenuItem {
-            text: "Explore here"
+            text: qsTr("Explore here")
             icon.name: "folder-symbolic"
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
         }
         MenuSeparator {}
         MenuItem {
-            text: "Move up"
+            text: qsTr("Move up")
             icon.name: "go-up-symbolic"
             onTriggered: view.command({
                 type: "move_favorite",
@@ -1061,7 +1065,7 @@ Item {
             })
         }
         MenuItem {
-            text: "Move down"
+            text: qsTr("Move down")
             icon.name: "go-down-symbolic"
             onTriggered: view.command({
                 type: "move_favorite",
@@ -1071,7 +1075,7 @@ Item {
         }
         MenuSeparator {}
         MenuItem {
-            text: "Remove from quick access"
+            text: qsTr("Remove from quick access")
             icon.name: "list-remove-symbolic"
             onTriggered: view.command({
                 type: "remove_favorite",
@@ -1082,11 +1086,28 @@ Item {
 
     Dialog {
         id: newFolderDialog
-        title: "New folder"
+        title: qsTr("New folder")
         modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
         anchors.centerIn: Overlay.overlay
         width: 380
+        // Explicit buttons for the same reason as the settings dialog: Qt's own
+        // "OK"/"Cancel" are the system's translations, and the app's own
+        // catalogue travels with it.
+        footer: DialogButtonBox {
+            alignment: Qt.AlignRight
+            Button {
+                text: qsTr("Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                onClicked: newFolderDialog.reject()
+            }
+            Button {
+                objectName: "newFolderCreate"
+                text: qsTr("Create")
+                highlighted: true
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                onClicked: newFolderDialog.accept()
+            }
+        }
 
         onOpened: {
             nameField.text = "";
@@ -1106,13 +1127,13 @@ Item {
         contentItem: ColumnLayout {
             spacing: 8
             Label {
-                text: "Folder name"
+                text: qsTr("Folder name")
                 color: view.theme.textMuted
             }
             TextField {
                 id: nameField
                 Layout.fillWidth: true
-                placeholderText: "New folder"
+                placeholderText: qsTr("New folder")
                 onAccepted: newFolderDialog.accept()
             }
         }
@@ -1129,7 +1150,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.state.currentFolder
                 ToolTip.visible: hovered
-                ToolTip.text: "Go to parent folder"
+                ToolTip.text: qsTr("Go to parent folder")
                 onClicked: view.goUp()
             }
             ToolbarButton {
@@ -1137,7 +1158,7 @@ Item {
                 icon.name: "view-refresh-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Refresh"
+                ToolTip.text: qsTr("Refresh")
                 onClicked: view.command({ type: "refresh" })
             }
             ToolbarButton {
@@ -1146,7 +1167,7 @@ Item {
                 icon.name: "folder-open-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Open folder…"
+                ToolTip.text: qsTr("Open folder…")
                 // The dialog lives in the shell, like "Open folder" in the menu,
                 // and the chosen folder re-roots the tree (open_folder).
                 onClicked: view.requestOpenFolder()
@@ -1156,7 +1177,7 @@ Item {
                 icon.name: "folder-new-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "New folder"
+                ToolTip.text: qsTr("New folder")
                 onClicked: view.promptNewFolder(view.state.currentFolder)
             }
             ToolbarSeparator { theme: view.theme }
@@ -1167,7 +1188,7 @@ Item {
                 icon.name: "sidebar-show-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Toggle quick access and folder tree"
+                ToolTip.text: qsTr("Toggle quick access and folder tree")
                 onClicked: view.command({ type: "toggle_left_panel" })
             }
             ToolbarButton {
@@ -1177,7 +1198,7 @@ Item {
                 icon.name: "sidebar-show-right-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: "Toggle preview and metadata panel"
+                ToolTip.text: qsTr("Toggle preview and metadata panel")
                 onClicked: view.command({ type: "toggle_right_panel" })
             }
         }

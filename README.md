@@ -38,6 +38,20 @@ Read `AGENTS.md` first, then:
 - `docs/M1-REPORT.md` — desktop shell evidence and known gaps
 - `docs/adr/` — recorded decisions
 
+## Working with an agent
+
+The repository is wired for [OpenCode](https://opencode.ai):
+
+- `AGENTS.md` — the rulebook, loaded automatically (the only instructions file
+  OpenCode V2 reads; there is no `CLAUDE.md`).
+- `opencode.json` — pins `docs/WORKFLOW.md` and `docs/SESSION-STATE.md` as
+  always-on instructions and refuses tool edits under `build/` and `target/`.
+- `.opencode/skills/` — `real-window-verification` (build, launch, evidence,
+  mutation checks), `qt-quick-pitfalls` (QML traps) and `cxx-qt` (the Rust ↔ Qt
+  bridge), loaded on demand.
+- `.opencode/commands/` — `/doctor`, `/rebuild`, `/test`, `/run`, `/logs`,
+  `/verify`, `/handoff`, all thin prompts over `just`.
+
 ## Identity
 
 | | Dev build | Production build |

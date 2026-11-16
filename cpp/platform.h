@@ -7,6 +7,10 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+namespace kogaview::i18n {
+QString translate(const QString& locale, const char* source);
+}
+
 class QTimer;
 class QUrl;
 
@@ -55,6 +59,24 @@ public:
   /// measurement happens here, where it is a plain computation with no binding
   /// involved, and QML only receives the numbers.
   Q_INVOKABLE QVariantList textWidths(const QStringList& labels, const QFont& font);
+
+  /// File-dialog filter for the image formats Core can decode
+  /// (`kogaview_protocol::IMAGE_EXTENSIONS`). One definition for every chooser.
+  Q_INVOKABLE QString imageNameFilter() const;
+
+  /// "Name (*.png)" entries a save dialog offers, in the order `SAVE_FORMATS`
+  /// declares them, translated like the rest of the UI.
+  Q_INVOKABLE QStringList saveNameFilters() const;
+
+  /// The locale the interface is in, for the labels this helper spells itself:
+  /// `KOGAVIEW_UI_LANG`, else the installed translator, else empty (the
+  /// desktop language, whose strings are English).
+  QString interfaceLocale() const;
+
+  /// The languages the interface can be shown in: `system`, `en`, `vi`. The
+  /// labels are in the target language on purpose — a language picker you can
+  /// only read in the language you do not speak yet is useless.
+  Q_INVOKABLE QVariantList languages() const;
 
 signals:
   void filesSelected(const QStringList& paths);

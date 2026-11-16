@@ -10,7 +10,10 @@
 // `angleDelta`.
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
 #include <QPointingDevice>
@@ -18,8 +21,12 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
+
+#include <cmath>
 
 #include "stubthumbnailcache.h"
 
@@ -364,11 +371,48 @@ private slots:
     // A notch *down* is "towards the user": the strip advances to the next
     // images, the direction the grid scrolls.
     injectWheel(mouseDevice(), over, QPoint(0, 0), QPoint(0, -120));
+    // Step the animation frame by frame and sample `contentX` from inside the
+    // frame, where the `NumberAnimation` really drives it: a busy loop that only
+    // spins `processEvents` renders no animation frames. A jump reports the
+    // destination on the first frame; a glide is short of it and then settles.
+    struct Sample { qreal first; qreal last; };
+    auto sampleGlide = [strip]() {
+      Sample out { -1.0, -1.0 };
+      QEventLoop loop;
+      QElapsedTimer clock;
+      clock.start();
+      QTimer tick;
+      tick.setInterval(8);
+      QObject::connect(&tick, &QTimer::timeout, &loop, [&]() {
+        const qreal now = strip->property("contentX").toReal();
+        if (out.first < 0 && now > 0) {
+          out.first = now;
+        }
+        out.last = now;
+        if (clock.elapsed() > 250) {
+          loop.quit();
+        }
+      });
+      tick.start();
+      loop.exec();
+      return out;
+    };
+    const Sample down = sampleGlide();
+    QVERIFY2(down.first >= 0, "a vertical wheel over the filmstrip did not move it");
     QTRY_VERIFY2(strip->property("contentX").toReal() > 0,
                  "a vertical wheel over the filmstrip did not scroll it");
     const qreal afterOneNotch = strip->property("contentX").toReal();
     QVERIFY2(afterOneNotch >= 78,
              qPrintable(QStringLiteral("one notch moved only %1 px").arg(afterOneNotch)));
+    // The first frame of the movement was short of the destination: the strip
+    // glided (a jump would report the destination on the first frame) and the
+    // animation then settled instead of running away.
+    QVERIFY2(down.first < afterOneNotch,
+             qPrintable(QStringLiteral("the strip jumped to %1 px on the first frame instead of "
+                                       "gliding from %2")
+                          .arg(afterOneNotch)
+                          .arg(down.first)));
+    QTRY_COMPARE(strip->property("contentX").toReal(), afterOneNotch);
 
     // A notch *up* goes back towards the first images. Without this half, a
     // handler that ignores the sign would still pass while scrolling the wrong
@@ -379,6 +423,41 @@ private slots:
 
     // And the strip scrolls instead of zooming the canvas underneath.
     QCOMPARE(zoom(), zoomBefore);
+  }
+
+  /// Two notches in quick succession must move the strip by two steps.
+  ///
+  /// The strip glides, so the second notch usually arrives while the first
+  /// animation is still running. If each notch measured from the *animated*
+  /// position instead of the pending target, the travel still owed by the first
+  /// notch would be dropped and a fast wheel spin would crawl.
+  void twoQuickNotchesAddUp()
+  {
+    QStringList images;
+    for (int index = 0; index < 40; ++index) {
+      images.append(m_fixtures.path() + QStringLiteral("/strip-%1.png").arg(index));
+    }
+    m_viewer->setProperty("viewerImages", images);
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    m_viewer->setProperty("state", state);
+
+    QQuickItem* strip = item("viewerFilmstrip");
+    QVERIFY2(strip != nullptr, "the viewer has no filmstrip");
+    QTRY_VERIFY2(strip->property("contentWidth").toReal() > strip->width(),
+                 "the filmstrip does not overflow, so the wheel cannot be measured");
+    QCOMPARE(strip->property("contentX").toReal(), 0.0);
+
+    const QPointF over = strip->mapToScene(QPointF(strip->width() / 2.0,
+                                                   strip->height() / 2.0));
+    injectWheel(mouseDevice(), over, QPoint(0, 0), QPoint(0, -120));
+    // Deliberately no waiting: the second notch lands mid-glide.
+    injectWheel(mouseDevice(), over, QPoint(0, 0), QPoint(0, -120));
+
+    // One notch is 504 px (two tile groups); two of them are 1008.
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 1008.0, 2000);
   }
 
   /// A touchpad reports `pixelDelta` rather than `angleDelta`, and the strip
@@ -411,10 +490,10 @@ private slots:
     // A finger moving down the pad reports a negative `y`: the strip advances,
     // exactly as it does for a notch down.
     injectWheel(touchpad, over, QPoint(0, -40), QPoint(0, 0));
-    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 40.0, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 80.0, 2000);
     // And a finger moving up reports a positive `y`, which goes back.
     injectWheel(touchpad, over, QPoint(0, 15), QPoint(0, 0));
-    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 25.0, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 50.0, 2000);
     QCOMPARE(zoom(), zoomBefore);
   }
 
@@ -638,6 +717,250 @@ private slots:
     QVERIFY2(zoom() > 0.6, "a mouse wheel must work with acceptedDevices=Mouse");
     delete mouse;
     delete touchpad;
+  }
+
+  // -------------------------------------------------------------- canvas menu
+  // Helpers, not test slots: the class's test methods all live under
+  // `private slots:`, so the section is closed and reopened around them.
+private:
+  /// The menu declared in the viewer, which is a `QObject` child of the root
+  /// item even though it draws in a window of its own.
+  QObject* canvasMenu() const { return object("viewerMenu"); }
+
+  /// The canvas menu's entry showing `text`, or nullptr.
+  QQuickItem* canvasEntry(const QString& text) const
+  {
+    QObject* menu = canvasMenu();
+    if (menu == nullptr) {
+      return nullptr;
+    }
+    const int count = menu->property("count").toInt();
+    for (int index = 0; index < count; ++index) {
+      QQuickItem* entry = nullptr;
+      QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                Q_ARG(int, index));
+      if (entry != nullptr && entry->property("text").toString() == text) {
+        return entry;
+      }
+    }
+    return nullptr;
+  }
+
+  QStringList canvasLabels() const
+  {
+    QStringList labels;
+    QObject* menu = canvasMenu();
+    const int count = menu->property("count").toInt();
+    for (int index = 0; index < count; ++index) {
+      QQuickItem* entry = nullptr;
+      QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                Q_ARG(int, index));
+      if (entry != nullptr && !entry->property("text").toString().isEmpty()) {
+        labels.append(entry->property("text").toString());
+      }
+    }
+    return labels;
+  }
+
+  void openCanvasMenu()
+  {
+    QObject* menu = canvasMenu();
+    QVERIFY2(menu != nullptr, "the viewer has no canvas menu");
+    QMetaObject::invokeMethod(menu, "popup");
+    QTRY_VERIFY2(menu->property("visible").toBool(), "the canvas menu did not open");
+  }
+
+private slots:
+  /// A right click in the viewing area opens the canvas menu.
+  ///
+  /// The event goes through the window like a real click, so it exercises the
+  /// `TapHandler` and not just the `Menu`: the handler is the part that can be
+  /// mis-wired (wrong button, attached to the wrong item, shadowed by the pan
+  /// handler).
+  void rightClickOnTheCanvasOpensTheMenu()
+  {
+    QObject* menu = canvasMenu();
+    QVERIFY2(menu != nullptr, "the viewer has no canvas menu");
+    QVERIFY2(!menu->property("visible").toBool(), "the canvas menu was open before the click");
+
+    const QPoint inWindow =
+      m_viewport->mapToScene(QPointF(m_viewport->width() / 2.0, m_viewport->height() / 2.0)).toPoint();
+    QTest::mouseClick(m_view, Qt::RightButton, Qt::NoModifier, inWindow);
+    QTRY_VERIFY2(menu->property("visible").toBool(),
+                 "a right click on the image did not open the canvas menu");
+    QMetaObject::invokeMethod(menu, "close");
+    QTRY_VERIFY(!menu->property("visible").toBool());
+
+    // The menu opens *at the click*, not wherever the pointer happens to be:
+    // `popup()` without arguments asks for the global cursor position, which a
+    // synthetic click (and some Wayland compositors) do not update. Clicked near
+    // the top-left so the menu fits on screen and Qt has no reason to flip it.
+    const QPointF corner = m_viewport->mapToScene(QPointF(80, 60));
+    QTest::mouseClick(m_view, Qt::RightButton, Qt::NoModifier, corner.toPoint());
+    QTRY_VERIFY2(menu->property("visible").toBool(),
+                 "the second right click did not reopen the canvas menu");
+    QVERIFY2(qAbs(menu->property("x").toReal() - 80) <= 2.0 &&
+               qAbs(menu->property("y").toReal() - 60) <= 2.0,
+             qPrintable(QStringLiteral("the menu opened at %1,%2 instead of the click at 80,60")
+                          .arg(menu->property("x").toReal())
+                          .arg(menu->property("y").toReal())));
+    QMetaObject::invokeMethod(menu, "close");
+    QTRY_VERIFY(!menu->property("visible").toBool());
+  }
+
+  /// With nothing on screen there is no image to act on, so the menu stays shut
+  /// instead of offering a list of disabled entries.
+  void rightClickDoesNothingWithoutAnImage()
+  {
+    m_viewer->setProperty("state", QVariantMap());
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("currentPath").toString(), QString());
+
+    const QPoint inWindow =
+      m_viewport->mapToScene(QPointF(m_viewport->width() / 2.0, m_viewport->height() / 2.0)).toPoint();
+    QTest::mouseClick(m_view, Qt::RightButton, Qt::NoModifier, inWindow);
+    QTest::qWait(200);
+    QVERIFY2(!canvasMenu()->property("visible").toBool(),
+             "the canvas menu opened although no image is shown");
+  }
+
+  /// The menu offers the file actions the browser's file menu offers, plus the
+  /// viewer's own zoom/rotation, and every label it shows is one the theme
+  /// measures — otherwise the shell's width calculation is sized from an
+  /// incomplete list and the entry is clipped.
+  void theCanvasMenuOffersTheImagesActions()
+  {
+    openCanvasMenu();
+    const QStringList labels = canvasLabels();
+    for (const QString& expected :
+         { QStringLiteral("Edit"), QStringLiteral("Open with…"),
+           QStringLiteral("Copy image content"), QStringLiteral("Copy file path"),
+           QStringLiteral("Copy to…"), QStringLiteral("Move to…"),
+           QStringLiteral("Move to trash"), QStringLiteral("Delete permanently…"),
+           QStringLiteral("Fit to window"), QStringLiteral("Actual size"),
+           QStringLiteral("Rotate left"), QStringLiteral("Rotate right") }) {
+      QVERIFY2(labels.contains(expected),
+               qPrintable(QStringLiteral("the canvas menu has no \"%1\" entry").arg(expected)));
+    }
+
+    QObject* theme = m_viewer->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    QStringList catalogue;
+    for (const QVariant& label : theme->property("menuEntryLabels").value<QVariantList>()) {
+      catalogue.append(label.toString());
+    }
+    for (const QString& label : labels) {
+      QVERIFY2(catalogue.contains(label),
+               qPrintable(QStringLiteral("the canvas menu shows \"%1\", which "
+                                         "Theme.menuEntryLabels does not measure")
+                            .arg(label)));
+    }
+
+    // The widths `Main.qml` measures are what the menu is sized from: with them
+    // applied it is no wider than the widest catalogue label needs.
+    const qreal minimum = theme->property("menuMinimumWidth").toReal();
+    const QFontMetricsF metrics(QGuiApplication::font());
+    qreal widest = 0;
+    for (const QVariant& label : theme->property("menuEntryLabels").value<QVariantList>()) {
+      widest = qMax(widest, metrics.horizontalAdvance(label.toString()));
+    }
+    const qreal floor = qMax(minimum, std::ceil(widest) + 12);
+    QVERIFY2(canvasMenu()->property("width").toReal() <= floor,
+             qPrintable(QStringLiteral("the canvas menu is %1 px; the measured labels need at "
+                                       "most %2 px")
+                          .arg(canvasMenu()->property("width").toReal())
+                          .arg(floor)));
+    QMetaObject::invokeMethod(canvasMenu(), "close");
+  }
+
+  /// Each entry does what its label says: the file actions emit the command or
+  /// shell request for *this* image, and the presentation entries move the
+  /// viewer's own state.
+  void theCanvasMenuEntriesActOnTheImage()
+  {
+    const QString path = m_viewer->property("currentPath").toString();
+    QCOMPARE(path, m_landscape);
+
+    QSignalSpy commands(m_viewer, SIGNAL(command(QVariant)));
+    QSignalSpy copyImage(m_viewer, SIGNAL(copyImage(QString)));
+    QSignalSpy copyText(m_viewer, SIGNAL(copyText(QString)));
+    QSignalSpy openWith(m_viewer, SIGNAL(openWith(QString)));
+    QSignalSpy editInEditor(m_viewer, SIGNAL(editInEditor(QString)));
+    QSignalSpy destinations(m_viewer, SIGNAL(requestDestination(QString, QVariant)));
+    QSignalSpy deletes(m_viewer, SIGNAL(requestDelete(QVariant)));
+
+    const auto activate = [this](const QString& label) {
+      QQuickItem* entry = canvasEntry(label);
+      QVERIFY2(entry != nullptr, qPrintable(QStringLiteral("no \"%1\" entry").arg(label)));
+      QVERIFY2(entry->isEnabled(), qPrintable(QStringLiteral("\"%1\" is disabled").arg(label)));
+      // `trigger()` is not invokable through the meta-object; `click()` is, and
+      // it goes through the same `onTriggered` handler a real click uses.
+      QVERIFY(QMetaObject::invokeMethod(entry, "click"));
+    };
+
+    openCanvasMenu();
+    activate(QStringLiteral("Edit"));
+    // The view asks the shell to edit this image; the shell batches select +
+    // set_workspace + editor_open (`Main.qml`'s `onEditInEditor`). Emitting the
+    // three commands from the menu handler itself dropped one of them, and the
+    // batching is what that fixed — so the view is asserted on the request.
+    QCOMPARE(editInEditor.count(), 1);
+    QCOMPARE(editInEditor.at(0).at(0).toString(), path);
+    QCOMPARE(commands.count(), 0);
+    commands.clear();
+
+    activate(QStringLiteral("Move to trash"));
+    QCOMPARE(commands.count(), 1);
+    QCOMPARE(commands.at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("trash"));
+    QCOMPARE(commands.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ path });
+    commands.clear();
+
+    activate(QStringLiteral("Copy image content"));
+    QCOMPARE(copyImage.count(), 1);
+    QCOMPARE(copyImage.at(0).at(0).toString(), path);
+
+    activate(QStringLiteral("Copy file path"));
+    QCOMPARE(copyText.count(), 1);
+    QCOMPARE(copyText.at(0).at(0).toString(), path);
+
+    activate(QStringLiteral("Open with…"));
+    QCOMPARE(openWith.count(), 1);
+    QCOMPARE(openWith.at(0).at(0).toString(), path);
+
+    activate(QStringLiteral("Copy to…"));
+    QCOMPARE(destinations.count(), 1);
+    QCOMPARE(destinations.at(0).at(0).toString(), QStringLiteral("copy_to"));
+    QCOMPARE(destinations.at(0).at(1).toStringList(), QStringList{ path });
+
+    activate(QStringLiteral("Move to…"));
+    QCOMPARE(destinations.count(), 2);
+    QCOMPARE(destinations.at(1).at(0).toString(), QStringLiteral("move_to"));
+
+    activate(QStringLiteral("Delete permanently…"));
+    QCOMPARE(deletes.count(), 1);
+    QCOMPARE(deletes.at(0).at(0).toStringList(), QStringList{ path });
+
+    // The presentation entries are Qt-owned state, so they change the viewer
+    // directly rather than sending a command.
+    activate(QStringLiteral("Rotate right"));
+    QCOMPARE(m_viewer->property("rotationAngle").toInt(), 90);
+    activate(QStringLiteral("Rotate left"));
+    QCOMPARE(m_viewer->property("rotationAngle").toInt(), 0);
+
+    m_viewer->setProperty("zoom", 2.0);
+    QCoreApplication::processEvents();
+    activate(QStringLiteral("Fit to window"));
+    const qreal expected = qMin(m_viewport->width() / m_canvas->width(),
+                                m_viewport->height() / m_canvas->height()) * 0.98;
+    QVERIFY2(qAbs(zoom() - expected) < 0.01,
+             qPrintable(QStringLiteral("fit left the zoom at %1, expected %2")
+                          .arg(zoom())
+                          .arg(expected)));
+    activate(QStringLiteral("Actual size"));
+    QCOMPARE(zoom(), 1.0);
+    QCOMPARE(commands.count(), 0);
   }
 };
 

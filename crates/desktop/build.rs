@@ -16,6 +16,7 @@ fn main() {
         "qml/BrowserView.qml",
         "qml/Viewer.qml",
         "qml/EditorView.qml",
+        "qml/SettingsDialog.qml",
     ]))
     .qt_module("Core")
     .qt_module("Gui")

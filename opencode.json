@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "docs/WORKFLOW.md",
+    "docs/SESSION-STATE.md"
+  ],
+  "permissions": [
+    { "action": "edit", "resource": "build/*", "effect": "deny" },
+    { "action": "edit", "resource": "target/*", "effect": "deny" }
+  ]
+}

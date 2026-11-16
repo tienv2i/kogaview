@@ -6,6 +6,7 @@
 pub mod build_info;
 pub mod config;
 pub mod core;
+pub mod editor;
 pub mod identity;
 pub mod journal;
 pub mod logging;

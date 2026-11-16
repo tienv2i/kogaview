@@ -44,16 +44,34 @@ QtObject {
                         Math.ceil(widest + theme.menuEntryGutter + theme.menuEntryPostText))
     }
 
-    /// Every label a menu in this app can show. The set is fixed so the menu keeps
-    /// one width from one right click to the next instead of resizing per entry.
+    /// Every label a menu in this app can show, in the interface language. The
+    /// set is fixed so the menu keeps one width from one right click to the next
+    /// instead of resizing per entry.
+    ///
+    /// The literals are written inside `qsTr` here, one per line, so `lupdate`
+    /// extracts them into the `Theme` context: a loop over a list of variables
+    /// is invisible to it, and the menus stayed English until this list did.
+    /// Measuring the *translated* labels is deliberate — a menu has to fit what
+    /// it draws, and `Main.qml` re-measures when the language changes.
     readonly property var menuEntryLabels: [
-        "Open", "Edit", "Open with…", "Copy image content", "Copy file path",
-        "Copy to…", "Move to…", "Move to trash", "Delete permanently…",
-        "Explore here", "New folder…", "Copy path", "Add to quick access",
-        "Remove from quick access", "Move up", "Move down",
-        "Open file…", "Open folder…", "Switch to light mode",
-        "Switch to dark mode", "Exit"
+        qsTr("Open"), qsTr("Edit"), qsTr("Open with…"),
+        qsTr("Copy image content"), qsTr("Copy file path"),
+        qsTr("Copy to…"), qsTr("Move to…"), qsTr("Move to trash"),
+        qsTr("Delete permanently…"),
+        qsTr("Explore here"), qsTr("New folder…"), qsTr("Copy path"),
+        qsTr("Add to quick access"),
+        qsTr("Remove from quick access"), qsTr("Move up"), qsTr("Move down"),
+        qsTr("Open file…"), qsTr("Open folder…"), qsTr("Switch to light mode"),
+        qsTr("Switch to dark mode"), qsTr("Settings…"), qsTr("Exit"),
+        qsTr("Fit to window"), qsTr("Actual size"), qsTr("Rotate left"),
+        qsTr("Rotate right"),
+        qsTr("Flip horizontal"), qsTr("Flip vertical"), qsTr("Reset edits"),
+        qsTr("Close editor")
     ]
+    /// The labels the menus are built from (`Main.qml`, the Editor's canvas
+    /// menu). Same list, kept as a name of its own so the views read
+    /// "what to show" and the shell reads "what to measure".
+    readonly property var menuEntries: menuEntryLabels
     /// Pixels each of `menuEntryLabels` needs, measured once by the shell with the
     /// window font the entries are drawn in (`Main.qml` fills this in).
     property var menuLabelWidths: []

@@ -1,0 +1,17 @@
+# Qt Linguist project file. It names the QML sources so `lupdate` can refresh
+# `kogaview_vi.ts` without a full Qt project build:
+#
+#   lupdate i18n/kogaview_ts.pro
+#
+# `just build` then runs `lrelease` on the result and compiles the `.qm` into
+# the binary under `:/i18n/` (see the top-level `CMakeLists.txt`).
+TEMPLATE = app
+LANGUAGE = C++
+SOURCES = ../crates/desktop/qml/Main.qml \
+          ../crates/desktop/qml/BrowserView.qml \
+          ../crates/desktop/qml/Viewer.qml \
+          ../crates/desktop/qml/EditorView.qml \
+          ../crates/desktop/qml/SettingsDialog.qml \
+          ../crates/desktop/qml/WorkspaceSwitcher.qml \
+          ../crates/desktop/qml/Theme.qml
+TRANSLATIONS = kogaview_vi.ts

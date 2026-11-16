@@ -3,7 +3,7 @@
 //! The UI renders this snapshot; it never mutates it. Every field here is
 //! produced by Core after a command or a completed background task.
 
-use kogaview_protocol::{Theme, Workspace};
+use kogaview_protocol::{Language, Theme, Workspace};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -37,12 +37,50 @@ pub struct SelectionInfo {
     pub height: Option<u32>,
 }
 
+/// What the Editor paints, projected from the Core-owned working document.
+///
+/// The pixels stay in Core; this is the serializable description the UI needs:
+/// identity, size, whether undo/redo can do anything, the applied-operation
+/// labels, and where the latest preview PNG lives. `previewRevision` lets the
+/// view tell a stale image from the current one; `rendering` is true while a
+/// worker is still encoding the preview for the newest edit.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorState {
+    /// The source image; never written to.
+    pub path: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub modified: bool,
+    /// Labels of the applied operations, oldest first.
+    pub history: Vec<String>,
+    pub redo_count: usize,
+    pub preview_path: Option<String>,
+    pub preview_revision: u64,
+    pub rendering: bool,
+    /// Where saving would write. It follows the source until a save-as or a
+    /// save to another file moves it.
+    pub save_path: String,
+    /// True when the working pixels are on disk at `save_path`.
+    pub saved: bool,
+    /// The save style the file list advertises (`.jpg`, `.png`), derived from
+    /// the save path's extension.
+    pub format: String,
+    /// True while the pixels are being encoded and written on a worker.
+    pub saving: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiState {
     pub revision: u64,
     pub workspace: Workspace,
     pub theme: Theme,
+    /// The interface language the settings ask for (`system` by default).
+    pub language: Language,
     pub current_folder: Option<String>,
     /// Folder the explorer tree is rooted at. It is kept apart from
     /// `current_folder`: the tree may stay at a parent while the list shows a
@@ -62,9 +100,16 @@ pub struct UiState {
     pub left_panel: bool,
     pub right_panel: bool,
     pub filmstrip: bool,
+    /// The two settings the Settings dialog edits besides the theme. They are
+    /// published so the dialog opens on what is stored, not on a default.
+    pub remember_last_folder: bool,
+    pub background_thumbnails: bool,
     pub viewer_images: Vec<String>,
     pub viewer_index: Option<usize>,
     pub viewer_path: Option<String>,
+    /// The Editor's working document, or `None` when nothing is open. Pixels
+    /// live in Core's `EditorDocument`; this is the published description.
+    pub editor: Option<EditorState>,
     pub busy: bool,
     pub status: String,
     pub config_path: String,
@@ -76,16 +121,20 @@ pub struct UiState {
 impl UiState {
     pub fn new(
         theme: Theme,
+        language: Language,
         favorites: Vec<String>,
         left_panel: bool,
         right_panel: bool,
         filmstrip: bool,
+        remember_last_folder: bool,
+        background_thumbnails: bool,
         config_path: String,
     ) -> Self {
         Self {
             revision: 0,
             workspace: Workspace::Browser,
             theme,
+            language,
             current_folder: None,
             root_folder: None,
             tree_revision: 0,
@@ -97,9 +146,12 @@ impl UiState {
             left_panel,
             right_panel,
             filmstrip,
+            remember_last_folder,
+            background_thumbnails,
             viewer_images: Vec::new(),
             viewer_index: None,
             viewer_path: None,
+            editor: None,
             busy: false,
             status: "Ready".to_owned(),
             config_path,
@@ -126,6 +178,7 @@ impl UiState {
             revision: self.revision,
             workspace: &self.workspace,
             theme: &self.theme,
+            language: &self.language,
             current_folder: &self.current_folder,
             root_folder: &self.root_folder,
             tree_revision: self.tree_revision,
@@ -136,8 +189,11 @@ impl UiState {
             left_panel: self.left_panel,
             right_panel: self.right_panel,
             filmstrip: self.filmstrip,
+            remember_last_folder: self.remember_last_folder,
+            background_thumbnails: self.background_thumbnails,
             viewer_index: self.viewer_index,
             viewer_path: &self.viewer_path,
+            editor: &self.editor,
             busy: self.busy,
             status: &self.status,
             config_path: &self.config_path,
@@ -171,6 +227,7 @@ pub struct StateMeta<'a> {
     pub revision: u64,
     pub workspace: &'a Workspace,
     pub theme: &'a Theme,
+    pub language: &'a Language,
     pub current_folder: &'a Option<String>,
     pub root_folder: &'a Option<String>,
     pub tree_revision: u64,
@@ -181,8 +238,11 @@ pub struct StateMeta<'a> {
     pub left_panel: bool,
     pub right_panel: bool,
     pub filmstrip: bool,
+    pub remember_last_folder: bool,
+    pub background_thumbnails: bool,
     pub viewer_index: Option<usize>,
     pub viewer_path: &'a Option<String>,
+    pub editor: &'a Option<EditorState>,
     pub busy: bool,
     pub status: &'a str,
     pub config_path: &'a str,

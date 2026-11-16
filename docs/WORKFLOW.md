@@ -1,5 +1,17 @@
 # Engineering, Debugging and Verification Workflow
 
+This document is the operational companion to `AGENTS.md`: it defines how to
+investigate and verify a change, while `AGENTS.md` remains the authority for
+architecture and non-negotiable ownership rules.
+
+## Before editing
+
+1. Run `just doctor` and `git status --short`; confirm the dev/prod identity and
+   that no stale binary or unrelated change is being used as evidence.
+2. Read the relevant requirement documents and write down the expected visible
+   behavior, state delta, command (if any), and real output.
+3. Choose the smallest vertical slice and the narrowest test target.
+
 ## Default delivery cycle
 1. Define expected visible behavior, state effect, real output and command contract.
 2. Implement a vertical slice, build, launch desktop app and review startup logs.

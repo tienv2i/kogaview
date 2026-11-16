@@ -16,6 +16,9 @@ import QtQuick
 /// smooth two-finger scrolling keeps its 1:1 feel.
 WheelHandler {
     id: scroller
+    // Wayland touchpads are delivered as non-mouse pointing devices. The
+    // default Mouse-only filter makes fast two-finger gestures disappear.
+    acceptedDevices: PointerDevice.AllDevices
 
     /// The view to scroll. Set it explicitly — a handler cannot infer it, and a
     /// silent default would be a scroll wheel that does nothing.
@@ -45,10 +48,15 @@ WheelHandler {
 
     onWheel: function(event) {
         if (!scroller.view) return;
+        // Claim the event before changing the Flickable. Otherwise Qt Quick
+        // may also apply its own wheel step after this handler, producing an
+        // overscroll frame (the black band above the first grid row).
+        event.accepted = true;
         if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
-            // Continuous device: use the pixels the touchpad reported.
-            scroller.scrollBy(event.pixelDelta.x, event.pixelDelta.y);
-            event.accepted = true;
+            // Continuous device (touchpad): the pixels it reported, scaled by
+            // two so a two-finger gesture keeps up with a modern desktop list.
+            // This path is not quantized, so it stays smooth.
+            scroller.scrollBy(event.pixelDelta.x * 2, event.pixelDelta.y * 2);
             return;
         }
         // 120 eighths of a degree is one notch; positive is "away from the user",
@@ -58,12 +66,17 @@ WheelHandler {
         if (notches === 0) {
             return;
         }
-        var distance = notches * scroller.notchStep;
+        // Three row-sized steps per notch, so a physical mouse wheel moves a
+        // dense Browser grid at a usable pace. Touchpad pixel deltas take the
+        // continuous path above and are not multiplied by this.
+        var distance = notches * scroller.notchStep * 3;
         if (scroller.horizontal) {
             scroller.scrollBy(distance, 0);
         } else {
             scroller.scrollBy(0, distance);
         }
-        event.accepted = true;
+        if (scroller.view.returnToBounds) {
+            scroller.view.returnToBounds();
+        }
     }
 }

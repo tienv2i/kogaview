@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "translations.h"
 
 #include <QClipboard>
 #include <QCoreApplication>
@@ -425,6 +426,72 @@ QVariantList PlatformHelper::textWidths(const QStringList& labels, const QFont& 
     widths.append(metrics.horizontalAdvance(label));
   }
   return widths;
+}
+
+QString PlatformHelper::imageNameFilter() const
+{
+  // Built from the protocol's list so the dialog and the browser agree.
+  // The extension list is the same in every language (an extension is not a
+  // word), so it is spelled here rather than handed through CXX-Qt.
+  static const char* const extensions[] = {
+    "jpg", "jpeg", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif",
+    "heic", "heif", "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm",
+    "qoi", "tga", "ff", nullptr,
+  };
+  QStringList patterns;
+  for (const char* const* extension = extensions; *extension != nullptr; ++extension) {
+    patterns << QStringLiteral("*.") + QString::fromLatin1(*extension);
+  }
+  return kogaview::i18n::translate(interfaceLocale(), "Images") + QStringLiteral(" (")
+    + patterns.join(QLatin1Char(' ')) + QLatin1Char(')');
+}
+
+QStringList PlatformHelper::saveNameFilters() const
+{
+  const QString locale = interfaceLocale();
+  auto label = [&locale](const char* name) {
+    return kogaview::i18n::translate(locale, name);
+  };
+  return { label("PNG image") + QStringLiteral(" (*.png)"),
+           label("JPEG image") + QStringLiteral(" (*.jpg *.jpeg)"),
+           label("WebP image") + QStringLiteral(" (*.webp)"),
+           label("TIFF image") + QStringLiteral(" (*.tiff)"),
+           label("GIF image") + QStringLiteral(" (*.gif)"),
+           label("BMP image") + QStringLiteral(" (*.bmp)"),
+           label("TGA image") + QStringLiteral(" (*.tga)"),
+           label("QOI image") + QStringLiteral(" (*.qoi)") };
+}
+
+QString PlatformHelper::interfaceLocale() const
+{
+  // `KOGAVIEW_UI_LANG` is the harness override, exactly as `main.cpp` reads it;
+  // otherwise the translator that is installed names the locale.
+  const QString override = qEnvironmentVariable("KOGAVIEW_UI_LANG");
+  if (!override.isEmpty()) {
+    return override == QLatin1String("system") ? QString() : override;
+  }
+  for (QObject* child : QCoreApplication::instance()->children()) {
+    if (child->property("kogaviewLocale").isValid()) {
+      return child->property("kogaviewLocale").toString();
+    }
+  }
+  return QString();
+}
+
+QVariantList PlatformHelper::languages() const
+{
+  QVariantList out;
+  auto add = [&out](const QString& code, const QString& english, const QString& vietnamese) {
+    QVariantMap entry;
+    entry.insert(QStringLiteral("code"), code);
+    entry.insert(QStringLiteral("english"), english);
+    entry.insert(QStringLiteral("vietnamese"), vietnamese);
+    out.append(entry);
+  };
+  add(QStringLiteral("system"), QStringLiteral("System language"), QStringLiteral("Theo hệ thống"));
+  add(QStringLiteral("en"), QStringLiteral("English"), QStringLiteral("Tiếng Anh"));
+  add(QStringLiteral("vi"), QStringLiteral("Vietnamese"), QStringLiteral("Tiếng Việt"));
+  return out;
 }
 
 bool PlatformHelper::openUriWithPortal(const QUrl& url, bool directory)

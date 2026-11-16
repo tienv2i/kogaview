@@ -31,6 +31,20 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
   call per suite — worth `~3 s` (`14.7 s → 11.5 s`) on a run that rebuilds all
   three.
 
+## Translations in the build
+- `i18n/kogaview_vi.ts` is compiled by `lrelease` into
+  `build/dev/i18n/kogaview_translations.rcc` (a generated `.qrc` plus
+  `rcc --binary`, because Qt 6's `rcc` refuses a bare `.qm` argument) and
+  registered at `:/i18n/` by `cpp/language.cpp`. A build without `lrelease`
+  still links and runs: every string stays its English source text.
+- `lrelease`/`lupdate` are found by `scripts/find_lrelease.py`; a PySide6 copy
+  works, e.g. `PATH=/tmp/opencode/lrel/bin:$PATH just build`, or set
+  `KOGAVIEW_LRELEASE`.
+- `lupdate i18n/kogaview_ts.pro` refreshes the catalogue after QML string
+  changes; `just test translations` (part of the full gate) fails when the
+  catalogue and the C++ table in `cpp/translations.cpp` disagree or an entry is
+  unfinished.
+
 ## Isolation and identity
 - Dev app name `KogaView (Dev)`, production `KogaView`; distinct app IDs, config/data/cache, socket endpoints and database by default.
 - Version/build metadata: semantic version, git SHA, build profile, Qt version and protocol version.

@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kogaview_protocol::Theme;
+use kogaview_protocol::{Language, Theme};
 use serde::{Deserialize, Serialize};
 
 use crate::paths;
@@ -18,6 +18,9 @@ use crate::paths;
 #[serde(default)]
 pub struct Config {
     pub theme: Theme,
+    /// Interface language. `system` (the default) leaves the desktop locale in
+    /// charge.
+    pub language: Language,
     pub quick_access: Vec<String>,
     /// Folder the file list showed when the app last saved. Restored on the
     /// next start, independently from the explorer root below.
@@ -30,18 +33,23 @@ pub struct Config {
     pub left_panel: bool,
     pub right_panel: bool,
     pub filmstrip: bool,
+    pub remember_last_folder: bool,
+    pub background_thumbnails: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             theme: Theme::Dark,
+            language: Language::System,
             quick_access: default_quick_access(),
             last_folder: None,
             tree_root: None,
             left_panel: true,
             right_panel: true,
             filmstrip: true,
+            remember_last_folder: true,
+            background_thumbnails: true,
         }
     }
 }

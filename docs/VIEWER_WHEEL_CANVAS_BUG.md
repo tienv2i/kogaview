@@ -76,12 +76,12 @@ Khi đó:
 
 ## 3. Trạng thái trong codebase hiện tại
 
-- Bản sửa lỗi đã được áp dụng vào [crates/desktop/qml/Viewer.qml](crates/desktop/qml/Viewer.qml) mà không làm mất các thuộc tính debug (`objectName: "viewerViewport"`, `objectName: "viewerCanvas"`) của OpenCode.
+- Bản sửa lỗi đã được áp dụng vào [crates/desktop/qml/Viewer.qml](crates/desktop/qml/Viewer.qml) mà không làm mất các thuộc tính debug (`objectName: "viewerViewport"`, `objectName: "viewerCanvas"`) của phiên agent trước.
 - Cách kiểm chứng và các con số đo được ghi ở mục 4. Lưu ý: `NotifyPointerAxisDiscrete`
   của Mutter RemoteDesktop **không** dùng được để kiểm tra wheel (nó đến app dưới
   dạng pan), nên mọi kết quả ở mục 4 là sự kiện wheel được bơm trực tiếp với loại
   thiết bị touchpad/mouse khai báo tường minh, chưa phải gesture vật lý.
-- Chưa tạo git commit để không can thiệp hay gây xung đột với chu trình làm việc của OpenCode.
+- Chưa tạo git commit để không can thiệp hay gây xung đột với chu trình làm việc của phiên agent trước.
 
 ---
 

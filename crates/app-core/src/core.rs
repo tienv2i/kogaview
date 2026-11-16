@@ -13,16 +13,31 @@ use kogaview_protocol::{Command, Envelope, MoveDirection, ProtocolError, Query, 
 use serde_json::{json, Value};
 
 use crate::config::Config;
+use crate::editor::{self, EditOperation, EditorDocument, EditorTask};
 use crate::journal::{Journal, JournalEntry};
 use crate::ops;
 use crate::paths::AppPaths;
-use crate::state::{Crumb, FolderListing, SelectionInfo, UiState};
+use crate::state::{Crumb, EditorState, FolderListing, SelectionInfo, UiState};
 use crate::AppIdentity;
 
 struct ScanResult {
     generation: u64,
     folder: PathBuf,
     entries: Result<Vec<crate::state::Entry>, String>,
+}
+
+/// The dotted extension a path would save with, for the file list's label.
+fn save_format_label(path: &Path) -> String {
+    editor::SaveFormat::from_path(path)
+        .map(|format| format.label().to_owned())
+        .unwrap_or_else(|| ops::kind_label(path))
+}
+
+/// A save that finished on a worker.
+struct EditorSaveResult {
+    save: u64,
+    destination: PathBuf,
+    result: Result<(), String>,
 }
 
 struct OpResult {
@@ -43,6 +58,27 @@ pub struct Core {
     cancel_op: Option<Arc<AtomicBool>>,
     pending_viewer: Option<String>,
     pending_selection: Option<Vec<String>>,
+    /// The Editor's working document. Core owns the pixels; the UI only gets a
+    /// preview path, so no front end can mutate them without a command.
+    editor: Option<EditorDocument>,
+    /// Editor work runs on worker threads (decode, preview encode) and reports
+    /// through this one channel, so a preview can arrive after the command that
+    /// produced it already returned.
+    editor_tx: mpsc::Sender<EditorTask>,
+    editor_rx: Receiver<EditorTask>,
+    /// Bumped for every issued editor task; results from an older generation
+    /// are discarded so a slow open cannot overwrite a newer document.
+    editor_generation: u64,
+    editor_rendering: bool,
+    /// Preview PNG currently referenced by the UI. Replaced (and deleted) when
+    /// the next one is installed.
+    editor_preview_path: Option<PathBuf>,
+    /// True while a save is being encoded and written on a worker.
+    editor_saving: bool,
+    /// Bumped for every save, so a result for a superseded save is dropped.
+    editor_save_generation: u64,
+    /// The worker's answer for the save in flight.
+    pending_save: Option<Receiver<EditorSaveResult>>,
     /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
     /// listing on its own and only re-sends it when this changes, because it is
     /// the one part of the snapshot that grows with the folder.
@@ -61,12 +97,16 @@ impl Core {
 
         let journal = Journal::new(&paths.journal_dir);
         let config_path_label = config_path.to_string_lossy().into_owned();
+        let (editor_tx, editor_rx) = mpsc::channel();
         let state = UiState::new(
             config.theme,
+            config.language,
             config.quick_access.clone(),
             config.left_panel,
             config.right_panel,
             config.filmstrip,
+            config.remember_last_folder,
+            config.background_thumbnails,
             config_path_label,
         );
 
@@ -82,6 +122,15 @@ impl Core {
             cancel_op: None,
             pending_viewer: None,
             pending_selection: None,
+            editor: None,
+            editor_tx: editor_tx.clone(),
+            editor_rx,
+            editor_generation: 0,
+            editor_rendering: false,
+            editor_preview_path: None,
+            editor_saving: false,
+            editor_save_generation: 0,
+            pending_save: None,
             listing_epoch: 0,
         };
 
@@ -96,6 +145,12 @@ impl Core {
     /// `~/Pictures/Child` open comes back the same way instead of collapsing
     /// both into the deeper folder.
     fn restore_last_session(&mut self) {
+        // A session the user asked not to remember opens nothing, even if a
+        // previous run left folders in the file (`SetSettings` drops them, but a
+        // hand-edited or older config may still carry them).
+        if !self.config.remember_last_folder {
+            return;
+        }
         let saved_root = self.config.tree_root.clone();
         let saved_folder = self.config.last_folder.clone();
         let (root, folder) =
@@ -112,13 +167,7 @@ impl Core {
         self.start_scan(folder, false, true);
         // Persist what startup actually resolved, so a root derived from the
         // surviving folder is not re-derived (or lost) on every start.
-        if self.config.tree_root.as_deref() != Some(root_label.as_str())
-            || self.config.last_folder.as_deref() != Some(folder_label.as_str())
-        {
-            self.config.tree_root = Some(root_label);
-            self.config.last_folder = Some(folder_label);
-            self.save_config();
-        }
+        self.save_explorer_folders(root_label, folder_label);
     }
 
     /// Build a Core whose configuration, journal and state directories live in
@@ -140,12 +189,16 @@ impl Core {
             screenshot_dir: base.join("state/screenshots"),
         };
         let journal = Journal::new(&paths.journal_dir);
+        let (editor_tx, editor_rx) = mpsc::channel();
         let state = UiState::new(
             config.theme,
+            config.language,
             config.quick_access.clone(),
             config.left_panel,
             config.right_panel,
             config.filmstrip,
+            config.remember_last_folder,
+            config.background_thumbnails,
             config_path.to_string_lossy().into_owned(),
         );
         Self {
@@ -160,6 +213,15 @@ impl Core {
             cancel_op: None,
             pending_viewer: None,
             pending_selection: None,
+            editor: None,
+            editor_tx,
+            editor_rx,
+            editor_generation: 0,
+            editor_rendering: false,
+            editor_preview_path: None,
+            editor_saving: false,
+            editor_save_generation: 0,
+            pending_save: None,
             listing_epoch: 0,
         }
     }
@@ -347,6 +409,16 @@ impl Core {
     }
 
     /// Deliver completed background work. Returns true when state changed.
+    /// The configured interface language, as the settings store it.
+    pub fn language(&self) -> &'static str {
+        self.state.language.as_str()
+    }
+
+    /// True while a save is in flight, for the UI's busy indicator.
+    pub fn editor_saving(&self) -> bool {
+        self.editor_saving
+    }
+
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
 
@@ -392,6 +464,33 @@ impl Core {
             }
         }
 
+        // Editor workers report through one persistent channel. A preview is
+        // allowed to arrive after the command that produced it returned, which
+        // is why it needs its own poll branch and its own revision bump.
+        loop {
+            let task = match self.editor_rx.try_recv() {
+                Ok(task) => task,
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            };
+            changed |= self.apply_editor_task(task);
+        }
+
+        if let Some(receiver) = &self.pending_save {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.pending_save = None;
+                    changed |= self.apply_save_result(result);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.pending_save = None;
+                    self.editor_saving = false;
+                    self.state.status = "The save did not finish".to_owned();
+                    changed = true;
+                }
+            }
+        }
+
         if changed {
             self.state.bump();
         }
@@ -414,14 +513,58 @@ impl Core {
             }
             Command::SetWorkspace { workspace } => {
                 self.state.workspace = workspace;
-                if workspace == Workspace::Viewer {
-                    self.ensure_viewer_selection();
+                match workspace {
+                    Workspace::Viewer => self.ensure_viewer_selection(),
+                    // The Viewer and the Editor are one photograph seen two
+                    // ways: arriving at an empty Editor carries the image the
+                    // Viewer shows. A document the user already opened wins,
+                    // so returning from the Browser does not reload it.
+                    Workspace::Editor => self.link_viewer_into_editor(),
+                    Workspace::Browser => {}
+                }
+                // Leaving the Editor while a document is still open keeps the
+                // document (it is restored on return), but the status line
+                // describes what the workspace shows: "Editing …" would claim
+                // the Browser is the Editor.
+                if workspace != Workspace::Editor && self.editor.is_some() {
+                    self.state.status.clear();
                 }
                 Ok(None)
             }
             Command::SetTheme { theme } => {
                 self.set_theme(theme);
                 Ok(None)
+            }
+            Command::SetSettings {
+                theme,
+                remember_last_folder,
+                background_thumbnails,
+                language,
+            } => {
+                // `remember_last_folder` is what decides whether the explorer
+                // folders are written at all, so it is committed in one place:
+                // turning it on restores the folders this session showed, and
+                // turning it off stops the next navigation from saving them and
+                // drops the stale values the file may still hold.
+                self.config.theme = theme;
+                self.config.language = language;
+                self.config.remember_last_folder = remember_last_folder;
+                self.config.background_thumbnails = background_thumbnails;
+                self.state.theme = theme;
+                self.state.language = language;
+                self.state.remember_last_folder = remember_last_folder;
+                self.state.background_thumbnails = background_thumbnails;
+                self.remember_explorer_folders();
+                self.save_config();
+                self.state.bump();
+                Ok(Some("Settings saved".to_owned()))
+            }
+            Command::SetLanguage { language } => {
+                self.config.language = language;
+                self.state.language = language;
+                self.save_config();
+                self.state.bump();
+                Ok(Some(format!("Interface language: {}", language.as_str())))
             }
             Command::ToggleTheme => {
                 self.set_theme(self.config.theme.toggled());
@@ -460,6 +603,31 @@ impl Core {
             Command::ViewerNext => self.step_viewer(1),
             Command::ViewerPrevious => self.step_viewer(-1),
             Command::ViewerOpen { path } => self.open_viewer_image(&path),
+            Command::EditorOpen { path } => self.open_editor(&path),
+            Command::EditorResize { width, height } => {
+                self.editor_apply(EditOperation::Resize { width, height })
+            }
+            Command::EditorCrop {
+                x,
+                y,
+                width,
+                height,
+            } => self.editor_apply(EditOperation::Crop {
+                x,
+                y,
+                width,
+                height,
+            }),
+            Command::EditorRotate { degrees } => {
+                self.editor_apply(EditOperation::Rotate { degrees })
+            }
+            Command::EditorFlip { axis } => self.editor_apply(EditOperation::Flip { axis }),
+            Command::EditorSave => self.editor_save(None),
+            Command::EditorSaveAs { path } => self.editor_save(Some(&path)),
+            Command::EditorUndo => self.editor_step(true),
+            Command::EditorRedo => self.editor_step(false),
+            Command::EditorReset => self.editor_reset(),
+            Command::EditorClose => self.editor_close(),
             Command::CancelOperation => {
                 if let Some(cancel) = &self.cancel_op {
                     cancel.store(true, Ordering::SeqCst);
@@ -552,13 +720,7 @@ impl Core {
         // `Navigate` now has to persist too: it is the only command that moves
         // the folder the list shows. Only write when something really changed,
         // so a refresh or a repeated click does not rewrite the file.
-        let changed = self.config.tree_root.as_deref() != Some(root_label.as_str())
-            || self.config.last_folder.as_deref() != Some(folder_label.as_str());
-        self.config.tree_root = Some(root_label);
-        self.config.last_folder = Some(folder_label);
-        if changed {
-            self.save_config();
-        }
+        self.save_explorer_folders(root_label, folder_label);
 
         self.start_scan(path.clone(), true, false);
         Ok(Some(format!("Opened {}", path.display())))
@@ -798,6 +960,484 @@ impl Core {
         self.state.workspace = Workspace::Viewer;
         self.set_selection(vec![path]);
         Ok(None)
+    }
+
+    /// Load a source image into the Editor as a working document.
+    ///
+    /// The file is only read. Decoding and the first preview run on a worker
+    /// thread, so a large photo does not stall the window; the UI publishes a
+    /// spinner and the name until `apply_editor_task` installs the document.
+    fn open_editor(&mut self, path: &str) -> Result<Option<String>, ProtocolError> {
+        let source = ops::normalize_path(Path::new(path));
+        if !source.is_file() {
+            return Err(ProtocolError::new(
+                "not_found",
+                format!("{} is not a file", source.display()),
+            ));
+        }
+        if !ops::is_image_path(&source) {
+            return Err(ProtocolError::new(
+                "not_an_image",
+                format!("{} is not an image", source.display()),
+            ));
+        }
+        let path_label = source.to_string_lossy().into_owned();
+        let name = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path_label.clone());
+        let preview_dir = self.editor_preview_dir()?;
+        self.editor_generation += 1;
+        let generation = self.editor_generation;
+        let preview = preview_dir.join(format!("preview-{generation}.png"));
+
+        // A new document reuses the workspace: drop the old pixels and preview,
+        // and let an in-flight result for the old generation be discarded on
+        // arrival.
+        if let Some(previous) = self.editor_preview_path.take() {
+            let _ = std::fs::remove_file(previous);
+        }
+        self.editor = None;
+        self.editor_rendering = true;
+        self.state.workspace = Workspace::Editor;
+        self.set_selection(vec![path_label.clone()]);
+        self.state.busy = true;
+        self.state.status = format!("Opening {name} in the editor…");
+        self.state.editor = Some(EditorState {
+            save_path: path_label.clone(),
+            path: path_label,
+            name,
+            width: 0,
+            height: 0,
+            can_undo: false,
+            can_redo: false,
+            modified: false,
+            history: Vec::new(),
+            redo_count: 0,
+            preview_path: None,
+            preview_revision: generation,
+            rendering: true,
+            saved: true,
+            format: save_format_label(&source),
+            saving: false,
+        });
+        editor::spawn_open(source, generation, preview, self.editor_tx.clone());
+        Ok(Some("Opening the image in the editor".to_owned()))
+    }
+
+    fn editor_apply(&mut self, operation: EditOperation) -> Result<Option<String>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document
+            .apply(operation.clone())
+            .map_err(|message| ProtocolError::new("invalid_edit", message))?;
+        if !changed {
+            return Ok(Some("That edit would not change the image".to_owned()));
+        }
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(operation.label()))
+    }
+
+    fn editor_step(&mut self, undo: bool) -> Result<Option<String>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let moved = if undo {
+            document.undo()
+        } else {
+            document.redo()
+        };
+        if !moved {
+            return Ok(Some(
+                if undo {
+                    "Nothing to undo"
+                } else {
+                    "Nothing to redo"
+                }
+                .to_owned(),
+            ));
+        }
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(if undo { "Undo" } else { "Redo" }.to_owned()))
+    }
+
+    fn editor_reset(&mut self) -> Result<Option<String>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        if !document.reset() {
+            return Ok(Some("The image has no edits to reset".to_owned()));
+        }
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some("Reset to the original image".to_owned()))
+    }
+
+    /// Write the working pixels to `path`, or to the document's own save path
+    /// when `path` is `None` (the Save button).
+    ///
+    /// Overwriting the source is allowed — the user asked for it by pressing
+    /// Save — but it is never implicit: the command is journaled like every
+    /// other, the previous bytes are kept as `<name>.bak` beside the file, and
+    /// Core refuses when the file changed on disk since it was opened, because
+    /// writing would then silently discard whatever changed it. Encoding and
+    /// writing run on a worker; the document keeps rendering its preview and
+    /// `saved` flips only when the bytes are really there.
+    fn editor_save(&mut self, path: Option<&str>) -> Result<Option<String>, ProtocolError> {
+        let Some(document) = &self.editor else {
+            return Err(no_editor_document());
+        };
+        // Only the initial decode is a real wait: the pixels being saved do
+        // not exist until it finishes. A pending *preview* is just the picture
+        // on screen lagging the pixels, and Core applies edits synchronously,
+        // so the bytes written are always the current document.
+        if self.editor.is_none()
+            || self
+                .state
+                .editor
+                .as_ref()
+                .is_none_or(|editor| editor.width == 0)
+        {
+            return Err(ProtocolError::new(
+                "busy",
+                "the editor is still opening the image; save once it is shown",
+            ));
+        }
+        let destination = match path {
+            Some(path) => ops::normalize_path(Path::new(path)),
+            None => document.save_target().0.to_path_buf(),
+        };
+        if destination.is_dir() {
+            return Err(ProtocolError::new(
+                "invalid_path",
+                format!("{} is a folder, not a file", destination.display()),
+            ));
+        }
+        if editor::SaveFormat::from_path(&destination).is_none() {
+            return Err(ProtocolError::new(
+                "unsupported_format",
+                format!(
+                    "cannot save as {}; use one of {}",
+                    destination.display(),
+                    editor::SaveFormat::CHOICES
+                ),
+            ));
+        }
+        // Only the source can have moved under us; another destination is the
+        // user's own choice to replace.
+        let source = document.source_path().to_path_buf();
+        if destination == source && document.source_changed() {
+            return Err(ProtocolError::new(
+                "source_changed",
+                format!(
+                    "{} changed on disk since it was opened; use Save As instead",
+                    source.display()
+                ),
+            ));
+        }
+        let pixels = document.pixels();
+        let label = destination
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| destination.to_string_lossy().into_owned());
+
+        // Encoding and writing happen on a worker: a 24 MP JPEG takes about
+        // half a second to encode, which would be a visible freeze here. The
+        // document stays open and `saved` only flips when the bytes exist.
+        self.editor_save_generation += 1;
+        let save = self.editor_save_generation;
+        self.editor_saving = true;
+        self.state.status = format!("Saving {label}…");
+        self.publish_editor();
+        let (sender, receiver) = mpsc::channel();
+        let thread_source = source.clone();
+        std::thread::spawn(move || {
+            let result = editor::save_pixels(&thread_source, &pixels, &destination);
+            let _ = sender.send(EditorSaveResult {
+                save,
+                destination,
+                result,
+            });
+        });
+        self.pending_save = Some(receiver);
+        self.state.status = format!("Saving {label}…");
+        // `saving` travels in the snapshot, so the view's spinner and the
+        // disabled buttons are Core's answer rather than a local guess. The
+        // status line names the file; `Toast` would speak over it.
+        self.publish_editor();
+        self.state.bump();
+        Ok(Some(format!("Saving {label}…")))
+    }
+
+    /// Finish a write that a worker completed.
+    fn apply_save_result(&mut self, result: EditorSaveResult) -> bool {
+        if result.save != self.editor_save_generation {
+            return false;
+        }
+        self.editor_saving = false;
+        let Some(document) = &mut self.editor else {
+            return true;
+        };
+        match result.result {
+            Ok(()) => {
+                let label = result
+                    .destination
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if document.mark_saved(result.destination.clone()).is_ok() {
+                    // Core just wrote the source itself; that is not an
+                    // outside change.
+                    if result.destination == document.source_path().to_path_buf() {
+                        document.remember_source();
+                    }
+                }
+                self.state.status = format!("Saved {label}");
+            }
+            Err(message) => {
+                tracing::warn!(
+                    target: "kogaview::editor",
+                    path = %result.destination.display(),
+                    %message,
+                    "editor save failed"
+                );
+                self.state.status = message;
+            }
+        }
+        self.publish_editor();
+        true
+    }
+
+    /// Carrying the Viewer's photograph into an empty Editor. Only when there
+    /// is nothing open: an in-progress document is never replaced by a
+    /// workspace switch.
+    fn link_viewer_into_editor(&mut self) {
+        // A document open in the Editor wins over the Viewer: a switch must not
+        // throw away in-progress work, saved or not.
+        if self.editor.is_some() {
+            return;
+        }
+        let path = match self.state.viewer_path.clone() {
+            Some(path) => path,
+            // A freshly opened folder has no viewer path until the Viewer was
+            // entered; the selection is what a switch from the Browser carries.
+            None => match self.state.selection.first().cloned() {
+                Some(path) if ops::is_image_path(Path::new(&path)) => path,
+                _ => return,
+            },
+        };
+        if !editor::has_decoder(Path::new(&path)) {
+            self.state.status = format!("Cannot open {}: no decoder for this format", path);
+            return;
+        }
+        let opened = self.open_editor(&path);
+        tracing::debug!(
+            target: "kogaview::editor",
+            %path,
+            ok = opened.is_ok(),
+            "linked the viewer image into the editor"
+        );
+    }
+
+    fn editor_close(&mut self) -> Result<Option<String>, ProtocolError> {
+        if self.editor.is_none() {
+            return Err(no_editor_document());
+        }
+        // Bump the generation first: a worker still decoding or rendering now
+        // belongs to a document that no longer exists.
+        self.editor_generation += 1;
+        self.editor = None;
+        self.editor_rendering = false;
+        self.state.editor = None;
+        self.state.busy = false;
+        if let Some(preview) = self.editor_preview_path.take() {
+            let _ = std::fs::remove_file(preview);
+        }
+        self.state.status = "Editor closed".to_owned();
+        Ok(Some("Closed the editor document".to_owned()))
+    }
+
+    /// Republish the Editor projection after a synchronous edit, then ask a
+    /// worker for a preview. The previous preview stays on screen (marked
+    /// `rendering`) until the new file exists, so QML never loads a missing
+    /// image and flashes empty.
+    fn schedule_editor_preview(&mut self) {
+        let Some(document) = &self.editor else {
+            return;
+        };
+        self.editor_generation += 1;
+        let generation = self.editor_generation;
+        let pixels = document.pixels();
+        self.editor_rendering = true;
+        self.publish_editor();
+        let Ok(dir) = self.editor_preview_dir() else {
+            self.editor_rendering = false;
+            self.state.status = "Could not create the preview folder".to_owned();
+            self.publish_editor();
+            return;
+        };
+        let preview = dir.join(format!("preview-{generation}.png"));
+        editor::spawn_preview(pixels, generation, preview, self.editor_tx.clone());
+    }
+
+    /// The status line always names the document and its current size; an edit
+    /// that only refreshed the preview would otherwise leave the old size
+    /// there (measured in the real window: an applied crop left 1600 × 1000).
+    fn refresh_editor_status(&mut self) {
+        let Some(document) = &self.editor else {
+            return;
+        };
+        let (width, height) = document.dimensions();
+        let name = document
+            .source_path()
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".to_owned());
+        self.state.status = format!("Editing {name} · {width} × {height}");
+    }
+
+    /// Project the Core-owned document into the serializable UI state.
+    fn publish_editor(&mut self) {
+        let Some(document) = &self.editor else {
+            self.state.editor = None;
+            return;
+        };
+        let (width, height) = document.dimensions();
+        let path = document.source_path().to_string_lossy().into_owned();
+        let name = document
+            .source_path()
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        let (save_path, saved) = document.save_target();
+        let save_path = save_path.to_string_lossy().into_owned();
+        let format = save_format_label(Path::new(&save_path));
+        let previous = self.state.editor.take();
+        self.state.editor = Some(EditorState {
+            path,
+            name,
+            width,
+            height,
+            can_undo: document.can_undo(),
+            can_redo: document.can_redo(),
+            modified: document.can_undo(),
+            history: document.history(),
+            redo_count: document.redo_count(),
+            preview_path: self
+                .editor_preview_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            preview_revision: previous
+                .as_ref()
+                .map(|editor| editor.preview_revision)
+                .unwrap_or(0),
+            rendering: self.editor_rendering,
+            save_path,
+            saved,
+            format,
+            saving: self.editor_saving,
+        });
+    }
+
+    fn editor_preview_dir(&self) -> Result<PathBuf, ProtocolError> {
+        let dir = self.paths.cache_dir.join("editor");
+        std::fs::create_dir_all(&dir).map_err(|error| {
+            ProtocolError::new(
+                "io_error",
+                format!("could not create {}: {error}", dir.display()),
+            )
+        })?;
+        Ok(dir)
+    }
+
+    /// Consume one worker result. Stale generations are dropped, including the
+    /// preview file they wrote.
+    fn apply_editor_task(&mut self, task: EditorTask) -> bool {
+        match task {
+            EditorTask::Opened {
+                generation,
+                document,
+                preview,
+            } => {
+                if generation != self.editor_generation {
+                    let _ = std::fs::remove_file(preview);
+                    return false;
+                }
+                let (width, height) = document.dimensions();
+                self.install_editor_preview(&preview, generation);
+                tracing::debug!(
+                    target: "kogaview::editor",
+                    generation,
+                    width,
+                    height,
+                    "editor document installed"
+                );
+                let name = document
+                    .source_path()
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.editor = Some(document);
+                self.editor_rendering = false;
+                self.state.busy = false;
+                self.state.status = format!("Editing {name} · {width} × {height}");
+                self.publish_editor();
+                true
+            }
+            EditorTask::Preview {
+                generation,
+                preview,
+            } => {
+                if generation != self.editor_generation {
+                    let _ = std::fs::remove_file(preview);
+                    return false;
+                }
+                self.install_editor_preview(&preview, generation);
+                self.editor_rendering = false;
+                self.publish_editor();
+                true
+            }
+            EditorTask::Failed {
+                generation,
+                message,
+            } => {
+                if generation != self.editor_generation {
+                    return false;
+                }
+                tracing::warn!(
+                    target: "kogaview::editor",
+                    %message,
+                    "editor task failed"
+                );
+                self.editor_rendering = false;
+                self.state.busy = false;
+                self.state.status = message;
+                // An open that never produced a document leaves the workspace
+                // empty; an edit failure keeps the last good preview.
+                if self.editor.is_none() {
+                    self.state.editor = None;
+                } else {
+                    self.publish_editor();
+                }
+                true
+            }
+        }
+    }
+
+    fn install_editor_preview(&mut self, path: &Path, generation: u64) {
+        if let Some(previous) = self.editor_preview_path.replace(path.to_path_buf()) {
+            if previous != path {
+                let _ = std::fs::remove_file(previous);
+            }
+        }
+        if let Some(editor) = &mut self.state.editor {
+            editor.preview_path = Some(path.to_string_lossy().into_owned());
+            editor.preview_revision = generation;
+            editor.rendering = false;
+        }
     }
 
     fn set_theme(&mut self, theme: Theme) {
@@ -1064,6 +1704,45 @@ impl Core {
         Ok(None)
     }
 
+    /// Record the two explorer folders, honouring `remember_last_folder`.
+    ///
+    /// When the user turned remembering off, the folders are cleared instead of
+    /// written, so the next start opens nothing and the file never keeps a path
+    /// the user asked not to keep. The write is skipped when nothing changed.
+    fn save_explorer_folders(&mut self, root: String, folder: String) {
+        if !self.config.remember_last_folder {
+            let root = self.config.tree_root.take();
+            let folder = self.config.last_folder.take();
+            if root.is_some() || folder.is_some() {
+                self.save_config();
+            }
+            return;
+        }
+        let changed = self.config.tree_root.as_deref() != Some(root.as_str())
+            || self.config.last_folder.as_deref() != Some(folder.as_str());
+        self.config.tree_root = Some(root);
+        self.config.last_folder = Some(folder);
+        if changed {
+            self.save_config();
+        }
+    }
+
+    /// Make the configuration agree with what this session is showing, so a
+    /// later start restores it — or forget it, when the user turned that off.
+    fn remember_explorer_folders(&mut self) {
+        let root = self.state.root_folder.clone();
+        let folder = self.state.current_folder.clone();
+        match (root, folder) {
+            (Some(root), Some(folder)) => self.save_explorer_folders(root, folder),
+            _ => {
+                if !self.config.remember_last_folder {
+                    self.config.tree_root = None;
+                    self.config.last_folder = None;
+                }
+            }
+        }
+    }
+
     fn save_config(&mut self) {
         if let Err(error) = self.config.save(&self.config_path) {
             tracing::error!(
@@ -1092,6 +1771,14 @@ fn is_within(root: &Path, path: &Path) -> bool {
     // `Path::starts_with` compares whole components, so `/a/bc` is not inside
     // `/a/b`; a plain string prefix check would get that wrong.
     path == root || path.starts_with(root)
+}
+
+/// The error every editor command returns when no document is loaded.
+fn no_editor_document() -> ProtocolError {
+    ProtocolError::new(
+        "no_document",
+        "open an image in the editor before editing it",
+    )
 }
 
 /// The explorer root to use once the user is looking at `folder`.
@@ -1178,6 +1865,24 @@ mod tests {
         dir
     }
 
+    /// Remove a test directory, retrying while a worker still holds a file in it.
+    ///
+    /// The Editor renders previews into `<base>/cache/editor` on a worker
+    /// thread, so a `remove_dir_all` can meet a write that lands between its
+    /// enumeration and its last unlink — the call then answers "Directory not
+    /// empty" and the test fails on teardown, not on behaviour. Retrying is the
+    /// honest fix: nothing here asserts on how fast a preview is written.
+    fn remove_tree(path: &Path) {
+        for _ in 0..50 {
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+        let _ = std::fs::remove_dir_all(path);
+    }
+
     /// Wait for the background folder scan to land, the way the UI's poll timer
     /// does. Returns false if it never does.
     fn settle_scan(core: &mut Core) -> bool {
@@ -1233,7 +1938,7 @@ mod tests {
             core.listing_epoch() > while_loading,
             "the scan replaced the listing without moving the epoch"
         );
-        let mut last = core.listing_epoch();
+        let last = core.listing_epoch();
         let listing: Value = serde_json::from_str(&core.folder_json()).unwrap();
         assert_eq!(listing["entries"].as_array().unwrap().len(), 2);
         assert_eq!(listing["viewerImages"].as_array().unwrap().len(), 2);
@@ -1292,7 +1997,7 @@ mod tests {
             "the metadata and the listing did not add up to the snapshot"
         );
 
-        std::fs::remove_dir_all(base).unwrap();
+        remove_tree(&base);
     }
 
     #[test]
@@ -1311,7 +2016,7 @@ mod tests {
         assert!(error.contains("separator"));
         let created = ops::create_folder(&dir, "New folder").unwrap();
         assert!(created.is_dir());
-        std::fs::remove_dir_all(dir).unwrap();
+        remove_tree(&dir);
     }
 
     // ------------------------------------------------- explorer root vs list
@@ -1442,7 +2147,7 @@ mod tests {
             "the sidebar root and the open folder were written as one value"
         );
 
-        std::fs::remove_dir_all(base).unwrap();
+        remove_tree(&base);
     }
 
     /// Walking out of the tree ("up" past the root, a breadcrumb to an ancestor)
@@ -1467,7 +2172,7 @@ mod tests {
         assert_eq!(core.state.root_folder.as_deref(), Some(base_label.as_str()));
         assert_eq!(core.saved_folders().0, Some(base_label));
 
-        std::fs::remove_dir_all(base).unwrap();
+        remove_tree(&base);
     }
 
     /// A restored session comes back with the tree above the open folder, not
@@ -1498,7 +2203,7 @@ mod tests {
             Some(child_label.as_str())
         );
 
-        std::fs::remove_dir_all(base).unwrap();
+        remove_tree(&base);
     }
 
     /// Only the open folder was saved (or only the root): the other value is
@@ -1545,7 +2250,7 @@ mod tests {
             Some(child_label.as_str())
         );
 
-        std::fs::remove_dir_all(base).unwrap();
+        remove_tree(&base);
     }
 
     /// Folders that no longer exist open nothing, exactly like a first run.
@@ -1563,7 +2268,7 @@ mod tests {
         core.restore_last_session();
         assert!(core.state.root_folder.is_none());
         assert!(core.state.current_folder.is_none());
-        std::fs::remove_dir_all(base).unwrap();
+        remove_tree(&base);
     }
 
     #[test]
@@ -1573,5 +2278,636 @@ mod tests {
         assert!(folder.is_none());
         let (root, folder) = restored_folders(None, None, |_| true);
         assert!(root.is_none() && folder.is_none());
+    }
+
+    /// `set_settings` is what the Settings dialog sends. It has to change what
+    /// the *next* run restores, not only the file: that is the state delta the
+    /// user selected the checkbox for.
+    #[test]
+    fn settings_decide_whether_the_folders_come_back() {
+        let base = temp_dir();
+        let root = base.join("Pictures");
+        let child = root.join("Child");
+        std::fs::create_dir_all(&child).unwrap();
+        let runtime = base.join("runtime");
+        let root_label = root.to_string_lossy().into_owned();
+        let child_label = child.to_string_lossy().into_owned();
+
+        let settings = |remember: bool| {
+            format!(
+                r#"{{"id":"settings-1","protocol":1,"command":{{"type":"set_settings",
+                    "theme":"dark","remember_last_folder":{remember},
+                    "background_thumbnails":true}}}}"#
+            )
+        };
+
+        {
+            let mut core = Core::for_test(&runtime);
+            core.open_folder(root.clone(), true).unwrap();
+            core.open_folder(child.clone(), true).unwrap();
+            assert_eq!(core.state.root_folder.as_deref(), Some(root_label.as_str()));
+            assert_eq!(
+                core.saved_folders(),
+                (Some(root_label.clone()), Some(child_label.clone()))
+            );
+        }
+
+        // Remembered: the folder comes back, as before.
+        {
+            let mut core = Core::for_test(&runtime);
+            core.dispatch(&settings(true));
+            assert_eq!(
+                core.saved_folders(),
+                (Some(root_label.clone()), Some(child_label.clone()))
+            );
+        }
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+        assert_eq!(
+            core.state.current_folder.as_deref(),
+            Some(child_label.as_str())
+        );
+        assert_eq!(core.state.root_folder.as_deref(), Some(root_label.as_str()));
+
+        // Not remembered: the saved values are dropped, and the next start
+        // opens nothing even though this session is showing the folder.
+        {
+            let mut core = Core::for_test(&runtime);
+            core.restore_last_session();
+            assert!(core.state.remember_last_folder);
+            core.dispatch(&settings(false));
+            assert!(
+                !core.state.remember_last_folder,
+                "the dialog reads this from the snapshot; it still says remembered"
+            );
+            assert_eq!(
+                core.saved_folders(),
+                (None, None),
+                "turning the option off left the folders in the file"
+            );
+            // A navigation after that must not put them back.
+            core.open_folder(root.clone(), true).unwrap();
+            assert_eq!(
+                core.saved_folders(),
+                (None, None),
+                "navigation re-saved the folders"
+            );
+        }
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+        assert!(
+            core.state.current_folder.is_none(),
+            "a session the user asked not to remember came back anyway"
+        );
+
+        // And turning it on again remembers what is on screen now, without a
+        // navigation in between.
+        {
+            let mut core = Core::for_test(&runtime);
+            core.open_folder(root.clone(), true).unwrap();
+            core.open_folder(child.clone(), true).unwrap();
+            core.dispatch(&settings(true));
+            assert_eq!(core.saved_folders(), (Some(root_label), Some(child_label)));
+        }
+
+        remove_tree(&base);
+    }
+
+    /// A config that says "do not remember" is obeyed even when it still holds
+    /// folders (hand-edited, or written by an older build).
+    #[test]
+    fn a_config_that_forgets_opens_nothing() {
+        let base = temp_dir();
+        let root = base.join("Pictures");
+        std::fs::create_dir_all(&root).unwrap();
+        let runtime = base.join("runtime");
+        {
+            let mut core = Core::for_test(&runtime);
+            core.open_folder(root, true).unwrap();
+            core.config.remember_last_folder = false;
+            core.save_config();
+        }
+        let mut core = Core::for_test(&runtime);
+        core.restore_last_session();
+        assert!(core.state.root_folder.is_none());
+        assert!(core.state.current_folder.is_none());
+        remove_tree(&base);
+    }
+
+    /// Poll until the editor has a document and no preview render outstanding.
+    /// Wait for a save worker to report back, the way the UI's poll timer does.
+    fn settle_save(core: &mut Core) -> bool {
+        for _ in 0..3000 {
+            core.poll();
+            if !core.editor_saving() {
+                return core
+                    .state
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.saved);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    fn dispatch_json(core: &mut Core, id: &str, command: &str) -> serde_json::Value {
+        serde_json::from_str(&core.dispatch(&editor_envelope(id, command))).unwrap()
+    }
+
+    #[test]
+    fn save_overwrites_the_source_with_the_edit_and_keeps_a_backup() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let before = std::fs::read(&photo).unwrap();
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        );
+        assert!(settle_editor(&mut core), "the document never arrived");
+        assert!(core.state.editor.as_ref().unwrap().saved);
+        assert_eq!(
+            core.state.editor.as_ref().unwrap().save_path,
+            photo.to_string_lossy()
+        );
+
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+        assert!(
+            !core.state.editor.as_ref().unwrap().saved,
+            "an edit makes the document unsaved"
+        );
+
+        let response = dispatch_json(&mut core, "save-1", r#"{"type":"editor_save"}"#);
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_save(&mut core), "the save never finished");
+        let editor = core.state.editor.as_ref().unwrap();
+        assert!(editor.saved);
+        assert_eq!(editor.save_path, photo.to_string_lossy());
+
+        // The source now holds the rotated pixels: 20 × 40, not the original 40 × 20.
+        let written = image::open(&photo).unwrap();
+        assert_eq!((written.width(), written.height()), (20, 40));
+        // The bytes it had before the save are kept beside it.
+        let backup = base.join("photo.png.bak");
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+        // Journaled like every other command.
+        let journal =
+            std::fs::read_to_string(base.join("runtime/state/journal/commands.jsonl")).unwrap();
+        assert!(journal.contains("\"command\":\"editor_save\""), "{journal}");
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn save_as_moves_the_save_target_and_leaves_the_source_alone() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let before = std::fs::read(&photo).unwrap();
+        let destination = base.join("copy.jpeg");
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        );
+        assert!(settle_editor(&mut core));
+        dispatch_json(
+            &mut core,
+            "crop-1",
+            r#"{"type":"editor_crop","x":0,"y":0,"width":10,"height":5}"#,
+        );
+
+        let response = dispatch_json(
+            &mut core,
+            "save-as-1",
+            &format!(
+                r#"{{"type":"editor_save_as","path":{}}}"#,
+                serde_json::to_string(&destination.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_save(&mut core), "the save never finished");
+
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!(editor.save_path, destination.to_string_lossy());
+        assert_eq!(editor.format, ".jpg");
+        // A save-as never touches the source and keeps no backup of it.
+        assert_eq!(std::fs::read(&photo).unwrap(), before);
+        assert!(!base.join("photo.png.bak").exists());
+        let written = image::open(&destination).unwrap();
+        assert_eq!((written.width(), written.height()), (10, 5));
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn a_save_is_refused_when_the_source_changed_under_the_document() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        );
+        assert!(settle_editor(&mut core));
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+
+        // Something else rewrites the file while the document is open.
+        write_png(&photo, 40, 20);
+        let now = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        std::fs::File::options()
+            .write(true)
+            .open(&photo)
+            .unwrap()
+            .set_modified(now)
+            .unwrap();
+
+        let response = dispatch_json(&mut core, "save-1", r#"{"type":"editor_save"}"#);
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "source_changed", "{response}");
+        assert!(!core.state.editor.as_ref().unwrap().saved);
+
+        // Save As is still allowed, and says nothing about the source.
+        let elsewhere = base.join("rescue.png");
+        let response = dispatch_json(
+            &mut core,
+            "save-as-1",
+            &format!(
+                r#"{{"type":"editor_save_as","path":{}}}"#,
+                serde_json::to_string(&elsewhere.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_save(&mut core));
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn saving_an_unsupported_extension_is_rejected_before_any_write() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        );
+        assert!(settle_editor(&mut core));
+        let target = base.join("idea.psd");
+        let response = dispatch_json(
+            &mut core,
+            "save-as-1",
+            &format!(
+                r#"{{"type":"editor_save_as","path":{}}}"#,
+                serde_json::to_string(&target.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(
+            response["error"]["code"], "unsupported_format",
+            "{response}"
+        );
+        assert!(!target.exists(), "a rejected save writes nothing");
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn switching_to_the_editor_carries_the_viewer_image() {
+        let base = temp_dir();
+        write_png(&base.join("one.png"), 10, 10);
+        write_png(&base.join("two.png"), 12, 12);
+        let mut core = Core::for_test(&base.join("runtime"));
+        let folder = base.to_string_lossy().into_owned();
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(r#"{{"type":"open_folder","path":{folder:?}}}"#),
+        );
+        assert!(settle_scan(&mut core), "the folder never listed");
+        dispatch_json(
+            &mut core,
+            "viewer-1",
+            r#"{"type":"set_workspace","workspace":"viewer"}"#,
+        );
+        assert!(core.state.viewer_path.is_some(), "the viewer needs a path");
+        let shown = core.state.viewer_path.clone().unwrap();
+
+        // The workspace switcher alone: no `editor_open` anywhere in the user's action.
+        let response = dispatch_json(
+            &mut core,
+            "editor-1",
+            r#"{"type":"set_workspace","workspace":"editor"}"#,
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        let editor = core
+            .state
+            .editor
+            .as_ref()
+            .expect("the editor must open the viewed image");
+        assert_eq!(editor.path, shown);
+        assert!(settle_editor(&mut core));
+        assert!(
+            core.state.status.starts_with("Editing "),
+            "the editor must say it is editing: {:?}",
+            core.state.status
+        );
+
+        // A second switch back does not reload, and a document already open
+        // wins over the Viewer's current image.
+        let kept = core.state.editor.as_ref().unwrap().path.clone();
+        dispatch_json(
+            &mut core,
+            "browser-1",
+            r#"{"type":"set_workspace","workspace":"browser"}"#,
+        );
+        let status = core.state.status.clone();
+        assert!(
+            !status.starts_with("Editing "),
+            "the Browser still claimed to be editing: {status:?}"
+        );
+        dispatch_json(
+            &mut core,
+            "editor-2",
+            r#"{"type":"set_workspace","workspace":"editor"}"#,
+        );
+        assert_eq!(core.state.editor.as_ref().unwrap().path, kept);
+        remove_tree(&base);
+    }
+
+    fn settle_editor(core: &mut Core) -> bool {
+        for _ in 0..3000 {
+            core.poll();
+            match &core.state.editor {
+                Some(editor) if editor.width > 0 && !editor.rendering => return true,
+                _ => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    fn write_png(path: &Path, width: u32, height: u32) {
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba([(x % 251) as u8, (y % 251) as u8, 90, 255])
+        });
+        image::DynamicImage::ImageRgba8(image)
+            .save_with_format(path, image::ImageFormat::Png)
+            .unwrap();
+    }
+
+    fn editor_envelope(id: &str, command: &str) -> String {
+        format!(r#"{{"id":"{id}","protocol":1,"command":{command}}}"#)
+    }
+
+    #[test]
+    fn an_image_opens_in_the_editor_and_the_source_is_never_written() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let before = std::fs::read(&photo).unwrap();
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+
+        let response = core.dispatch(&editor_envelope(
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], true, "{response}");
+        assert!(settle_editor(&mut core), "the document never arrived");
+
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (40, 20));
+        assert_eq!(editor.name, "photo.png");
+        assert_eq!(core.state.workspace, Workspace::Editor);
+        assert!(editor.preview_path.is_some());
+        let preview = PathBuf::from(editor.preview_path.as_ref().unwrap());
+        assert!(preview.is_file(), "the preview PNG must exist");
+
+        // A rotate changes the published size, keeps the source untouched, and
+        // lands a new preview.
+        let response = core.dispatch(&editor_envelope(
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        ));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["ok"],
+            true,
+            "{response}"
+        );
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (20, 40));
+        assert_eq!(editor.history, vec!["Rotate right 90°"]);
+        assert!(editor.can_undo);
+        assert!(!editor.can_redo);
+        assert!(settle_editor(&mut core), "the preview never landed");
+        assert_eq!(std::fs::read(&photo).unwrap(), before);
+
+        // Undo restores the size and offers redo.
+        core.dispatch(&editor_envelope("undo-1", r#"{"type":"editor_undo"}"#));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (40, 20));
+        assert!(!editor.can_undo);
+        assert!(editor.can_redo);
+        assert_eq!(editor.history.len(), 0);
+        assert!(settle_editor(&mut core));
+
+        core.dispatch(&editor_envelope("redo-1", r#"{"type":"editor_redo"}"#));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (20, 40));
+        assert!(settle_editor(&mut core));
+
+        // Close drops the document and its preview, and still leaves the file.
+        let current_preview = PathBuf::from(
+            core.state
+                .editor
+                .as_ref()
+                .unwrap()
+                .preview_path
+                .as_ref()
+                .unwrap(),
+        );
+        core.dispatch(&editor_envelope("close-1", r#"{"type":"editor_close"}"#));
+        assert!(core.state.editor.is_none());
+        assert!(
+            !current_preview.is_file(),
+            "the preview is removed on close"
+        );
+        assert_eq!(std::fs::read(&photo).unwrap(), before);
+
+        // The journal recorded each command that reached the gateway.
+        let journal =
+            std::fs::read_to_string(runtime.join("state/journal/commands.jsonl")).unwrap();
+        for name in [
+            "editor_open",
+            "editor_rotate",
+            "editor_undo",
+            "editor_redo",
+            "editor_close",
+        ] {
+            assert!(
+                journal.contains(&format!("\"command\":\"{name}\"")),
+                "{journal}"
+            );
+        }
+
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn editor_commands_without_a_document_are_rejected_and_journaled() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+
+        for (id, command) in [
+            ("undo", r#"{"type":"editor_undo"}"#),
+            ("redo", r#"{"type":"editor_redo"}"#),
+            (
+                "crop",
+                r#"{"type":"editor_crop","x":0,"y":0,"width":4,"height":4}"#,
+            ),
+            ("resize", r#"{"type":"editor_resize","width":4,"height":4}"#),
+            ("rotate", r#"{"type":"editor_rotate","degrees":90}"#),
+            ("flip", r#"{"type":"editor_flip","axis":"horizontal"}"#),
+            ("reset", r#"{"type":"editor_reset"}"#),
+        ] {
+            let response = core.dispatch(&editor_envelope(id, command));
+            let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(parsed["ok"], false, "{command}: {response}");
+            assert_eq!(parsed["error"]["code"], "no_document", "{command}");
+            assert!(core.state.editor.is_none());
+        }
+
+        let journal =
+            std::fs::read_to_string(runtime.join("state/journal/commands.jsonl")).unwrap();
+        assert!(journal.contains("\"ok\":false"));
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn opening_a_missing_or_non_image_file_is_rejected() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+
+        let missing = base.join("missing.png");
+        let response = core.dispatch(&editor_envelope(
+            "open-missing",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&missing.to_string_lossy()).unwrap()
+            ),
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["error"]["code"], "not_found");
+
+        let notes = base.join("notes.txt");
+        std::fs::write(&notes, "not an image").unwrap();
+        let response = core.dispatch(&editor_envelope(
+            "open-text",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&notes.to_string_lossy()).unwrap()
+            ),
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["error"]["code"], "not_an_image");
+
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn editor_resize_crop_and_flip_change_the_published_size() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+        core.dispatch(&editor_envelope(
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        ));
+        assert!(settle_editor(&mut core));
+
+        core.dispatch(&editor_envelope(
+            "crop-1",
+            r#"{"type":"editor_crop","x":4,"y":2,"width":10,"height":8}"#,
+        ));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (10, 8));
+        assert_eq!(editor.history, vec!["Crop 10 × 8 at 4,2"]);
+        assert!(
+            core.state.status.contains("10 × 8"),
+            "the status line must follow the document size: {}",
+            core.state.status
+        );
+
+        core.dispatch(&editor_envelope(
+            "resize-1",
+            r#"{"type":"editor_resize","width":25,"height":25}"#,
+        ));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (25, 25));
+
+        core.dispatch(&editor_envelope(
+            "flip-1",
+            r#"{"type":"editor_flip","axis":"vertical"}"#,
+        ));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (25, 25));
+        assert_eq!(editor.history.len(), 3);
+
+        // An out-of-bounds crop is rejected with a message and changes nothing.
+        let response = core.dispatch(&editor_envelope(
+            "crop-2",
+            r#"{"type":"editor_crop","x":20,"y":20,"width":10,"height":10}"#,
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["error"]["code"], "invalid_edit");
+        assert_eq!(core.state.editor.as_ref().unwrap().history.len(), 3);
+
+        // Reset drops every step, back to the source size.
+        core.dispatch(&editor_envelope("reset-1", r#"{"type":"editor_reset"}"#));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (40, 20));
+        assert!(editor.history.is_empty());
+        assert!(!editor.can_undo);
+        assert!(!editor.modified);
+
+        remove_tree(&base);
     }
 }

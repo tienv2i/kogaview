@@ -102,6 +102,7 @@ fn sanitized_paths(command: &Command) -> Vec<String> {
         | Command::RemoveFavorite { path }
         | Command::MoveFavorite { path, .. } => vec![sanitize(path)],
         Command::NewFolder { parent, .. } => vec![sanitize(parent)],
+        Command::EditorOpen { path } => vec![sanitize(path)],
         Command::CopyTo { paths, destination } | Command::MoveTo { paths, destination } => {
             let mut all: Vec<String> = paths.iter().map(|p| sanitize(p)).collect();
             all.push(sanitize(destination));

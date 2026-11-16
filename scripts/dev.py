@@ -31,6 +31,12 @@ QML_TEST_SUITES = {
         BUILD_DIR / "bin" / "kogaview_browser_cache_tests",
     ),
     "state": ("kogaview_state_tests", BUILD_DIR / "bin" / "kogaview_state_tests"),
+    "settings": ("kogaview_settings_tests", BUILD_DIR / "bin" / "kogaview_settings_tests"),
+    "editor": ("kogaview_editor_tests", BUILD_DIR / "bin" / "kogaview_editor_tests"),
+    "language": (
+        "kogaview_language_tests",
+        BUILD_DIR / "bin" / "kogaview_language_tests",
+    ),
 }
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"
@@ -42,6 +48,12 @@ PROJECT = "KogaView"
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print("+ " + " ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=ROOT, **kwargs)
+
+
+def lrelease() -> str:
+    """The Qt Linguist `lrelease` the build should use, empty when none is
+    installed. `scripts/find_lrelease.py` owns the search order."""
+    return output([sys.executable, str(ROOT / "scripts/find_lrelease.py")]).strip()
 
 
 def output(cmd: list[str]) -> str:
@@ -128,6 +140,8 @@ def doctor() -> int:
         if not path:
             print(f"{'':18}  install: {hint}")
 
+    linguist = lrelease()
+    print(f"{'Qt lrelease':18}: {linguist or 'MISSING (set KOGAVIEW_LRELEASE)'}")
     version, prefix, qml_dir = qt_version()
     print(f"{'Qt version':18}: {version or 'unknown'}"
           + (f"  ({prefix})" if prefix else ""))
@@ -210,12 +224,16 @@ def build() -> int:
         print("build: refusing to build with missing prerequisites", file=sys.stderr)
         return setup_result
 
-    configure = run(["cmake", "--preset", "dev"])
+    environment = os.environ.copy()
+    linguist = lrelease()
+    if linguist:
+        environment["KOGAVIEW_LRELEASE"] = linguist
+    configure = run(["cmake", "--preset", "dev"], env=environment)
     if configure.returncode != 0:
         print("build: CMake configure failed; no binary will be run", file=sys.stderr)
         return configure.returncode
 
-    compile_result = run(["cmake", "--build", "--preset", "dev"])
+    compile_result = run(["cmake", "--build", "--preset", "dev"], env=environment)
     if compile_result.returncode != 0:
         print("build: compile failed; no binary will be run", file=sys.stderr)
         return compile_result.returncode
@@ -240,7 +258,20 @@ def run_app(args: list[str]) -> int:
     return 1  # unreachable
 
 
-TEST_USAGE = "usage: just test [cargo|qml|viewer|browser|cache|state]"
+TEST_USAGE = (
+    "usage: just test "
+    "[cargo|translations|qml|viewer|browser|cache|state|settings|editor|language]"
+)
+
+
+def translation_tests() -> int:
+    """The `.ts` catalogue and the C++ table that mirrors it must agree.
+
+    Neither copy is derived from the other at build time (see
+    `scripts/check_translations.py` for why), so a disagreement is silent: a
+    menu and a native dialog would show two translations of one English string.
+    """
+    return run([sys.executable, "scripts/check_translations.py"]).returncode
 
 
 def rust_tests() -> int:
@@ -264,7 +295,7 @@ def test(selection: list[str]) -> int:
     choice = selection[0] if selection else "all"
     if choice in ("all", "qml"):
         suites = dict(QML_TEST_SUITES)
-    elif choice == "cargo":
+    elif choice in ("cargo", "translations"):
         suites = {}
     elif choice in QML_TEST_SUITES:
         suites = {choice: QML_TEST_SUITES[choice]}
@@ -272,6 +303,10 @@ def test(selection: list[str]) -> int:
         print(f"test: unknown selection '{choice}'\n{TEST_USAGE}", file=sys.stderr)
         return 2
 
+    if choice in ("all", "translations"):
+        translation_result = translation_tests()
+        if translation_result != 0:
+            return translation_result
     if choice in ("all", "cargo"):
         cargo_result = rust_tests()
         if cargo_result != 0:

@@ -195,9 +195,9 @@ Evidence gate (all must be shown):
 
 ### M4 — Non-destructive Editor, history, export (effort L)
 
-- Recipe model (rotate, flip, crop, resize, exposure, brightness, contrast, saturation), preview from original + recipe, before/after, undo/redo as recipe history (ADR 0003 separating it from the journal).
-- Export: batch task, staged temp + atomic rename, collision policy, preserve source (hash before/after), cancellation cleanup.
-- Evidence: edit -> preview -> export -> reopen exported file; verify original bytes unchanged; kill during export and check recovery; journal vs edit history compared.
+- Working-document model per ADR 0003 (already landed with M1: decode once, apply edits directly, undo/redo as a bounded step stack). Remaining: exposure/brightness/contrast/saturation operations, before/after, and **export**: batch task, staged temp + atomic rename, collision policy, preserve source (hash before/after), cancellation cleanup.
+- The `EditOperation` recipe stays serializable so a session format can be built on it; the display renders the materialized document, not a replay of the recipe.
+- Evidence: edit -> preview -> export -> reopen exported file; verify original bytes unchanged; kill during export and check recovery; editor history vs command journal compared.
 
 ### M5 — IPC, `kogactl`, MCP, diagnostics, replay (effort L)
 
@@ -224,7 +224,7 @@ Evidence gate (all must be shown):
 | Observability | structured JSON logs (`logs/kogaview.jsonl.<date>`), request/correlation ids, command journal from M1 (`journal/commands.jsonl`), events from M1, screenshots from M1, bundle from M5 | M1, M5 |
 | Performance | decode/scan/thumbnail/export off GUI thread; bounded caches; image dimension/memory limits; virtualized grid; measure before optimizing | M2–M4 |
 | Correctness | revision conflicts, idempotent retries, atomic saves, recovery records, reconciliation | M1, M2, M4 |
-| i18n/a11y | externalized strings, system fonts/palette/DPI, keyboard navigation, accessible names; no fake GNOME Adwaita fidelity claims | M3/M6 |
+| i18n/a11y | externalized strings, system fonts/palette/DPI, keyboard navigation, accessible names; no fake GNOME Adwaita fidelity claims. **Started in M1:** English source text + a Vietnamese catalogue compiled into the binary, switchable while the window is open (ADR 0006); Core's status text is still English until it becomes a code + arguments | M3/M6 |
 | Reproducibility | pinned toolchain and deps, vendoring plan for Flatpak offline builds, CI uses same `just` commands | M0, M6 |
 
 ## 8. Verification protocol (applies to every milestone)

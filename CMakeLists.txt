@@ -12,6 +12,45 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 DBus Concurrent)
 
+# Translations are compiled into the binary, not read from the host: the `.ts`
+# sources live in `i18n/` and `lrelease` turns them into `.qm` files that are
+# registered in the resource system as `:/i18n/`. A sandboxed Flatpak then needs
+# nothing from outside. `lrelease` ships with Qt's tools package, which not every
+# distribution installs with Qt itself, so it is located by a script that also
+# knows about a bundled PySide6 (`scripts/find_lrelease.py`); the build runs
+# untranslated when it is missing, it does not fail.
+set(KOGAVIEW_LRELEASE "" CACHE FILEPATH "Path to Qt's lrelease (empty: search for it)")
+if(NOT KOGAVIEW_LRELEASE)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/find_lrelease.py"
+      OUTPUT_VARIABLE _found_lrelease OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_found_lrelease)
+      set(KOGAVIEW_LRELEASE "${_found_lrelease}" CACHE FILEPATH "Path to Qt's lrelease" FORCE)
+    endif()
+  endif()
+endif()
+
+set(KOGAVIEW_QM_FILES "")
+set(KOGAVIEW_TRANSLATIONS vi)
+if(KOGAVIEW_LRELEASE)
+  foreach(language IN LISTS KOGAVIEW_TRANSLATIONS)
+    set(_ts "${CMAKE_CURRENT_SOURCE_DIR}/i18n/kogaview_${language}.ts")
+    set(_qm "${CMAKE_CURRENT_BINARY_DIR}/i18n/kogaview_${language}.qm")
+    add_custom_command(
+      OUTPUT "${_qm}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/i18n"
+      COMMAND "${KOGAVIEW_LRELEASE}" -silent "${_ts}" -qm "${_qm}"
+      DEPENDS "${_ts}" "${KOGAVIEW_LRELEASE}"
+      COMMENT "lrelease ${language}")
+    list(APPEND KOGAVIEW_QM_FILES "${_qm}")
+  endforeach()
+else()
+  message(STATUS "KogaView: lrelease not found; building without translations "
+                 "(set KOGAVIEW_LRELEASE or install qt6-tools)")
+endif()
+
 find_package(CxxQt 0.10 QUIET)
 if(NOT CxxQt_FOUND)
   include(FetchContent)
@@ -41,8 +80,56 @@ cxx_qt_import_qml_module(
   SOURCE_CRATE kogaview_desktop
 )
 
-add_executable(kogaview cpp/main.cpp cpp/platform.cpp cpp/thumbnailcache.cpp)
+add_executable(kogaview cpp/main.cpp cpp/language.cpp cpp/platform.cpp cpp/thumbnailcache.cpp
+                         cpp/translations.cpp
+                         ${KOGAVIEW_QM_FILES})
 target_link_libraries(kogaview PRIVATE kogaview_qml_module Qt6::DBus Qt6::Concurrent)
+
+# `.qm` files through a generated index, onto a resource prefix of their own.
+# Qt 6's `rcc` refuses a bare `.qm` as its file argument (it parses whatever it
+# is handed as a `.qrc`), so the index names each file with its resource alias,
+# and `rcc --binary` turns it into an `.rcc` the shell registers by hand
+# (`cpp/language.cpp`). The binary format is what makes the path independent of
+# the QML module's `/qt/qml` tree, which would otherwise own any resource under
+# it.
+if(KOGAVIEW_QM_FILES)
+  get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+  get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
+  find_program(KOGAVIEW_RCC rcc HINTS "${_qt_bin_dir}" NO_DEFAULT_PATH)
+  if(NOT KOGAVIEW_RCC)
+    find_program(KOGAVIEW_RCC rcc)
+  endif()
+  set(KOGAVIEW_TRANSLATIONS_RCC "${CMAKE_CURRENT_BINARY_DIR}/i18n/kogaview_translations.rcc")
+  set(KOGAVIEW_QM_QRC "${CMAKE_CURRENT_BINARY_DIR}/i18n/kogaview_translations.qrc")
+  set(_qrc_entries "")
+  foreach(qm IN LISTS KOGAVIEW_QM_FILES)
+    get_filename_component(qm_name "${qm}" NAME)
+    string(APPEND _qrc_entries "    <file alias=\"${qm_name}\">${qm}</file>\n")
+  endforeach()
+  # A bracket argument keeps the newlines real: `file(WRITE)` writes a quoted
+  # `\n` as the two characters, and `rcc` then refuses the index.
+  file(WRITE "${KOGAVIEW_QM_QRC}"
+       [=[<?xml version="1.0" encoding="UTF-8"?>
+<RCC>
+  <qresource prefix="/i18n">
+]=])
+  file(APPEND "${KOGAVIEW_QM_QRC}" "${_qrc_entries}")
+  file(APPEND "${KOGAVIEW_QM_QRC}"
+       [=[
+  </qresource>
+</RCC>
+]=])
+  add_custom_command(
+    OUTPUT "${KOGAVIEW_TRANSLATIONS_RCC}"
+    COMMAND "${KOGAVIEW_RCC}" --binary --name kogaview_translations
+            --output "${KOGAVIEW_TRANSLATIONS_RCC}" "${KOGAVIEW_QM_QRC}"
+    DEPENDS "${KOGAVIEW_QM_QRC}" ${KOGAVIEW_QM_FILES} "${KOGAVIEW_RCC}"
+    COMMENT "rcc translations")
+  # A plain target, so CMake makes it and gives it a job that runs before the
+  # link — a custom command that nothing was named on is never scheduled.
+  add_custom_target(kogaview_translations DEPENDS "${KOGAVIEW_TRANSLATIONS_RCC}")
+  add_dependencies(kogaview kogaview_translations)
+endif()
 
 set_target_properties(
   kogaview
@@ -52,9 +139,20 @@ set_target_properties(
     MACOSX_BUNDLE FALSE
 )
 
+# Where the compiled translations are, for `InterfaceLanguage` to register: a
+# path is not a resource, so it is passed as a definition rather than guessed.
+if(TARGET kogaview_translations)
+  target_compile_definitions(kogaview PRIVATE
+    KOGAVIEW_TRANSLATIONS_RCC="${KOGAVIEW_TRANSLATIONS_RCC}")
+endif()
+
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   # M0-only window-grab evidence harness, never part of a release build.
   target_compile_definitions(kogaview PRIVATE KOGAVIEW_DEV_HARNESS)
+  # The pan hook drives a real drag; a `DragHandler` needs the pointer sequence
+  # `QTest` produces, which a hand-rolled `QMouseEvent` does not satisfy.
+  find_package(Qt6 REQUIRED COMPONENTS Test)
+  target_link_libraries(kogaview PRIVATE Qt6::Test)
 endif()
 
 # QML regression tests: load the real `.qml` sources and assert on what Qt Quick
@@ -69,7 +167,10 @@ if(KOGAVIEW_BUILD_TESTS)
     "kogaview_qml_tests:tst_viewer.cpp"
     "kogaview_browser_qml_tests:tst_browser.cpp"
     "kogaview_browser_cache_tests:tst_thumbnails.cpp"
-    "kogaview_state_tests:tst_statesnapshot.cpp")
+    "kogaview_state_tests:tst_statesnapshot.cpp"
+    "kogaview_settings_tests:tst_settings.cpp"
+    "kogaview_editor_tests:tst_editor.cpp"
+    "kogaview_language_tests:tst_language.cpp")
 
   foreach(suite IN LISTS KOGAVIEW_QML_TEST_SUITES)
     string(REPLACE ":" ";" parts "${suite}")
@@ -81,6 +182,13 @@ if(KOGAVIEW_BUILD_TESTS)
     if(target STREQUAL "kogaview_browser_cache_tests")
       list(APPEND suite_sources cpp/thumbnailcache.cpp)
     endif()
+    # The language suite drives the real translator installer, so it needs the
+    # same compiled-in catalogue the application registers.
+    set(suite_translations OFF)
+    if(target STREQUAL "kogaview_language_tests")
+      list(APPEND suite_sources cpp/language.cpp)
+      set(suite_translations ON)
+    endif()
     # The thumbnail stub is a QObject both view suites drive; listing the header
     # is what lets AUTOMOC generate its meta-object into these targets.
     if(target STREQUAL "kogaview_qml_tests" OR target STREQUAL "kogaview_browser_qml_tests")
@@ -90,6 +198,11 @@ if(KOGAVIEW_BUILD_TESTS)
     target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate Qt6::Concurrent)
     target_compile_definitions(${target}
       PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml")
+    if(suite_translations)
+      target_compile_definitions(${target} PRIVATE
+        KOGAVIEW_TRANSLATIONS_RCC="${KOGAVIEW_TRANSLATIONS_RCC}")
+      add_dependencies(${target} kogaview_translations)
+    endif()
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cpp")
   endforeach()
 endif()

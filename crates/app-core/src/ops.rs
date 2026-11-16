@@ -8,14 +8,12 @@ use std::time::UNIX_EPOCH;
 
 use crate::state::Entry;
 
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "avif", "heic", "heif",
-];
-
 pub fn is_image_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .map(|extension| IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+        .map(|extension| {
+            kogaview_protocol::IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
         .unwrap_or(false)
 }
 
@@ -354,6 +352,24 @@ mod tests {
         assert!(is_image_path(Path::new("/tmp/a.png")));
         assert!(!is_image_path(Path::new("/tmp/a.txt")));
         assert!(!is_image_path(Path::new("/tmp/folder")));
+    }
+
+    /// The list is shared with every front end, so the formats it advertises
+    /// are the ones the editor really decodes — checked against the decoder
+    /// rather than restated by hand. HEIC/HEIF are the documented exception:
+    /// listed so a phone photo is not invisible, and rejected with a message
+    /// when opened.
+    #[test]
+    fn every_advertised_extension_has_a_decoder() {
+        for extension in kogaview_protocol::IMAGE_EXTENSIONS {
+            if matches!(*extension, "heic" | "heif") {
+                continue;
+            }
+            assert!(
+                image::ImageFormat::from_extension(extension).is_some(),
+                "the browser lists .{extension} but `image` cannot decode it"
+            );
+        }
     }
 
     #[cfg(unix)]

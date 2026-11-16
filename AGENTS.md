@@ -2,6 +2,22 @@
 
 Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implementing features. Treat these as project requirements; record any deviation in an ADR.
 
+## Agent configuration in this repository (OpenCode)
+- This file is the always-loaded rulebook. `opencode.json` adds `docs/WORKFLOW.md` and `docs/SESSION-STATE.md` as `instructions`, so both are in context from the first turn, and refuses the file-editing tools for anything under the generated trees `build/` and `target/` (verified: an edit tool write there is answered `Permission denied: edit`; shell redirection is not restricted — permissions police tools, not the OS). OpenCode V2 reads `AGENTS.md` only (no `CLAUDE.md` fallback); a nested `AGENTS.md` applies to the subtree it sits in.
+- Long-form procedures live in `.opencode/skills/`, loaded on demand instead of bloating every turn:
+  - `real-window-verification` — build, launch, exercise, photograph, mutation-check and report a change. Load it before claiming anything works, and read its `references/dev-harness.md` for the `KOGAVIEW_DEV_*` hooks.
+  - `qt-quick-pitfalls` — input handlers, transform math, binding loops, popup placement and menu width. Load it before editing QML or debugging presentation.
+  - `cxx-qt` — the bridge (`bridge.rs`), its generated header, the `cxx-qt-build`/CMake wiring and the `KogaViewBridge` QML type. Load it before changing anything that crosses Rust ↔ Qt.
+- `.opencode/commands/` wraps the repeatable steps: `/doctor`, `/rebuild`, `/test`, `/run`, `/logs`, `/verify`, `/handoff`. They are prompts, not a second command path — they still go through `just` and the same gateway.
+- Scratch space is `/tmp/opencode` (isolated `XDG_*` roots, fixtures, screenshots). Generated artifacts, runtime state and temporary fixtures stay out of the repository, and project state is never parked in an external service.
+
+## Instruction precedence and fast start
+- Follow the nearest applicable `AGENTS.md`; explicit user requirements take precedence over repository guidance.
+- When documents conflict, use the newer decision recorded in `docs/adr/` and update the stale document in the same change.
+- Before editing: run `just doctor`, inspect `git status --short`, and identify the owning layer (protocol, Core, adapter, QML, or platform).
+- After editing: run the narrowest relevant check, then the full `just test` gate when practical; run `cargo fmt --check` for Rust changes.
+- Never report a test, launch, screenshot, or platform check that was not actually performed.
+
 ## Non-negotiable rules
 - Rust modular monolith, Qt 6/QML with CXX-Qt bridge; target GNOME, KDE Plasma, and Windows.
 - UI is the eyes: render AppState and translate interactions into typed Envelope commands. No domain mutations, business rules, filesystem I/O, or image processing in QML.
@@ -40,11 +56,14 @@ Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implem
 8. Mutation-check the fix selectively: revert the fix (or plant one small fault in a code path the fix owns), rebuild, confirm the new test **fails**, restore it and confirm it **passes**. A few targeted mutations, not the whole file — never a mutation framework or a batch script that walks the tree. Report what was mutated and what each mutation did to the suite.
 9. Report what was actually run, OS/session, evidence, limitations and unverified areas.
 
-## First implementation milestone
-- Bootstrap Cargo workspace and CMake/Qt/CXX-Qt desktop shell.
-- Define typed protocol, AppState revision, in-process command gateway, structured logs and minimal journal.
-- Implement `OpenImage` end-to-end from QML and CLI through the same gateway, with an observable state transition and rendered image.
-- Add local IPC transport, then MCP adapter, after command contracts stabilize.
+## Delivery baseline and next milestones
+- The repository currently contains the M0/M1 desktop shell and browsing slice.
+- Do not repeat bootstrap work that already exists; use `docs/SESSION-STATE.md`
+  and `docs/IMPLEMENTATION_PLAN.md` to select the next missing vertical slice.
+- Keep the existing Cargo/CMake/Qt/CXX-Qt shell healthy while extending it.
+- Preserve the typed protocol, revisioned AppState, command gateway, structured logs and journal.
+- Extend `OpenImage` and browsing behavior through the same gateway before adding new front ends.
+- Add local IPC transport, then MCP adapter, only after command contracts stabilize.
 - Avoid prematurely splitting into too many crates, building a second command path, or introducing GPU complexity before profiling.
 
 ## Flatpak readiness (mandatory from day one)
