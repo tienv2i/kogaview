@@ -593,6 +593,20 @@ ApplicationWindow {
         sequence: "F5"
         onActivated: root.send({ type: "refresh" })
     }
+    // Workspace navigation, the same guarded path the switcher buttons take:
+    // leaving the Editor with unsaved edits asks before it goes.
+    Shortcut {
+        sequence: "Ctrl+1"
+        onActivated: root.guardEditorLeave({ workspace: "browser" })
+    }
+    Shortcut {
+        sequence: "Ctrl+2"
+        onActivated: root.guardEditorLeave({ workspace: "viewer" })
+    }
+    Shortcut {
+        sequence: "Ctrl+3"
+        onActivated: root.guardEditorLeave({ workspace: "editor" })
+    }
 
     header: ToolBar {
         id: headerBar
@@ -706,6 +720,8 @@ ApplicationWindow {
             ToolButton {
                 visible: bridge.busy
                 text: qsTr("Cancel")
+                focusPolicy: Qt.NoFocus
+                activeFocusOnTab: false
                 onClicked: root.send({ type: "cancel_operation" })
             }
         }

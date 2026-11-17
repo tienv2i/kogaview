@@ -16,6 +16,7 @@
 #include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
+#include <QKeyEvent>
 #include <QPointingDevice>
 #include <QQmlEngine>
 #include <QQmlExpression>
@@ -1207,6 +1208,204 @@ private slots:
     activate(QStringLiteral("Actual size"));
     QCOMPARE(zoom(), 1.0);
     QCOMPARE(commands.count(), 0);
+  }
+
+  // ---------------------------------------------------------------- keyboard
+
+private:
+  /// The Viewer holds keyboard focus while its workspace is up; a dead focus
+  /// would make every test below look like a dead shortcut.
+  void giveKeyboardFocus()
+  {
+    m_view->rootObject()->forceActiveFocus();
+    QCoreApplication::processEvents();
+    QVERIFY2(m_viewer->property("activeFocus").toBool(),
+             "the Viewer never took keyboard focus");
+  }
+
+  /// Publish a folder of images without waiting for a decode.
+  void showImages(const QStringList& images, int index)
+  {
+    m_viewer->setProperty("viewerImages", images);
+    m_viewer->setProperty("entries", QVariantList());
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), images.value(index));
+    state.insert(QStringLiteral("viewerIndex"), index);
+    m_viewer->setProperty("state", state);
+    QCoreApplication::processEvents();
+  }
+
+  static QStringList commandTypes(const QSignalSpy& spy)
+  {
+    QStringList types;
+    for (const QList<QVariant>& call : spy) {
+      types.append(call.at(0).toMap().value(QStringLiteral("type")).toString());
+    }
+    return types;
+  }
+
+private slots:
+  /// Arrows, Page keys and Space walk the folder through Core's own
+  /// `viewer_previous`/`viewer_next`, not through QML-side index arithmetic.
+  void navigationKeysAskCoreForTheNeighbour()
+  {
+    showImages({ m_landscape, m_portrait }, 0);
+    giveKeyboardFocus();
+    QSignalSpy spy(m_viewer, SIGNAL(command(QVariant)));
+
+    QTest::keyClick(m_view, Qt::Key_Right);
+    QTest::keyClick(m_view, Qt::Key_PageDown);
+    QTest::keyClick(m_view, Qt::Key_Space);
+    QTest::keyClick(m_view, Qt::Key_Left);
+    QTest::keyClick(m_view, Qt::Key_PageUp);
+    QTest::keyClick(m_view, Qt::Key_Space, Qt::ShiftModifier);
+    QCoreApplication::processEvents();
+
+    QCOMPARE(commandTypes(spy),
+             (QStringList{ QStringLiteral("viewer_next"), QStringLiteral("viewer_next"),
+                           QStringLiteral("viewer_next"), QStringLiteral("viewer_previous"),
+                           QStringLiteral("viewer_previous"),
+                           QStringLiteral("viewer_previous") }));
+  }
+
+  /// Home/End jump without stepping, which is a `viewer_open` on that path.
+  void homeAndEndOpenTheFolderEnds()
+  {
+    showImages({ m_landscape, m_portrait }, 0);
+    giveKeyboardFocus();
+    QSignalSpy spy(m_viewer, SIGNAL(command(QVariant)));
+
+    QTest::keyClick(m_view, Qt::Key_End);
+    QTest::keyClick(m_view, Qt::Key_Home);
+    QCoreApplication::processEvents();
+
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("viewer_open"));
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("path")).toString(), m_portrait);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("path")).toString(), m_landscape);
+  }
+
+  /// Zoom/fit keys own presentation state only: no command reaches Core, and
+  /// `autoFit` follows the same rule the toolbar buttons use.
+  void zoomKeysChangeTheViewNotTheState()
+  {
+    giveKeyboardFocus();
+    QSignalSpy spy(m_viewer, SIGNAL(command(QVariant)));
+    const qreal fitted = zoom();
+
+    QTest::keyClick(m_view, Qt::Key_Plus);
+    QCoreApplication::processEvents();
+    QVERIFY2(zoom() > fitted, qPrintable(QStringLiteral("+ did not zoom in: %1").arg(zoom())));
+    QCOMPARE(m_viewer->property("autoFit").toBool(), false);
+
+    const qreal afterFirst = zoom();
+    QTest::keyClick(m_view, Qt::Key_Plus);
+    QCoreApplication::processEvents();
+    QTest::keyClick(m_view, Qt::Key_Minus);
+    QCoreApplication::processEvents();
+    QVERIFY2(qAbs(zoom() - afterFirst) < 0.001,
+             qPrintable(QStringLiteral("+ then − did not return to %1, it is %2")
+                          .arg(afterFirst)
+                          .arg(zoom())));
+
+    QTest::keyClick(m_view, Qt::Key_0);
+    QCoreApplication::processEvents();
+    QCOMPARE(zoom(), 1.0);
+
+    QTest::keyClick(m_view, Qt::Key_F);
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("autoFit").toBool(), true);
+    QVERIFY2(qAbs(zoom() - fitted) < 0.001,
+             qPrintable(QStringLiteral("F left the zoom at %1, expected the fit %2")
+                          .arg(zoom())
+                          .arg(fitted)));
+    QCOMPARE(spy.count(), 0);
+  }
+
+  /// R/Shift+R and H/V are the canvas menu's rotate and flip, reached from the
+  /// keyboard; T asks the shell to toggle the filmstrip.
+  void presentationKeysTurnAndFlipThePicture()
+  {
+    giveKeyboardFocus();
+    QSignalSpy spy(m_viewer, SIGNAL(command(QVariant)));
+
+    QTest::keyClick(m_view, Qt::Key_R);
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("rotationAngle").toInt(), 90);
+    QTest::keyClick(m_view, Qt::Key_R, Qt::ShiftModifier);
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("rotationAngle").toInt(), 0);
+
+    QTest::keyClick(m_view, Qt::Key_H);
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("flipH").toBool(), true);
+    QTest::keyClick(m_view, Qt::Key_V);
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("flipV").toBool(), true);
+
+    QTest::keyClick(m_view, Qt::Key_T);
+    QCoreApplication::processEvents();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("toggle_filmstrip"));
+  }
+
+  /// Up/Down nudge a zoomed picture through the same offsets a drag writes.
+  void upAndDownPanTheZoomedPicture()
+  {
+    giveKeyboardFocus();
+    zoomTo(2.0);
+    const qreal startY = m_viewer->property("offsetY").toReal();
+
+    QTest::keyClick(m_view, Qt::Key_Up);
+    QCoreApplication::processEvents();
+    const qreal afterUp = m_viewer->property("offsetY").toReal();
+    QVERIFY2(afterUp > startY,
+             qPrintable(QStringLiteral("Up did not move the picture: %1 -> %2")
+                          .arg(startY)
+                          .arg(afterUp)));
+
+    QTest::keyClick(m_view, Qt::Key_Down);
+    QCoreApplication::processEvents();
+    QVERIFY2(m_viewer->property("offsetY").toReal() < afterUp,
+             "Down did not move the picture back");
+  }
+
+  /// Delete trashes the image on screen once per press; Escape goes back to the
+  /// Browser. Ctrl combinations belong to the shell and must not leak in.
+  void deleteTrashesOnceAndEscapeReturnsToTheBrowser()
+  {
+    const QString path = m_landscape;
+    showImages({ path, m_portrait }, 0);
+    giveKeyboardFocus();
+    QSignalSpy spy(m_viewer, SIGNAL(command(QVariant)));
+
+    QTest::keyClick(m_view, Qt::Key_R, Qt::ControlModifier);
+    QCoreApplication::processEvents();
+    QCOMPARE(spy.count(), 0);
+
+    QTest::keyClick(m_view, Qt::Key_Delete);
+    QCoreApplication::processEvents();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("trash"));
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ path });
+
+    // A held key arrives as the same key with `isAutoRepeat` set; it must not
+    // trash again (the folder would empty one repeat at a time).
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier, QString(), true);
+    QCoreApplication::sendEvent(m_view, &repeat);
+    QCoreApplication::processEvents();
+    QCOMPARE(spy.count(), 1);
+
+    QTest::keyClick(m_view, Qt::Key_Escape);
+    QCoreApplication::processEvents();
+    QCOMPARE(spy.count(), 2);
+    const QVariantMap back = spy.at(1).at(0).toMap();
+    QCOMPARE(back.value(QStringLiteral("type")).toString(), QStringLiteral("set_workspace"));
+    QCOMPARE(back.value(QStringLiteral("workspace")).toString(), QStringLiteral("browser"));
   }
 };
 

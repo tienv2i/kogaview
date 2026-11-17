@@ -85,6 +85,37 @@
 - A handler cannot infer its view, so `view:` is set explicitly: a missing view
   scrolls nothing rather than silently scrolling the wrong item.
 
+## Keyboard operation
+- Plain-key shortcuts live in the workspace that owns them — `Keys.onPressed`
+  on `BrowserView.qml` and `Viewer.qml` — not in a window-wide `Shortcut`, which
+  would also fire while a text field, menu or dialog has the keyboard. Other
+  `Ctrl` and `Alt` combinations stay in `Main.qml`; the Browser's Ctrl+A is the
+  one modified key a view owns.
+- Viewer: Left/PageUp/Shift+Space previous, Right/PageDown/Space next,
+  Home/End first/last (`viewer_open`), Up/Down pan 60 px, `+`/`=` zoom in,
+  `-`/`_` zoom out, `0`/`1` actual size, `F` fit, `R` rotate right (Shift+R
+  left), `H`/`V` flip, `T` toggle the filmstrip, Delete trash once, and
+  Escape/Backspace back to the Browser.
+- Browser: arrows move the grid selection (Up/Down by a real row), PageUp/PageDown
+  by a viewport, Home/End to the listing's ends, Enter opens the keyboard cursor,
+  Backspace goes to the parent, Ctrl+A selects the listing, Escape clears the
+  selection (`select []`) and Delete trashes it once.
+- Keys translate to the same typed commands a click emits: `select`, `navigate`,
+  `open_file`, `viewer_next`/`viewer_previous`/`viewer_open`, `trash`,
+  `toggle_filmstrip`, `set_workspace`. Zoom, pan, rotate and flip are Qt
+  presentation state and emit no command, exactly like their toolbar buttons.
+- Focus belongs to the view: both workspace roots are `focus: true` and take
+  active focus on completion, while non-text controls that would otherwise eat an
+  arrow (breadcrumb ellipsis, tree chevron, footer Cancel) are `Qt.NoFocus`.
+- The Browser's keyboard cursor is presentation-only: Core owns `selection`, and
+  the view only remembers the cell the next arrow walks from.
+- A key with no image does nothing, and Delete ignores `isAutoRepeat`, so holding
+  the key trashes once rather than walking the folder into the trash.
+- Window-level keys: Ctrl+O/Ctrl+Shift+O (file/folder), Ctrl+S/Ctrl+Shift+S
+  (Editor save/save-as), Ctrl+Q (quit), F5 (refresh) and Ctrl+1/2/3 (Browser/
+  Viewer/Editor). Workspace switches go through the same guarded Editor-leave
+  path as the switcher buttons.
+
 ## Explorer refresh contract
 - Every operation that can change the folder tree on disk (copy, move, trash,
   delete, new folder, explicit refresh) bumps `treeRevision` once it completes.

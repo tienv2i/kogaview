@@ -41,6 +41,15 @@ Item {
     property bool menuIsDir: false
     property string newFolderParent: ""
 
+    /// Keyboard ownership, as in the Viewer: the Browser view holds focus while
+    /// its workspace is up, and its buttons refuse focus, so the arrows below
+    /// move the grid instead of a toolbar.
+    focus: true
+    /// Where the keyboard cursor rests. Core owns `selection`; this only
+    /// remembers the cell the next arrow starts from, because a selection that
+    /// left the folder (or an empty one) has no index to walk from.
+    property int keyboardCursor: -1
+
     // Sidebar widths. Seeded from the theme, then owned by the drag handles so
     // both panels are resizable; nothing is persisted yet.
     property real leftPanelWidth: theme.panelWidth
@@ -134,6 +143,197 @@ Item {
         if (!folder) return;
         view.command({ type: "navigate", path: view.parentPath(folder) });
     }
+
+    // ------------------------------------------------------------- keyboard
+    //
+    // The grid is driven like any file manager: arrows move one cell or row,
+    // PageUp/PageDown move a screenful, Home/End jump to the ends, Enter opens
+    // the cell (folder -> navigate, image -> Viewer), Backspace goes to the
+    // parent, Ctrl+A selects the listing, Delete trashes the selection and
+    // Escape clears it. Every key that changes selection or the folder emits
+    // the same typed command a click does; nothing is mutated in QML.
+
+    /// Index of `path` in the listing, or -1 when it left the folder.
+    function indexOfPath(path) {
+        var list = view.entries || [];
+        for (var index = 0; index < list.length; ++index) {
+            if (list[index] && list[index].path === path) return index;
+        }
+        return -1;
+    }
+
+    /// The cell the next key starts from: the first selected entry the grid
+    /// still shows, then the remembered cursor, then the first cell.
+    function currentIndex() {
+        var selection = view.state.selection || [];
+        for (var index = 0; index < selection.length; ++index) {
+            var found = view.indexOfPath(selection[index]);
+            if (found >= 0) return found;
+        }
+        var count = (view.entries || []).length;
+        if (view.keyboardCursor >= 0 && view.keyboardCursor < count) {
+            return view.keyboardCursor;
+        }
+        return count > 0 ? 0 : -1;
+    }
+
+    /// Move the keyboard cursor to `index` and select exactly that entry.
+    /// `grid.currentIndex` and `positionViewAtIndex` make the movement visible
+    /// before the next state snapshot arrives.
+    function selectIndex(index) {
+        var list = view.entries || [];
+        if (list.length === 0) return;
+        index = Math.max(0, Math.min(list.length - 1, index));
+        view.keyboardCursor = index;
+        grid.currentIndex = index;
+        grid.positionViewAtIndex(index, GridView.Contain);
+        var selection = view.state.selection || [];
+        if (selection.length === 1 && selection[0] === list[index].path) return;
+        view.command({ type: "select", paths: [list[index].path] });
+    }
+
+    /// How many cells fit in a row, so Up/Down move by a real row.
+    function gridColumns() {
+        return Math.max(1, Math.floor(grid.width / Math.max(1, grid.cellWidth)));
+    }
+
+    function gridPageRows() {
+        return Math.max(1, Math.floor(grid.height / Math.max(1, grid.cellHeight)));
+    }
+
+    function moveCursor(delta) {
+        var index = view.currentIndex();
+        if (index < 0) return;
+        // The first arrow out of an empty selection lands on the first cell
+        // instead of skipping it, which is what a file manager does.
+        if ((view.state.selection || []).length === 0 && view.keyboardCursor < 0) {
+            view.selectIndex(index);
+            return;
+        }
+        view.selectIndex(index + delta);
+    }
+
+    function moveCursorRows(rows) {
+        view.moveCursor(rows * view.gridColumns());
+    }
+
+    function openCursor() {
+        var list = view.entries || [];
+        var index = view.currentIndex();
+        if (index >= 0 && list[index]) view.openEntry(list[index]);
+    }
+
+    function selectAllEntries() {
+        var list = view.entries || [];
+        if (list.length === 0) return;
+        var paths = [];
+        for (var index = 0; index < list.length; ++index) {
+            if (list[index]) paths.push(list[index].path);
+        }
+        view.keyboardCursor = view.currentIndex();
+        view.command({ type: "select", paths: paths });
+    }
+
+    function clearSelection() {
+        if ((view.state.selection || []).length > 0) {
+            view.command({ type: "select", paths: [] });
+        }
+    }
+
+    /// Trash what is selected, or the cell under the keyboard cursor when the
+    /// selection has left the folder. Trash is recoverable, so — like the file
+    /// menu's "Move to trash" — it does not ask first; permanent delete keeps
+    /// its confirmation dialog.
+    function trashSelection() {
+        var list = view.entries || [];
+        var selection = view.state.selection || [];
+        var paths = [];
+        for (var index = 0; index < selection.length; ++index) {
+            if (view.indexOfPath(selection[index]) >= 0) paths.push(selection[index]);
+        }
+        if (paths.length === 0) {
+            var cursor = view.currentIndex();
+            if (cursor >= 0 && list[cursor]) paths.push(list[cursor].path);
+        }
+        if (paths.length > 0) {
+            view.command({ type: "trash", paths: paths });
+        }
+    }
+
+    Keys.onPressed: function(event) {
+        if ((event.modifiers & Qt.AltModifier) !== 0) {
+            return;
+        }
+        if ((event.modifiers & Qt.ControlModifier) !== 0) {
+            // Ctrl+A is the one modified key the grid owns; every other Ctrl
+            // combination belongs to the shell's window shortcuts.
+            if (event.key === Qt.Key_A) {
+                view.selectAllEntries();
+                event.accepted = true;
+            }
+            return;
+        }
+        switch (event.key) {
+        case Qt.Key_Left:
+            view.moveCursor(-1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Right:
+            view.moveCursor(1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Up:
+            view.moveCursorRows(-1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Down:
+            view.moveCursorRows(1);
+            event.accepted = true;
+            break;
+        case Qt.Key_PageUp:
+            view.moveCursorRows(-view.gridPageRows());
+            event.accepted = true;
+            break;
+        case Qt.Key_PageDown:
+            view.moveCursorRows(view.gridPageRows());
+            event.accepted = true;
+            break;
+        case Qt.Key_Home:
+            view.selectIndex(0);
+            event.accepted = true;
+            break;
+        case Qt.Key_End:
+            view.selectIndex((view.entries || []).length - 1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Return:
+        case Qt.Key_Enter:
+            view.openCursor();
+            event.accepted = true;
+            break;
+        case Qt.Key_Backspace:
+            view.goUp();
+            event.accepted = true;
+            break;
+        case Qt.Key_Escape:
+            view.clearSelection();
+            event.accepted = true;
+            break;
+        case Qt.Key_Delete:
+            // Holding the key must not walk the folder into the trash: one
+            // press, one command. The repeat arrives as the same key with
+            // `isAutoRepeat` set.
+            if (!event.isAutoRepeat) {
+                view.trashSelection();
+                event.accepted = true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    Component.onCompleted: view.forceActiveFocus()
 
     function promptNewFolder(parent) {
         view.newFolderParent = parent || view.state.currentFolder || "";
@@ -402,6 +602,8 @@ Item {
                         text: qsTr("…")
                         implicitWidth: 28
                         implicitHeight: 28
+                        focusPolicy: Qt.NoFocus
+                        activeFocusOnTab: false
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Hidden parent folders")
                         onClicked: hiddenMenu.popup()
@@ -853,6 +1055,8 @@ Item {
                         implicitHeight: 20
                         text: node.expanded ? "▾" : "▸"
                         display: AbstractButton.TextOnly
+                        focusPolicy: Qt.NoFocus
+                        activeFocusOnTab: false
                         onClicked: node.toggleExpanded()
                     }
 

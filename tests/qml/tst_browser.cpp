@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFontMetricsF>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QPointingDevice>
 #include <QQmlEngine>
 #include <QQmlExpression>
@@ -432,6 +433,28 @@ private:
     return state;
   }
 
+  /// A state snapshot carrying `selection`, so a test starts from a settled
+  /// Core-owned selection instead of the empty one `init` installs.
+  void showSelection(const QStringList& paths)
+  {
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("treeRevision"), 0);
+    state.insert(QStringLiteral("selection"), paths);
+    showState(browserItem(), state);
+    settle();
+  }
+
+  /// Give the view the keyboard, the way showing the window does in the app.
+  /// The assertion is the test's own guard: a dead focus would make every key
+  /// below a no-op that looks like a broken shortcut.
+  void giveKeyboardFocus()
+  {
+    browserItem()->forceActiveFocus();
+    settle();
+    QVERIFY2(browserItem()->property("activeFocus").toBool(),
+             "the Browser never took keyboard focus");
+  }
+
 private slots:
   void initTestCase()
   {
@@ -464,6 +487,7 @@ private slots:
     view->setProperty("expandedPaths", QVariantMap());
     view->setProperty("collapsedPaths", QVariantMap());
     view->setProperty("lastTreeRevision", -1);
+    view->setProperty("keyboardCursor", -1);
     // The stub cache of a previous test lived on its stack; drop it before it
     // dangles and before this test decides whether it wants a cache at all.
     // (A null *QObject pointer*, not an invalid QVariant: the property is `var`
@@ -1683,6 +1707,177 @@ private slots:
     QCOMPARE(editInEditor.count(), 1);
     QCOMPARE(editInEditor.at(0).at(0).toString(), QStringLiteral("/root/img.png"));
     QCOMPARE(commands.count(), 0);
+  }
+
+  // ---------------------------------------------------------------- keyboard
+
+  /// Arrows are the grid's own selection, not a scroll: the first arrow lands
+  /// on the first cell, the next ones walk it, and every landing is the same
+  /// `select` command a click emits.
+  void arrowKeysWalkTheGridSelection()
+  {
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+
+    QTest::keyClick(m_browser, Qt::Key_Right);
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/dirA") });
+
+    QTest::keyClick(m_browser, Qt::Key_Right);
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/img.png") });
+
+    QTest::keyClick(m_browser, Qt::Key_Left);
+    settle();
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(2).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/dirA") });
+  }
+
+  /// Up/Down move by a real row, which needs the column count the grid applied.
+  void downMovesByOneGridRow()
+  {
+    QVariantMap state = baseState();
+    QVariantList entries;
+    for (int index = 0; index < 6; ++index) {
+      entries.append(entry(QStringLiteral("file%1.png").arg(index),
+                           QStringLiteral("/root/file%1.png").arg(index), false, true));
+    }
+    // `baseState()` resets the member listing, so the six entries replace it
+    // afterwards and `showState` publishes exactly that.
+    entryList = entries;
+    showState(browserItem(), state);
+    settle();
+    giveKeyboardFocus();
+
+    // The expected target is the cell actually drawn directly below the first
+    // one, not a column count recomputed from two properties: that is the
+    // movement the eye sees, and it stays honest if the grid's arithmetic
+    // changes. It is read after the first key and a settle, so a layout pass
+    // that is still pending cannot hand the test a stale row.
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_Right);
+    settle();
+
+    QQuickItem* first = findCell(QStringLiteral("/root/file0.png"));
+    QVERIFY2(first != nullptr, "the first cell was not drawn");
+    QQuickItem* below = nullptr;
+    for (QQuickItem* candidate : items(browserItem(), QStringLiteral("fileCell"))) {
+      if (candidate == first || qAbs(candidate->x() - first->x()) > 1.0) continue;
+      if (candidate->y() <= first->y()) continue;
+      if (below == nullptr || candidate->y() < below->y()) below = candidate;
+    }
+    QVERIFY2(below != nullptr, "the fixture needs a second row of cells");
+    const QString belowPath = readQml(below, QStringLiteral("entry.path")).toString();
+
+    QTest::keyClick(m_browser, Qt::Key_Down);
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ belowPath });
+  }
+
+  /// Enter opens the keyboard cursor: a folder navigates (never re-roots the
+  /// tree), an image goes to the Viewer.
+  void enterOpensTheSelectedEntry()
+  {
+    showSelection(QStringList{ QStringLiteral("/root/dirA") });
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_Return);
+    settle();
+    QCOMPARE(describe(commands(spy)), QStringLiteral("navigate:/root/dirA"));
+
+    spy.clear();
+    showSelection(QStringList{ QStringLiteral("/root/img.png") });
+    giveKeyboardFocus();
+    QTest::keyClick(m_browser, Qt::Key_Return);
+    settle();
+    QCOMPARE(describe(commands(spy)), QStringLiteral("open_file:"));
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/img.png") });
+  }
+
+  /// Backspace is "up one folder" and routes through the same navigate command
+  /// the breadcrumb emits.
+  void backspaceNavigatesToTheParent()
+  {
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_Backspace);
+    settle();
+    QCOMPARE(describe(commands(spy)), QStringLiteral("navigate:/root"));
+  }
+
+  /// Ctrl+A selects the whole listing, Ctrl+other stays the shell's.
+  void ctrlASelectsEveryEntry()
+  {
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_A, Qt::ControlModifier);
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/dirA"), QStringLiteral("/root/img.png") }));
+
+    // A Ctrl combination the view does not own must not become a selection.
+    spy.clear();
+    QTest::keyClick(m_browser, Qt::Key_R, Qt::ControlModifier);
+    settle();
+    QCOMPARE(spy.count(), 0);
+  }
+
+  /// Delete trashes the selection (recoverable, so no confirmation), and Escape
+  /// clears it through `select []`.
+  void deleteTrashesTheSelectionAndEscapeClearsIt()
+  {
+    showSelection(QStringList{ QStringLiteral("/root/dirA"), QStringLiteral("/root/img.png") });
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+
+    QTest::keyClick(m_browser, Qt::Key_Delete);
+    settle();
+    QCOMPARE(spy.count(), 1);
+    const QVariantMap trash = spy.at(0).at(0).toMap();
+    QCOMPARE(trash.value(QStringLiteral("type")).toString(), QStringLiteral("trash"));
+    QCOMPARE(trash.value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/dirA"), QStringLiteral("/root/img.png") }));
+
+    // Held Delete repeats the same key with `isAutoRepeat`; one press must stay
+    // one command.
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier, QString(), true);
+    QCoreApplication::sendEvent(m_browser, &repeat);
+    settle();
+    QCOMPARE(spy.count(), 1);
+
+    spy.clear();
+    QTest::keyClick(m_browser, Qt::Key_Escape);
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("select"));
+    QVERIFY(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList().isEmpty());
+  }
+
+  /// Home and End land on the first and last cell of the listing.
+  void homeAndEndJumpToTheEnds()
+  {
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_End);
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/img.png") });
+    QTest::keyClick(m_browser, Qt::Key_Home);
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/dirA") });
   }
 };
 

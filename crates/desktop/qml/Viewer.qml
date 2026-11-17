@@ -81,6 +81,12 @@ Item {
     signal requestDestination(string action, var paths)
     signal requestDelete(var paths)
 
+    /// Keyboard ownership. The viewing area is the window's focus target while
+    /// this workspace is up, so the shortcuts below reach the view instead of a
+    /// toolbar button (those refuse focus) or the Loader. Opening a popup or a
+    /// dialog moves focus to it and the keys go there until it closes.
+    focus: true
+
     /// The widths `Main.qml` measured for `Theme.menuEntryLabels`, so the canvas
     /// menu is as wide as the longest label it can show instead of the style's
     /// fixed 200 px. Empty in the QML harness, where the theme's floor applies.
@@ -201,6 +207,36 @@ Item {
         view.flipV = !view.flipV;
     }
 
+    /// Nudge the picture with the arrow keys. Only meaningful when the zoomed
+    /// picture is larger than the viewport; `clampOffsets()` decides that, so a
+    /// fitted picture simply stays centred.
+    function panBy(dx, dy) {
+        view.offsetX += dx;
+        view.offsetY += dy;
+        view.clampOffsets();
+    }
+
+    /// Ask Core for the neighbouring image. The Viewer only translates the key;
+    /// `viewer_previous`/`viewer_next` own the wrap-around and the state.
+    function stepImage(delta) {
+        if (view.images.length === 0) {
+            return;
+        }
+        view.command({ type: delta < 0 ? "viewer_previous" : "viewer_next" });
+    }
+
+    /// Jump to an index in the folder without stepping through every file.
+    function openImageAt(index) {
+        if (index < 0 || index >= view.images.length) {
+            return;
+        }
+        view.command({ type: "viewer_open", path: view.images[index] });
+    }
+
+    function backToBrowser() {
+        view.command({ type: "set_workspace", workspace: "browser" });
+    }
+
     // Turning a picture swaps the sides that must fit, so a fitted view has to
     // be refitted even though the image itself did not change.
     onRotationAngleChanged: view.refitOrClamp()
@@ -218,6 +254,128 @@ Item {
         view.zoom = 1;
         view.offsetX = 0;
         view.offsetY = 0;
+    }
+
+    // ------------------------------------------------------------- keyboard
+    //
+    // The map is the one a desktop image viewer teaches: arrows/PageUp/PageDown
+    // walk the folder, +/− zoom, 0/1 show actual size, F fits, R turns, H/V
+    // flip, T toggles the filmstrip, Delete trashes, Escape/Backspace returns to
+    // the Browser. Up/Down pan instead of walking, because a zoomed picture is
+    // looked at more often than the folder is stepped through vertically.
+    //
+    // Ctrl and Alt combinations are left alone: `Main.qml` owns those window
+    // shortcuts (Ctrl+O, Ctrl+S, …) and a view must not swallow them. `event.
+    // isAutoRepeat` is honoured for the destructive key only — holding Delete
+    // must not empty the folder.
+    Keys.onPressed: function(event) {
+        var shift = (event.modifiers & Qt.ShiftModifier) !== 0;
+        if ((event.modifiers & Qt.ControlModifier) !== 0
+                || (event.modifiers & Qt.AltModifier) !== 0) {
+            return;
+        }
+        var hasImage = !!view.currentPath;
+        switch (event.key) {
+        case Qt.Key_Left:
+        case Qt.Key_PageUp:
+            view.stepImage(-1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Right:
+        case Qt.Key_PageDown:
+            view.stepImage(1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Space:
+            // Shift+Space walks backwards, the convention in every viewer that
+            // offers Space as "next".
+            view.stepImage(shift ? -1 : 1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Home:
+            view.openImageAt(0);
+            event.accepted = true;
+            break;
+        case Qt.Key_End:
+            view.openImageAt(view.images.length - 1);
+            event.accepted = true;
+            break;
+        case Qt.Key_Up:
+            if (hasImage) {
+                view.panBy(0, 60);
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_Down:
+            if (hasImage) {
+                view.panBy(0, -60);
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_Plus:
+        case Qt.Key_Equal:
+            if (hasImage) {
+                view.zoomIn();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_Minus:
+        case Qt.Key_Underscore:
+            if (hasImage) {
+                view.zoomOut();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_0:
+        case Qt.Key_1:
+            if (hasImage) {
+                view.actualSize();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_F:
+            if (hasImage) {
+                view.fit();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_R:
+            if (hasImage) {
+                if (shift) view.rotateLeft();
+                else view.rotateRight();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_H:
+            if (hasImage) {
+                view.toggleFlipH();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_V:
+            if (hasImage) {
+                view.toggleFlipV();
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_T:
+            view.command({ type: "toggle_filmstrip" });
+            event.accepted = true;
+            break;
+        case Qt.Key_Delete:
+            if (hasImage && !event.isAutoRepeat) {
+                view.command({ type: "trash", paths: [view.currentPath] });
+                event.accepted = true;
+            }
+            break;
+        case Qt.Key_Escape:
+        case Qt.Key_Backspace:
+            view.backToBrowser();
+            event.accepted = true;
+            break;
+        default:
+            break;
+        }
     }
 
     ColumnLayout {
@@ -633,6 +791,7 @@ Item {
     }
 
     Component.onCompleted: {
+        view.forceActiveFocus();
         if (view.imageIndex >= 0) {
             strip.positionViewAtIndex(view.imageIndex, ListView.Center);
         }
