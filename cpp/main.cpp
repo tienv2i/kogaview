@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
@@ -246,7 +247,19 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
 
   const QString path = qEnvironmentVariable("KOGAVIEW_DEV_SCREENSHOT");
   if (!path.isEmpty()) {
-    auto grab = [rootObject, &app, path]() {
+    // The grab has to come from an exposed window. A covered window on this
+    // Wayland session stops receiving frame callbacks and reports itself
+    // unexposed, and `grabWindow()` then returns the last *committed* frame —
+    // which, right after the launch resize, is the pre-fit one. That produced a
+    // screenshot of a picture at the wrong zoom with no hint, while the window's
+    // own properties said `zoom 1`. So the hook asks to be raised and activated
+    // (a client may do that while it has focus), waits for exposure, and fails
+    // the run instead of saving a frame it cannot vouch for.
+    auto* clock = new QElapsedTimer;
+    clock->start();
+    auto* retry = new QTimer(&app);
+    retry->setInterval(250);
+    QObject::connect(retry, &QTimer::timeout, &app, [rootObject, &app, path, retry, clock]() {
       auto* window = qobject_cast<QQuickWindow*>(rootObject);
       if (window == nullptr) {
         qCritical() << "KogaView dev screenshot: root object is not a QQuickWindow";
@@ -254,10 +267,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         return;
       }
       if (!window->isExposed()) {
-        qCritical() << "KogaView dev screenshot: window is not exposed";
+        if (clock->elapsed() < 20000) {
+          qInfo() << "KogaView dev screenshot: waiting for an exposed window"
+                  << clock->elapsed() << "ms";
+          return;
+        }
+        qCritical() << "KogaView dev screenshot: window never became exposed";
         app.exit(4);
         return;
       }
+      retry->stop();
 
       const QImage image = window->grabWindow();
       const QFileInfo info(path);
@@ -273,10 +292,18 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_EXIT_AFTER_SCREENSHOT")) {
         app.exit(0);
       }
-    };
+    });
 
     const int delay = qEnvironmentVariableIntValue("KOGAVIEW_DEV_SCREENSHOT_DELAY_MS");
-    QTimer::singleShot(delay > 0 ? delay : 1500, &app, grab);
+    QTimer::singleShot(delay > 0 ? delay : 1500, &app, [retry, rootObject]() {
+      // An occluded window is not exposed, and its last frame is not the
+      // current one. Ask the compositor to bring it forward before waiting.
+      if (auto* window = qobject_cast<QQuickWindow*>(rootObject)) {
+        window->raise();
+        window->requestActivate();
+      }
+      retry->start();
+    });
   }
 
   // QA hook: drive a real interface path that normally needs a click. Only the
