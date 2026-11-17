@@ -24,6 +24,17 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "dev-prod",
+      "displayName": "KogaView dev install (optimized, production identity)",
+      "description": "Optimized build with the KOGAVIEW_DEV_* evidence hooks but the production app ID and data directories; `just install-dev` installs it and sets KOGAVIEW_PROFILE=prod in its wrapper",
+      "binaryDir": "${sourceDir}/build/dev-prod",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "KOGAVIEW_DEV_HARNESS": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -34,6 +45,10 @@
     {
       "name": "release",
       "configurePreset": "release"
+    },
+    {
+      "name": "dev-prod",
+      "configurePreset": "dev-prod"
     }
   ]
 }

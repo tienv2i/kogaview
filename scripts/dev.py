@@ -50,6 +50,13 @@ PROJECT = "KogaView"
 PREFIX = Path(os.environ.get("KOGAVIEW_PREFIX", "/usr/local"))
 RELEASE_DIR = ROOT / "build" / "release"
 RELEASE_BINARY = RELEASE_DIR / "bin" / "kogaview"
+# The optimized build that keeps the `KOGAVIEW_DEV_*` evidence hooks. It is
+# RelWithDebInfo, so `cfg!(debug_assertions)` is off and the identity is the
+# production one (`Profile::current()`), the same data directories and the same
+# app ID as a release install. `just install-dev` puts *this* under the prefix
+# so a development install can be exercised with the hooks the release lacks.
+DEVPROD_DIR = ROOT / "build" / "dev-prod"
+DEVPROD_BINARY = DEVPROD_DIR / "bin" / "kogaview"
 PACKAGING_DIR = ROOT / "packaging" / "linux"
 DESKTOP_TEMPLATE = PACKAGING_DIR / f"{APP_ID_PROD}.desktop.in"
 ICON_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.svg"
@@ -160,7 +167,8 @@ def installed_identity(binary: Path) -> str:
     for path, label in (
         (BINARY, f"dev build, {APP_ID_DEV}"),
         (RELEASE_BINARY, f"release build, {APP_ID_PROD}"),
-        (PREFIX / "bin" / "kogaview", f"installed release build, {APP_ID_PROD}"),
+        (DEVPROD_BINARY, f"dev-prod build, {APP_ID_PROD} (hooks compiled in)"),
+        (PREFIX / "bin" / "kogaview", f"installed build, {APP_ID_PROD}"),
     ):
         if binary == path.resolve():
             return label
@@ -350,12 +358,14 @@ def run_app(args: list[str]) -> int:
 # in "Open With", and `xdg-mime default` stays the user's decision (docs/DESKTOP.md).
 
 
-def build_release() -> int:
-    """Configure and build the release preset; refuse to install anything else.
+def build_preset(preset: str, binary: Path) -> int:
+    """Configure and build one preset; refuse to install anything else.
 
-    A release build is what an installed app must be: the dev harness is
-    compiled only into Debug (`CMakeLists.txt`), and the identity follows the
+    A release build is what an installed app must be: the dev harness is off in
+    a plain Release build (`CMakeLists.txt`), and the identity follows the
     profile, so this binary is `io.github.tienv2i.KogaView`, not `…​.Dev`.
+    `dev-prod` is the development alternative: optimized, hooks compiled in, and
+    still the production identity because `RelWithDebInfo` defines `NDEBUG`.
     """
     setup_result = setup()
     if setup_result != 0:
@@ -367,18 +377,23 @@ def build_release() -> int:
     if linguist:
         environment["KOGAVIEW_LRELEASE"] = linguist
     for step in (
-        ["cmake", "--preset", "release"],
-        ["cmake", "--build", "--preset", "release"],
+        ["cmake", "--preset", preset],
+        ["cmake", "--build", "--preset", preset],
     ):
         result = run(step, env=environment)
         if result.returncode != 0:
             print(f"install: {' '.join(step)} failed; nothing was installed", file=sys.stderr)
             return result.returncode
 
-    if not RELEASE_BINARY.is_file() or not os.access(RELEASE_BINARY, os.X_OK):
-        print(f"install: expected executable missing: {RELEASE_BINARY}", file=sys.stderr)
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        print(f"install: expected executable missing: {binary}", file=sys.stderr)
         return 1
     return 0
+
+
+def build_release() -> int:
+    """Configure and build the release preset."""
+    return build_preset("release", RELEASE_BINARY)
 
 
 def installed_files() -> dict[str, Path]:
@@ -657,16 +672,27 @@ def current_image_handler() -> str:
     return output(["xdg-mime", "query", "default", "image/jpeg"]) or "none"
 
 
-def install() -> int:
-    result = build_release()
+def install(*, development: bool = False) -> int:
+    """Install KogaView under the prefix.
+
+    `development` installs the `dev-prod` binary — the same app ID, the same data
+    directories and the same desktop entry as a release install, plus the
+    `KOGAVIEW_DEV_*` hooks — so a development build can be driven on the real
+    desktop without a second identity. `just install` always builds Release and
+    is what a user gets.
+    """
+    stage = DEVPROD_DIR if development else RELEASE_DIR
+    binary = DEVPROD_BINARY if development else RELEASE_BINARY
+    result = (build_preset("dev-prod", DEVPROD_BINARY) if development
+              else build_release())
     if result != 0:
         return result
 
-    # Everything the install writes is staged under `build/release/` first, so a
-    # failure anywhere below leaves the system untouched.
-    rendered = RELEASE_DIR / f"{APP_ID_PROD}.desktop"
+    # Everything the install writes is staged under the build directory first,
+    # so a failure anywhere below leaves the system untouched.
+    rendered = stage / f"{APP_ID_PROD}.desktop"
     rendered.write_text(render_desktop_entry(), encoding="utf-8")
-    rendered_metainfo = RELEASE_DIR / f"{APP_ID_PROD}.metainfo.xml"
+    rendered_metainfo = stage / f"{APP_ID_PROD}.metainfo.xml"
     rendered_metainfo.write_text(render_metainfo(), encoding="utf-8")
     validator = which("desktop-file-validate")
     if validator:
@@ -688,14 +714,14 @@ def install() -> int:
     # committed, so the icon cannot fork into two drawings.
     rendered_pixmaps: list[Path] = []
     for edge in ICON_PIXMAP_SIZES:
-        staged = RELEASE_DIR / "icons" / f"{edge}x{edge}" / f"{APP_ID_PROD}.png"
+        staged = stage / "icons" / f"{edge}x{edge}" / f"{APP_ID_PROD}.png"
         if rasterise_icon(edge, staged) != 0:
             break
         rendered_pixmaps.append(staged)
 
     targets = installed_files()
     sources = {
-        "binary": (RELEASE_BINARY, "755"),
+        "binary": (binary, "755"),
         "desktop entry": (rendered, "644"),
         "icon": (ICON_SOURCE, "644"),
         "AppStream metadata": (rendered_metainfo, "644"),
@@ -718,7 +744,10 @@ def install() -> int:
     refresh_desktop_caches()
     forget_icon_caches()
 
-    print(f"install: {PROJECT} {APP_ID_PROD} installed under {PREFIX}")
+    flavour = ("development build (RelWithDebInfo, KOGAVIEW_DEV_* hooks, "
+               "production identity)" if development
+               else "release build")
+    print(f"install: {PROJECT} {APP_ID_PROD} installed under {PREFIX} — {flavour}")
     for name, target in targets.items():
         print(f"  {name:18} {target}")
     print(f"  image viewer group  Categories={desktop_categories()}")
@@ -957,6 +986,8 @@ def main() -> int:
         return run_app(sys.argv[2:])
     if command == "install":
         return install()
+    if command == "install-dev":
+        return install(development=True)
     if command == "uninstall":
         return uninstall()
     if command == "package":

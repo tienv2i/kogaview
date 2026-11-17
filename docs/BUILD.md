@@ -12,6 +12,7 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
 | `just doctor` | Print versions, app ID, binary paths, build mode, runtime mode and installation conflicts |
 | `just logs` | Locate/read current dev instance structured logs |
 | `just install` / `uninstall` | Native install/remove into `KOGAVIEW_PREFIX` (`/usr/local` by default) without silently deleting user data, and without changing the default image viewer — see "Install contract" below |
+| `just install-dev` | The same install, of the `dev-prod` preset: optimized, with the `KOGAVIEW_DEV_*` hooks compiled in, and still the production app ID and data directories — see "Development install" below |
 | `just package` | Produce native distributable |
 | `just flatpak-build` / `flatpak-run` | Later: sandbox build and actual runtime verification |
 
@@ -86,6 +87,28 @@ including the generated `index.theme`; it keeps the user's config,
 state/journal/logs and cache. The install registers supported image MIME types
 for **Open With** but does not run `xdg-mime default`; the existing default
 viewer is never changed silently.
+
+### Development install
+
+`just install-dev` exists so the *installed* app can be exercised with the
+evidence harness, which a Release build does not contain. It builds the
+`dev-prod` preset — `RelWithDebInfo` with `KOGAVIEW_DEV_HARNESS=ON` — and
+installs it exactly like a release install:
+
+- the same app ID (`io.github.tienv2i.KogaView`), so the desktop entry, the icon
+  and the dock entry match;
+- the same directories (`$XDG_CONFIG_HOME/kogaview`, …), because `RelWithDebInfo`
+  defines `NDEBUG`, so `Profile::current()` returns `Prod`;
+- no second identity, no `…​.Dev`, no `kogaview-dev` data.
+
+The measured result of that choice: a 33 MB binary (against 28 MB Release and
+220 MB Debug), `app_id="io.github.tienv2i.KogaView"`, `profile="prod"`,
+`state_dir=…/kogaview`, and `KOGAVIEW_DEV_SCREENSHOT` / `KOGAVIEW_DEV_COMMANDS` /
+`KOGAVIEW_DEV_GEOM` all working.
+
+Do **not** symlink `build/dev/bin/kogaview` into the prefix. That binary is the
+`.Dev` identity with `kogaview-dev` directories, so the launcher would not match
+it and it would ignore the configuration the installed app had saved.
 
 `just test packaging` runs `scripts/check_packaging.py`. The check keeps the
 desktop MIME list synchronized with the protocol's advertised extensions and

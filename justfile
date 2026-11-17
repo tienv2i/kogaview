@@ -26,6 +26,12 @@ logs:
 install:
     @python3 scripts/dev.py install
 
+# Development install: same app ID, data directories and desktop entry as
+# `just install`, but optimized-with-hooks instead of Release. Use it to exercise
+# the installed app with the `KOGAVIEW_DEV_*` evidence harness.
+install-dev:
+    @python3 scripts/dev.py install-dev
+
 uninstall:
     @python3 scripts/dev.py uninstall
 

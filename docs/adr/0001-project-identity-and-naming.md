@@ -26,6 +26,13 @@ the short name instead; see ADR 0002.
 - Development identity is selected by the build profile: debug builds are Dev,
   release builds are production. A `KOGAVIEW_PROFILE` environment override is
   accepted only in debug builds for tests.
+- The `dev-prod` preset (`just install-dev`) is deliberately **not** a third
+  identity: it is `RelWithDebInfo`, so `NDEBUG` makes it production on every
+  axis (app ID, directories, desktop entry) while `KOGAVIEW_DEV_HARNESS=ON`
+  keeps the evidence hooks. A development *install* therefore shares the
+  production identity, which is what lets it be driven on a real desktop
+  without a second launcher entry. It must never be what a user installs —
+  `just install` remains Release.
 - XDG runtime directories are namespaced by the short application name, not the
   app ID: `$XDG_STATE_HOME/kogaview-dev/logs/` in development and
   `$XDG_STATE_HOME/kogaview/logs/` in production. See ADR 0002.

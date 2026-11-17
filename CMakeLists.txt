@@ -146,8 +146,11 @@ if(TARGET kogaview_translations)
     KOGAVIEW_TRANSLATIONS_RCC="${KOGAVIEW_TRANSLATIONS_RCC}")
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  # M0-only window-grab evidence harness, never part of a release build.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR KOGAVIEW_DEV_HARNESS)
+  # M0-only window-grab evidence harness, never part of a release build. The
+  # `KOGAVIEW_DEV_HARNESS` cache option exists so the `dev-prod` preset can build
+  # an *optimized* binary with the hooks and the production identity, which is
+  # what a development install needs; a plain Release build keeps it off.
   target_compile_definitions(kogaview PRIVATE KOGAVIEW_DEV_HARNESS)
   # The pan hook drives a real drag; a `DragHandler` needs the pointer sequence
   # `QTest` produces, which a hand-rolled `QMouseEvent` does not satisfy.
