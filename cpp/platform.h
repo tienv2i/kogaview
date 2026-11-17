@@ -2,6 +2,7 @@
 
 #include <QFont>
 #include <QObject>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -59,6 +60,15 @@ public:
   /// measurement happens here, where it is a plain computation with no binding
   /// involved, and QML only receives the numbers.
   Q_INVOKABLE QVariantList textWidths(const QStringList& labels, const QFont& font);
+
+  /// Pixel size an image file declares, read from its header only.
+  ///
+  /// `open FILE` from the shell sizes the window to the picture before the
+  /// Viewer has decoded anything, so the user never sees 1280×820 followed by a
+  /// jump to the image's shape. Reading the header costs a file open, not a
+  /// decode, which is why this runs synchronously at startup. Returns an empty
+  /// size for a file whose header cannot be read; the caller keeps its default.
+  Q_INVOKABLE QSize imageSize(const QString& path) const;
 
   /// File-dialog filter for the image formats Core can decode
   /// (`kogaview_protocol::IMAGE_EXTENSIONS`). One definition for every chooser.

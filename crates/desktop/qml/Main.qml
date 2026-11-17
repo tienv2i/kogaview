@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import QtQuick.Window
 import io.github.tienv2i.KogaView 1.0
 
 ApplicationWindow {
@@ -9,8 +10,12 @@ ApplicationWindow {
 
     width: 1280
     height: 820
-    minimumWidth: 940
-    minimumHeight: 560
+    // The floor is measured, not typed: a window must keep every toolbar icon
+    // with the labels dropped, and leave room for a sidebar and a picture. See
+    // `ToolbarMetrics.minimumWindowWidth` and
+    // `docs/adr/0010-toolbar-compaction-and-shell-open-sizing.md`.
+    minimumWidth: root.minimumWindowWidth
+    minimumHeight: 420
     visible: true
     title: qsTr("KogaView") + (bridge.profile === "dev" ? " " + qsTr("(Dev)") : "")
     color: appTheme.background
@@ -30,6 +35,50 @@ ApplicationWindow {
     /// theme". Set by `previewRequested`, cleared by `revertRequested` and by
     /// every save.
     property string previewTheme: ""
+
+    // --------------------------------------------------- toolbar compaction
+    //
+    // A narrow window must not cut the toolbar in half. Every toolbar button is
+    // an icon square, and a label only appears when the window is wide enough
+    // to give it room (`CompactToolbarButton.useText`). `ToolbarMetrics` owns
+    // the measuring; the shell only reads the two answers:
+    //
+    //   width ≥ labelThreshold      ⇒ labels may appear
+    //   width ≥ minimumWindowWidth  ⇒ the window may exist at all
+    //
+    // Both come from the same arithmetic, so a window that may exist can always
+    // draw every icon. See `docs/adr/0010-*.md`.
+
+    ToolbarMetrics {
+        id: toolbarMetrics
+    }
+
+    /// Where a label first has room, and what the window may shrink to.
+    readonly property real toolbarLabelThreshold: toolbarMetrics.labelThreshold
+    readonly property real minimumWindowWidth: toolbarMetrics.minimumWindowWidth
+    /// True while the window is wide enough for labels beside the icons.
+    readonly property bool toolbarLabels: root.width >= root.toolbarLabelThreshold
+
+    /// The floor is also enforced here, and not only through `minimumWidth`.
+    ///
+    /// On this GNOME/Wayland session the compositor does not honour a QML
+    /// window's minimum size for a programmatic `resize`: a request for 200 px
+    /// produced a 200 px window whose toolbar was cut in half. A user-initiated
+    /// drag is clamped by the compositor, but the shell-facing contract has to
+    /// hold on its own too — this re-applies the floor whenever the window ends
+    /// up narrower than `minimumWindowWidth`.
+    onWidthChanged: {
+        if (root.width < root.minimumWindowWidth) {
+            Qt.callLater(root.enforceMinimumWidth)
+        }
+    }
+
+    /// Put the window back at its floor after a resize that went under it.
+    function enforceMinimumWidth() {
+        if (root.width < root.minimumWindowWidth) {
+            root.width = root.minimumWindowWidth
+        }
+    }
 
     /// Menus size themselves to their longest label, and the pixels have to come
     /// from C++: a `Menu`'s own `font` follows its width, so measuring text inside
@@ -343,6 +392,98 @@ ApplicationWindow {
         }
     }
 
+    /// The window the shell opened with. `open FILE` sizes it to the picture
+    /// before the Viewer's first fit, so the user sees one fitted image
+    /// instead of a default window followed by a jump to the photo's shape.
+    ///
+    /// The chrome measured here is what the Viewer adds around the picture:
+    /// the header and footer bars, the filmstrip, and the margin `fittedZoom`
+    /// leaves (2 %). It is a *target*, not a promise: the compositor may clamp
+    /// the size, `minimumWidth` keeps it usable, and the working area keeps it
+    /// on screen.
+    readonly property int viewerChromeHeight: 50 + 32 + 106 + 16
+    readonly property int viewerChromeWidth: 16
+
+    /// The size a window should have to show `imageWidth`×`imageHeight` with
+    /// as little empty space as possible.
+    ///
+    /// A small picture never enlarges the picture past 100 %, so its window
+    /// only has to be big enough to frame it; a large one is fitted into a
+    /// window no bigger than the screen allows. Either way the bounds are the
+    /// window floor and the available screen area — an 8000×6000 photo does
+    /// not ask for an 8000 px window.
+    function windowSizeForImage(imageWidth, imageHeight) {
+        if (!imageWidth || !imageHeight) {
+            return { width: root.width, height: root.height }
+        }
+        var screen = root.screen
+        var available = screen && screen.desktopAvailableWidth > 0
+                        ? screen.desktopAvailableWidth : 1920
+        var availableHeight = screen && screen.desktopAvailableHeight > 0
+                              ? screen.desktopAvailableHeight : 1080
+        // Leave room for panels and a strip of desktop on every side; a window
+        // that fills the screen exactly is hard to move and indistinguishable
+        // from fullscreen.
+        var maxWidth = Math.round(available * 0.92)
+        var maxHeight = Math.round(availableHeight * 0.92)
+        // The picture's own box: what is left of the screen once the toolbar,
+        // footer and filmstrip have taken theirs. Measuring the scale against
+        // the *window* instead would ask for an image plus chrome taller than
+        // the screen.
+        var pictureWidth = Math.max(1, maxWidth - root.viewerChromeWidth)
+        var pictureHeight = Math.max(1, maxHeight - root.viewerChromeHeight)
+        // The picture at its fitted zoom: never above 100 %, and `fittedZoom`'s
+        // 2 % margin applies once it is scaled down.
+        var scale = Math.min(1, Math.min(pictureWidth / imageWidth,
+                                         pictureHeight / imageHeight))
+        if (scale < 1) {
+            scale *= 0.98
+        }
+        var width = Math.round(imageWidth * scale) + root.viewerChromeWidth
+        var height = Math.round(imageHeight * scale) + root.viewerChromeHeight
+        return {
+            width: Math.max(root.minimumWidth, Math.min(maxWidth, width)),
+            height: Math.max(root.minimumHeight, Math.min(maxHeight, height))
+        }
+    }
+
+    /// The size the shell is trying to give the window, or zeroes when the
+    /// window was not opened with an image. Only the launch path writes it.
+    property var openedWindowSize: ({ width: 0, height: 0 })
+
+    /// Size the window to the image the shell opened. Only the launch path
+    /// calls this: a folder opened from inside the app must not resize the
+    /// window under the user's hands.
+    function fitWindowToImage(path) {
+        var size = Platform.imageSize(path)
+        if (!size || !size.width || !size.height) {
+            return
+        }
+        var target = root.windowSizeForImage(size.width, size.height)
+        root.openedWindowSize = target
+        root.width = target.width
+        root.height = target.height
+        // The compositor can apply its own geometry when the window is mapped:
+        // on this machine GNOME turned a 1639×1104 request into a 1920×1125
+        // window. Setting the size again once the window exists is what makes
+        // it stick. It runs at most twice, at launch only, so a window the user
+        // resizes afterwards is never pulled back.
+        Qt.callLater(root.enforceOpenedWindowSize)
+        retryWindowSizeTimer.restart()
+    }
+
+    /// Restore `openedWindowSize` if the compositor overrode it.
+    function enforceOpenedWindowSize() {
+        var target = root.openedWindowSize
+        if (!target || !target.width) {
+            return
+        }
+        if (root.width !== target.width || root.height !== target.height) {
+            root.width = target.width
+            root.height = target.height
+        }
+    }
+
     function processLaunchArguments() {
         var args = launchArgs || [];
         if (args.length === 0) return;
@@ -356,6 +497,8 @@ ApplicationWindow {
                 root.send({ type: "open_folder", path: rest[0] });
             }
         } else if (rest.length > 0) {
+            var target = root.toLocalPath(rest[0]);
+            root.fitWindowToImage(target);
             root.send({ type: "open_file", paths: rest });
         }
     }
@@ -394,6 +537,17 @@ ApplicationWindow {
         id: toastTimer
         interval: 3400
         onTriggered: root.toastText = ""
+    }
+
+    // One late attempt at the opened window's size, for a compositor that
+    // applies its geometry after the first frame. It is not a loop: it fires
+    // once, and only when a launch sized the window.
+    Timer {
+        id: retryWindowSizeTimer
+        objectName: "retryWindowSizeTimer"
+        interval: 250
+        repeat: false
+        onTriggered: root.enforceOpenedWindowSize()
     }
 
     Timer {
@@ -449,6 +603,7 @@ ApplicationWindow {
         contentHeight: 50
 
         RowLayout {
+            objectName: "mainToolbarRow"
             anchors.fill: parent
             anchors.leftMargin: 8
             anchors.rightMargin: 8
@@ -457,6 +612,8 @@ ApplicationWindow {
             WorkspaceSwitcher {
                 objectName: "workspaceSwitcher"
                 theme: appTheme
+                metrics: toolbarMetrics
+                showLabels: root.toolbarLabels
                 workspace: root.state.workspace || "browser"
                 onSelected: function(workspace) {
                     // Leaving the Editor with unsaved edits asks first; any
@@ -469,6 +626,7 @@ ApplicationWindow {
 
             Loader {
                 id: workspaceToolbar
+                objectName: "workspaceToolbarLoader"
                 Layout.alignment: Qt.AlignVCenter
                 sourceComponent: workspaceLoader.item ? workspaceLoader.item.toolbar : null
             }
@@ -484,12 +642,14 @@ ApplicationWindow {
                 implicitHeight: 28
             }
 
-            ToolbarButton {
+            CompactToolbarButton {
+                objectName: "mainMenuButton"
                 theme: appTheme
+                metrics: toolbarMetrics
+                showLabel: root.toolbarLabels
                 icon.name: "open-menu-symbolic"
                 text: qsTr("Menu")
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
+                ToolTip.visible: hovered && !useText
                 ToolTip.text: qsTr("Main menu")
                 onClicked: mainMenu.popup()
             }

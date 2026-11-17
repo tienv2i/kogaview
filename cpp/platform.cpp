@@ -428,6 +428,23 @@ QVariantList PlatformHelper::textWidths(const QStringList& labels, const QFont& 
   return widths;
 }
 
+QSize PlatformHelper::imageSize(const QString& path) const
+{
+  // `size()` reads the header, not the pixels: a 60 MP JPEG costs one small
+  // read here. `autoTransform` asks for the EXIF orientation so a photo shot
+  // in portrait reports the shape it is actually displayed in.
+  if (path.isEmpty()) {
+    return {};
+  }
+  QImageReader reader(path);
+  reader.setAutoTransform(true);
+  const QSize size = reader.size();
+  if (!size.isValid() || size.isEmpty()) {
+    return {};
+  }
+  return size;
+}
+
 QString PlatformHelper::imageNameFilter() const
 {
   // Built from the protocol's list so the dialog and the browser agree.

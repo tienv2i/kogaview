@@ -822,6 +822,11 @@ private slots:
     const qreal zoomWithFullViewport = zoom();
     const qreal tall = m_viewport->height();
 
+    // A strip needs something to strip: a folder with two images lets the
+    // toggle take effect at all (a single image hides it, see
+    // `aSingleImageFolderHasNoFilmstrip`).
+    m_viewer->setProperty("viewerImages", QStringList{ m_landscape, m_portrait });
+
     QVariantMap state;
     state.insert(QStringLiteral("viewerPath"), m_landscape);
     state.insert(QStringLiteral("viewerIndex"), 0);
@@ -835,8 +840,8 @@ private slots:
                                        "(%1 -> %2)")
                           .arg(zoomWithFullViewport)
                           .arg(afterFilmstrip)));
-    const qreal expected = std::min(m_viewport->width() / 1200.0,
-                                    m_viewport->height() / 800.0) * 0.98;
+    const qreal expected = std::min(1.0, std::min(m_viewport->width() / 1200.0,
+                                                  m_viewport->height() / 800.0) * 0.98);
     QVERIFY2(qAbs(afterFilmstrip - expected) < 0.01,
              qPrintable(QStringLiteral("filmstrip fit is %1, expected %2")
                           .arg(afterFilmstrip).arg(expected)));
@@ -847,6 +852,75 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(m_viewport->height() > tall - 2, 2000);
     QTRY_VERIFY2(qAbs(zoom() - zoomWithFullViewport) < 0.01,
                  "hiding the filmstrip did not give the picture back its size");
+  }
+
+  /// A picture smaller than the window is not blown up to fill it: fit stops at
+  /// 100 %, so a 300×200 photo stays sharp and the viewer says why it is
+  /// surrounded by space.
+  ///
+  /// The assertion is on a real state change: the zoom is exactly 1.0 and
+  /// *below* the zoom the old fit-the-viewport rule would have produced, so a
+  /// regression that removes the cap fails on a number, not on a flag.
+  void aSmallPictureFitsAtOneHundredPercent()
+  {
+    const QString small = m_fixtures.path() + QStringLiteral("/small-300x200.png");
+    QImage image(300, 200, QImage::Format_RGB32);
+    image.fill(QColor(200, 60, 60));
+    QVERIFY(image.save(small));
+
+    loadImage(small);
+    m_viewer->setProperty("viewerImages", QStringList{ small });
+    QMetaObject::invokeMethod(m_viewer, "fit");
+    QCoreApplication::processEvents();
+
+    QVERIFY2(m_viewer->property("autoFit").toBool(), "fit left auto fit off");
+    const qreal fitted = zoom();
+    QVERIFY2(qAbs(fitted - 1.0) < 0.001,
+             qPrintable(QStringLiteral("a small picture fitted at %1, expected 1.0").arg(fitted)));
+
+    // What the uncapped rule would have said: the picture filling the viewport.
+    const qreal withoutCap =
+      std::min(m_viewport->width() / 300.0, m_viewport->height() / 200.0) * 0.98;
+    QVERIFY2(withoutCap > 1.5,
+             qPrintable(QStringLiteral("the fixture is not small enough to prove anything: "
+                                       "uncapped fit would be %1")
+                          .arg(withoutCap)));
+
+    // And the viewer offers a way forward instead of leaving the user puzzled.
+    QTRY_VERIFY2(m_viewer->property("imageSmallerThanViewport").toBool(),
+                 "the small-image hint never became visible");
+
+    // It is guidance, not a lock: zooming out of the fitted size is still
+    // allowed, and the hint goes away with it.
+    QMetaObject::invokeMethod(m_viewer, "setZoom", Q_ARG(QVariant, 2.0));
+    QCoreApplication::processEvents();
+    QVERIFY2(!m_viewer->property("imageSmallerThanViewport").toBool()
+               || !m_viewer->property("autoFit").toBool(),
+             "the hint stayed after a deliberate zoom");
+    QVERIFY(qAbs(zoom() - 2.0) < 0.001);
+  }
+
+  /// A folder with one image has nothing to strip, so the filmstrip stays out
+  /// of the way even though the stored preference is on — and the preference
+  /// itself is untouched, so a two-image folder still shows it.
+  void aSingleImageFolderHasNoFilmstrip()
+  {
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    m_viewer->setProperty("viewerImages", QStringList{ m_landscape });
+    m_viewer->setProperty("state", state);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(!m_viewer->property("filmstripShown").toBool(),
+             "a one-image folder still showed the filmstrip");
+    const qreal singleImageViewport = m_viewport->height();
+
+    // Two images: the same preference now means a real strip.
+    m_viewer->setProperty("viewerImages", QStringList{ m_landscape, m_portrait });
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewer->property("filmstripShown").toBool(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->height() < singleImageViewport - 100, 2000);
   }
 
   /// A hand-chosen zoom is not auto fit, so a resize leaves it alone. Without

@@ -38,6 +38,7 @@ QML_TEST_SUITES = {
         "kogaview_language_tests",
         BUILD_DIR / "bin" / "kogaview_language_tests",
     ),
+    "toolbar": ("kogaview_toolbar_tests", BUILD_DIR / "bin" / "kogaview_toolbar_tests"),
 }
 APP_ID_DEV = "io.github.tienv2i.KogaView.Dev"
 APP_ID_PROD = "io.github.tienv2i.KogaView"
@@ -818,7 +819,7 @@ def uninstall() -> int:
 
 TEST_USAGE = (
     "usage: just test [cargo|translations|packaging|qml|viewer|browser|cache|"
-    "state|settings|editor|language]"
+    "state|settings|editor|language|toolbar]"
 )
 
 

@@ -48,6 +48,25 @@ Item {
     /// turns it back on.
     property bool autoFit: true
 
+    /// True when the picture is smaller than the viewport, so fitting leaves
+    /// it at its natural size instead of blowing it up. It drives a quiet one
+    /// line of guidance; `fit()` never enlarges past 100 % (see
+    /// `docs/adr/0010-toolbar-compaction-and-shell-open-sizing.md`), because a
+    /// 300×200 photo stretched to fill a 1500×900 window is blurry and reads
+    /// as a broken viewer.
+    readonly property bool imageSmallerThanViewport:
+        image.status === Image.Ready
+        && viewport.width > 0 && viewport.height > 0
+        && (fittedZoom() >= 1)
+    /// The zoom as a whole percentage, for the footer readout: an image opened
+    /// fitted at 32 % must say so.
+    readonly property int zoomPercent: Math.round(view.zoom * 100)
+    readonly property bool zoomIsNotActual: Math.abs(view.zoom - 1) > 0.005
+
+    /// The filmstrip is shown when the user asked for it *and* there is a
+    /// strip worth showing: a folder with one image has nothing to scroll.
+    readonly property bool filmstripShown: !!view.state.filmstrip && view.images.length > 1
+
     signal command(var command)
     /// The canvas menu's shell-side actions. The view only says *what* the user
     /// asked for; the shell owns the platform calls (clipboard, application
@@ -121,6 +140,11 @@ Item {
 
     /// The zoom that shows the whole picture in the viewport, leaving a 2 %
     /// margin so a fit does not look flush against the edge.
+    ///
+    /// Never above 100 %: a picture smaller than the window is shown at its
+    /// natural size, centred, rather than enlarged until it is soft. The wheel
+    /// and the zoom buttons still go past 100 % — that is a deliberate choice,
+    /// which is why it is not what "fit" means.
     function fittedZoom() {
         if (image.implicitWidth <= 0 || image.implicitHeight <= 0) {
             return view.zoom;
@@ -130,8 +154,8 @@ Item {
         var turned = view.rotationAngle % 180 !== 0;
         var sourceWidth = turned ? image.implicitHeight : image.implicitWidth;
         var sourceHeight = turned ? image.implicitWidth : image.implicitHeight;
-        return Math.min(viewport.width / sourceWidth,
-                        viewport.height / sourceHeight) * 0.98;
+        return Math.min(1, Math.min(viewport.width / sourceWidth,
+                                   viewport.height / sourceHeight) * 0.98);
     }
 
     /// Re-apply the view's own rule after something that could invalidate the
@@ -345,10 +369,43 @@ Item {
                 color: view.theme.danger
                 font.pixelSize: 15
             }
+
+            // Guidance for the one case where "fitted" is not what the eye
+            // expects: the picture is smaller than the window, so it sits at
+            // 100 % surrounded by space. It says what happened and what to do,
+            // and it stays out of the way — centred under the picture, muted,
+            // hidden the moment a zoom leaves the fitted size.
+            Label {
+                objectName: "viewerSmallImageHint"
+                anchors.horizontalCenter: parent.horizontalCenter
+                // Bottom of the viewport rather than under the picture: the
+                // picture can be any size, and a caption that follows it would
+                // move with every zoom.
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 12
+                visible: view.imageSmallerThanViewport && view.autoFit
+                text: qsTr("Small image shown at 100 % — scroll or press + to enlarge")
+                color: view.theme.textMuted
+                font.pixelSize: 12
+                background: Rectangle {
+                    radius: view.theme.radius
+                    color: view.theme.surface
+                    border.width: 1
+                    border.color: view.theme.border
+                }
+                padding: 8
+            }
         }
 
         Rectangle {
-            visible: !!view.state.filmstrip
+            id: filmstrip
+            objectName: "viewerFilmstripHost"
+            // A single-image folder has no strip to scroll, so the toggle in
+            // the toolbar hides it even though the preference is on; the
+            // checkpoint there still shows the preference, so turning it off
+            // and on again is not needed to get the strip back in a folder
+            // that has one.
+            visible: view.filmstripShown
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? 106 : 0
             color: view.theme.surface

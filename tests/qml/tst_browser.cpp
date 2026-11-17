@@ -634,7 +634,14 @@ private slots:
 
   // ---------------------------------------------------------------- switcher
 
-  /// The mode buttons must read `<icon> <text>`; icon-only was the bug.
+  /// The mode buttons show `<icon> <text>` when the window can afford the
+  /// labels, and drop to the icon square when it cannot — the two states this
+  /// toolbar is allowed to be in.
+  ///
+  /// Both are asserted, in both directions, so neither "always icon-only"
+  /// (the original bug: the current workspace was unreadable) nor "always
+  /// text" (the bug this replaced: the labelled buttons squeezed everything
+  /// after them out of a narrow window) can pass.
   void switcherShowsIconAndText()
   {
     QQuickItem* switcher = m_switcher->rootObject();
@@ -645,43 +652,69 @@ private slots:
     const QStringList labels = { QStringLiteral("Browser"), QStringLiteral("Viewer"),
                                  QStringLiteral("Editor") };
 
-    for (int index = 0; index < names.size(); ++index) {
-      const QList<QQuickItem*> found =
-        items(switcher, QStringLiteral("workspaceButton-") + names.at(index));
-      QCOMPARE(found.size(), 1);
-      QQuickItem* button = found.first();
+    const auto assertState = [&](bool labelsAllowed) {
+      for (int index = 0; index < names.size(); ++index) {
+        const QList<QQuickItem*> found =
+          items(switcher, QStringLiteral("workspaceButton-") + names.at(index));
+        QCOMPARE(found.size(), 1);
+        QQuickItem* button = found.first();
 
-      QCOMPARE(button->property("text").toString(), labels.at(index));
-      QCOMPARE(button->property("display").toInt(), kDisplayTextBesideIcon);
-      QVERIFY2(button->property("display").toInt() != kDisplayIconOnly,
-               "the mode buttons must not be icon-only");
+        // The label is always in `text`, whatever the toolbar is showing, so a
+        // tooltip and a screen reader agree with the drawn state.
+        QCOMPARE(button->property("text").toString(), labels.at(index));
 
-      const QString iconName = readQml(button, QStringLiteral("icon.name")).toString();
-      QVERIFY2(!iconName.isEmpty(),
-               qPrintable(QStringLiteral("%1 button has no icon (icon.name is empty)")
-                            .arg(labels.at(index))));
+        const QString iconName = readQml(button, QStringLiteral("icon.name")).toString();
+        QVERIFY2(!iconName.isEmpty(),
+                 qPrintable(QStringLiteral("%1 button has no icon (icon.name is empty)")
+                              .arg(labels.at(index))));
 
-      // The label must contribute to the layout: an icon-only button has a
-      // content width of the icon alone, so a wider content item proves the
-      // text is measured in, and a button at least as wide as its content
-      // proves the layout did not squeeze the label away.
-      const qreal iconWidth =
-        readQml(button, QStringLiteral("icon.width")).toReal();
-      const qreal contentWidth =
-        readQml(button, QStringLiteral("contentItem ? contentItem.implicitWidth : 0")).toReal();
-      QVERIFY2(contentWidth > iconWidth + 2.0,
-               qPrintable(QStringLiteral("%1 content is icon-only (%2 px, icon %3 px)")
-                            .arg(labels.at(index))
-                            .arg(contentWidth)
-                            .arg(iconWidth)));
-      QVERIFY2(button->width() + 0.5 >= button->implicitWidth(),
-               qPrintable(QStringLiteral("%1 button is squeezed to %2 px, needs %3 px")
-                            .arg(labels.at(index))
-                            .arg(button->width())
-                            .arg(button->implicitWidth())));
-      QVERIFY2(button->implicitWidth() > 34.0,
-               "implicitWidth still forces the icon-only square size");
-    }
+        const qreal iconOnly = readQml(button, QStringLiteral("iconOnlyWidth")).toReal();
+        const qreal labelled = readQml(button, QStringLiteral("labelledWidth")).toReal();
+        QVERIFY2(labelled > iconOnly,
+                 qPrintable(QStringLiteral("%1 adds no width for its label").arg(labels.at(index))));
+
+        if (labelsAllowed) {
+          QCOMPARE(button->property("display").toInt(), kDisplayTextBesideIcon);
+          QVERIFY2(qAbs(button->implicitWidth() - labelled) < 0.5,
+                   qPrintable(QStringLiteral("%1 asks for %2 px, its label needs %3")
+                                .arg(labels.at(index))
+                                .arg(button->implicitWidth())
+                                .arg(labelled)));
+          // The label must contribute to the layout: an icon-only button has a
+          // content width of the icon alone.
+          const qreal iconWidth = readQml(button, QStringLiteral("icon.width")).toReal();
+          const qreal contentWidth =
+            readQml(button, QStringLiteral("contentItem ? contentItem.implicitWidth : 0"))
+              .toReal();
+          QVERIFY2(contentWidth > iconWidth + 2.0,
+                   qPrintable(QStringLiteral("%1 content is icon-only (%2 px, icon %3 px)")
+                                .arg(labels.at(index))
+                                .arg(contentWidth)
+                                .arg(iconWidth)));
+        } else {
+          QCOMPARE(button->property("display").toInt(), kDisplayIconOnly);
+          QCOMPARE(button->implicitWidth(), iconOnly);
+        }
+
+        // Never squeezed by the row, in either state.
+        QVERIFY2(button->width() + 0.5 >= button->implicitWidth(),
+                 qPrintable(QStringLiteral("%1 button is squeezed to %2 px, needs %3 px")
+                              .arg(labels.at(index))
+                              .arg(button->width())
+                              .arg(button->implicitWidth())));
+      }
+    };
+
+    switcher->setProperty("showLabels", true);
+    QCoreApplication::processEvents();
+    assertState(true);
+
+    switcher->setProperty("showLabels", false);
+    QCoreApplication::processEvents();
+    assertState(false);
+
+    switcher->setProperty("showLabels", true);
+    QCoreApplication::processEvents();
   }
 
   void switcherReportsTheClickedWorkspace()

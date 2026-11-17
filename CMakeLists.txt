@@ -173,7 +173,8 @@ if(KOGAVIEW_BUILD_TESTS)
     "kogaview_state_tests:tst_statesnapshot.cpp"
     "kogaview_settings_tests:tst_settings.cpp"
     "kogaview_editor_tests:tst_editor.cpp"
-    "kogaview_language_tests:tst_language.cpp")
+    "kogaview_language_tests:tst_language.cpp"
+    "kogaview_toolbar_tests:tst_toolbar.cpp")
 
   foreach(suite IN LISTS KOGAVIEW_QML_TEST_SUITES)
     string(REPLACE ":" ";" parts "${suite}")
@@ -200,7 +201,8 @@ if(KOGAVIEW_BUILD_TESTS)
     add_executable(${target} ${suite_sources})
     target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate Qt6::Concurrent)
     target_compile_definitions(${target}
-      PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml")
+      PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml"
+              KOGAVIEW_QML_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/qml")
     if(suite_translations)
       target_compile_definitions(${target} PRIVATE
         KOGAVIEW_TRANSLATIONS_RCC="${KOGAVIEW_TRANSLATIONS_RCC}")
