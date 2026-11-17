@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,29 @@ PACKAGING_DIR = ROOT / "packaging" / "linux"
 DESKTOP_TEMPLATE = PACKAGING_DIR / f"{APP_ID_PROD}.desktop.in"
 ICON_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.svg"
 METAINFO_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.metainfo.xml"
+# Raster copies of `ICON_SOURCE` written beside it. The scalable SVG alone is not
+# enough for the launcher: see `icon_fallbacks()`.
+ICON_PIXMAP_SIZES = (16, 24, 32, 48, 64, 128, 256)
+# The interface languages the launch surface is localised into. English is the
+# source text and needs no translation; these come first in the pickers, so `vi`
+# leads. `i18n/kogaview_vi.ts` holds the in-window strings (ADR 0006); the
+# desktop entry and AppStream metadata are generated from these tables because
+# neither format can read a Qt catalogue.
+DESKTOP_LANGUAGES = {
+    "vi": {
+        "Name": "KogaView",
+        "GenericName": "Trình xem ảnh",
+        "Comment": "Duyệt, xem và chỉnh sửa ảnh",
+        "Keywords": "ảnh;hình;thư viện ảnh;trình xem;chỉnh sửa;duyệt;",
+        "summary": "Duyệt, xem và chỉnh sửa ảnh",
+        "description": (
+            "KogaView là trình duyệt, trình xem và trình chỉnh sửa ảnh. Ứng dụng "
+            "quét một thư mục trong nền, hiển thị lưới ảnh thu nhỏ kèm bản xem "
+            "trước, mở ảnh trong trình xem có thể thu phóng và kéo, và chỉnh sửa "
+            "trên một bản làm việc của ảnh."
+        ),
+    },
+}
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -223,6 +247,20 @@ def doctor() -> int:
         )
     else:
         print(f"Installed binary  : none under {PREFIX} (run `just install`)")
+    present = sum(1 for path in icon_fallbacks() if path.is_file())
+    theme_dir = PREFIX / "share" / "icons" / "hicolor"
+    cache = theme_dir / "icon-theme.cache"
+    cached = False
+    if cache.is_file():
+        try:
+            cached = APP_ID_PROD.encode() in cache.read_bytes()
+        except OSError:
+            cached = False
+    print(
+        f"Icon files        : {present}/{len(icon_fallbacks())} raster sizes + "
+        f"{'SVG' if (theme_dir / 'scalable' / 'apps' / f'{APP_ID_PROD}.svg').is_file() else 'no SVG'}"
+        f"; theme cache {'covers' if cached else 'does not cover'} {APP_ID_PROD}"
+    )
 
     latest = latest_log()
     if latest:
@@ -345,7 +383,7 @@ def build_release() -> int:
 
 def installed_files() -> dict[str, Path]:
     """Every path `just install` owns. Nothing else is written or removed."""
-    return {
+    files = {
         "binary": PREFIX / "bin" / "kogaview",
         "desktop entry": PREFIX / "share" / "applications" / f"{APP_ID_PROD}.desktop",
         "icon": PREFIX
@@ -357,16 +395,195 @@ def installed_files() -> dict[str, Path]:
         / f"{APP_ID_PROD}.svg",
         "AppStream metadata": PREFIX / "share" / "metainfo" / f"{APP_ID_PROD}.metainfo.xml",
     }
+    for index, path in enumerate(icon_fallbacks(), start=1):
+        files[f"icon {ICON_PIXMAP_SIZES[index - 1]}"] = path
+    return files
 
 
 def render_desktop_entry() -> str:
-    """The desktop template with the install prefix filled in.
+    """The desktop template with the install prefix and translations filled in.
 
     The template is the source of truth (and what `check_packaging.py` reads);
-    only the binary directory depends on where the app is being installed.
+    only the binary directory depends on where the app is being installed. The
+    translated keys (`Name[vi]`, `Comment[vi]`, …) are appended inside the
+    `[Desktop Entry]` group directly after their English counterpart, because the
+    gettext `localedir` alternative needs a `.mo` build step this repository
+    does not have yet.
     """
-    text = DESKTOP_TEMPLATE.read_text(encoding="utf-8")
-    return text.replace("@BINDIR@", str(PREFIX / "bin"))
+    text = DESKTOP_TEMPLATE.read_text(encoding="utf-8").replace(
+        "@BINDIR@", str(PREFIX / "bin")
+    )
+    for language, strings in DESKTOP_LANGUAGES.items():
+        for key in ("Name", "GenericName", "Comment", "Keywords"):
+            text = _after_desktop_key(text, key, f"{key}[{language}]={strings[key]}")
+    return text
+
+
+def _after_desktop_key(text: str, key: str, line: str) -> str:
+    """Put `line` directly after the `key=` line of the first group."""
+    marker = f"\n{key}="
+    start = text.index(marker)
+    end = text.index("\n", start + len(marker)) + 1
+    return text[:end] + line + "\n" + text[end:]
+
+
+def icon_fallbacks() -> list[Path]:
+    """The raster sizes `just install` writes beside the SVG.
+
+    GNOME's shell, the dock and the app grid read icons through GLib's icon
+    theme *cache*: one flat file per theme directory, holding only the size
+    buckets its `index.theme` lists. A prefix that installs only
+    `scalable/apps` has no such bucket, so the launcher draws an empty square,
+    while everything that reads the directory directly (an Open With dialog,
+    GTK's own lookup) still finds the SVG. These raster copies land in buckets
+    the target desktops' caches cover.
+    """
+    return [
+        PREFIX
+        / "share"
+        / "icons"
+        / "hicolor"
+        / f"{edge}x{edge}"
+        / "apps"
+        / f"{APP_ID_PROD}.png"
+        for edge in ICON_PIXMAP_SIZES
+    ]
+
+
+def render_metainfo() -> str:
+    """The AppStream metadata with its translated strings filled in.
+
+    AppStream localisation is XML (`xml:lang=` on each element), but writing the
+    Vietnamese copy by hand next to the English in one file invites the two to
+    drift. The translations live in `DESKTOP_LANGUAGES` beside the desktop
+    entry's, and this function is the only writer.
+
+    The base file stays the English source (`appstreamcli validate` checks it,
+    and a translator reads it there); the generated file is what `just install`
+    writes. ElementTree cannot round-trip the comments that explain the file, so
+    the insertion is done on the text, after the element's own closing tag.
+    """
+    text = METAINFO_SOURCE.read_text(encoding="utf-8")
+    for language, strings in DESKTOP_LANGUAGES.items():
+        text = _localise_element(text, "name", "KogaView", strings["Name"], language)
+        text = _localise_element(
+            text, "summary", "Browse, view and edit photos", strings["summary"], language
+        )
+        text = _insert_translated_paragraph(
+            text, _xml_escape(strings["description"]), language
+        )
+    return text
+
+
+def _xml_escape(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _localise_element(
+    text: str, element: str, expected: str, value: str, language: str
+) -> str:
+    """Copy `<element>expected</element>` as a translated sibling right after it.
+
+    `expected` is what makes the match unique: `<name>` appears twice in the file
+    (the component's and the developer's), and only the component's is shown in
+    an app centre, so matching on the text keeps the copy in the right place and
+    a reworded English source fails here instead of silently duplicating it.
+    """
+    close = f"</{element}>"
+    english = f"<{element}>{expected}{close}"
+    if text.count(english) != 1:
+        raise SystemExit(
+            f"metainfo: expected one <{element}>{expected}</{element}>, "
+            f"found {text.count(english)}"
+        )
+    end = text.index(english) + len(english)
+    translated = f'\n  <{element} xml:lang="{language}">{_xml_escape(value)}</{element}>'
+    return text[:end] + translated + text[end:]
+
+
+def _insert_translated_paragraph(text: str, value: str, language: str) -> str:
+    """Append a translated `<p>` after the last English paragraph."""
+    block_start = text.index("<description>")
+    block_end = text.index("</description>", block_start)
+    anchor = text.rindex("</p>", block_start, block_end) + len("</p>")
+    paragraph = f'\n    <p xml:lang="{language}">{value}</p>'
+    return text[:anchor] + paragraph + text[anchor:]
+
+
+def rasterise_icon(size: int, destination: Path) -> int:
+    """Render the SVG icon into `size`×`size` pixels at `destination`.
+
+    PySide6 ships `QSvgRenderer`; a desktop without PySide6 can still install the
+    scalable icon, so a missing renderer is reported and the PNG list shrinks
+    rather than failing the install.
+    """
+    try:
+        from PySide6.QtCore import Qt  # noqa: F401  (import proves the binding)
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtSvg import QSvgRenderer
+    except ImportError:
+        print(
+            "install: PySide6 not available; installing only the scalable icon "
+            "(the GNOME dock and app grid may draw it blank). "
+            "Install `pyside6` or run `just install` on a build machine with it.",
+            file=sys.stderr,
+        )
+        return 1
+    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(str(ICON_SOURCE)).render(painter)
+    painter.end()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not image.save(str(destination), "PNG"):
+        print(f"install: cannot write {destination}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def merge_icon_cache(theme_dir: Path) -> None:
+    """Let the icon theme cache cover the size buckets this install writes.
+
+    A theme cache is a flat file that can only hold the size buckets its
+    `index.theme` lists. GNOME's hicolor default lists no `48x48` bucket, and
+    the prefix owns no `index.theme`, so `gtk-update-icon-cache` would either
+    refuse or silently record nothing. Adding just the missing `[<bucket>]`
+    sections to the prefix's own copy is enough: directories are resolved
+    through the theme search path, so the system's `index.theme` still supplies
+    the rest. Merging instead of copying keeps a future hicolor update from
+    being shadowed by a stale full copy.
+    """
+    system_index = Path("/usr/share/icons/hicolor/index.theme")
+    local_index = theme_dir / "index.theme"
+    if not system_index.is_file():
+        print(f"install: {system_index} is missing; icon cache not rebuilt", file=sys.stderr)
+        return
+    text = system_index.read_text(encoding="utf-8")
+    missing: list[str] = []
+    for edge in ICON_PIXMAP_SIZES:
+        if f"\n{edge}x{edge}/apps" in text:
+            continue
+        section = (
+            f"\n[{edge}x{edge}/apps]\n"
+            f"Size={edge}\n"
+            "Context=Applications\n"
+            "Type=Threshold\n"
+        )
+        text = text.rstrip("\n") + "\n" + section
+        missing.append(f"{edge}x{edge}/apps")
+    if missing:
+        print(f"install: icon cache index gains {', '.join(missing)}")
+    staged = RELEASE_DIR / "icons" / "index.theme"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(text, encoding="utf-8")
+    result = run(privileged(["install", "-D", "-m644", str(staged), str(local_index)]))
+    if result.returncode != 0:
+        print(
+            f"install: cannot write {local_index}; the icon cache will not cover "
+            "the raster sizes",
+            file=sys.stderr,
+        )
 
 
 def sudo_is_passwordless() -> bool:
@@ -400,13 +617,40 @@ def refresh_desktop_caches() -> None:
     if which("update-desktop-database"):
         run(privileged(["update-desktop-database", str(applications)]))
     theme_dir = PREFIX / "share" / "icons" / "hicolor"
-    if (theme_dir / "index.theme").is_file() and which("gtk-update-icon-cache"):
+    merge_icon_cache(theme_dir)
+    if which("gtk-update-icon-cache"):
+        # `-f` rewrites the file even if the mtimes look unchanged, and `-t`
+        # ignores the directory timestamp check: a cache that is half written is
+        # worse than none, because the launcher then draws a blank icon.
         run(privileged(["gtk-update-icon-cache", "-f", "-t", str(theme_dir)]))
     else:
-        # No local copy of the theme's index.theme: GTK still searches this
-        # directory through the hicolor search path, there is just no cache of
-        # it to rebuild.
-        print(f"{theme_dir} has no index.theme; icon cache not rebuilt")
+        print(
+            f"install: gtk-update-icon-cache is missing; the GNOME dock and app "
+            f"grid may draw a blank icon for the cache at {theme_dir}",
+            file=sys.stderr,
+        )
+
+
+def forget_icon_caches() -> None:
+    """Report the caches a running launcher keeps, so the caller can say what to do.
+
+    GNOME Shell, the dock and GTK app centres resolve an icon once and keep it
+    for the session. `gtk-update-icon-cache` rewrites the theme's cache, which is
+    the signal they watch, but a *miss* may already have been memoised. The user
+    hicolor theme has its own cache and is searched before the prefix, so a
+    stale copy there is worth naming instead of silently trusting it.
+    """
+    user_cache = Path.home() / ".local" / "share" / "icons" / "hicolor" / "icon-theme.cache"
+    try:
+        stale = user_cache.is_file() and APP_ID_PROD.encode() not in user_cache.read_bytes()
+    except OSError:
+        return
+    if stale:
+        print(
+            "install: note: "
+            f"{user_cache} predates this install and has no {APP_ID_PROD} entry; "
+            "launchers that cached a miss may need a session restart to redraw it"
+        )
 
 
 def current_image_handler() -> str:
@@ -418,36 +662,67 @@ def install() -> int:
     if result != 0:
         return result
 
+    # Everything the install writes is staged under `build/release/` first, so a
+    # failure anywhere below leaves the system untouched.
     rendered = RELEASE_DIR / f"{APP_ID_PROD}.desktop"
     rendered.write_text(render_desktop_entry(), encoding="utf-8")
+    rendered_metainfo = RELEASE_DIR / f"{APP_ID_PROD}.metainfo.xml"
+    rendered_metainfo.write_text(render_metainfo(), encoding="utf-8")
     validator = which("desktop-file-validate")
     if validator:
         check = run([validator, str(rendered)])
         if check.returncode != 0:
             print("install: the desktop entry is invalid; nothing was installed", file=sys.stderr)
             return check.returncode
+    appstream = which("appstreamcli")
+    if appstream:
+        check = run([appstream, "validate", "--no-net", str(rendered_metainfo)])
+        if check.returncode != 0:
+            print(
+                "install: the AppStream metadata is invalid; nothing was installed",
+                file=sys.stderr,
+            )
+            return check.returncode
+
+    # The raster fallbacks come from the one SVG, rendered here rather than
+    # committed, so the icon cannot fork into two drawings.
+    rendered_pixmaps: list[Path] = []
+    for edge in ICON_PIXMAP_SIZES:
+        staged = RELEASE_DIR / "icons" / f"{edge}x{edge}" / f"{APP_ID_PROD}.png"
+        if rasterise_icon(edge, staged) != 0:
+            break
+        rendered_pixmaps.append(staged)
 
     targets = installed_files()
     sources = {
         "binary": (RELEASE_BINARY, "755"),
         "desktop entry": (rendered, "644"),
         "icon": (ICON_SOURCE, "644"),
-        "AppStream metadata": (METAINFO_SOURCE, "644"),
+        "AppStream metadata": (rendered_metainfo, "644"),
     }
+    for index, staged in enumerate(rendered_pixmaps):
+        sources[f"icon {ICON_PIXMAP_SIZES[index]}"] = (staged, "644")
+
     handler_before = current_image_handler()
-    for name, target in targets.items():
+    for name in list(targets):
+        if name not in sources:
+            # A raster size the staging step could not produce (no PySide6).
+            del targets[name]
+            continue
         source, mode = sources[name]
-        result = run(privileged(["install", "-D", f"-m{mode}", str(source), str(target)]))
+        result = run(privileged(["install", "-D", f"-m{mode}", str(source), str(targets[name])]))
         if result.returncode != 0:
-            print(f"install: cannot write {target}; stopping here", file=sys.stderr)
+            print(f"install: cannot write {targets[name]}; stopping here", file=sys.stderr)
             return result.returncode
 
     refresh_desktop_caches()
+    forget_icon_caches()
 
     print(f"install: {PROJECT} {APP_ID_PROD} installed under {PREFIX}")
     for name, target in targets.items():
         print(f"  {name:18} {target}")
     print(f"  image viewer group  Categories={desktop_categories()}")
+    print(f"  interface names     {desktop_languages_summary()}")
     print(
         "  default handler     unchanged: image/jpeg opens with "
         f"'{handler_before}'. KogaView is offered in Open With; make it the "
@@ -456,6 +731,12 @@ def install() -> int:
     )
     print(f"  remove it with      just uninstall")
     return 0
+
+
+def desktop_languages_summary() -> str:
+    """Which languages the desktop entry and AppStream file carry a name in."""
+    languages = ["en"] + list(DESKTOP_LANGUAGES)
+    return ", ".join(languages) + f" ({len(languages)} locales)"
 
 
 def desktop_categories() -> str:
@@ -485,7 +766,14 @@ def uninstall() -> int:
             return result.returncode
         print(f"  removed {name:18} {target}")
 
+    # The merged `index.theme` is derived, not a user file: leaving it behind
+    # would keep advertising size buckets with no icons in them.
+    index = PREFIX / "share" / "icons" / "hicolor" / "index.theme"
+    if index.is_file():
+        run(privileged(["rm", "-f", str(index)]))
+
     refresh_desktop_caches()
+    forget_icon_caches()
     print(f"uninstall: {APP_ID_PROD} removed from {PREFIX}")
     for kept in (
         xdg_config_home() / APP_DIR_PROD,

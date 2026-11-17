@@ -12,13 +12,35 @@
 - Do not forcibly replace user's default image viewer; user selects default via desktop settings.
 - Honor XDG directories, portal file chooser, Wayland and KDE/GNOME theme integration.
 - `just install` builds the release artifact and installs the binary, desktop
-  entry, hicolor SVG icon and AppStream metadata under `/usr/local` by default;
-  `KOGAVIEW_PREFIX` overrides the prefix. The desktop entry uses
-  `Categories=Graphics;Viewer;Photography;`, `GenericName=Image Viewer` and
-  `StartupWMClass=KogaView`.
+  entry, an SVG icon plus seven raster copies of it, and AppStream metadata under
+  `/usr/local` by default; `KOGAVIEW_PREFIX` overrides the prefix. The desktop
+  entry uses `Categories=Graphics;Viewer;Photography;`, `GenericName=Image Viewer`
+  and `StartupWMClass=KogaView`.
+- **The icon needs the rasters, not just the SVG.** GNOME's dock, the shell's app
+  grid and the app centre read icons through GLib's icon theme *cache*: one flat
+  file per theme directory that can only hold the size buckets listed in that
+  theme's `index.theme`. A prefix that installed only
+  `hicolor/scalable/apps/<id>.svg` gave the launcher nothing to cache, so the dock
+  drew an empty square with the app's name beside it — while the Open With dialog,
+  which reads the directory directly, still found the SVG and drew it. `just
+  install` therefore renders `<id>.png` at 16/24/32/48/64/128/256 from the one
+  SVG, writes a prefix-local `hicolor/index.theme` that adds only the missing
+  size sections (the system one still supplies the rest), and runs
+  `gtk-update-icon-cache -f -t`. `just doctor` reports
+  `Icon files : 7/7 raster sizes + SVG; theme cache covers <id>`.
+  Rendering needs PySide6 (`QSvgRenderer`); without it the install keeps going
+  with the SVG alone and says the dock may draw blank.
+- Launch-surface languages: the desktop entry and the AppStream file carry
+  `Name[vi]`/`GenericName[vi]`/`Comment[vi]`/`Keywords[vi]` and
+  `<name|summary|p xml:lang="vi">`. They are generated from one table,
+  `DESKTOP_LANGUAGES` in `scripts/dev.py`, beside the Qt catalogue that the
+  window itself uses (`i18n/kogaview_vi.ts`, ADR 0006) — a language added to one
+  and forgotten in the other would show a Vietnamese window inside an English
+  launcher, so `just test packaging` checks both ends.
 - Installation is Open With registration only. It does not run `xdg-mime
   default`, so the user's existing default handler is preserved. `just
-  uninstall` removes only KogaView's four installed files and keeps user data.
+  uninstall` removes only KogaView's installed files (binary, entry, icon,
+  rasters, metadata and the generated `index.theme`) and keeps user data.
 - Derived files (the thumbnail cache) live under the XDG cache directory and are
   therefore safe to delete at any time: `<cache>/thumbnails`, with `<cache>` from
   `kogaview_cache_dir()` so the `-dev` naming rule is not duplicated in C++.

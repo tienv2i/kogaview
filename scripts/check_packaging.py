@@ -98,6 +98,11 @@ def validate_with(tool: str, path: Path, extra: list[str]) -> list[str]:
     return [f"{tool} rejected {path.name}:\n{result.stdout}{result.stderr}".strip()]
 
 
+def metainfo_text() -> str:
+    """The AppStream file `just install` writes, translations included."""
+    return dev.render_metainfo()
+
+
 def main() -> int:
     problems: list[str] = []
     extensions = advertised_extensions()
@@ -186,7 +191,33 @@ def main() -> int:
     if entry.get("Terminal") != "false":
         problems.append("Terminal= must be false for a windowed app")
 
-    # 5. The tools the desktop itself uses, on the rendered file.
+    # 5. Every launch-surface language is present where the desktop reads it.
+    #    A catalogue string and a desktop key are two different files, so a
+    #    language added to one and forgotten in the other shows up as an English
+    #    launcher inside a Vietnamese window.
+    for language, strings in dev.DESKTOP_LANGUAGES.items():
+        for key in ("Name", "GenericName", "Comment", "Keywords"):
+            value = entry.get(f"{key}[{language}]")
+            if not value:
+                problems.append(f'desktop entry has no {key}[{language}]=')
+            elif value != strings[key]:
+                problems.append(
+                    f'{key}[{language}]= is "{value}", expected "{strings[key]}" '
+                    "from DESKTOP_LANGUAGES"
+                )
+        if f'xml:lang="{language}"' not in metainfo_text():
+            problems.append(f"AppStream metadata carries no {language} translation")
+
+    # 6. The icon is installed in size buckets the launcher's cache can hold, and
+    #    the SVG is still there for the sizes above them.
+    fallbacks = dev.icon_fallbacks()
+    if not fallbacks:
+        problems.append("no raster icon sizes are installed; the GNOME dock may draw blank")
+    for path in fallbacks:
+        if path.parent.name != "apps" or path.stem != dev.APP_ID_PROD:
+            problems.append(f"raster icon {path} is not named after the app ID in apps/")
+
+    # 7. The tools the desktop itself uses, on the rendered file.
     with tempfile.TemporaryDirectory() as scratch:
         rendered = Path(scratch) / f"{dev.APP_ID_PROD}.desktop"
         rendered.write_text(entry_text, encoding="utf-8")

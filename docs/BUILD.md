@@ -74,19 +74,27 @@ The native Linux install owns exactly these files:
 - `${prefix}/bin/kogaview`
 - `${prefix}/share/applications/io.github.tienv2i.KogaView.desktop`
 - `${prefix}/share/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg`
+- `${prefix}/share/icons/hicolor/{16x16,24x24,32x32,48x48,64x64,128x128,256x256}/apps/io.github.tienv2i.KogaView.png`
 - `${prefix}/share/metainfo/io.github.tienv2i.KogaView.metainfo.xml`
 
-It refreshes the desktop database and, when the local hicolor theme provides
-an `index.theme`, its icon cache. `just uninstall` removes only those files;
-it keeps the user's config, state/journal/logs and cache. The install registers
-supported image MIME types for **Open With** but does not run `xdg-mime default`;
-the existing default viewer is never changed silently.
+It also writes `${prefix}/share/icons/hicolor/index.theme` — the system
+`hicolor/index.theme` plus the size sections it is missing, which the icon cache
+needs — and refreshes the desktop database and the hicolor icon cache
+(`gtk-update-icon-cache -f -t`). The rasters are rendered from the SVG with
+PySide6 so the drawing cannot fork. `just uninstall` removes only those files,
+including the generated `index.theme`; it keeps the user's config,
+state/journal/logs and cache. The install registers supported image MIME types
+for **Open With** but does not run `xdg-mime default`; the existing default
+viewer is never changed silently.
 
 `just test packaging` runs `scripts/check_packaging.py`. The check keeps the
 desktop MIME list synchronized with the protocol's advertised extensions and
 shared-mime-info, requires the `Graphics;Viewer;` menu categories, validates
-the desktop entry and AppStream metadata, and checks the application ID across
-the desktop file, icon and metadata.
+the desktop entry and AppStream metadata, checks the application ID across the
+desktop file, icon and metadata, checks that every language in
+`DESKTOP_LANGUAGES` has both its desktop keys and its `xml:lang` in the
+metadata, and checks that the raster icon list is non-empty and named after the
+app ID under `apps/`.
 
 ## Completion gate
 Build success -> launch real app -> exercise Browser/Viewer/Editor -> inspect logs/journal -> inspect screenshots and output files -> report actual platforms verified. A green test suite is never the final gate.
