@@ -1104,7 +1104,69 @@ private slots:
                               .arg(row)));
   }
 
-  // --------------------------------------------------------- thumbnails
+  /// A mouse on this desktop reports **both** deltas: one notch arrives as
+  /// `angleDelta (0, ±120)` *and* `pixelDelta (0, ±10)` (measured on the real
+  /// window, `/tmp/opencode/wheel/run.log`). A pixel-first reading turned that
+  /// into 20 px per notch — a 194 px row needed ten notches — which is what the
+  /// user described as "the wheel is very slow". The notch is what the user
+  /// turned; it must win over the scaled-down pixel figure.
+  void aMouseNotchThatAlsoReportsPixelsMovesAWholeRow()
+  {
+    QVariantMap state = baseState();
+    QVariantList many;
+    for (int index = 0; index < 200; ++index) {
+      many.append(entry(QStringLiteral("photo-%1.jpg").arg(index),
+                        QStringLiteral("/root/photo-%1.jpg").arg(index), false, true));
+    }
+    entryList = many;
+    showState(browserItem(), state);
+    settle();
+
+    QQuickItem* grid = findItem(QStringLiteral("fileGrid"));
+    QVERIFY(grid != nullptr);
+    QTRY_VERIFY2(grid->property("contentHeight").toReal() > grid->height(),
+                 "the grid does not scroll, so the wheel cannot be measured");
+    const qreal row = grid->property("cellHeight").toReal();
+    QCOMPARE(grid->property("contentY").toReal(), 0.0);
+
+    injectWheel(centreOf(grid), QPoint(0, -10), QPoint(0, -120));
+    QTRY_VERIFY2(grid->property("contentY").toReal() >= row * 0.9,
+                 qPrintable(QStringLiteral("a mouse notch that also reports a 10 px pixel "
+                                           "delta moved the grid by only %1 px; a row is %2 px")
+                              .arg(grid->property("contentY").toReal())
+                              .arg(row)));
+    // And it is the notch, not triple the 10 px a pixel-first reading would give.
+    QVERIFY2(grid->property("contentY").toReal() > 100.0,
+             "the grid moved by the pixel delta, not by the notch");
+  }
+
+  /// The continuation events of one notch — same angle, same pixel delta — do
+  /// not scroll again. On the real window a single notch produces six events
+  /// that differ only in `local`; counting them would multiply the travel.
+  void theContinuationsOfOneNotchDoNotScrollAgain()
+  {
+    QVariantMap state = baseState();
+    QVariantList many;
+    for (int index = 0; index < 200; ++index) {
+      many.append(entry(QStringLiteral("photo-%1.jpg").arg(index),
+                        QStringLiteral("/root/photo-%1.jpg").arg(index), false, true));
+    }
+    entryList = many;
+    showState(browserItem(), state);
+    settle();
+
+    QQuickItem* grid = findItem(QStringLiteral("fileGrid"));
+    QVERIFY(grid != nullptr);
+    QTRY_VERIFY2(grid->property("contentHeight").toReal() > grid->height(),
+                 "the grid does not scroll, so the wheel cannot be measured");
+
+    injectWheel(centreOf(grid), QPoint(0, -10), QPoint(0, -120));
+    QTRY_VERIFY(grid->property("contentY").toReal() > 0);
+    const qreal afterOne = grid->property("contentY").toReal();
+    settle();
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("contentY").toReal(), afterOne, 400);
+  }
+
 
   /// The grid tile draws the cached thumbnail instead of the original file, and
   /// asks for it with the entry's size and mtime, so an edited image misses.

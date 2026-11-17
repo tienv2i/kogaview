@@ -332,7 +332,19 @@ Item {
                         var step = 504;
                         var maxX = Math.max(0, strip.contentWidth - strip.width);
                         var dx = 0;
-                        if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
+                        /// The device decides which delta is real: a mouse on
+                        /// this desktop sends `angleDelta` ±120 *and* a
+                        /// `pixelDelta` of a tenth of a notch, so checking the
+                        /// pixel delta first would drop a notch to 20 px.
+                        var notches = event.angleDelta.y !== 0 ? event.angleDelta.y / 120
+                                                               : event.angleDelta.x / 120;
+                        if (notches !== 0) {
+                            /// Mouse: a vertical wheel moves the strip sideways,
+                            /// and a notch down (negative, "towards the user")
+                            /// advances to the next images, the same direction
+                            /// the grid below moves.
+                            dx = -notches * step;
+                        } else if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
                             /// Touchpad: the pixels it reported, doubled the same
                             /// way `WheelScroll` doubles them so the strip keeps
                             /// up with the grid. A finger moving down the pad
@@ -341,17 +353,8 @@ Item {
                             /// direction the grid already scrolls.
                             dx = (event.pixelDelta.x - event.pixelDelta.y)
                                  * 2;
-                        } else {
-                            /// Mouse: a vertical wheel moves the strip sideways,
-                            /// and a notch down (negative, "towards the user")
-                            /// advances to the next images, the same direction
-                            /// the grid below moves.
-                            var delta = event.angleDelta.y !== 0 ? event.angleDelta.y
-                                                                 : event.angleDelta.x;
-                            var notches = delta / 120;
-                            if (notches === 0) return;
-                            dx = -notches * step;
                         }
+                        if (dx === 0) return;
                         // Accumulate on the *target*, not on the animated
                         // position: a second notch that arrives while the strip
                         // is still gliding would otherwise restart from where it

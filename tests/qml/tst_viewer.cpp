@@ -497,7 +497,45 @@ private slots:
     QCOMPARE(zoom(), zoomBefore);
   }
 
-  /// The filmstrip draws cached tiles instead of the originals. `viewerImages`
+  /// A mouse notch on the real window reports `angleDelta` ±120 **and**
+  /// `pixelDelta` ±10. Preferring the pixel delta moved the strip by 20 px
+  /// instead of 504 — the "very slow" the user saw. And the touchpad path must
+  /// stay: an event with no notch still glides by its pixels.
+  void aMouseNotchWithAPixelDeltaStillMovesAFilmstripGroup()
+  {
+    QStringList images;
+    for (int index = 0; index < 40; ++index) {
+      images.append(m_fixtures.path() + QStringLiteral("/strip-%1.png").arg(index));
+    }
+    m_viewer->setProperty("viewerImages", images);
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    m_viewer->setProperty("state", state);
+
+    QQuickItem* strip = item("viewerFilmstrip");
+    QVERIFY2(strip != nullptr, "the viewer has no filmstrip");
+    QTRY_VERIFY2(strip->property("contentWidth").toReal() > strip->width(),
+                 "the filmstrip does not overflow");
+    QCOMPARE(strip->property("contentX").toReal(), 0.0);
+
+    const QPointF over = strip->mapToScene(QPointF(strip->width() / 2.0,
+                                                   strip->height() / 2.0));
+    injectWheel(mouseDevice(), over, QPoint(0, -10), QPoint(0, -120));
+    QTRY_VERIFY2(strip->property("contentX").toReal() >= 78,
+                 qPrintable(QStringLiteral("one mouse notch (with a 10 px pixel delta) moved "
+                                           "only %1 px")
+                              .arg(strip->property("contentX").toReal())));
+    // The whole group, not the 20 px a pixel-first reading gives.
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), 504.0, 2000);
+
+    // A touchpad event has no notch at all, so the pixel path still applies.
+    const qreal afterNotch = strip->property("contentX").toReal();
+    injectWheel(touchpadDevice(), over, QPoint(0, -10), QPoint(0, 0));
+    QTRY_COMPARE_WITH_TIMEOUT(strip->property("contentX").toReal(), afterNotch + 20.0, 2000);
+  }
+
   /// carries paths only, so the size and mtime the cache keys on come from the
   /// folder listing — and a tile only draws once its thumbnail is there.
   void filmstripDrawsCachedThumbnails()
