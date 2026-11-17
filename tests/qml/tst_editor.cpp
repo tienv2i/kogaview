@@ -56,6 +56,8 @@ private slots:
   void aLargePicturePansFreelyInBothAxes();
   void thePanHandlerTakesTouchpadsAndMiddleClicks();
   void aTouchpadWheelZoomsTheCanvasAtTheCursor();
+  void aFittedDocumentFollowsTheWindowResize();
+  void aManualZoomSurvivesTheWindowResize();
 
 private:
   QQuickItem* visualItem(const QString& name) const;
@@ -637,6 +639,85 @@ void TestEditor::thePanHandlerTakesTouchpadsAndMiddleClicks()
 /// `WheelHandler` ignores every device but the mouse unless `acceptedDevices`
 /// says otherwise. This drives the real handler, so a missing setting fails
 /// here instead of only on a user's laptop.
+/// Fit is a mode here too: resizing the window resizes the canvas host, and a
+/// fitted document must refit instead of keeping the scale of the old window.
+void TestEditor::aFittedDocumentFollowsTheWindowResize()
+{
+  // Re-open the document for real: `setState()` with the same path does not
+  // emit `onDocumentPathChanged`, so a fit state left by another test would
+  // leak in and the assertion below would test the harness, not the view.
+  setState(QVariantMap{});
+  setState(documentState());
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "fit"));
+  QTest::qWait(20);
+  auto* host = qobject_cast<QQuickItem*>(findObject(QStringLiteral("editorCanvasHost")));
+  QVERIFY(host != nullptr);
+  QVERIFY2(m_editor->property("autoFit").toBool(), "the document was not fitted on open");
+  const double before = m_editor->property("zoom").toDouble();
+  const qreal fullWidth = host->width();
+
+  // 4000x3000 into the canvas the editor laid out at 1100x700.
+  const double fittedFor = [host]() {
+    return std::min((host->width() - 32) / 4000.0, (host->height() - 32) / 3000.0);
+  }();
+  QVERIFY2(qAbs(before - fittedFor) < 0.01,
+           qPrintable(QStringLiteral("open fit is %1, expected %2")
+                        .arg(before).arg(fittedFor)));
+
+  // Shrink the real window: the whole editor layout follows it.
+  m_view->resize(760, 460);
+  m_editor->setWidth(760);
+  m_editor->setHeight(460);
+  QTRY_VERIFY_WITH_TIMEOUT(host->width() < fullWidth - 1, 2000);
+
+  const double after = m_editor->property("zoom").toDouble();
+  const double expected = std::min((host->width() - 32) / 4000.0,
+                                   (host->height() - 32) / 3000.0);
+  QVERIFY2(qAbs(after - expected) < 0.01,
+           qPrintable(QStringLiteral("after the resize the zoom is %1, but the document fills "
+                                     "%2 of the %3x%4 canvas")
+                        .arg(after).arg(expected).arg(host->width()).arg(host->height())));
+  // State delta, not stability.
+  QVERIFY2(after < before - 0.01,
+           qPrintable(QStringLiteral("zoom did not shrink with the window: %1 -> %2")
+                        .arg(before).arg(after)));
+
+  // The document now fits the smaller canvas.
+  QVERIFY(qAbs(4000 * after) <= host->width());
+  QVERIFY(qAbs(3000 * after) <= host->height());
+
+  m_view->resize(kHostWidth, kHostHeight);
+  m_editor->setWidth(kHostWidth);
+  m_editor->setHeight(kHostHeight);
+  QTRY_VERIFY_WITH_TIMEOUT(host->width() >= fullWidth, 2000);
+}
+
+/// A hand-chosen zoom is not auto fit and must survive a resize untouched.
+void TestEditor::aManualZoomSurvivesTheWindowResize()
+{
+  setState(documentState());
+  auto* host = qobject_cast<QQuickItem*>(findObject(QStringLiteral("editorCanvasHost")));
+  QVERIFY(host != nullptr);
+  const qreal fullWidth = host->width();
+  QVERIFY(fullWidth > 300);
+  clickItem(expectItem("editorActualSize"));
+  QCOMPARE(m_editor->property("zoom").toDouble(), 1.0);
+  QVERIFY(!m_editor->property("autoFit").toBool());
+
+  m_view->resize(760, 460);
+  m_editor->setWidth(760);
+  m_editor->setHeight(460);
+  QTRY_VERIFY_WITH_TIMEOUT(host->width() < 700, 2000);
+  QCOMPARE(m_editor->property("zoom").toDouble(), 1.0);
+
+  m_view->resize(kHostWidth, kHostHeight);
+  m_editor->setWidth(kHostWidth);
+  m_editor->setHeight(kHostHeight);
+  QTRY_VERIFY_WITH_TIMEOUT(host->width() >= fullWidth, 2000);
+  QCOMPARE(m_editor->property("zoom").toDouble(), 1.0);
+  QVERIFY(!m_editor->property("autoFit").toBool());
+}
+
 void TestEditor::aTouchpadWheelZoomsTheCanvasAtTheCursor()
 {
   setState(documentState());

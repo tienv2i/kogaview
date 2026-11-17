@@ -26,6 +26,7 @@
 #include <QTest>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 
 #include "stubthumbnailcache.h"
@@ -479,6 +480,14 @@ private slots:
     QVERIFY(strip != nullptr);
     QTRY_VERIFY2(strip->property("contentWidth").toReal() > strip->width(),
                  "the filmstrip does not overflow");
+    // Showing the strip shrinks the viewport, which re-fits a fitted picture
+    // (`Viewer.qml`, viewport `onHeightChanged`). Fit again once the layout has
+    // settled so `zoomBefore` is the zoom of *this* viewport: the assertion at
+    // the end is that the *gesture* does not zoom the canvas, not that the
+    // layout never moved.
+    QTRY_VERIFY(m_viewport->height() < 720);
+    QMetaObject::invokeMethod(m_viewer, "fit");
+    QCoreApplication::processEvents();
     const QPointF over = strip->mapToScene(QPointF(strip->width() / 2.0,
                                                    strip->height() / 2.0));
 
@@ -755,6 +764,131 @@ private slots:
     QVERIFY2(zoom() > 0.6, "a mouse wheel must work with acceptedDevices=Mouse");
     delete mouse;
     delete touchpad;
+  }
+
+  // ------------------------------------------------------------ auto fit mode
+  /// Fit is a *mode*, not a one-shot: resizing the window while the picture is
+  /// fitted must re-fit it to the new viewport. Before this, `fit()` cleared
+  /// its own flag, so the picture kept the old scale — too small when the window
+  /// grew, overflowing when it shrank.
+  void aFittedImageFollowsTheWindowResize()
+  {
+    // `init()` loaded the 1200x800 fixture and fitted it to 1280x820.
+    QVERIFY2(m_viewer->property("autoFit").toBool(), "the fixture was not fitted");
+    const qreal before = zoom();
+    const qreal fittedFor = [&]() {
+      return std::min(m_viewport->width() / 1200.0, m_viewport->height() / 800.0) * 0.98;
+    }();
+    QVERIFY2(qAbs(before - fittedFor) < 0.01,
+             qPrintable(QStringLiteral("the initial fit is %1, expected %2")
+                          .arg(before)
+                          .arg(fittedFor)));
+
+    // The window really shrinks: the viewport follows the root item.
+    m_view->resize(760, 520);
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->width() < 1100, 2000);
+    const qreal after = zoom();
+    const qreal expected = std::min(m_viewport->width() / 1200.0,
+                                    m_viewport->height() / 800.0) * 0.98;
+    QVERIFY2(qAbs(after - expected) < 0.01,
+             qPrintable(QStringLiteral("after the resize the zoom is %1, but the picture fills "
+                                       "%2 of the smaller viewport %3x%4")
+                          .arg(after)
+                          .arg(expected)
+                          .arg(m_viewport->width())
+                          .arg(m_viewport->height())));
+    // A state delta, not stability: the scale really moved.
+    QVERIFY2(qAbs(after - before) > 0.05,
+             qPrintable(QStringLiteral("zoom did not change on resize: %1 -> %2")
+                          .arg(before)
+                          .arg(after)));
+
+    // And the whole picture still fits inside the viewport.
+    const QRectF shown(m_canvas->mapToItem(m_viewport, QPointF(0, 0)),
+                       QSizeF(m_canvas->width() * zoom(), m_canvas->height() * zoom()));
+    QVERIFY2(QRectF(0, 0, m_viewport->width(), m_viewport->height()).contains(shown),
+             "the resized window cropped the fitted picture");
+
+    m_view->resize(kViewWidth, kViewHeight);
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->width() > 1100, 2000);
+  }
+
+  /// The window is not the only thing that resizes the viewing area: showing
+  /// the filmstrip takes 106 px off the bottom with the window unchanged. A
+  /// fitted picture must shrink to fit there too.
+  void showingTheFilmstripRefitsThePicture()
+  {
+    QVERIFY(m_viewer->property("autoFit").toBool());
+    const qreal zoomWithFullViewport = zoom();
+    const qreal tall = m_viewport->height();
+
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), true);
+    m_viewer->setProperty("state", state);
+
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->height() < tall - 100, 2000);
+    const qreal afterFilmstrip = zoom();
+    QVERIFY2(afterFilmstrip < zoomWithFullViewport - 0.01,
+             qPrintable(QStringLiteral("the filmstrip did not refit a fitted picture "
+                                       "(%1 -> %2)")
+                          .arg(zoomWithFullViewport)
+                          .arg(afterFilmstrip)));
+    const qreal expected = std::min(m_viewport->width() / 1200.0,
+                                    m_viewport->height() / 800.0) * 0.98;
+    QVERIFY2(qAbs(afterFilmstrip - expected) < 0.01,
+             qPrintable(QStringLiteral("filmstrip fit is %1, expected %2")
+                          .arg(afterFilmstrip).arg(expected)));
+
+    // Hiding it again restores the fuller fit.
+    state.insert(QStringLiteral("filmstrip"), false);
+    m_viewer->setProperty("state", state);
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->height() > tall - 2, 2000);
+    QTRY_VERIFY2(qAbs(zoom() - zoomWithFullViewport) < 0.01,
+                 "hiding the filmstrip did not give the picture back its size");
+  }
+
+  /// A hand-chosen zoom is not auto fit, so a resize leaves it alone. Without
+  /// this the resize handler could refit everything and quietly destroy a zoom
+  /// the user set.
+  void aManualZoomSurvivesTheWindowResize()
+  {
+    zoomTo(2.5);
+    QVERIFY2(!m_viewer->property("autoFit").toBool(), "zoomTo left auto fit on");
+
+    m_view->resize(760, 520);
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->width() < 1100, 2000);
+    QCOMPARE(zoom(), 2.5);
+
+    m_view->resize(kViewWidth, kViewHeight);
+    QTRY_VERIFY_WITH_TIMEOUT(m_viewport->width() > 1100, 2000);
+    QCOMPARE(zoom(), 2.5);
+    QVERIFY(!m_viewer->property("autoFit").toBool());
+  }
+
+  /// Turning a picture swaps the side that must fit: a fitted landscape photo
+  /// is 1200 wide, and a quarter turn makes it 1200 *tall*, which no longer
+  /// fits the viewport height. The fitted mode refits after the rotation.
+  void aFittedImageRefitsAfterAQuarterTurn()
+  {
+    QVERIFY(m_viewer->property("autoFit").toBool());
+    const qreal before = zoom();
+    QMetaObject::invokeMethod(m_viewer, "rotateRight");
+    QCoreApplication::processEvents();
+    QCOMPARE(m_viewer->property("rotationAngle").toInt(), 90);
+    const qreal after = zoom();
+    QVERIFY2(qAbs(after - before) > 0.01,
+             qPrintable(QStringLiteral("zoom did not change after a quarter turn: %1 -> %2")
+                          .arg(before)
+                          .arg(after)));
+    // A quarter-turned 1200x800 fits the viewport's h/w swapped direction.
+    const qreal expected = std::min(m_viewport->width() / 800.0,
+                                    m_viewport->height() / 1200.0) * 0.98;
+    QVERIFY2(qAbs(after - expected) < 0.01,
+             qPrintable(QStringLiteral("turned fit is %1, expected %2").arg(after).arg(expected)));
+    m_viewer->setProperty("rotationAngle", 0);
+    QCoreApplication::processEvents();
   }
 
   // -------------------------------------------------------------- canvas menu

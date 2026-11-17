@@ -41,6 +41,11 @@ Item {
     property int rotationAngle: 0
     property bool flipH: false
     property bool flipV: false
+    /// Fit-to-window as a *mode*, not a one-shot. While it is on, the picture
+    /// is re-fitted whenever the viewport, the image or its rotation changes,
+    /// so resizing the window keeps the whole picture inside the new area.
+    /// Any deliberate zoom (wheel, buttons, 100 %) turns it off, and `fit()`
+    /// turns it back on.
     property bool autoFit: true
 
     signal command(var command)
@@ -70,6 +75,8 @@ Item {
                              ? -1 : view.state.viewerIndex
 
     function setZoom(value) {
+        // A typed or stepped zoom is a deliberate one; it leaves auto fit.
+        view.autoFit = false;
         view.zoom = Math.max(0.05, Math.min(16, value));
     }
 
@@ -81,41 +88,77 @@ Item {
         if (Math.abs(next - previous) < 0.000001) {
             return;
         }
+        // A deliberate zoom is the user leaving auto fit; the wheel would
+        // otherwise be undone by the next window resize.
+        view.autoFit = false;
         var centerX = viewport.width / 2 + view.offsetX;
         var centerY = viewport.height / 2 + view.offsetY;
         var shift = 1 - next / previous;
         view.offsetX += (pointX - centerX) * shift;
         view.offsetY += (pointY - centerY) * shift;
         view.zoom = next;
-        view.autoFit = false;
     }
 
     function zoomIn() {
-        view.autoFit = false;
         view.setZoom(view.zoom * 1.25);
     }
 
     function zoomOut() {
-        view.autoFit = false;
         view.setZoom(view.zoom / 1.25);
     }
 
+    /// Scale the picture so it fits the viewport, and stay in that mode: the
+    /// view refits itself when the window or the picture changes size.
     function fit() {
         if (viewport.width > 0 && viewport.height > 0
                 && image.implicitWidth > 0 && image.implicitHeight > 0) {
-            view.zoom = Math.min(viewport.width / image.implicitWidth,
-                                 viewport.height / image.implicitHeight) * 0.98;
+            view.autoFit = true;
+            view.zoom = fittedZoom();
             view.offsetX = 0;
             view.offsetY = 0;
-            view.autoFit = false;
         }
     }
 
+    /// The zoom that shows the whole picture in the viewport, leaving a 2 %
+    /// margin so a fit does not look flush against the edge.
+    function fittedZoom() {
+        if (image.implicitWidth <= 0 || image.implicitHeight <= 0) {
+            return view.zoom;
+        }
+        // A quarter-turned picture is as wide as it is tall, so the viewport
+        // axis it must fit is not the one the source dimensions suggest.
+        var turned = view.rotationAngle % 180 !== 0;
+        var sourceWidth = turned ? image.implicitHeight : image.implicitWidth;
+        var sourceHeight = turned ? image.implicitWidth : image.implicitHeight;
+        return Math.min(viewport.width / sourceWidth,
+                        viewport.height / sourceHeight) * 0.98;
+    }
+
+    /// Re-apply the view's own rule after something that could invalidate the
+    /// current view: fitted views refit, hand-chosen ones only re-clamp.
+    function refitOrClamp() {
+        if (view.autoFit) {
+            view.fit();
+        } else {
+            view.clampOffsets();
+        }
+    }
+
+    /// Keep the pan reachable after the viewport or the zoom changed.
+    function clampOffsets() {
+        var shownX = image.implicitWidth * view.zoom;
+        var shownY = image.implicitHeight * view.zoom;
+        var maxX = Math.max(0, (shownX - viewport.width) / 2);
+        var maxY = Math.max(0, (shownY - viewport.height) / 2);
+        view.offsetX = Math.max(-maxX, Math.min(maxX, view.offsetX));
+        view.offsetY = Math.max(-maxY, Math.min(maxY, view.offsetY));
+    }
+
     function actualSize() {
+        view.autoFit = false;
         view.zoom = 1;
         view.offsetX = 0;
         view.offsetY = 0;
-        view.autoFit = false;
     }
 
     function rotateLeft() {
@@ -133,6 +176,15 @@ Item {
     function toggleFlipV() {
         view.flipV = !view.flipV;
     }
+
+    // Turning a picture swaps the sides that must fit, so a fitted view has to
+    // be refitted even though the image itself did not change.
+    onRotationAngleChanged: view.refitOrClamp()
+    // Resizing the window is the common case: the picture must stay whole.
+    // These handlers fire on every frame of a drag, and `fit()` only writes
+    // properties, so there is no binding loop to worry about.
+    onWidthChanged: view.refitOrClamp()
+    onHeightChanged: view.refitOrClamp()
 
     onCurrentPathChanged: {
         view.autoFit = true;
@@ -154,6 +206,11 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            // The area the picture is fitted into changes on a window resize,
+            // a panel split and a filmstrip toggle; fitting here covers all
+            // three, not just the window.
+            onWidthChanged: view.refitOrClamp()
+            onHeightChanged: view.refitOrClamp()
 
             Rectangle {
                 anchors.fill: parent

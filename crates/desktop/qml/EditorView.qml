@@ -127,6 +127,13 @@ Item {
         view.autoFit = true
     }
 
+    /// Fit the document to the canvas and *stay* fitted: the host resize
+    /// handler below keeps it whole while the window is dragged.
+    function refitOrClamp() {
+        if (view.autoFit) view.fit()
+        else view.clampOffsets()
+    }
+
     function actualSize() {
         if (!hasDocument) return
         view.offsetX = 0
@@ -183,8 +190,8 @@ Item {
 
     // An edit that changes the document's size keeps a fitted view fitted and
     // leaves a hand-chosen zoom alone (only re-clamping it to the new edges).
-    onDocumentWidthChanged: view.autoFit ? view.fit() : view.clampOffsets()
-    onDocumentHeightChanged: view.autoFit ? view.fit() : view.clampOffsets()
+    onDocumentWidthChanged: view.refitOrClamp()
+    onDocumentHeightChanged: view.refitOrClamp()
 
     // ------------------------------------------------------------ editor menu
     // The long label serves as the width probe: a regression that cuts labels
@@ -553,6 +560,12 @@ Item {
             Layout.fillHeight: true
             clip: true
             color: view.theme.thumb
+            // Resizing the window (or the sidebar) resizes the canvas, not the
+            // document: a fitted document must refit, a hand-zoomed one only
+            // re-clamp. This is what kept a fitted picture at its old scale
+            // after the window grew or shrank.
+            onWidthChanged: view.refitOrClamp()
+            onHeightChanged: view.refitOrClamp()
 
             Image {
                 id: canvas
