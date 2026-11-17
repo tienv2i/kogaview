@@ -19,10 +19,17 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   rows 62–64 of `docs/M1-REPORT.md`.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
-- Installed state: `/usr/local/bin/kogaview` plus entry, SVG, seven PNG rasters,
-  merged `index.theme` and metainfo; `xdg-mime query default image/jpeg` is
-  `io.github.tienv2i.KogaView.desktop` **because the owner set it that way** —
-  the install itself never calls `xdg-mime default`.
+- Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
+  build: RelWithDebInfo + dev hooks, production identity) plus entry, SVG, seven
+  PNG rasters, merged `index.theme` and metainfo; `xdg-mime query default
+  image/jpeg` is `io.github.tienv2i.KogaView.desktop` **because the owner set it
+  that way** — the install itself never calls `xdg-mime default`.
+- The prefix binary is a development install on purpose (the owner asked for
+  that, not a separate release). `just install` replaces it with a Release build;
+  `just install-dev` puts the hook-carrying one back. **Never symlink
+  `build/dev/bin/kogaview` into the prefix**: it is `.Dev` with `kogaview-dev`
+  directories, so the launcher would not match it and it would read none of the
+  saved configuration.
 
 ## Environment the evidence was produced on
 
@@ -107,6 +114,16 @@ close → `applySavesAndLeavesTheDialogOpen` fails with "Apply closed the dialog
   from the C++ table, but it would not catch a new one.
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
+
+## Installed binary (this session, after `167bfcd`)
+
+`just install-dev` → `dev-prod` preset. Measured on `/usr/local/bin/kogaview`:
+33 MB (Release 28 MB, Debug 220 MB); `--version` prints
+`io.github.tienv2i.KogaView`; startup log `profile="prod"`,
+`state_dir=…/kogaview`; `KOGAVIEW_DEV_COMMANDS`, `KOGAVIEW_DEV_GEOM` and
+`KOGAVIEW_DEV_SCREENSHOT` all worked on it (journal ids `dev-1`, `dev-2`,
+`ok:true`; a 1280×820 window grab showing the Viewer with no "(Dev)" suffix).
+A launcher-started instance was also seen running from that path.
 
 ## Next natural step
 
