@@ -190,7 +190,7 @@ close → `applySavesAndLeavesTheDialogOpen` fails with "Apply closed the dialog
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
 
-## Installed binary (this session, after `167bfcd`)
+## Installed binary (this session, after `fad0fb1`)
 
 `just install-dev` → `dev-prod` preset. Measured on `/usr/local/bin/kogaview`:
 33 MB (Release 28 MB, Debug 220 MB); `--version` prints
@@ -199,6 +199,12 @@ close → `applySavesAndLeavesTheDialogOpen` fails with "Apply closed the dialog
 `KOGAVIEW_DEV_SCREENSHOT` all worked on it (journal ids `dev-1`, `dev-2`,
 `ok:true`; a 1280×820 window grab showing the Viewer with no "(Dev)" suffix).
 A launcher-started instance was also seen running from that path.
+
+Reinstalled after the language follow-up and smoke-tested on that binary with an
+isolated `XDG_CONFIG_HOME` (`language: "vi"`, a 300×200 picture): it opened at
+878×420, the icon-only toolbar, the hint `Ảnh nhỏ đang hiển thị ở 100 % …`, and
+the instance reported `profile="prod"`. The owner's own configuration and the
+`image/jpeg` default handler were not touched.
 
 ## Next natural step
 
