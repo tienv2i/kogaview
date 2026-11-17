@@ -49,8 +49,13 @@ private slots:
   void opensCentredWithAnInsetContentColumn();
   void aWrittenPositionSticks();
   void draggingTheHeaderMovesTheDialog();
-  void escapeClosesWithoutSaving();
-  void theSaveButtonCarriesTheChoices();
+  void escapeRevertsThePreview();
+  void theButtonsReadDefaultsCancelApplyOk();
+  void okSavesTheChoicesAndCloses();
+  void applySavesAndLeavesTheDialogOpen();
+  void defaultsRestoreTheBuiltInValuesWithoutSaving();
+  void everyChangePreviewsImmediately();
+  void cancelUndoesThePreview();
   void theCloseButtonStillClicksThroughTheDragHandler();
 
 private:
@@ -196,51 +201,212 @@ void TestSettings::draggingTheHeaderMovesTheDialog()
   QVERIFY(dialogVisible());
 }
 
-void TestSettings::escapeClosesWithoutSaving()
+void TestSettings::escapeRevertsThePreview()
 {
   openDialog();
   QSignalSpy saved(m_dialog, SIGNAL(saveRequested(QString, bool, bool, QString)));
+  QSignalSpy reverted(m_dialog, SIGNAL(revertRequested()));
 
   QTest::keyClick(m_view, Qt::Key_Escape);
   QTest::qWait(50);
 
   QVERIFY(!dialogVisible());
   QCOMPARE(saved.count(), 0);
+  // Escape is Cancel: whatever was previewed is undone, not kept.
+  QCOMPARE(reverted.count(), 1);
 }
 
-void TestSettings::theSaveButtonCarriesTheChoices()
+/// The footer's wording and order are the contract: a value-restoring button
+/// apart on the left, then Cancel · Apply · OK with OK as the default action.
+void TestSettings::theButtonsReadDefaultsCancelApplyOk()
+{
+  openDialog();
+  QQuickItem* defaults = item("settingsDefaults");
+  QQuickItem* cancel = item("settingsCancel");
+  QQuickItem* apply = item("settingsApply");
+  QQuickItem* ok = item("settingsOk");
+  QVERIFY(defaults != nullptr && cancel != nullptr && apply != nullptr && ok != nullptr);
+
+  QCOMPARE(defaults->property("text").toString(), QStringLiteral("Defaults"));
+  QCOMPARE(cancel->property("text").toString(), QStringLiteral("Cancel"));
+  QCOMPARE(apply->property("text").toString(), QStringLiteral("Apply"));
+  QCOMPARE(ok->property("text").toString(), QStringLiteral("OK"));
+
+  // Left to right on the real footer.
+  const auto leftOf = [](QQuickItem* a, QQuickItem* b) {
+    return a->mapToScene(QPointF(0, 0)).x() < b->mapToScene(QPointF(0, 0)).x();
+  };
+  QVERIFY2(leftOf(defaults, cancel), "Defaults is not left of Cancel");
+  QVERIFY2(leftOf(cancel, apply), "Cancel is not left of Apply");
+  QVERIFY2(leftOf(apply, ok), "Apply is not left of OK");
+  // OK is the default action.
+  QVERIFY(ok->property("highlighted").toBool());
+  QVERIFY(!apply->property("highlighted").toBool());
+  // Nothing has changed yet, so Apply has nothing to do.
+  QVERIFY2(!apply->property("enabled").toBool(),
+           "Apply is enabled with nothing pending");
+}
+
+void TestSettings::okSavesTheChoicesAndCloses()
 {
   openDialog();
   QSignalSpy saved(m_dialog, SIGNAL(saveRequested(QString, bool, bool, QString)));
+  QSignalSpy reverted(m_dialog, SIGNAL(revertRequested()));
   QVERIFY(saved.isValid());
 
-  // The footer is built from explicit `Button`s (Qt's `standardButtons` would
-  // draw the system's translations, and this machine has no `qtbase_vi`), so
-  // the AcceptRole wiring — click → `accepted` → `saveRequested` — is what has
-  // to be proven. A `ReferenceError` in that handler used to close the dialog
-  // and save nothing, which is why this test toggles a value first: a pass has
-  // to carry a *changed* choice, not the defaults.
+  // Toggle a value first: a pass has to carry a *changed* choice, not the
+  // defaults the dialog opened with.
   QQuickItem* remember = item("settingsRemember");
   QVERIFY(remember != nullptr);
   const bool initialRemember = remember->property("checked").toBool();
   remember->setProperty("checked", !initialRemember);
   QTest::qWait(20);
 
-  QQuickItem* save = item("settingsSave");
-  QVERIFY(save != nullptr);
-  QCOMPARE(save->property("text").toString(), QStringLiteral("Save"));
+  QQuickItem* ok = item("settingsOk");
   const QPoint centre =
-    save->mapToScene(QPointF(save->width() / 2.0, save->height() / 2.0)).toPoint();
+    ok->mapToScene(QPointF(ok->width() / 2.0, ok->height() / 2.0)).toPoint();
   QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre);
   QTest::qWait(50);
 
   QCOMPARE(saved.count(), 1);
+  QCOMPARE(reverted.count(), 0);
   const QList<QVariant> arguments = saved.first();
   QCOMPARE(arguments.at(0).toString(), m_dialog->property("initialTheme").toString());
   QCOMPARE(arguments.at(1).toBool(), !initialRemember);
   QCOMPARE(arguments.at(2).toBool(), m_dialog->property("initialBackground").toBool());
   QCOMPARE(arguments.at(3).toString(), m_dialog->property("initialLanguage").toString());
   QVERIFY(!dialogVisible());
+}
+
+void TestSettings::applySavesAndLeavesTheDialogOpen()
+{
+  openDialog();
+  QSignalSpy saved(m_dialog, SIGNAL(saveRequested(QString, bool, bool, QString)));
+  QSignalSpy reverted(m_dialog, SIGNAL(revertRequested()));
+
+  QQuickItem* themeChoice = item("settingsTheme");
+  QVERIFY(themeChoice != nullptr);
+  const int initialTheme = themeChoice->property("currentIndex").toInt();
+  themeChoice->setProperty("currentIndex", initialTheme == 1 ? 0 : 1);
+  QTest::qWait(20);
+
+  QQuickItem* apply = item("settingsApply");
+  QVERIFY2(apply->property("enabled").toBool(), "Apply is disabled after a change");
+  const QPoint centre =
+    apply->mapToScene(QPointF(apply->width() / 2.0, apply->height() / 2.0)).toPoint();
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre);
+  QTest::qWait(50);
+
+  QCOMPARE(saved.count(), 1);
+  QVERIFY2(dialogVisible(), "Apply closed the dialog");
+  QCOMPARE(saved.first().at(0).toString(),
+           initialTheme == 1 ? QStringLiteral("dark") : QStringLiteral("light"));
+  // The change was written, so Apply is pending again only after the next edit.
+  QVERIFY2(!apply->property("enabled").toBool(),
+           "Apply is still enabled after it saved the pending change");
+
+  // And a second edit re-enables it, so the dialog stays usable.
+  themeChoice->setProperty("currentIndex", initialTheme);
+  QTest::qWait(20);
+  QVERIFY(apply->property("enabled").toBool());
+
+  // Closing with the × after a save does not undo the saved values.
+  QTest::keyClick(m_view, Qt::Key_Escape);
+  QTest::qWait(50);
+  QVERIFY(!dialogVisible());
+  QCOMPARE(reverted.count(), 0);
+}
+
+void TestSettings::defaultsRestoreTheBuiltInValuesWithoutSaving()
+{
+  openDialog();
+  QSignalSpy saved(m_dialog, SIGNAL(saveRequested(QString, bool, bool, QString)));
+  QSignalSpy previewed(m_dialog, SIGNAL(previewRequested(QString, bool, bool, QString)));
+
+  // Put the form somewhere away from the built-in values first.
+  QQuickItem* themeChoice = item("settingsTheme");
+  QQuickItem* remember = item("settingsRemember");
+  QQuickItem* background = item("settingsBackground");
+  m_dialog->setProperty("initialTheme", "light");
+  themeChoice->setProperty("currentIndex", 1);
+  remember->setProperty("checked", false);
+  background->setProperty("checked", false);
+  QTest::qWait(20);
+
+  QQuickItem* defaults = item("settingsDefaults");
+  const QPoint centre =
+    defaults->mapToScene(QPointF(defaults->width() / 2.0, defaults->height() / 2.0)).toPoint();
+  previewed.clear();
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre);
+  QTest::qWait(50);
+
+  // Back to light=false (dark), remember=true, thumbnails=true.
+  QCOMPARE(themeChoice->property("currentIndex").toInt(), 0);
+  QVERIFY(remember->property("checked").toBool());
+  QVERIFY(background->property("checked").toBool());
+  // Previewed, not saved, and still open.
+  QVERIFY2(previewed.count() >= 1, "Defaults did not preview the restored values");
+  QCOMPARE(saved.count(), 0);
+  QVERIFY(dialogVisible());
+}
+
+void TestSettings::everyChangePreviewsImmediately()
+{
+  openDialog();
+  QSignalSpy previewed(m_dialog, SIGNAL(previewRequested(QString, bool, bool, QString)));
+  QSignalSpy saved(m_dialog, SIGNAL(saveRequested(QString, bool, bool, QString)));
+
+  // Start from a known value so the change below is a real change: an
+  // assignment to the value already shown emits nothing, which is correct.
+  QQuickItem* themeChoice = item("settingsTheme");
+  themeChoice->setProperty("currentIndex", 0);
+  QTest::qWait(30);
+  previewed.clear();
+  themeChoice->setProperty("currentIndex", 1);
+  QTest::qWait(30);
+  QCOMPARE(previewed.count(), 1);
+  QCOMPARE(previewed.last().at(0).toString(), QStringLiteral("light"));
+  // A preview is not a save.
+  QCOMPARE(saved.count(), 0);
+
+  QQuickItem* remember = item("settingsRemember");
+  const bool initialRemember = remember->property("checked").toBool();
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier,
+                    remember->mapToScene(QPointF(remember->width() / 2.0,
+                                                 remember->height() / 2.0)).toPoint());
+  QTest::qWait(30);
+  QCOMPARE(previewed.count(), 2);
+  QCOMPARE(previewed.last().at(1).toBool(), !initialRemember);
+  QCOMPARE(saved.count(), 0);
+}
+
+/// Cancel puts the preview back the way the dialog found it: the form and the
+/// shell both go back, and nothing was written.
+void TestSettings::cancelUndoesThePreview()
+{
+  openDialog();
+  QSignalSpy previewed(m_dialog, SIGNAL(previewRequested(QString, bool, bool, QString)));
+  QSignalSpy saved(m_dialog, SIGNAL(saveRequested(QString, bool, bool, QString)));
+  QSignalSpy reverted(m_dialog, SIGNAL(revertRequested()));
+
+  QQuickItem* themeChoice = item("settingsTheme");
+  const int initialTheme = themeChoice->property("currentIndex").toInt();
+  themeChoice->setProperty("currentIndex", initialTheme == 1 ? 0 : 1);
+  QTest::qWait(30);
+  QVERIFY(previewed.count() >= 1);
+
+  QQuickItem* cancel = item("settingsCancel");
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier,
+                    cancel->mapToScene(QPointF(cancel->width() / 2.0,
+                                               cancel->height() / 2.0)).toPoint());
+  QTest::qWait(50);
+
+  QVERIFY(!dialogVisible());
+  QCOMPARE(saved.count(), 0);
+  QCOMPARE(reverted.count(), 1);
+  // The last preview the shell receives restores the opening theme.
+  QCOMPARE(previewed.last().at(0).toString(),
+           initialTheme == 1 ? QStringLiteral("light") : QStringLiteral("dark"));
 }
 
 void TestSettings::theCloseButtonStillClicksThroughTheDragHandler()

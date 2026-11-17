@@ -101,8 +101,11 @@ static const Entry kEntries_vi[] = {
   { "Browsing", "Đang duyệt" },
   { "Remember the last opened folder", "Nhớ thư mục mở gần nhất" },
   { "Generate thumbnails in the background", "Tạo hình thu nhỏ ở chế độ nền" },
-  { "Changes are applied when you press Save.", "Thay đổi được áp dụng khi bạn nhấn Lưu." },
-  { "Reset", "Đặt lại" },
+  { "Changes are previewed as you make them. Apply saves them; OK saves and closes.", "Thay đổi được xem trước ngay khi bạn chọn. Áp dụng để lưu; OK để lưu và đóng." },
+  { "Apply", "Áp dụng" },
+  { "OK", "OK" },
+  { "Defaults", "Mặc định" },
+  { "Cancel", "Huỷ" },
   // context: Viewer
   { "Open an image to start viewing", "Mở một ảnh để bắt đầu xem" },
   { "This image cannot be decoded", "Không giải mã được ảnh này" },

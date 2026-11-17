@@ -271,13 +271,6 @@
         <translation>Kích thước thật (100%)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorView.qml" line="363"/>
-        <location filename="../crates/desktop/qml/EditorView.qml" line="762"/>
-        <location filename="../crates/desktop/qml/EditorView.qml" line="793"/>
-        <source>Save</source>
-        <translation>Lưu</translation>
-    </message>
-    <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="373"/>
         <location filename="../crates/desktop/qml/EditorView.qml" line="804"/>
         <source>Save as…</source>
@@ -534,6 +527,31 @@
 <context>
     <name>SettingsDialog</name>
     <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml"/>
+        <source>Apply</source>
+        <translation>Áp dụng</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml"/>
+        <source>OK</source>
+        <translation>OK</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml"/>
+        <source>Defaults</source>
+        <translation>Mặc định</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml"/>
+        <source>Cancel</source>
+        <translation>Huỷ</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml"/>
+        <source>Changes are previewed as you make them. Apply saves them; OK saves and closes.</source>
+        <translation>Thay đổi được xem trước ngay khi bạn chọn. Áp dụng để lưu; OK để lưu và đóng.</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/SettingsDialog.qml" line="17"/>
         <source>Settings</source>
         <translation>Cài đặt</translation>
@@ -592,16 +610,6 @@
         <location filename="../crates/desktop/qml/SettingsDialog.qml" line="138"/>
         <source>Generate thumbnails in the background</source>
         <translation>Tạo hình thu nhỏ ở chế độ nền</translation>
-    </message>
-    <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="143"/>
-        <source>Changes are applied when you press Save.</source>
-        <translation>Thay đổi được áp dụng khi bạn nhấn Lưu.</translation>
-    </message>
-    <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="171"/>
-        <source>Reset</source>
-        <translation>Đặt lại</translation>
     </message>
 </context>
 <context>

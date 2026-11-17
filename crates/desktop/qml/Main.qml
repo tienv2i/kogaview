@@ -17,8 +17,19 @@ ApplicationWindow {
 
     Theme {
         id: appTheme
-        dark: root.state.theme === "dark"
+        // Core owns the stored theme. While the Settings dialog previews one,
+        // `previewTheme` (ephemeral, never written) wins so the window repaints
+        // before anything is saved; clearing it — on Cancel or on the save that
+        // publishes the new theme — falls back to the stored value. This is the
+        // one piece of state QML is allowed to own, and ADR 0009 records why:
+        // a preview that had to be persisted first would not be a preview.
+        dark: (root.previewTheme || root.state.theme) === "dark"
     }
+
+    /// The theme the Settings dialog is previewing, or empty for "the stored
+    /// theme". Set by `previewRequested`, cleared by `revertRequested` and by
+    /// every save.
+    property string previewTheme: ""
 
     /// Menus size themselves to their longest label, and the pixels have to come
     /// from C++: a `Menu`'s own `font` follows its width, so measuring text inside
@@ -664,19 +675,33 @@ ApplicationWindow {
 
     SettingsDialog {
         id: settingsDialog
+        objectName: "settingsDialog"
         theme: appTheme
+        /// Live preview: the window repaints with the value under the control
+        /// that was just changed, before anything is saved. The theme is an
+        /// ephemeral override (`previewTheme`); the language goes through the
+        /// same live translator switch the menu uses.
+        onPreviewRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
+            root.previewTheme = themeName;
+            if (language) root.applyInterfaceLanguage(language === "system" ? "" : language);
+        }
+        /// Apply (stay open) or OK (close): persist through the one command
+        /// that owns these values. The preview becomes the stored value, so the
+        /// override is dropped and the binding takes over again.
         onSaveRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
+            root.previewTheme = "";
             root.send({ type: "set_settings", theme: themeName,
                         remember_last_folder: rememberLastFolder,
                         background_thumbnails: backgroundThumbnails,
                         language: language });
         }
-        onResetRequested: {
-            root.send({ type: "set_theme", theme: "dark" });
-            settingsDialog.close();
+        /// Cancel, × or Escape: nothing was written, so dropping the override
+        /// is the whole undo, and the language goes back to the stored one.
+        onRevertRequested: {
+            root.previewTheme = "";
+            root.applyInterfaceLanguage(root.state.language === "system"
+                                        ? "" : (root.state.language || ""));
         }
-        onAccepted: settingsDialog.close()
-        onRejected: settingsDialog.close()
     }
 
     FileDialog {

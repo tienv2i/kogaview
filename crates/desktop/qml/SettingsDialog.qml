@@ -2,6 +2,24 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+/// The Settings dialog: a live preview plus the standard four-button contract.
+///
+/// Every control previews *immediately* through `previewRequested` — the shell
+/// applies the look without writing anything, so the user judges the result on
+/// the real window instead of guessing what "Light" will do. Nothing reaches
+/// `config.json` until a save button is pressed:
+///
+/// - **Defaults** restores the built-in values into the form (and previews
+///   them). It does not save and does not close.
+/// - **Cancel** puts everything back the way the dialog found it, previews that,
+///   and closes; nothing is written.
+/// - **Apply** saves and leaves the dialog open, so a second change is one click
+///   away.
+/// - **OK** saves and closes.
+///
+/// The order (Defaults | Cancel · Apply · OK) follows GTK and KDE: the
+/// value-restoring button sits apart on the left, the exit buttons on the
+/// right, and the default action is the rightmost one.
 Dialog {
     id: dialog
     property Theme theme: Theme {}
@@ -14,14 +32,92 @@ Dialog {
     /// an empty list where the dialog runs alone (the QML tests).
     property var languageChoices: []
 
+    /// The values the dialog was opened with, captured on open so Cancel and
+    /// the × can put the preview back exactly as it was.
+    readonly property var openedTheme: initialTheme
+    readonly property bool openedRemember: initialRemember
+    readonly property bool openedBackground: initialBackground
+    readonly property string openedLanguage: initialLanguage
+
+    /// The built-in values "Defaults" restores.
+    readonly property string defaultTheme: "dark"
+    readonly property bool defaultRemember: true
+    readonly property bool defaultBackground: true
+    readonly property string defaultLanguage: "system"
+
+    /// True while the form differs from what is stored *and* saved. Drives the
+    /// Apply button: pressing it with nothing pending would be a no-op, and an
+    /// always-enabled Apply reads as broken.
+    readonly property bool hasPendingChanges: themeChoice.currentIndex !== seenTheme
+                                              || rememberChoice.checked !== seenRemember
+                                              || backgroundChoice.checked !== seenBackground
+                                              || languageChoice.selectedCode() !== seenLanguage
+
+    /// What the last save wrote (or what the dialog opened with), so Apply can
+    /// tell a fresh change from the one it just committed.
+    property int seenTheme: 0
+    property bool seenRemember: true
+    property bool seenBackground: true
+    property string seenLanguage: "system"
+
+    function themeCode() {
+        return themeChoice.currentIndex === 1 ? "light" : "dark"
+    }
+
+    function languageCode() {
+        return languageChoice.selectedCode()
+    }
+
+    /// A save button was pressed: record what was written (so Apply knows it is
+    /// no longer pending) and tell the shell.
+    function commit() {
+        dialog.seenTheme = themeChoice.currentIndex
+        dialog.seenRemember = rememberChoice.checked
+        dialog.seenBackground = backgroundChoice.checked
+        dialog.seenLanguage = dialog.languageCode()
+        // From now on the form *is* the stored configuration, so closing must
+        // not revert it.
+        dialog.saved = true
+        dialog.saveRequested(dialog.themeCode(), rememberChoice.checked,
+                             backgroundChoice.checked, dialog.languageCode())
+    }
+
+    /// Put the form back to `theme`/`remember`/`background`/`language` and tell
+    /// the shell, so the preview follows the form rather than lagging it.
+    function restoreValues(themeCode, remember, background, language) {
+        dialog.restoring = true
+        themeChoice.currentIndex = themeCode === "light" ? 1 : 0
+        rememberChoice.checked = remember
+        backgroundChoice.checked = background
+        if (dialog.languageChoices && dialog.languageChoices.length > 0) {
+            languageChoice.refresh(dialog.languageChoices, language)
+        }
+        dialog.restoring = false
+        dialog.emitPreview()
+    }
+
+    /// True while `restoreValues` is writing the form, so four property writes
+    /// produce one preview instead of four.
+    property bool restoring: false
+    /// True once Apply or OK has written the form's values to the configuration.
+    property bool saved: false
+
+    /// Cancel, × or Escape: undo the preview and close. The stored
+    /// configuration was never touched unless something was saved, in which
+    /// case the saved values are what the form already holds.
+    function revertAndClose() {
+        dialog.saved = false
+        dialog.close()
+    }
+
     title: qsTr("Settings")
     modal: true
     dim: true
     width: Math.min(620, parent ? parent.width - 48 : 620)
     height: Math.min(520, parent ? parent.height - 48 : 520)
     padding: 0
-    // Escape dismisses without saving, like a desktop dialog. A click outside
-    // still does not: the dialog owns the Save/Reset contract.
+    // Escape reverts like Cancel; a click outside still does not dismiss, so a
+    // stray click cannot silently discard a previewed change.
     closePolicy: Popup.CloseOnEscape
     // x/y are set by hand instead of `anchors.centerIn`: an anchor owns the
     // position and snaps a written x back within one frame (measured in a probe:
@@ -33,12 +129,36 @@ Dialog {
         x = Math.round((parent.width - width) / 2)
         y = Math.round((parent.height - height) / 2)
     }
+    /// Report the form's current values for a live preview. Emitted on every
+    /// change; the shell applies it without persisting.
+    function emitPreview() {
+        if (dialog.restoring) return
+        dialog.previewRequested(dialog.themeCode(), rememberChoice.checked,
+                                backgroundChoice.checked, dialog.languageCode())
+    }
+
     onOpened: {
         moved = false
         centerInParent()
+        dialog.saved = false
         if (dialog.languageChoices && dialog.languageChoices.length > 0) {
             languageChoice.refresh(dialog.languageChoices, dialog.initialLanguage)
         }
+        dialog.seenTheme = themeChoice.currentIndex
+        dialog.seenRemember = rememberChoice.checked
+        dialog.seenBackground = backgroundChoice.checked
+        dialog.seenLanguage = dialog.languageCode()
+    }
+    /// Every way out of the dialog ends here — OK, Cancel, ×, Escape and the
+    /// shell closing it. If nothing was saved, whatever was previewed on the
+    /// way is undone: the form goes back to the opening values and the shell is
+    /// told to repaint with them. The stored configuration was never touched,
+    /// so restoring the values is the whole undo.
+    onClosed: {
+        if (dialog.saved) return
+        dialog.restoreValues(dialog.openedTheme, dialog.openedRemember,
+                             dialog.openedBackground, dialog.openedLanguage)
+        dialog.revertRequested()
     }
     onWidthChanged: if (!moved) centerInParent()
     onHeightChanged: if (!moved) centerInParent()
@@ -66,7 +186,8 @@ Dialog {
         }
         RowLayout { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 10
             Label { text: dialog.title; color: dialog.theme.text; font.pixelSize: 17; font.bold: true; Layout.fillWidth: true }
-            ToolButton { objectName: "settingsClose"; text: qsTr("×"); font.pixelSize: 24; onClicked: dialog.reject() }
+            // Closing with the title bar's × is Cancel, not OK.
+            ToolButton { objectName: "settingsClose"; text: qsTr("×"); font.pixelSize: 24; onClicked: dialog.revertAndClose() }
         }
     }
 
@@ -76,7 +197,15 @@ Dialog {
             Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
             RowLayout { Layout.fillWidth: true
                 Label { text: qsTr("Theme"); color: dialog.theme.text; Layout.fillWidth: true }
-                ComboBox { id: themeChoice; model: [qsTr("Dark"), qsTr("Light")]; currentIndex: dialog.initialTheme === "light" ? 1 : 0; Layout.preferredWidth: 220 }
+                ComboBox {
+                    id: themeChoice
+                    objectName: "settingsTheme"
+                    model: [qsTr("Dark"), qsTr("Light")]
+                    currentIndex: dialog.initialTheme === "light" ? 1 : 0
+                    Layout.preferredWidth: 220
+                    // Preview as soon as it changes, not when it is saved.
+                    onCurrentIndexChanged: if (dialog.visible) dialog.emitPreview()
+                }
             }
             RowLayout { Layout.fillWidth: true
                 Label { text: qsTr("Language"); color: dialog.theme.text; Layout.fillWidth: true }
@@ -118,6 +247,7 @@ Dialog {
                         model = entries;
                         currentIndex = selected;
                     }
+                    onCurrentIndexChanged: if (dialog.visible) dialog.emitPreview()
                 }
             }
             Label { text: qsTr("Browsing"); color: dialog.theme.accent; font.bold: true }
@@ -131,6 +261,7 @@ Dialog {
                 text: qsTr("Remember the last opened folder")
                 checked: dialog.initialRemember
                 Layout.fillWidth: true
+                onToggled: if (dialog.visible) dialog.emitPreview()
             }
             CheckBox {
                 id: backgroundChoice
@@ -138,9 +269,10 @@ Dialog {
                 text: qsTr("Generate thumbnails in the background")
                 checked: dialog.initialBackground
                 Layout.fillWidth: true
+                onToggled: if (dialog.visible) dialog.emitPreview()
             }
             Label {
-                text: qsTr("Changes are applied when you press Save.")
+                text: qsTr("Changes are previewed as you make them. Apply saves them; OK saves and closes.")
                 color: dialog.theme.textMuted
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
@@ -149,34 +281,71 @@ Dialog {
         }
     }
 
-    footer: DialogButtonBox {
-        // Explicit buttons, not `standardButtons`: Qt draws "Save"/"Cancel"
+    footer: Rectangle {
+        // A plain footer instead of `DialogButtonBox`: that template re-sorts
+        // its buttons by role (Accept first, then Reject, Apply, Reset), so the
+        // declaration order is not the drawn order — measured: OK landed at
+        // x=446, left of everything. Here the order is literal.
+        objectName: "settingsButtons"
+        implicitHeight: 60
+        color: dialog.theme.surface
+        border.color: dialog.theme.border
+        border.width: 1
+        // Explicit `Button`s, not `standardButtons`: Qt draws "OK"/"Cancel"
         // from the system's `qtbase_<locale>.qm`, and a machine without that
         // file (this one ships no `qtbase_vi`) leaves a Vietnamese dialog with
-        // two English buttons. These read the app's own catalogue, which
-        // travels inside the binary.
-        objectName: "settingsButtons"
-        alignment: Qt.AlignRight
-        padding: 12
-        Button {
-            text: qsTr("Cancel")
-            DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+        // English buttons. These read the app's own catalogue, which travels
+        // inside the binary.
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            spacing: 8
+
+            // Restores the built-in values into the form and previews them. It
+            // deliberately does not save: a user who only wanted to look at the
+            // defaults can still press Cancel. It sits apart on the left, the
+            // way GTK and KDE put the value-restoring button.
+            Button {
+                objectName: "settingsDefaults"
+                text: qsTr("Defaults")
+                onClicked: dialog.restoreValues(dialog.defaultTheme, dialog.defaultRemember,
+                                                dialog.defaultBackground, dialog.defaultLanguage)
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                objectName: "settingsCancel"
+                text: qsTr("Cancel")
+                onClicked: dialog.revertAndClose()
+            }
+            Button {
+                objectName: "settingsApply"
+                text: qsTr("Apply")
+                // Enabled only while the form differs from what was last saved,
+                // so the button says whether pressing it would do anything.
+                enabled: dialog.hasPendingChanges
+                onClicked: dialog.commit()
+            }
+            Button {
+                objectName: "settingsOk"
+                text: qsTr("OK")
+                highlighted: true
+                onClicked: {
+                    dialog.commit();
+                    dialog.close();
+                }
+            }
         }
-        Button {
-            objectName: "settingsSave"
-            text: qsTr("Save")
-            highlighted: true
-            DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-        }
-        Button { text: qsTr("Reset"); DialogButtonBox.buttonRole: DialogButtonBox.Reset; onClicked: dialog.resetRequested() }
-        onAccepted: {
-            dialog.saveRequested(themeChoice.currentIndex === 1 ? "light" : "dark",
-                                 rememberChoice.checked, backgroundChoice.checked,
-                                 languageChoice.selectedCode());
-            dialog.accept();
-        }
-        onRejected: dialog.reject()
     }
-    signal resetRequested()
-    signal saveRequested(string themeName, bool rememberLastFolder, bool backgroundThumbnails, string language)
+
+    /// The form changed and the shell should show it without saving.
+    signal previewRequested(string themeName, bool rememberLastFolder,
+                            bool backgroundThumbnails, string language)
+    /// Apply or OK: persist the form's values. The dialog stays open for Apply
+    /// and closes for OK, which is decided by the button, not here.
+    signal saveRequested(string themeName, bool rememberLastFolder,
+                         bool backgroundThumbnails, string language)
+    /// Cancel, × or Escape: everything previewed is being undone. Emitted
+    /// before the dialog closes.
+    signal revertRequested()
 }
