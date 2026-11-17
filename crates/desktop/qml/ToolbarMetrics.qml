@@ -91,25 +91,37 @@ Item {
     // One measurement per label; the widths below read their advances. An
     // `advanceWidth` read before the item completes is 0, which keeps every
     // width finite instead of NaN.
+    //
+    // The strings are fetched with `qsTranslate(context, …)` and **not** with
+    // `qsTr()`: `qsTr` would look them up in this file's own context
+    // (`ToolbarMetrics`), which the catalogue does not have, so it would silently
+    // measure the English source while the window drew a longer translation.
+    // `qsTranslate` names the context the label is really translated in — the
+    // switcher for the three workspaces, `Main` for the menu — so these are the
+    // same words, in the same font, as the buttons they measure.
+    //
+    // `scripts/check_translations.py` fails if either half of a `qsTranslate`
+    // is not in the catalogue, so a moved or renamed label cannot degrade into
+    // an English measurement without the gate noticing.
     TextMetrics {
         id: browserLabel
         font: Qt.application.font
-        text: qsTr("Browser")
+        text: qsTranslate("WorkspaceSwitcher", "Browser")
     }
     TextMetrics {
         id: viewerLabel
         font: Qt.application.font
-        text: qsTr("Viewer")
+        text: qsTranslate("WorkspaceSwitcher", "Viewer")
     }
     TextMetrics {
         id: editorLabel
         font: Qt.application.font
-        text: qsTr("Editor")
+        text: qsTranslate("WorkspaceSwitcher", "Editor")
     }
     TextMetrics {
         id: menuLabel
         font: Qt.application.font
-        text: qsTr("Menu")
+        text: qsTranslate("Main", "Menu")
     }
 
     readonly property var switcherLabelWidths:
@@ -189,8 +201,15 @@ Item {
     /// Headroom the labelled row keeps beyond its own intrinsic width. Qt's
     /// `Text` rounds each label to a whole pixel and the layout rounds again,
     /// so a window exactly as wide as the arithmetic says can still lose the
-    /// last pixel. Measured on the real window: the labelled row needs 933 px
-    /// of intrinsic width and the labels stop fitting below about 1036 px.
+    /// last pixel.
+    ///
+    /// Measured on the real window with the widest workspace (Editor) open:
+    /// the labelled row's own `implicitWidth` is 1039 px in English and 1133 px
+    /// in Vietnamese, while `labelledToolbarWidth` says 1114 px and 1208 px —
+    /// it budgets the widest workspace whichever one is open, so it is
+    /// deliberately generous. The threshold is therefore the widest row plus
+    /// this slack, and it moves with the interface language because the labels
+    /// above are measured translated.
     readonly property real labelSlack: 16
 
     /// The width at which the window can afford the labels.

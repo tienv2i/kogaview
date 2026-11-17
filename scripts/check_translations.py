@@ -40,11 +40,26 @@ MESSAGE = re.compile(
     r"<message>(?P<body>.*?)</message>", re.S
 )
 SOURCE = re.compile(r"<source>(?P<text>.*?)</source>", re.S)
+CONTEXT = re.compile(r"<context>\s*<name>(?P<name>[^<]+)</name>(?P<body>.*?)</context>", re.S)
 TRANSLATION = re.compile(
     r"<translation(?P<attrs>[^>]*)>(?P<text>.*?)</translation>", re.S
 )
 # One row of the C++ table: { "source", "translation" },
 ENTRY = re.compile(r'\{\s*"(?P<source>(?:[^"\\]|\\.)*)"\s*,\s*"(?P<translation>(?:[^"\\]|\\.)*)"\s*\}')
+
+# The translatable strings the QML draws: `qsTr("…")`. The argument is captured
+# as a run of literal characters and `\` escapes, so a concatenated call
+# (`qsTr("a" + b`) stops at the closing quote of its first literal rather than
+# swallowing the file, which is the failure a careless regex gives here.
+QML_TR = re.compile(r'qsTr\(\s*"(?P<text>(?:[^"\\\n]|\\.)*)"')
+# `qsTranslate("Context", "source")` — the explicit-context form. Both halves are
+# checked: a context the catalogue does not have would make Qt answer with the
+# source text, which is how a measurement silently degrades to English.
+QML_QSTRANSLATE = re.compile(
+    r'qsTranslate\(\s*"(?P<context>(?:[^"\\\n]|\\.)*)"\s*,\s*"(?P<text>(?:[^"\\\n]|\\.)*)"'
+)
+QML_ESCAPE = {"\\": "\\", '"': '"', "'": "'", "n": "\n", "t": "\t", "r": "\r"}
+QML_DIR = ROOT / "crates" / "desktop" / "qml"
 
 UNESCAPE = {"\\": "\\", '"': '"', "n": "\n", "t": "\t"}
 
@@ -73,30 +88,129 @@ def unescape_xml(text: str) -> str:
     )
 
 
-def catalogue() -> tuple[dict[str, str], list[str], list[str]]:
-    """The `.ts` as {source: translation}, plus unfinished and empty sources."""
+def catalogue() -> tuple[dict[str, str], dict[str, set[str]], list[str], list[str]]:
+    """The `.ts` as {source: translation}, {context: {sources}}, unfinished, empty."""
     text = TS_PATH.read_text(encoding="utf-8")
     translations: dict[str, str] = {}
+    by_context: dict[str, set[str]] = {}
     unfinished: list[str] = []
     empty: list[str] = []
-    for match in MESSAGE.finditer(text):
-        body = match.group("body")
-        source = SOURCE.search(body)
-        translation = TRANSLATION.search(body)
-        if source is None or translation is None:
+    for context_match in CONTEXT.finditer(text):
+        context = context_match.group("name")
+        for match in MESSAGE.finditer(context_match.group("body")):
+            body = match.group("body")
+            source = SOURCE.search(body)
+            translation = TRANSLATION.search(body)
+            if source is None or translation is None:
+                continue
+            key = unescape_xml(source.group("text"))
+            value = unescape_xml(translation.group("text"))
+            by_context.setdefault(context, set()).add(key)
+            if "unfinished" in translation.group("attrs"):
+                unfinished.append(key)
+            elif not value.strip():
+                empty.append(key)
+            # The same English text appears in several contexts (a menu in
+            # `Main`, the same item in `BrowserView`); every copy must say the
+            # same thing.
+            if key in translations and translations[key] != value:
+                empty.append(f"{key} (contexts disagree)")
+            translations.setdefault(key, value)
+    return translations, by_context, unfinished, empty
+
+
+def strip_comments(text: str) -> str:
+    """Remove `//` and `/* */` comments, leaving string literals alone.
+
+    A comment that mentions `qsTr(...)` in prose must not be counted — and, the
+    other way round, a string inside a comment must not be able to *satisfy* the
+    check for a missing one. The scan is simple because QML comments are: it
+    tracks whether the current character is inside a `"…"` literal, and only
+    then is a `//` a comment rather than the middle of a URL.
+    """
+    out: list[str] = []
+    index = 0
+    in_string = False
+    in_block = False
+    while index < len(text):
+        char = text[index]
+        pair = text[index : index + 2]
+        if in_block:
+            if pair == "*/":
+                in_block = False
+                index += 2
+            else:
+                # Keep newlines so reported positions stay meaningful.
+                out.append("\n" if char == "\n" else " ")
+                index += 1
             continue
-        key = unescape_xml(source.group("text"))
-        value = unescape_xml(translation.group("text"))
-        if "unfinished" in translation.group("attrs"):
-            unfinished.append(key)
-        elif not value.strip():
-            empty.append(key)
-        # The same English text appears in several contexts (a menu in `Main`,
-        # the same item in `BrowserView`); every copy must say the same thing.
-        if key in translations and translations[key] != value:
-            empty.append(f"{key} (contexts disagree)")
-        translations.setdefault(key, value)
-    return translations, unfinished, empty
+        if in_string:
+            out.append(char)
+            if char == "\\" and index + 1 < len(text):
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if pair == "//":
+            end = text.find("\n", index)
+            if end < 0:
+                break
+            index = end
+            continue
+        if pair == "/*":
+            in_block = True
+            out.append("  ")
+            index += 2
+            continue
+        if char == '"':
+            in_string = True
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def qml_strings() -> tuple[dict[str, list[str]], list[tuple[str, str, str]]]:
+    """What the QML asks for: `({source: [files]}, [(context, source, file)]).
+
+    `lupdate` would produce these from the `.pro`, but it is a Qt tool the build
+    may not have, and the gate must not depend on it: a new `qsTr()` that never
+    reached the catalogue is exactly the case this check exists to catch. The
+    one that got away — the small-picture hint, `Small image shown at 100 % …` —
+    was in the QML, absent from the `.ts`, and drew English in a Vietnamese
+    window while every other check passed.
+
+    `qsTranslate` is reported separately because its context matters as much as
+    its text: the catalogue is keyed by context, so `qsTranslate("A", "x")` with
+    no `A` context returns the untranslated `x`.
+    """
+    found: dict[str, list[str]] = {}
+    translated: list[tuple[str, str, str]] = []
+    for path in sorted(QML_DIR.glob("*.qml")):
+        # Test fixtures live in the same directory so their local types resolve
+        # as siblings, but they are not part of the interface.
+        if path.name.startswith("tst_"):
+            continue
+        text = strip_comments(path.read_text(encoding="utf-8"))
+        for match in QML_TR.finditer(text):
+            literal = match.group("text")
+            source = re.sub(
+                r"\\(.)",
+                lambda m: QML_ESCAPE.get(m.group(1), m.group(1)),
+                literal,
+            )
+            found.setdefault(source, []).append(path.name)
+        for match in QML_QSTRANSLATE.finditer(text):
+            context = re.sub(
+                r"\\(.)", lambda m: QML_ESCAPE.get(m.group(1), m.group(1)), match.group("context")
+            )
+            source = re.sub(
+                r"\\(.)", lambda m: QML_ESCAPE.get(m.group(1), m.group(1)), match.group("text")
+            )
+            translated.append((context, source, path.name))
+    return found, translated
 
 
 def table() -> list[tuple[str, str]]:
@@ -125,9 +239,34 @@ def main(argv: list[str]) -> int:
         print(f"translations: missing {TABLE_PATH}", file=sys.stderr)
         return 1
 
-    strings, unfinished, empty = catalogue()
+    strings, by_context, unfinished, empty = catalogue()
     compiled = table()
     problems: list[str] = []
+
+    # Every string the interface draws must be in the catalogue. This runs
+    # before the table check so a missing entry is reported once, by file.
+    drawn, translated = qml_strings()
+    for source in sorted(drawn):
+        if source not in strings:
+            where = ", ".join(sorted(set(drawn[source])))
+            problems.append(
+                f'qsTr("{source}") in {where} is not in kogaview_vi.ts — '
+                "add it there (or run `lupdate i18n/kogaview_ts.pro`)"
+            )
+    # `qsTranslate` has to name a context the catalogue really has: with a wrong
+    # or stale context Qt answers with the source text, so the caller silently
+    # measures (or draws) English while every other check passes.
+    for context, source, file in sorted(translated):
+        if context not in by_context:
+            problems.append(
+                f'qsTranslate("{context}", "{source}") in {file}: '
+                f"the .ts has no context {context!r}"
+            )
+        elif source not in by_context[context]:
+            problems.append(
+                f'qsTranslate("{context}", "{source}") in {file}: '
+                f"context {context!r} has no source {source!r}"
+            )
 
     for source in sorted(unfinished):
         problems.append(f'unfinished translation in the .ts: "{source}"')
@@ -155,7 +294,9 @@ def main(argv: list[str]) -> int:
     if list_only or not problems:
         print(
             f"translations: {len(strings)} strings in {TS_PATH.name}, "
-            f"{len({source for source, _ in compiled})} of them compiled into C++"
+            f"{len({source for source, _ in compiled})} of them compiled into C++, "
+            f"{len(drawn)} drawn by the QML, "
+            f"{len(translated)} looked up by context"
         )
     if problems:
         print(f"translations: {len(problems)} problem(s)", file=sys.stderr)

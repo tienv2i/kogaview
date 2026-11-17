@@ -187,9 +187,11 @@ if(KOGAVIEW_BUILD_TESTS)
       list(APPEND suite_sources cpp/thumbnailcache.cpp)
     endif()
     # The language suite drives the real translator installer, so it needs the
-    # same compiled-in catalogue the application registers.
+    # same compiled-in catalogue the application registers. The toolbar suite
+    # does too: it asserts that the label threshold follows the interface
+    # language, which is only true if the measurements read the real catalogue.
     set(suite_translations OFF)
-    if(target STREQUAL "kogaview_language_tests")
+    if(target STREQUAL "kogaview_language_tests" OR target STREQUAL "kogaview_toolbar_tests")
       list(APPEND suite_sources cpp/language.cpp)
       set(suite_translations ON)
     endif()

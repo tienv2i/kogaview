@@ -778,6 +778,11 @@
         <translation>Không giải mã được ảnh này</translation>
     </message>
     <message>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="387"/>
+        <source>Small image shown at 100 % — scroll or press + to enlarge</source>
+        <translation>Ảnh nhỏ đang hiển thị ở 100 % — lăn chuột hoặc nhấn + để phóng to</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/Viewer.qml" line="428"/>
         <source>Edit</source>
         <translation>Chỉnh sửa</translation>

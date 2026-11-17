@@ -13,7 +13,7 @@ ApplicationWindow {
     // The floor is measured, not typed: a window must keep every toolbar icon
     // with the labels dropped, and leave room for a sidebar and a picture. See
     // `ToolbarMetrics.minimumWindowWidth` and
-    // `docs/adr/0010-toolbar-compaction-and-shell-open-sizing.md`.
+    // `docs/adr/0010-earned-labels-and-picture-sized-windows.md`.
     minimumWidth: root.minimumWindowWidth
     minimumHeight: 420
     visible: true

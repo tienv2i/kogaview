@@ -51,7 +51,7 @@ Item {
     /// True when the picture is smaller than the viewport, so fitting leaves
     /// it at its natural size instead of blowing it up. It drives a quiet one
     /// line of guidance; `fit()` never enlarges past 100 % (see
-    /// `docs/adr/0010-toolbar-compaction-and-shell-open-sizing.md`), because a
+    /// `docs/adr/0010-earned-labels-and-picture-sized-windows.md`), because a
     /// 300×200 photo stretched to fill a 1500×900 window is blurry and reads
     /// as a broken viewer.
     readonly property bool imageSmallerThanViewport:

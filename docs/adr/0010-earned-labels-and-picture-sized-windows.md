@@ -53,6 +53,27 @@ whose `minimumWidth` is 870, so `onWidthChanged` re-applies the floor with
 `Qt.callLater`. A user's drag is clamped by the compositor; the shell does not
 depend on that.
 
+### The threshold follows the interface language
+
+The measured labels are fetched with `qsTranslate(context, …)` — the
+`WorkspaceSwitcher` context for the three workspace words, `Main` for the menu —
+and not with `qsTr()`. `qsTr()` would look each string up in `ToolbarMetrics`'
+own context, which the catalogue does not have, so the file would measure the
+English source while the window drew a longer translation. That is not
+hypothetical: it is how the Vietnamese interface first ran — 94 px wider in its
+labels than the arithmetic that decided when labels may appear — and it fitted
+only because `labelledToolbarWidth` happens to budget the widest workspace.
+
+Measured on the real window with the widest workspace (Editor) open: the labelled
+row's own `implicitWidth` is 1039 px in English and 1133 px in Vietnamese, and
+the threshold moves with it — **1131 px** English, **1225 px** Vietnamese, the
+same 210 px of headroom in both.
+
+`scripts/check_translations.py` now scans the QML for both `qsTr("…")` (the
+source must be in the `.ts`) and `qsTranslate("Ctx", "src")` (the context *and*
+the source must be) after stripping comments, so a moved label or a stale context
+fails the gate instead of silently measuring English.
+
 ### The window is sized to the picture, once, at launch
 
 `PlatformHelper::imageSize()` reads the size from the header only
@@ -74,9 +95,11 @@ moves the window.
 GNOME re-applied its own geometry on map (a 1639×1104 request became
 1920×1125), so `fitWindowToImage` stores `openedWindowSize` and re-applies it
 through `Qt.callLater(enforceOpenedWindowSize)` plus a 250 ms retry.
-`Viewer.fittedZoom()` caps at `Math.min(1, …)`, so the first paint is already
-fitted and no re-flow is visible; the wheel and the zoom buttons still go past
-100 %.
+`Viewer.fittedZoom()` caps at `Math.min(1, …)`, and the size is set before the
+picture decodes, so the window never shows a picture that is then re-fitted in
+view — the wheel and the zoom buttons still go past 100 %. That ordering is
+argued from the launch path, not from a frame-by-frame capture: a window grab
+only ever shows the settled window (see Consequences).
 
 ### The filmstrip follows the picture, not the folder
 
@@ -100,6 +123,18 @@ folder where a strip means something.
   visible slack; that is the price of never squeezing the Editor's canvas.
 - Oversized windows on very wide screens are capped by the screen, not by the
   image: a 9000×600 panorama opens at 1731×420 and fits at 19 %.
+- The threshold is now a per-language number, so a translation with much longer
+  words moves it: the gate keeps the measurements honest, but nobody has
+  reviewed the Vietnamese words for width — they are simply measured.
+- `KOGAVIEW_DEV_SCREENSHOT` raises and activates the window before grabbing and
+  waits up to 20 s for it to be exposed, failing the run if it never is. It does
+  not grab an unexposed window any more: on this session such a grab returned
+  the last committed frame, which right after the launch resize was the pre-fit
+  one — a picture at the wrong zoom with no hint, while the window's own
+  properties said `zoom 1`. Every screenshot in `docs/evidence/` is a window
+  grab of an exposed window, not a compositor capture.
 - Not covered: a maximised/fullscreen toggle, a multi-monitor DPI change while
   open, and a real pointer-drag resize (this session has no scripted resize
-  tool).
+  tool). First paint was not photographed frame by frame: the screenshots show
+  the settled window, and "fitted from the first frame" rests on the launch path
+  setting the size and the fit before the picture decodes, not on a capture.

@@ -16,6 +16,8 @@
 #include <QQmlExpression>
 #include <QTest>
 
+#include "language.h"
+
 namespace {
 QString qmlDir()
 {
@@ -339,6 +341,58 @@ private slots:
     button->setProperty("text", QString());
     QVERIFY(!button->property("useText").toBool());
     QCOMPARE(real(button, "implicitWidth"), iconOnly);
+  }
+
+  /// The threshold follows the interface language.
+  ///
+  /// The labels are measured translated (`qsTranslate` into the context the
+  /// switcher and the menu translate in), so a language with longer words needs
+  /// a wider window before the labels appear. It did not: the measurements were
+  /// the English literals, the threshold stayed at 1131 px, and Vietnamese — 94 px
+  /// wider on this machine — fitted only because the arithmetic happens to budget
+  /// the widest workspace. A slightly longer language would have clipped.
+  void theLabelThresholdFollowsTheInterfaceLanguage()
+  {
+    QmlViewFixture fixture(&m_engine, switcherFixture(), QSize(1400, 60));
+    QVERIFY2(fixture.root() != nullptr, qPrintable(fixture.error()));
+    QObject* metrics = fixture.root()->findChild<QObject*>(QStringLiteral("toolbarMetrics"));
+    QVERIFY(metrics != nullptr);
+
+    const qreal english = real(metrics, "labelThreshold");
+    const qreal englishLabels = real(metrics, "switcherLabelsWidth");
+    QVERIFY2(english > 0, "the English threshold is not a number");
+
+    // The same translator switch the settings dialog performs.
+    InterfaceLanguage language(&m_engine, fixture.root(), QString());
+    language.apply(QStringLiteral("vi"));
+
+    const qreal vietnamese = real(metrics, "labelThreshold");
+    const qreal vietnameseLabels = real(metrics, "switcherLabelsWidth");
+
+    // "Trình chỉnh sửa" is wider than "Editor": the measured label total must
+    // grow, and the threshold with it.
+    QVERIFY2(vietnameseLabels > englishLabels,
+             qPrintable(QStringLiteral("the Vietnamese labels measured no wider "
+                                       "(%1 vs %2): the metrics are still using "
+                                       "the English literals")
+                          .arg(vietnameseLabels)
+                          .arg(englishLabels)));
+    QVERIFY2(vietnamese > english,
+             qPrintable(QStringLiteral("the Vietnamese threshold is %1, not wider "
+                                       "than the English %2")
+                          .arg(vietnamese)
+                          .arg(english)));
+    // And the growth is the label growth, not some unrelated constant.
+    QVERIFY2(qAbs((vietnamese - english) - (vietnameseLabels - englishLabels)) < 2.0,
+             qPrintable(QStringLiteral("the threshold grew by %1 but the labels by %2")
+                          .arg(vietnamese - english)
+                          .arg(vietnameseLabels - englishLabels)));
+
+    // Back to English: the numbers must return, so neither state passes by
+    // never changing.
+    language.apply(QString());
+    QVERIFY2(qAbs(real(metrics, "labelThreshold") - english) < 1.0,
+             "the threshold did not return to its English value");
   }
 
   /// The floor is the widest workspace, not whichever one happens to be open.
