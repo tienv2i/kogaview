@@ -834,6 +834,7 @@ ApplicationWindow {
             objectName: "editor"
             theme: appTheme
             state: root.state
+            thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             onCommand: function(command) { root.send(command); }
             onRequestOpen: root.chooseEditorImage()
             onRequestSaveAs: root.chooseEditorSaveAs()

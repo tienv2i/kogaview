@@ -11,21 +11,29 @@ import QtQuick.Layouts
 // Core rejects leaves the view showing the truth rather than an optimistic
 // guess.
 //
-// The layout is a tool palette, not a second copy of the toolbar: the left
-// column holds the actions and the tools, the right column holds the options of
-// the tool selected on the left (a resize or crop rectangle), and the toolbar
-// keeps only what is global — open, zoom, save, back and close. The history
-// itself stays in Core; the view no longer lists it.
+// The layout is a tool palette and an inspector, not a second copy of the
+// toolbar: the left column holds the tools (Pointer, Resize, Crop) and the
+// quick edits, the right column shows the document's details, thumbnail and
+// history under the pointer or the selected tool's options, and the toolbar
+// keeps what is global — open, zoom, save, undo/redo/reset, back and close.
+// Core still owns the history and the undo/redo state; the view only draws the
+// labels, and only where a tool is not armed.
 Item {
     id: view
 
     property Theme theme: Theme {}
+    /// The shared thumbnail cache (C++ `ThumbnailCache`). Null in the QML test
+    /// harness, where the pointer frame stays empty instead of decoding a fake
+    /// path.
+    property var thumbnails: null
     /// The published Core state; `editor` is null until a document is open.
     property var state: ({})
     property int leftPanelWidth: 220
     property int rightPanelWidth: 260
-    /// Which tool's options the right column shows: `resize` or `crop`.
-    property string tool: "resize"
+    /// Which tool is selected: `pointer` (no tool), `resize` or `crop`. The
+    /// pointer is the default and the no-op tool, so opening the Editor never
+    /// leaves an Apply button armed.
+    property string tool: "pointer"
 
     /// Raised by the empty state and the toolbar's open button; Main owns the
     /// file chooser so the portal/fallback path stays in one place.
@@ -36,6 +44,9 @@ Item {
     signal command(var command)
 
     readonly property var editor: state.editor || null
+    /// The steps applied in this session, oldest first; Core publishes them as
+    /// labels and still owns undo/redo. The pointer inspector draws the list.
+    readonly property var history: editor ? (editor.history || []) : []
     readonly property bool hasDocument: !!(editor && editor.width > 0)
     readonly property bool rendering: !!(editor && editor.rendering)
     readonly property bool modified: !!(editor && editor.modified)
@@ -201,6 +212,14 @@ Item {
     onDocumentWidthChanged: view.refitOrClamp()
     onDocumentHeightChanged: view.refitOrClamp()
 
+    /// The pointer inspector's preview comes from the same cache the browser's
+    /// grid uses, so it is a fast, small image rather than a second decode of
+    /// the full preview.
+    ThumbnailBook {
+        id: thumbs
+        cache: view.thumbnails
+    }
+
     // ------------------------------------------------------------ editor menu
     // The long label serves as the width probe: a regression that cuts labels
     // shows up as "Crop to selection…" losing its ellipsis.
@@ -328,6 +347,37 @@ Item {
             }
             ToolbarSeparator { theme: view.theme }
             ToolbarButton {
+                objectName: "undoButton"
+                theme: view.theme
+                icon.name: "edit-undo-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: !!(view.editor && view.editor.canUndo)
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Undo")
+                onClicked: view.command({ type: "editor_undo" })
+            }
+            ToolbarButton {
+                objectName: "redoButton"
+                theme: view.theme
+                icon.name: "edit-redo-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: !!(view.editor && view.editor.canRedo)
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Redo")
+                onClicked: view.command({ type: "editor_redo" })
+            }
+            ToolbarButton {
+                objectName: "resetButton"
+                theme: view.theme
+                icon.name: "document-revert-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: view.modified
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Reset to original")
+                onClicked: view.command({ type: "editor_reset" })
+            }
+            ToolbarSeparator { theme: view.theme }
+            ToolbarButton {
                 objectName: "editorBack"
                 theme: view.theme
                 icon.name: "go-previous-symbolic"
@@ -377,9 +427,39 @@ Item {
                     font.bold: true
                 }
 
-                // A single column, not a 2 × 2 grid: at the default 220 px the
-                // grid cut "Flip horizontal" down to "Flip horizo…" in English
-                // and would do the same to the Vietnamese labels.
+                // The pointer is the no-op tool: it selects nothing, so Core
+                // never sees a command from it. It is the tool the Editor
+                // opens on, and clicking the selected Resize/Crop again
+                // returns to it.
+                Button {
+                    objectName: "toolPointer"
+                    Layout.fillWidth: true
+                    text: qsTr("Pointer")
+                    highlighted: view.tool === "pointer"
+                    onClicked: view.tool = "pointer"
+                }
+                Button {
+                    objectName: "toolResize"
+                    Layout.fillWidth: true
+                    text: qsTr("Resize")
+                    highlighted: view.tool === "resize"
+                    enabled: view.hasDocument
+                    onClicked: view.tool = view.tool === "resize" ? "pointer" : "resize"
+                }
+                Button {
+                    objectName: "toolCrop"
+                    Layout.fillWidth: true
+                    text: qsTr("Crop")
+                    highlighted: view.tool === "crop"
+                    enabled: view.hasDocument
+                    onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
+                }
+
+                MenuSeparator {}
+
+                // These change pixels the moment they are pressed, so they are
+                // actions rather than tools. Undo, Redo and Reset live on the
+                // toolbar; the palette keeps the tools and the quick edits.
                 Button {
                     objectName: "editsRotateLeft"
                     Layout.fillWidth: true
@@ -407,56 +487,6 @@ Item {
                     text: qsTr("Flip vertical")
                     enabled: view.hasDocument
                     onClicked: view.command({ type: "editor_flip", axis: "vertical" })
-                }
-
-                MenuSeparator {}
-
-                // Selecting a tool changes nothing but which options the right
-                // column shows; the command is sent by Apply.
-                Button {
-                    objectName: "toolResize"
-                    Layout.fillWidth: true
-                    text: qsTr("Resize")
-                    highlighted: view.tool === "resize"
-                    enabled: view.hasDocument
-                    onClicked: view.tool = "resize"
-                }
-                Button {
-                    objectName: "toolCrop"
-                    Layout.fillWidth: true
-                    text: qsTr("Crop")
-                    highlighted: view.tool === "crop"
-                    enabled: view.hasDocument
-                    onClicked: view.tool = "crop"
-                }
-
-                MenuSeparator {}
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 6
-
-                    Button {
-                        objectName: "undoButton"
-                        Layout.fillWidth: true
-                        text: qsTr("Undo")
-                        enabled: !!(view.editor && view.editor.canUndo)
-                        onClicked: view.command({ type: "editor_undo" })
-                    }
-                    Button {
-                        objectName: "redoButton"
-                        Layout.fillWidth: true
-                        text: qsTr("Redo")
-                        enabled: !!(view.editor && view.editor.canRedo)
-                        onClicked: view.command({ type: "editor_redo" })
-                    }
-                }
-                Button {
-                    objectName: "resetButton"
-                    Layout.fillWidth: true
-                    text: qsTr("Reset to original")
-                    enabled: view.modified
-                    onClicked: view.command({ type: "editor_reset" })
                 }
 
                 Item { Layout.fillHeight: true }
@@ -658,226 +688,325 @@ Item {
                     width: inspector.width - 24
                     spacing: 10
 
+                    // The heading names the tool whose column this is. With the
+                    // pointer selected there is no tool, so the column becomes
+                    // the document itself.
                     Label {
-                        objectName: "imageHeading"
-                        text: qsTr("Image")
+                        objectName: "toolOptionsHeading"
+                        text: view.tool === "pointer"
+                              ? qsTr("Pointer")
+                              : (view.tool === "crop" ? qsTr("Crop") : qsTr("Resize"))
                         color: view.theme.text
                         font.bold: true
                     }
 
-                    Label {
+                    // ------------------------------- pointer: document details
+                    // The pointer changes no pixels, so its column shows what
+                    // the document is, what it looks like and what has been
+                    // done to it in this session — never an Apply button.
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        objectName: "imageName"
-                        text: view.editor
-                              ? (view.editor.name + (view.modified ? " · " + qsTr("edited") : ""))
-                              : "—"
-                        color: view.theme.text
-                        elide: Text.ElideMiddle
-                    }
+                        visible: view.tool === "pointer"
+                        spacing: 8
 
-                    Label {
-                        Layout.fillWidth: true
-                        objectName: "imageSize"
-                        text: view.sizeLabel()
-                        color: view.theme.textMuted
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        objectName: "saveTarget"
-                        text: {
-                            if (!view.editor) return "—"
-                            var where = view.editor.savePath || view.editor.path || ""
-                            var name = where.split("/").pop()
-                            var style = view.editor.format ? " (" + view.editor.format + ")" : ""
-                            var state = view.saved ? qsTr("saved") : qsTr("unsaved changes")
-                            return name + style + " · " + state
+                        Label {
+                            objectName: "imageHeading"
+                            text: qsTr("Image")
+                            color: view.theme.text
+                            font.bold: true
                         }
-                        color: view.saved ? view.theme.textMuted : view.theme.accent
-                        font.pixelSize: 11
-                        elide: Text.ElideMiddle
-                        wrapMode: Text.NoWrap
-                    }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        BusyIndicator {
-                            Layout.preferredWidth: 18
-                            Layout.preferredHeight: 18
-                            running: view.saving
-                            visible: running
-                        }
                         Label {
                             Layout.fillWidth: true
-                            text: qsTr("Saving…")
-                            visible: view.saving
+                            objectName: "imageName"
+                            text: view.hasDocument
+                                  ? (view.editor.name + (view.modified ? " · " + qsTr("edited") : ""))
+                                  : "—"
+                            color: view.theme.text
+                            elide: Text.ElideMiddle
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            objectName: "imageSize"
+                            text: view.sizeLabel()
+                            color: view.theme.textMuted
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            objectName: "saveTarget"
+                            text: {
+                                if (!view.hasDocument) return "—"
+                                var where = view.editor.savePath || view.editor.path || ""
+                                var name = where.split("/").pop()
+                                var style = view.editor.format ? " (" + view.editor.format + ")" : ""
+                                var state = view.saved ? qsTr("saved") : qsTr("unsaved changes")
+                                return name + style + " · " + state
+                            }
+                            color: view.saved ? view.theme.textMuted : view.theme.accent
+                            font.pixelSize: 11
+                            elide: Text.ElideMiddle
+                            wrapMode: Text.NoWrap
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            BusyIndicator {
+                                Layout.preferredWidth: 18
+                                Layout.preferredHeight: 18
+                                running: view.saving
+                                visible: running
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("Saving…")
+                                visible: view.saving
+                                color: view.theme.textMuted
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        // The current preview through the grid's thumbnail
+                        // cache, in the same frame the grid uses: a small
+                        // cached decode that follows each edit.
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(180, width * 0.72)
+                            radius: view.theme.radius
+                            color: view.theme.thumb
+                            clip: true
+
+                            CachedThumbnail {
+                                objectName: "pointerThumbnail"
+                                anchors.fill: parent
+                                anchors.margins: 4
+                                book: thumbs
+                                // The current preview through the grid's own
+                                // thumbnail cache: a small cached decode, and
+                                // a new preview path after each edit refreshes
+                                // it. The QML harness passes no cache and uses
+                                // fake paths, so it draws the placeholder.
+                                path: view.hasDocument && view.thumbnails
+                                      ? (view.editor.previewPath || view.editor.path) : ""
+                                thumbnailable: view.hasDocument
+                                fillMode: Image.PreserveAspectFit
+                            }
+                            Label {
+                                anchors.centerIn: parent
+                                visible: !view.hasDocument
+                                text: qsTr("No image open")
+                                color: view.theme.textMuted
+                            }
+                        }
+
+                        Label {
+                            text: qsTr("History")
+                            color: view.theme.text
+                            font.bold: true
+                        }
+
+                        ListView {
+                            id: historyList
+                            objectName: "historyList"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 220
+                            Layout.minimumHeight: 120
+                            clip: true
+                            model: view.history
+                            spacing: 2
+                            delegate: Rectangle {
+                                required property string modelData
+                                required property int index
+                                width: ListView.view.width
+                                height: 26
+                                radius: view.theme.radius
+                                color: "transparent"
+
+                                Label {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 6
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                    color: view.theme.text
+                                    font.pixelSize: 12
+                                    text: (index + 1) + ". " + modelData
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: view.history.length === 0
+                            text: view.hasDocument ? qsTr("No edits yet") : qsTr("No image open")
                             color: view.theme.textMuted
                             font.pixelSize: 11
                         }
                     }
 
-                    MenuSeparator {}
-
-                    Label {
-                        objectName: "toolOptionsHeading"
-                        text: view.tool === "crop" ? qsTr("Crop") : qsTr("Resize")
-                        color: view.theme.text
-                        font.bold: true
-                    }
-
-                    GridLayout {
+                    // ------------------------------- resize/crop: tool options
+                    // The two tools share Width/Height; only the selected one
+                    // shows its own fields and Apply button. Reset clears the
+                    // fields without sending anything.
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        columns: 2
-                        columnSpacing: 6
-                        rowSpacing: 4
+                        visible: view.tool !== "pointer"
+                        spacing: 10
 
-                        Label {
-                            text: qsTr("X")
-                            visible: view.tool === "crop"
-                            color: view.theme.textMuted
-                        }
-                        TextField {
-                            id: cropX
-                            objectName: "cropX"
+                        GridLayout {
                             Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            font.pixelSize: 12
-                            text: "0"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 0; top: 20000 }
-                        }
-                        Label {
-                            text: qsTr("Y")
-                            visible: view.tool === "crop"
-                            color: view.theme.textMuted
-                        }
-                        TextField {
-                            id: cropY
-                            objectName: "cropY"
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            font.pixelSize: 12
-                            text: "0"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 0; top: 20000 }
-                        }
-                        Label {
-                            text: qsTr("Width")
-                            color: view.theme.textMuted
-                        }
-                        TextField {
-                            id: widthField
-                            objectName: "widthField"
-                            Layout.fillWidth: true
-                            font.pixelSize: 12
-                            placeholderText: view.editor ? String(view.editor.width) : "0"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 1; top: 20000 }
-                        }
-                        Label {
-                            text: qsTr("Height")
-                            color: view.theme.textMuted
-                        }
-                        TextField {
-                            id: heightField
-                            objectName: "heightField"
-                            Layout.fillWidth: true
-                            font.pixelSize: 12
-                            placeholderText: view.editor ? String(view.editor.height) : "0"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 1; top: 20000 }
-                        }
-                    }
+                            columns: 2
+                            columnSpacing: 6
+                            rowSpacing: 4
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Button {
-                            objectName: "halfSize"
-                            text: qsTr("Half")
-                            visible: view.tool === "resize"
-                            enabled: view.hasDocument
-                            onClicked: {
-                                widthField.text = String(Math.max(1, Math.round(view.editor.width / 2)))
-                                heightField.text = String(Math.max(1, Math.round(view.editor.height / 2)))
+                            Label {
+                                text: qsTr("X")
+                                visible: view.tool === "crop"
+                                color: view.theme.textMuted
+                            }
+                            TextField {
+                                id: cropX
+                                objectName: "cropX"
+                                Layout.fillWidth: true
+                                visible: view.tool === "crop"
+                                font.pixelSize: 12
+                                text: "0"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: IntValidator { bottom: 0; top: 20000 }
+                            }
+                            Label {
+                                text: qsTr("Y")
+                                visible: view.tool === "crop"
+                                color: view.theme.textMuted
+                            }
+                            TextField {
+                                id: cropY
+                                objectName: "cropY"
+                                Layout.fillWidth: true
+                                visible: view.tool === "crop"
+                                font.pixelSize: 12
+                                text: "0"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: IntValidator { bottom: 0; top: 20000 }
+                            }
+                            Label {
+                                text: qsTr("Width")
+                                color: view.theme.textMuted
+                            }
+                            TextField {
+                                id: widthField
+                                objectName: "widthField"
+                                Layout.fillWidth: true
+                                font.pixelSize: 12
+                                placeholderText: view.hasDocument ? String(view.editor.width) : "0"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: IntValidator { bottom: 1; top: 20000 }
+                            }
+                            Label {
+                                text: qsTr("Height")
+                                color: view.theme.textMuted
+                            }
+                            TextField {
+                                id: heightField
+                                objectName: "heightField"
+                                Layout.fillWidth: true
+                                font.pixelSize: 12
+                                placeholderText: view.hasDocument ? String(view.editor.height) : "0"
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                validator: IntValidator { bottom: 1; top: 20000 }
                             }
                         }
-                        Item { Layout.fillWidth: true }
-                    }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
-                        Button {
-                            objectName: "applyResize"
-                            text: qsTr("Apply")
+                        RowLayout {
                             Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            enabled: view.hasDocument
-                                     && widthField.acceptableInput
-                                     && heightField.acceptableInput
-                                     && parseInt(widthField.text) > 0
-                                     && parseInt(heightField.text) > 0
-                            onClicked: {
-                                view.command({
-                                    type: "editor_resize",
-                                    width: parseInt(widthField.text),
-                                    height: parseInt(heightField.text)
-                                })
-                                widthField.text = ""
-                                heightField.text = ""
+                            spacing: 6
+
+                            Button {
+                                objectName: "halfSize"
+                                text: qsTr("Half")
+                                visible: view.tool === "resize"
+                                enabled: view.hasDocument
+                                onClicked: {
+                                    widthField.text = String(Math.max(1, Math.round(view.editor.width / 2)))
+                                    heightField.text = String(Math.max(1, Math.round(view.editor.height / 2)))
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Button {
+                                objectName: "applyResize"
+                                text: qsTr("Apply")
+                                Layout.fillWidth: true
+                                visible: view.tool === "resize"
+                                enabled: view.hasDocument
+                                         && widthField.acceptableInput
+                                         && heightField.acceptableInput
+                                         && parseInt(widthField.text) > 0
+                                         && parseInt(heightField.text) > 0
+                                onClicked: {
+                                    view.command({
+                                        type: "editor_resize",
+                                        width: parseInt(widthField.text),
+                                        height: parseInt(heightField.text)
+                                    })
+                                    widthField.text = ""
+                                    heightField.text = ""
+                                }
+                            }
+                            Button {
+                                objectName: "applyCrop"
+                                text: qsTr("Apply crop")
+                                Layout.fillWidth: true
+                                visible: view.tool === "crop"
+                                enabled: view.hasDocument
+                                         && cropX.acceptableInput
+                                         && cropY.acceptableInput
+                                         && widthField.acceptableInput
+                                         && heightField.acceptableInput
+                                         && parseInt(widthField.text) > 0
+                                         && parseInt(heightField.text) > 0
+                                onClicked: {
+                                    view.command({
+                                        type: "editor_crop",
+                                        x: parseInt(cropX.text),
+                                        y: parseInt(cropY.text),
+                                        width: parseInt(widthField.text),
+                                        height: parseInt(heightField.text)
+                                    })
+                                    widthField.text = ""
+                                    heightField.text = ""
+                                    cropX.text = "0"
+                                    cropY.text = "0"
+                                }
+                            }
+                            Button {
+                                objectName: "resetToolFields"
+                                text: qsTr("Reset")
+                                enabled: view.hasDocument
+                                onClicked: {
+                                    widthField.text = ""
+                                    heightField.text = ""
+                                    cropX.text = "0"
+                                    cropY.text = "0"
+                                }
                             }
                         }
-                        Button {
-                            objectName: "applyCrop"
-                            text: qsTr("Apply crop")
+
+                        Label {
                             Layout.fillWidth: true
                             visible: view.tool === "crop"
-                            enabled: view.hasDocument
-                                     && cropX.acceptableInput
-                                     && cropY.acceptableInput
-                                     && widthField.acceptableInput
-                                     && heightField.acceptableInput
-                                     && parseInt(widthField.text) > 0
-                                     && parseInt(heightField.text) > 0
-                            onClicked: {
-                                view.command({
-                                    type: "editor_crop",
-                                    x: parseInt(cropX.text),
-                                    y: parseInt(cropY.text),
-                                    width: parseInt(widthField.text),
-                                    height: parseInt(heightField.text)
-                                })
-                                widthField.text = ""
-                                heightField.text = ""
-                                cropX.text = "0"
-                                cropY.text = "0"
-                            }
+                            text: qsTr("Set Width/Height, then enter the rectangle's top-left corner.")
+                            color: view.theme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
                         }
-                        Button {
-                            objectName: "resetToolFields"
-                            text: qsTr("Reset")
-                            enabled: view.hasDocument
-                            onClicked: {
-                                widthField.text = ""
-                                heightField.text = ""
-                                cropX.text = "0"
-                                cropY.text = "0"
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: view.tool === "crop"
-                        text: qsTr("Set Width/Height, then enter the rectangle's top-left corner.")
-                        color: view.theme.textMuted
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
                     }
 
                     Item { Layout.fillHeight: true }

@@ -59,8 +59,8 @@ Item {
     readonly property int browserSeparators: 1
     readonly property int viewerButtons: 12
     readonly property int viewerSeparators: 4
-    readonly property int editorButtons: 9
-    readonly property int editorSeparators: 4
+    readonly property int editorButtons: 12
+    readonly property int editorSeparators: 5
 
     /// `EditorView`'s zoom readout is a fixed 48 px (`Layout.preferredWidth`),
     /// wider than the icon square it stands in for. The Middle other readouts

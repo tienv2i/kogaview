@@ -56,15 +56,16 @@
 
 ## Editor layout
 - The header keeps only global actions: open, the zoom controls, Save / Save
-  as…, back and close. Rotate, flip, undo, redo and reset live on the left
-  **tool palette**, one full-width column, so no label is elided at the 220 px
-  default.
-- Resize and Crop on the left are selectors, not commands. The right
-  **inspector** shows only the selected tool's options (Width/Height, X/Y for
-  Crop, Half for Resize) with Apply/Apply crop and Reset; selecting a tool or
-  clearing its fields sends no command.
-- Core still owns the history; the view no longer draws the list of steps.
-  Undo, Redo and Reset to original are buttons in the palette.
+  as…, Undo, Redo, Reset to original, back and close. The left **tool palette**
+  lists Pointer, Resize, Crop, then Rotate/Flip; its labels are full width so
+  none is elided at the 220 px default.
+- **Pointer** is the no-op default and the Editor opens on it. Its right column
+  shows the document title, size, save target, a cached thumbnail of the
+  current preview and the session history. Resize and Crop replace that with their options
+  (Width/Height, X/Y for Crop, Half for Resize) and Apply/Apply crop. Clicking
+  the selected Resize/Crop again returns to Pointer.
+- Selecting a tool or clearing its fields sends no command; Core still owns the
+  history and the undo/redo state.
 
 ## Sidebar widths
 - Both browser sidebars and both editor sidebars are resized by dragging the
