@@ -604,9 +604,17 @@ impl Core {
             Command::ViewerPrevious => self.step_viewer(-1),
             Command::ViewerOpen { path } => self.open_viewer_image(&path),
             Command::EditorOpen { path } => self.open_editor(&path),
-            Command::EditorResize { width, height } => {
-                self.editor_apply(EditOperation::Resize { width, height })
-            }
+            Command::EditorResize {
+                width,
+                height,
+                anchor,
+                fill,
+            } => self.editor_apply(EditOperation::Resize {
+                width,
+                height,
+                anchor,
+                fill,
+            }),
             Command::EditorCrop {
                 x,
                 y,

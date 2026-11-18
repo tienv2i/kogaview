@@ -15,6 +15,7 @@
 //! without copying the whole buffer. This module owns pixels and history only;
 //! file paths, the command gateway and UI state stay in Core.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -22,7 +23,7 @@ use std::sync::Arc;
 
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, ImageReader, RgbaImage};
-use kogaview_protocol::FlipAxis;
+use kogaview_protocol::{Anchor, FlipAxis};
 use serde::Serialize;
 
 /// Refuse documents larger than this; a full RGBA buffer at 80 MP is already
@@ -58,6 +59,10 @@ pub enum EditOperation {
     Resize {
         width: u32,
         height: u32,
+        anchor: Anchor,
+        /// When present, pad the shorter side to a square with this RGB colour
+        /// before the anchored crop and scale.
+        fill: Option<[u8; 3]>,
     },
 }
 
@@ -82,7 +87,22 @@ impl EditOperation {
                 width,
                 height,
             } => format!("Crop {width} × {height} at {x},{y}"),
-            Self::Resize { width, height } => format!("Resize {width} × {height}"),
+            Self::Resize {
+                width,
+                height,
+                anchor,
+                fill,
+            } => {
+                let mut label = format!("Resize {width} × {height}");
+                if *anchor != Anchor::Center {
+                    label.push_str(" · ");
+                    label.push_str(anchor_label(*anchor));
+                }
+                if let Some([r, g, b]) = fill {
+                    label.push_str(&format!(" · square #{r:02x}{g:02x}{b:02x}"));
+                }
+                label
+            }
         }
     }
 }
@@ -534,9 +554,13 @@ impl EditorDocument {
             EditOperation::Resize {
                 width: w,
                 height: h,
+                fill,
+                ..
             } => {
                 validate_resize(*w, *h)?;
-                Ok(*w == width && *h == height)
+                // A square source has no shorter side to fill, so the pad is
+                // only a real change on a non-square document.
+                Ok(*w == width && *h == height && (fill.is_none() || width == height))
             }
         }
     }
@@ -613,6 +637,79 @@ fn validate_resize(width: u32, height: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Human label for an anchor, used in history steps. Centre is the default and
+/// is omitted from the label by the caller.
+fn anchor_label(anchor: Anchor) -> &'static str {
+    match anchor {
+        Anchor::TopLeft => "top left",
+        Anchor::Top => "top",
+        Anchor::TopRight => "top right",
+        Anchor::Left => "left",
+        Anchor::Center => "centre",
+        Anchor::Right => "right",
+        Anchor::BottomLeft => "bottom left",
+        Anchor::Bottom => "bottom",
+        Anchor::BottomRight => "bottom right",
+    }
+}
+
+/// Offset of the free space on one axis: 0 keeps the source at the start,
+/// 1 centres it, 2 pushes it to the end.
+fn anchored_offset(free: u32, index: u8) -> u32 {
+    match index {
+        0 => 0,
+        2 => free,
+        _ => free / 2,
+    }
+}
+
+/// Pad a shorter side to a square of the longer edge with a solid colour. The
+/// source is placed in the square according to `anchor`, so top-left adds the
+/// fill to the right/bottom and centre adds it evenly.
+fn pad_to_square(image: &RgbaImage, anchor: Anchor, color: [u8; 3]) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let side = w.max(h);
+    let mut canvas =
+        RgbaImage::from_pixel(side, side, image::Rgba([color[0], color[1], color[2], 255]));
+    let x = anchored_offset(side - w, anchor.column());
+    let y = anchored_offset(side - h, anchor.row());
+    imageops::overlay(&mut canvas, image, i64::from(x), i64::from(y));
+    canvas
+}
+
+/// The source rectangle that covers the target aspect without stretching,
+/// positioned by `anchor`. A wider source loses columns, a taller source loses
+/// rows; equal aspects keep the whole image.
+fn anchored_cover_rect(
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+    anchor: Anchor,
+) -> (u32, u32, u32, u32) {
+    let sw = u64::from(source_width);
+    let sh = u64::from(source_height);
+    let tw = u64::from(target_width);
+    let th = u64::from(target_height);
+    let (crop_width, crop_height) = if sw * th > tw * sh {
+        // Source is wider: keep full height, take an anchored width.
+        let width = ((sh * tw + th / 2) / th).clamp(1, sw) as u32;
+        (width, source_height)
+    } else if sw * th < tw * sh {
+        // Source is taller: keep full width, take an anchored height.
+        let height = ((sw * th + tw / 2) / tw).clamp(1, sh) as u32;
+        (source_width, height)
+    } else {
+        (source_width, source_height)
+    };
+    (
+        anchored_offset(source_width - crop_width, anchor.column()),
+        anchored_offset(source_height - crop_height, anchor.row()),
+        crop_width,
+        crop_height,
+    )
+}
+
 /// Render one operation into a new buffer, leaving `image` untouched.
 fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<RgbaImage, String> {
     let (width, height) = image.dimensions();
@@ -641,9 +738,21 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
         EditOperation::Resize {
             width: w,
             height: h,
+            anchor,
+            fill,
         } => {
             validate_resize(*w, *h)?;
-            Ok(imageops::resize(image, *w, *h, FilterType::Lanczos3))
+            // Fill to a square on the longer edge, then crop the target aspect
+            // around the anchor and scale. The crop keeps the result from
+            // stretching when the target aspect differs.
+            let source = match fill {
+                Some([r, g, b]) => Cow::Owned(pad_to_square(image, *anchor, [*r, *g, *b])),
+                None => Cow::Borrowed(image),
+            };
+            let rect = anchored_cover_rect(source.width(), source.height(), *w, *h, *anchor);
+            let cropped =
+                imageops::crop_imm(source.as_ref(), rect.0, rect.1, rect.2, rect.3).to_image();
+            Ok(imageops::resize(&cropped, *w, *h, FilterType::Lanczos3))
         }
     }
 }
@@ -879,6 +988,8 @@ mod tests {
             .apply(EditOperation::Resize {
                 width: 8,
                 height: 6,
+                anchor: Anchor::Center,
+                fill: None,
             })
             .unwrap());
         assert_eq!(document.dimensions(), (8, 6));
@@ -918,6 +1029,8 @@ mod tests {
             .apply(EditOperation::Resize {
                 width: 64,
                 height: 32,
+                anchor: Anchor::Center,
+                fill: None,
             })
             .unwrap());
         assert!(!document.can_undo());
@@ -948,10 +1061,82 @@ mod tests {
             .apply(EditOperation::Resize {
                 width: 32,
                 height: 16,
+                anchor: Anchor::Center,
+                fill: None,
             })
             .unwrap());
         assert!(!document.can_redo());
         assert_eq!(document.history(), vec!["Resize 32 × 16"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn anchored_cover_keeps_the_requested_edge() {
+        // A 2:1 source resized to 1:1 keeps the full height and takes a square
+        // width from the left, centre or right.
+        assert_eq!(
+            anchored_cover_rect(64, 32, 16, 16, Anchor::TopLeft),
+            (0, 0, 32, 32)
+        );
+        assert_eq!(
+            anchored_cover_rect(64, 32, 16, 16, Anchor::Center),
+            (16, 0, 32, 32)
+        );
+        assert_eq!(
+            anchored_cover_rect(64, 32, 16, 16, Anchor::BottomRight),
+            (32, 0, 32, 32)
+        );
+        // A taller source loses rows instead.
+        assert_eq!(
+            anchored_cover_rect(32, 64, 16, 16, Anchor::Top),
+            (0, 0, 32, 32)
+        );
+        assert_eq!(
+            anchored_cover_rect(32, 64, 16, 16, Anchor::Bottom),
+            (0, 32, 32, 32)
+        );
+        // The same aspect keeps the whole image.
+        assert_eq!(
+            anchored_cover_rect(64, 32, 32, 16, Anchor::Left),
+            (0, 0, 64, 32)
+        );
+    }
+
+    #[test]
+    fn square_pad_uses_the_anchor_and_colour() {
+        let image = RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]));
+        let padded = pad_to_square(&image, Anchor::BottomRight, [1, 2, 3]);
+        assert_eq!(padded.dimensions(), (4, 4));
+        assert_eq!(padded.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
+        assert_eq!(padded.get_pixel(3, 3), &image::Rgba([10, 20, 30, 255]));
+        let centred = pad_to_square(&image, Anchor::Center, [9, 8, 7]);
+        assert_eq!(centred.get_pixel(0, 0), &image::Rgba([9, 8, 7, 255]));
+        assert_eq!(centred.get_pixel(0, 1), &image::Rgba([10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn resize_can_fill_a_square_with_the_chosen_colour() {
+        let dir = temp_dir();
+        let path = source_file(&dir, "photo.png", 8, 4);
+        let mut document = open_document(&path).unwrap();
+        assert!(document
+            .apply(EditOperation::Resize {
+                width: 8,
+                height: 8,
+                anchor: Anchor::TopLeft,
+                fill: Some([255, 0, 0]),
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (8, 8));
+        assert_eq!(
+            document.pixels().get_pixel(0, 7),
+            &image::Rgba([255, 0, 0, 255]),
+            "the added square area is the chosen colour"
+        );
+        assert_eq!(
+            document.history(),
+            vec!["Resize 8 × 8 · top left · square #ff0000"]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1106,6 +1291,8 @@ mod tests {
             .apply(EditOperation::Resize {
                 width: 10,
                 height: 5,
+                anchor: Anchor::Center,
+                fill: None,
             })
             .unwrap());
         save_pixels(&source, &document.pixels(), &source).unwrap();

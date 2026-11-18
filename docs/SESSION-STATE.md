@@ -9,14 +9,16 @@ now follows the interface language instead of measuring English, the Browser
 and Viewer are operable from the keyboard, their tooltips name the keys, the
 burger menu opens a file, a folder or the Editor, a modal dialog owns the
 pointer so the Settings header drags in the Viewer instead of panning the
-picture behind it, and the Editor is a tool palette with a pointer inspector
-rather than a second toolbar.
+picture behind it, the Editor is a tool palette with a pointer inspector
+rather than a second toolbar, and its Resize tool frames the picture with an
+anchor pad, 64-divisible presets and a pad-to-square fill.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`, working tree clean. This session's commits are on top of
+- Branch `main`. The Resize follow-up (row 72) is the newest commit on top of
+  `e9e2e12` (the pointer inspector); the tree is clean after it. This session's earlier commits are on top of
   `d149152` and are listed in `git log`; the newest are the keyboard map, the
   tooltip hints, the burger-menu fix, the modal-pointer fix, the Editor
   layout and its pointer follow-up.
@@ -62,13 +64,18 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
   no compositor permission); `QT_QPA_PLATFORM=offscreen` loads no icon theme.
 - `org.gnome.Shell` `Eval` answers `ok False`: the app grid cannot be read or
   photographed from here.
-- **No `xdotool`, no `wmctrl`, and XTEST input does not reach the app window.**
-  A window cannot be resized, clicked or typed into from a script on this
-  session; real-window checks drove the app through temporary debug hooks —
+- **No `wmctrl`, and XTEST input does not reach the app window.** A window
+  cannot be resized, clicked or typed into from a script on this session;
+  real-window checks drove the app through temporary debug hooks —
   `QQuickWindow::resize`, a button's `click()`, or `QTest::keyClick` through the
   real focus item (`KOGAVIEW_DEV_KEYS`) — not through a hand. Mouse and key
   events sent with `xdotool` were silently ignored by the Wayland/XWayland
   window.
+- **`xdotool` exists but only works on a window the run itself created under
+  `QT_QPA_PLATFORM=xcb`**, and only while that launch keeps focus; a warm-up
+  click on the "Editor" tab was what let a later click reach a field. That is
+  how the Resize panel was typed into (row 72); it is still not a human hand, and
+  it does not touch the compositor's own windows.
 
 ## What changed
 
@@ -81,22 +88,25 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 66 | The Browser and Viewer were mouse-only; no key walked the grid, stepped/zoomed/rotated the picture, trashed a file or switched workspace | QML suites: `viewer` 35 and `browser` 42 cases; real debug binary with a temporary `KOGAVIEW_DEV_KEYS` hook (QTest key events through the real focus path) + `KOGAVIEW_DEV_GEOM`/`KOGAVIEW_DEV_SCREENSHOT`; journals under `/tmp/opencode/kb/s*/kogaview-dev/journal/commands.jsonl`; pictures `docs/evidence/M1-keyboard-browser.png`, `docs/evidence/M1-keyboard-viewer.png` |
 | 67 | Tooltips described the controls but not the keys that reach them | three new QML cases reading each button's attached `ToolTip.text` (`viewer` 36, `browser` 44, `editor` 19 cases); `just test translations` (142 strings, 112 compiled into C++); real binary with a temporary `KOGAVIEW_DEV_GRAB_POPUPS` hook and a forced `ToolTip.visible` → `docs/evidence/M1-tooltip-shortcuts.png` (`Rotate left (Shift+R)`); dropping a key from a tooltip fails its suite, dropping it from the catalogue fails the translation gate |
 | 68 | The burger menu showed `Move down`/`Open file…` in its first two slots and had no explicit Editor entry | `tst_browser.cpp::shellMenuStartsWithTheOpenEntries` resolving `Theme.menuEntries[n]` to labels from `Main.qml` (browser now 45 cases); `just test translations` (143 strings); real binary with temporary `KOGAVIEW_DEV_MAIN_MENU`/`KOGAVIEW_DEV_EDITOR_PICK` hooks → `docs/evidence/M1-main-menu.png`, `docs/evidence/M1-open-in-editor.png`; journal `set_workspace` rev 3 then `editor_open` rev 4, Editor status `Editing M1-viewer.png` |
+| 70–71 | The Editor's sidebars duplicated the toolbar, then kept Undo/Redo/Reset in the palette with no home for the document itself | palette Pointer/Resize/Crop with per-tool inspector, header Undo/Redo/Reset (12 buttons, 5 separators), Pointer default showing details, cached thumbnail and history; `editor` 22 cases at that point (`docs/evidence/M1-editor-tools.png`, `M1-editor-pointer.png`) |
 | 69 | The Settings dialog could not be dragged by its header in the Viewer (the pan handler took the drag); it worked in the Editor | `tst_viewer.cpp::aModalDialogOwnsThePointer` (real Viewer + real Settings dialog, header drag moves the dialog and leaves the offsets at 0, then Escape/R prove focus returns), `tst_settings.cpp::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen` (source guard on `Main.qml`); real binary with a temporary `KOGAVIEW_DEV_UI_REQUEST=settings-drag` hook: header drag `(330,108) → (250,148)` moved the dialog, offsets stayed `0,0` (before the fix the dialog stayed put and the offsets went `-80,40`) |
+| 72 | Resize could only type two numbers: no anchor, no common sizes, no squaring | anchor pad + 64-divisible presets + pad-to-square colour, in Core (`pad_to_square`, `anchored_cover_rect`) and QML; `cargo` 63, `editor` 24, `translations` 161 strings; real window `docs/evidence/M1-editor-resize.png`, `M1-editor-resize-square.png`; mutations: pad ignoring the anchor, Resize not padding, preset auto-selected |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 146 strings in kogaview_vi.ts, 112 of them compiled into C++
+translations: 161 strings in kogaview_vi.ts, 112 of them compiled into C++, 157 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
-cargo: 60 passed + 4 passed
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 22 · language 5 · toolbar 11
+cargo: 63 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 24 · language 5 · toolbar 11
 ```
 
-`cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` reports two
-pre-existing `derivable_impls` errors in `crates/app-protocol/src/lib.rs` (`Default for
-Workspace`/`Theme`), untouched by this change.
+`cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` still reports
+the two pre-existing `derivable_impls` warnings in `crates/app-protocol/src/lib.rs`
+(`impl Default for Workspace`/`Theme`, lines 53 and 173); the Resize change adds no new warning
+(the protocol's `Anchor` derives `Default` with `Center` marked `#[default]`).
 
 ## Design decisions, keyboard session
 
@@ -198,6 +208,35 @@ Workspace`/`Theme`), untouched by this change.
   hidden fields and Reset are asserted through the real items; `tst_toolbar`
   still guards the counts.
 
+## Design decisions, resize session
+
+- **The anchor is one value used twice, not two controls.** `Anchor` (nine
+  snake_case variants, `Center` default) travels in `editor_resize` with an
+  optional `fill: [r, g, b]`. Core pads the shorter side to the longer one
+  around it, then takes the cover rectangle for the target aspect around it
+  again — so a picture is never stretched, and the same pad tells the user which
+  part of the frame survives.
+- **The protocol stays backward compatible.** `anchor` and `fill` carry
+  `#[serde(default)]`, so an `editor_resize` written before this change still
+  parses as centre-without-padding; the round-trip test asserts that, and that
+  `bottom_right` + `[1,2,3]` parses back out.
+- **Square is a pre-step, not a mode.** `fill: Some(..)` is the whole feature:
+  `None` is exactly the old cover-and-scale, so undo/redo, the no-op check and
+  the preview path did not change. The history label names the fill
+  (`Resize 512 × 512 · square #ff0000`) and only mentions the anchor when the
+  target aspect is not 1:1.
+- **Presets are a convenience, not a constraint.** Width and Height stay free
+  text fields; the dropdown only writes them (±64 on both sides so a preset
+  never lands on a fractional pixel at any scale). Editing either field, or
+  pressing Half, sets the label back to `Custom`.
+- **Nothing is armed by itself.** The dropdown starts at `currentIndex: -1`, so
+  Apply stays disabled until a size is really chosen; a default selection of
+  `1024 × 1024` would have been one click away from a resize the user never
+  asked for. `tst_editor` asserts the initial `-1`/`Custom`.
+- **The anchor pad is glyphs with names.** 24 px buttons with arrows (centre is a
+  dot), `objectName: anchor_<variant>` for the tests, a tooltip and an
+  `Accessible.name` for every button, because an arrow alone is not a name.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -252,6 +291,14 @@ workspace loader is not gated"); dropping `settingsDialog.visible` from
 loader-disable from the pairing test (the control run) → `aModalDialogOwnsThePointer`
 fails with the dialog still at `330`, which is the reported bug.
 
+Resize: `pad_to_square` placing the source at `0,0` and ignoring the anchor →
+`square_pad_uses_the_anchor_and_colour` fails (`left: Rgba([10, 20, 30, 255])`,
+the source pixel where the fill was expected); the Resize branch borrowing the
+image instead of padding it → `resize_can_fill_a_square_with_the_chosen_colour`
+fails ("the added square area is the chosen colour"); the preset list defaulting
+to `currentIndex: 0` → `theResizePresetsAreMultiplesOf64` fails
+(`currentIndex` 0, expected -1). Each restored, then `just test` green.
+
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;
 the Ctrl+A guard changed to `Key_B` → `ctrlASelectsEveryEntry` fails; `gridColumns()`
@@ -297,6 +344,16 @@ re-run separately). All restored, then `just test` green.
 - **Ctrl+1/2/3 have no suite test.** They live in `Main.qml`, which needs the
   bridge; their evidence is the real-window journal (three `set_workspace`
   entries with focus following browser → viewer → editor → browser).
+- **The Resize panel grab used a temporary build.** `M1-editor-resize.png` came
+  from a run whose defaults were `tool: "resize"`, padding on and a red fill, so
+  the panel shows every resize control at once; those three defaults were put
+  back (Pointer, padding off, white) and the tree committed is the shipped one.
+  The square result (`M1-editor-resize-square.png`) is the shipped binary.
+- **The anchored cover loses pixels on purpose.** A non-square source scaled to
+  a different aspect is cropped, not letterboxed; only `fill` pads. Whether the
+  user wants "cover" or "fit with transparency" as a second mode is unasked.
+- **Resize has no live preview on the canvas.** The size is applied on Apply, as
+  before; the panel and the post-edit preview are the only feedback.
 - The dock and app grid were never photographed. Proven at the icon-theme and
   desktop-entry layer. If a launcher already cached the miss, the empty square
   can persist until the session restarts.
@@ -358,8 +415,11 @@ install`). The keyboard, tooltip and menu evidence comes from
 
 ## Next natural step
 
-1. **Status text as data** — publish `status { code, args }`, translate at the
-   presentation edge; removes the last English strings in a Vietnamese window.
+1. **Editor history labels and status text as data** — Core builds
+   `Resize 512 × 512 · square #ff0000` and `Ready` with `format!`; publishing
+   `{ code, args }` and translating at the presentation edge removes the last
+   English strings in a Vietnamese window (which now includes the Resize
+   history line and its anchor names).
 2. **Export** the working document with real options (JPEG quality, metadata) —
    ADR 0004 left them out.
 3. **Editor open speed** (row 60): downscaled JPEG decode for the preview, tiled

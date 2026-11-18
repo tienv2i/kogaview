@@ -10,6 +10,7 @@
 // right, that the icons resolve (offscreen loads no icon theme), or that Core
 // accepts the commands — those need the real window and the Core tests.
 
+#include <QColor>
 #include <QFile>
 #include <QGuiApplication>
 #include <QImage>
@@ -50,6 +51,8 @@ private slots:
   void rotateAndFlipEmitTypedCommands();
   void undoRedoResetAndCloseEmitCommands();
   void resizeApplyEmitsTheTypedSize();
+  void theResizePresetsAreMultiplesOf64();
+  void resizeCarriesTheAnchorAndSquareFill();
   void cropApplyEmitsTheTypedRectangle();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
@@ -406,6 +409,76 @@ void TestEditor::resizeApplyEmitsTheTypedSize()
   QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
   QCOMPARE(command.value("width").toInt(), 800);
   QCOMPARE(command.value("height").toInt(), 600);
+  QCOMPARE(command.value("anchor").toString(), QStringLiteral("center"));
+  QVERIFY(command.value("fill").isNull());
+}
+
+/// The dropdown offers common ratios whose sides are exact multiples of 64, so
+/// a preset never produces fractional pixels at any scale. Choosing one fills
+/// both fields.
+void TestEditor::theResizePresetsAreMultiplesOf64()
+{
+  setState(documentState());
+  selectTool("resize");
+
+  const QVariantList presets = m_editor->property("sizePresets").toList();
+  QVERIFY2(presets.size() >= 6, "the common ratios are present");
+  for (const QVariant& entry : presets) {
+    const QVariantMap preset = entry.toMap();
+    QVERIFY(!preset.value("label").toString().isEmpty());
+    QVERIFY2(preset.value("width").toInt() % 64 == 0,
+             qPrintable(QStringLiteral("%1 width is not a multiple of 64")
+                            .arg(preset.value("label").toString())));
+    QVERIFY2(preset.value("height").toInt() % 64 == 0,
+             qPrintable(QStringLiteral("%1 height is not a multiple of 64")
+                            .arg(preset.value("label").toString())));
+  }
+
+  QQuickItem* dropdown = expectItem("sizePreset");
+  QVERIFY(dropdown->isVisible());
+  // Nothing is armed on open: a preset that selected itself filled the fields
+  // with a size the user never picked.
+  QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
+  QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
+  dropdown->setProperty("currentIndex", 3);
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
+  QTRY_COMPARE(height->property("text").toString(), QStringLiteral("576"));
+  QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("16:9 · 1024 × 576"));
+}
+
+/// The anchor and the square fill travel with the typed command: the UI must not
+/// keep them in a different place from the size.
+void TestEditor::resizeCarriesTheAnchorAndSquareFill()
+{
+  setState(documentState());
+  selectTool("resize");
+
+  QQuickItem* anchor = expectItem("anchor_bottom_right");
+  clickItem(anchor);
+  QCOMPARE(m_editor->property("resizeAnchor").toString(), QStringLiteral("bottom_right"));
+
+  QQuickItem* pad = expectItem("padSquare");
+  clickItem(pad);
+  QTRY_VERIFY(m_editor->property("resizePadSquare").toBool());
+  QVERIFY(expectItem("fillColorButton")->isVisible());
+
+  m_editor->setProperty("resizeFillColor", QColor(255, 0, 0));
+  expectItem("widthField")->setProperty("text", QStringLiteral("1024"));
+  expectItem("heightField")->setProperty("text", QStringLiteral("576"));
+  QTest::qWait(20);
+  clickItem(expectItem("applyResize"));
+
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
+  QCOMPARE(command.value("anchor").toString(), QStringLiteral("bottom_right"));
+  const QVariantList fill = command.value("fill").toList();
+  QCOMPARE(fill.size(), 3);
+  QCOMPARE(fill.at(0).toInt(), 255);
+  QCOMPARE(fill.at(1).toInt(), 0);
+  QCOMPARE(fill.at(2).toInt(), 0);
 }
 
 void TestEditor::cropApplyEmitsTheTypedRectangle()
@@ -507,7 +580,8 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   // A tool: only its options, inside the same inspector.
   selectTool("resize");
   for (const char* option : {"toolOptionsHeading", "widthField", "heightField", "halfSize",
-                             "applyResize", "resetToolFields"}) {
+                             "applyResize", "resetToolFields", "sizePreset", "anchor_center",
+                             "anchor_top_left", "anchor_bottom_right", "padSquare"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
                                                  .arg(QString::fromLatin1(option))));
@@ -540,6 +614,8 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(imageName->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
+  QVERIFY(!expectItem("sizePreset")->isVisible());
+  QVERIFY(!expectItem("padSquare")->isVisible());
   QVERIFY(!expectItem("cropX")->isVisible());
   QVERIFY(!expectItem("cropY")->isVisible());
 
@@ -550,6 +626,8 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(!imageName->isVisible());
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("cropY")->isVisible());
+  QVERIFY(!expectItem("sizePreset")->isVisible());
+  QVERIFY(!expectItem("padSquare")->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QCOMPARE(m_commands->count(), 0);
 
@@ -577,16 +655,20 @@ void TestEditor::resetClearsTheToolFields()
   QQuickItem* height = expectItem("heightField");
   QQuickItem* cropX = expectItem("cropX");
   QQuickItem* cropY = expectItem("cropY");
+  QQuickItem* preset = expectItem("sizePreset");
   width->setProperty("text", QStringLiteral("800"));
   height->setProperty("text", QStringLiteral("600"));
   cropX->setProperty("text", QStringLiteral("4"));
   cropY->setProperty("text", QStringLiteral("6"));
+  preset->setProperty("currentIndex", 2);
+  QCOMPARE(preset->property("currentIndex").toInt(), 2);
 
   clickItem(expectItem("resetToolFields"));
   QCOMPARE(width->property("text").toString(), QString());
   QCOMPARE(height->property("text").toString(), QString());
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
   QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(preset->property("currentIndex").toInt(), -1);
   QCOMPARE(m_commands->count(), 0);
 }
 

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 // The Editor workspace.
@@ -34,6 +35,31 @@ Item {
     /// pointer is the default and the no-op tool, so opening the Editor never
     /// leaves an Apply button armed.
     property string tool: "pointer"
+    /// Resize keeps the anchored part of the source when the target aspect
+    /// differs, and uses the same anchor to place the source in the square pad.
+    property string resizeAnchor: "center"
+    /// Resize pads the shorter side to the longer edge with this colour before
+    /// cropping and scaling.
+    property bool resizePadSquare: false
+    property color resizeFillColor: "#ffffff"
+    /// Common ratios whose two sides are multiples of 64. Selecting one fills
+    /// Width/Height; editing either field goes back to Custom.
+    readonly property var sizePresets: [
+        { label: "1:1 · 1024 × 1024", width: 1024, height: 1024 },
+        { label: "4:3 · 1024 × 768", width: 1024, height: 768 },
+        { label: "3:2 · 1152 × 768", width: 1152, height: 768 },
+        { label: "16:9 · 1024 × 576", width: 1024, height: 576 },
+        { label: "9:16 · 576 × 1024", width: 576, height: 1024 },
+        { label: "3:4 · 768 × 1024", width: 768, height: 1024 },
+        { label: "2:3 · 768 × 1152", width: 768, height: 1152 },
+        { label: "5:4 · 1280 × 1024", width: 1280, height: 1024 },
+        { label: "21:9 · 1344 × 576", width: 1344, height: 576 }
+    ]
+    /// Split a QML `color` into the three bytes the typed command carries.
+    function colorRgb(color) {
+        return [Math.round(color.r * 255), Math.round(color.g * 255),
+                Math.round(color.b * 255)]
+    }
 
     /// Raised by the empty state and the toolbar's open button; Main owns the
     /// file chooser so the portal/fallback path stays in one place.
@@ -903,6 +929,7 @@ Item {
                                 placeholderText: view.hasDocument ? String(view.editor.width) : "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
+                                onTextEdited: sizePreset.currentIndex = -1
                             }
                             Label {
                                 text: qsTr("Height")
@@ -916,7 +943,136 @@ Item {
                                 placeholderText: view.hasDocument ? String(view.editor.height) : "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
+                                onTextEdited: sizePreset.currentIndex = -1
                             }
+                        }
+
+                        // Resize: anchor, preset sizes and the square pad.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize"
+                            spacing: 8
+
+                            Label {
+                                text: qsTr("Anchor")
+                                color: view.theme.textMuted
+                            }
+                            Grid {
+                                columns: 3
+                                columnSpacing: 2
+                                rowSpacing: 2
+
+                                Repeater {
+                                    // The arrow points at the corner or edge
+                                    // of the frame the source keeps.
+                                    model: [
+                                        { key: "top_left", glyph: "\u2196", label: qsTr("Top left") },
+                                        { key: "top", glyph: "\u2191", label: qsTr("Top") },
+                                        { key: "top_right", glyph: "\u2197", label: qsTr("Top right") },
+                                        { key: "left", glyph: "\u2190", label: qsTr("Left") },
+                                        { key: "center", glyph: "\u25cf", label: qsTr("Center") },
+                                        { key: "right", glyph: "\u2192", label: qsTr("Right") },
+                                        { key: "bottom_left", glyph: "\u2199", label: qsTr("Bottom left") },
+                                        { key: "bottom", glyph: "\u2193", label: qsTr("Bottom") },
+                                        { key: "bottom_right", glyph: "\u2198", label: qsTr("Bottom right") }
+                                    ]
+
+                                    Button {
+                                        required property var modelData
+                                        objectName: "anchor_" + modelData.key
+                                        width: 24
+                                        height: 24
+                                        text: modelData.glyph
+                                        font.pixelSize: 12
+                                        // The glyph alone in a 24 px square
+                                        // needs the button padding removed.
+                                        padding: 0
+                                        highlighted: view.resizeAnchor === modelData.key
+                                        enabled: view.hasDocument
+                                        onClicked: view.resizeAnchor = modelData.key
+                                        Accessible.name: modelData.label
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: modelData.label
+                                    }
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize"
+                            spacing: 2
+
+                            Label {
+                                text: qsTr("Preset")
+                                color: view.theme.textMuted
+                            }
+                            ComboBox {
+                                id: sizePreset
+                                objectName: "sizePreset"
+                                Layout.fillWidth: true
+                                // No preset is applied until the user picks
+                                // one: an automatically selected preset would
+                                // arm Apply with a size the user never chose.
+                                currentIndex: -1
+                                model: view.sizePresets
+                                textRole: "label"
+                                displayText: currentIndex < 0 ? qsTr("Custom") : currentText
+                                onCurrentIndexChanged: {
+                                    if (currentIndex < 0 || !view.sizePresets[currentIndex])
+                                        return
+                                    widthField.text = String(view.sizePresets[currentIndex].width)
+                                    heightField.text = String(view.sizePresets[currentIndex].height)
+                                }
+                            }
+                        }
+
+                        CheckBox {
+                            objectName: "padSquare"
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize"
+                            text: qsTr("Pad to square")
+                            checked: view.resizePadSquare
+                            enabled: view.hasDocument
+                            onToggled: view.resizePadSquare = checked
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize" && view.resizePadSquare
+                            spacing: 6
+
+                            Rectangle {
+                                objectName: "fillColorSwatch"
+                                Layout.preferredWidth: 24
+                                Layout.preferredHeight: 24
+                                radius: 4
+                                color: view.resizeFillColor
+                                border.width: 1
+                                border.color: view.theme.border
+                            }
+                            Button {
+                                objectName: "fillColorButton"
+                                text: qsTr("Fill color")
+                                onClicked: fillColorDialog.open()
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: view.resizeFillColor.toString()
+                                color: view.theme.textMuted
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize" && view.resizePadSquare
+                            text: qsTr("Pads the shorter side to the longer one.")
+                            color: view.theme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
                         }
 
                         RowLayout {
@@ -931,6 +1087,7 @@ Item {
                                 onClicked: {
                                     widthField.text = String(Math.max(1, Math.round(view.editor.width / 2)))
                                     heightField.text = String(Math.max(1, Math.round(view.editor.height / 2)))
+                                    sizePreset.currentIndex = -1
                                 }
                             }
                             Item { Layout.fillWidth: true }
@@ -954,10 +1111,15 @@ Item {
                                     view.command({
                                         type: "editor_resize",
                                         width: parseInt(widthField.text),
-                                        height: parseInt(heightField.text)
+                                        height: parseInt(heightField.text),
+                                        anchor: view.resizeAnchor,
+                                        fill: view.resizePadSquare
+                                              ? view.colorRgb(view.resizeFillColor)
+                                              : null
                                     })
                                     widthField.text = ""
                                     heightField.text = ""
+                                    sizePreset.currentIndex = -1
                                 }
                             }
                             Button {
@@ -984,6 +1146,7 @@ Item {
                                     heightField.text = ""
                                     cropX.text = "0"
                                     cropY.text = "0"
+                                    sizePreset.currentIndex = -1
                                 }
                             }
                             Button {
@@ -995,6 +1158,7 @@ Item {
                                     heightField.text = ""
                                     cropX.text = "0"
                                     cropY.text = "0"
+                                    sizePreset.currentIndex = -1
                                 }
                             }
                         }
@@ -1013,5 +1177,13 @@ Item {
                 }
             }
         }
+    }
+
+    ColorDialog {
+        id: fillColorDialog
+        objectName: "fillColorDialog"
+        title: qsTr("Fill color")
+        selectedColor: view.resizeFillColor
+        onAccepted: view.resizeFillColor = selectedColor
     }
 }

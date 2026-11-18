@@ -64,6 +64,21 @@
   current preview and the session history. Resize and Crop replace that with their options
   (Width/Height, X/Y for Crop, Half for Resize) and Apply/Apply crop. Clicking
   the selected Resize/Crop again returns to Pointer.
+- **Resize keeps the framing you choose.** Width/Height are free on both sides;
+  the 3 × 3 anchor pad (arrows pointing at the kept corner or edge, tooltips and
+  accessible names for each) decides which part survives the aspect change. The
+  preset list only offers ratios whose sides are multiples of 64 (1:1, 4:3, 3:2,
+  16:9, 9:16, 3:4, 2:3, 5:4, 21:9); picking one fills the two fields, editing
+  either field or picking Half returns the label to Custom. Nothing is armed
+  until the user acts: the list opens on Custom and Apply stays disabled while
+  the fields are empty, so no preset can be applied by accident.
+- **Pad to square runs before the scale.** Ticking it adds a fill colour picker
+  (disabled while unticked) and Core pads the shorter side out to the longer one
+  around the same anchor, then takes the anchored aspect cover and scales: a
+  1200 × 1600 portrait squared and scaled to 512 × 512 gets 64 px bands left
+  and right of the picture. The history line names the fill
+  (`Resize 512 × 512 · square #ff0000`) and omits the anchor when the target is
+  already square, because nothing is cropped.
 - Selecting a tool or clearing its fields sends no command; Core still owns the
   history and the undo/redo state.
 
