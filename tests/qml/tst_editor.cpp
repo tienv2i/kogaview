@@ -43,6 +43,7 @@ class TestEditor : public QObject
   Q_OBJECT
 private slots:
   void initTestCase();
+  void init();
   void emptyStateOffersToOpenAnImage();
   void theViewFollowsThePublishedDocument();
   void rotateAndFlipEmitTypedCommands();
@@ -50,7 +51,9 @@ private slots:
   void resizeApplyEmitsTheTypedSize();
   void cropApplyEmitsTheTypedRectangle();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
-  void theLeftSidebarHoldsTheEditsAndTheRightTheCommands();
+  void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
+  void thePaletteSelectsTheToolsOptions();
+  void resetClearsTheToolFields();
   void saveAndSaveAsEmitTheirCommands();
   void toolbarTooltipsNameTheirShortcuts();
   void saveAsSuggestsTheCurrentLocation();
@@ -143,6 +146,23 @@ void TestEditor::initTestCase()
   m_requestOpen = new QSignalSpy(m_editor, SIGNAL(requestOpen()));
   QVERIFY(m_commands->isValid());
   QVERIFY(m_requestOpen->isValid());
+}
+
+void TestEditor::init()
+{
+  // Every case starts on the resize tool with empty fields: which tool is
+  // selected is view state, and a previous case must not leak it into the next.
+  m_editor->setProperty("tool", QStringLiteral("resize"));
+  for (const char* name : {"widthField", "heightField"}) {
+    if (QQuickItem* field = visualItem(QString::fromLatin1(name))) {
+      field->setProperty("text", QString());
+    }
+  }
+  for (const char* name : {"cropX", "cropY"}) {
+    if (QQuickItem* field = visualItem(QString::fromLatin1(name))) {
+      field->setProperty("text", QStringLiteral("0"));
+    }
+  }
 }
 
 QObject* TestEditor::findObject(const QString& name) const
@@ -264,36 +284,28 @@ void TestEditor::theViewFollowsThePublishedDocument()
   QVERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
   QTRY_COMPARE(preview->property("status").toInt(), 1);  // Image.Ready
 
-  // After an edit Core publishes canUndo/modified and history labels.
+  // After an edit Core publishes canUndo/canRedo and the modified flag.
   editor.insert(QStringLiteral("canUndo"), true);
   editor.insert(QStringLiteral("canRedo"), true);
   editor.insert(QStringLiteral("modified"), true);
-  editor.insert(QStringLiteral("history"),
-                QVariantList{QStringLiteral("Rotate right 90°"),
-                             QStringLiteral("Crop 10 × 8 at 4,2")});
-  editor.insert(QStringLiteral("redoCount"), 3);
   setState(editor);
 
   QVERIFY(undo->property("enabled").toBool());
   QVERIFY(redo->property("enabled").toBool());
   QVERIFY(reset->property("enabled").toBool());
-
-  QQuickItem* history = expectItem("historyList");
-  QCOMPARE(history->property("count").toInt(), 2);
 }
 
 void TestEditor::rotateAndFlipEmitTypedCommands()
 {
   setState(documentState());
-  // The left sidebar lists every edit, and the toolbar repeats the two most
-  // used ones; each must send the same typed command.
+  // The tool palette lists every action that changes the picture; each sends
+  // the same typed command the old toolbar icons did.
   clickItem(expectItem("editsRotateLeft"));
   clickItem(expectItem("editsRotateRight"));
-  clickItem(expectItem("editorRotateRight"));
   clickItem(expectItem("editsFlipHorizontal"));
   clickItem(expectItem("editsFlipVertical"));
 
-  QCOMPARE(m_commands->count(), 5);
+  QCOMPARE(m_commands->count(), 4);
   QVariantMap first = m_commands->at(0).at(0).toMap();
   QCOMPARE(first.value("type").toString(), QStringLiteral("editor_rotate"));
   QCOMPARE(first.value("degrees").toInt(), -90);
@@ -301,14 +313,11 @@ void TestEditor::rotateAndFlipEmitTypedCommands()
   QCOMPARE(second.value("type").toString(), QStringLiteral("editor_rotate"));
   QCOMPARE(second.value("degrees").toInt(), 90);
   QVariantMap third = m_commands->at(2).at(0).toMap();
-  QCOMPARE(third.value("type").toString(), QStringLiteral("editor_rotate"));
-  QCOMPARE(third.value("degrees").toInt(), 90);
+  QCOMPARE(third.value("type").toString(), QStringLiteral("editor_flip"));
+  QCOMPARE(third.value("axis").toString(), QStringLiteral("horizontal"));
   QVariantMap fourth = m_commands->at(3).at(0).toMap();
   QCOMPARE(fourth.value("type").toString(), QStringLiteral("editor_flip"));
-  QCOMPARE(fourth.value("axis").toString(), QStringLiteral("horizontal"));
-  QVariantMap fifth = m_commands->at(4).at(0).toMap();
-  QCOMPARE(fifth.value("type").toString(), QStringLiteral("editor_flip"));
-  QCOMPARE(fifth.value("axis").toString(), QStringLiteral("vertical"));
+  QCOMPARE(fourth.value("axis").toString(), QStringLiteral("vertical"));
 }
 
 void TestEditor::undoRedoResetAndCloseEmitCommands()
@@ -359,11 +368,17 @@ void TestEditor::cropApplyEmitsTheTypedRectangle()
 {
   setState(documentState());
 
+  // Crop owns the right column only while it is the selected tool.
+  clickItem(expectItem("toolCrop"));
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("crop"));
+  QCOMPARE(m_commands->count(), 0);
+
   QQuickItem* cropX = expectItem("cropX");
   QQuickItem* cropY = expectItem("cropY");
   QQuickItem* width = expectItem("widthField");
   QQuickItem* height = expectItem("heightField");
   QQuickItem* apply = expectItem("applyCrop");
+  QTRY_VERIFY(apply->isVisible());
 
   cropX->setProperty("text", QStringLiteral("4"));
   cropY->setProperty("text", QStringLiteral("6"));
@@ -397,18 +412,16 @@ void TestEditor::anInvalidOrEmptySizeKeepsApplyDisabled()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The Editor's two sidebars have one job each: the left lists the operations
-/// that change pixels, the right holds the inputs and the save target. Moving a
-/// button back across would make a user look for an edit in a place that only
-/// describes one.
-void TestEditor::theLeftSidebarHoldsTheEditsAndTheRightTheCommands()
+/// The palette and the inspector have one job each: the left lists the tools
+/// and the actions that change pixels, the right holds the options of the tool
+/// chosen there. Saving is a toolbar action, and the history list is gone.
+void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
 {
   QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("history"), QVariantList{QStringLiteral("Rotate right 90°")});
   editor.insert(QStringLiteral("modified"), true);
   setState(editor);
 
-  QQuickItem* left = expectItem("editorHistory");
+  QQuickItem* left = expectItem("editorTools");
   QQuickItem* right = expectItem("editorInspector");
   QVERIFY(left->x() < right->x());
 
@@ -419,21 +432,79 @@ void TestEditor::theLeftSidebarHoldsTheEditsAndTheRightTheCommands()
            corner.x() + item->width() <= other.x() + container->width() + 0.5;
   };
 
-  for (const char* edit : {"editsRotateLeft", "editsRotateRight", "editsFlipHorizontal",
-                          "editsFlipVertical", "undoButton", "redoButton", "resetButton"}) {
-    QQuickItem* item = expectItem(edit);
-    QVERIFY2(inside(left, item), qPrintable(QStringLiteral("%1 is not in the edits sidebar")
-                                                .arg(QString::fromLatin1(edit))));
+  for (const char* tool : {"editsRotateLeft", "editsRotateRight", "editsFlipHorizontal",
+                           "editsFlipVertical", "toolResize", "toolCrop", "undoButton",
+                           "redoButton", "resetButton"}) {
+    QQuickItem* item = expectItem(tool);
+    QVERIFY2(inside(left, item), qPrintable(QStringLiteral("%1 is not in the tool palette")
+                                                .arg(QString::fromLatin1(tool))));
   }
-  for (const char* command :
-       {"saveHeading", "saveTarget", "editorSaveButton", "editorSaveAsButton"}) {
-    QQuickItem* item = expectItem(command);
-    QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the commands sidebar")
-                                                 .arg(QString::fromLatin1(command))));
+  for (const char* option : {"imageHeading", "saveTarget", "toolOptionsHeading", "widthField",
+                             "heightField", "applyResize", "resetToolFields"}) {
+    QQuickItem* item = expectItem(option);
+    QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
+                                                 .arg(QString::fromLatin1(option))));
   }
-  // Crop and resize interaction stay on the right, next to the save target.
-  QVERIFY(inside(right, expectItem("applyResize")));
-  QVERIFY(inside(right, expectItem("applyCrop")));
+
+  // The history list is not drawn any more: Core keeps the steps for undo.
+  QVERIFY(findObject("historyList") == nullptr);
+  QVERIFY(findObject("editorHistory") == nullptr);
+
+  // Saving lives on the toolbar, with no second copy in the inspector.
+  QVERIFY(expectItem("editorToolbarSave")->isVisible());
+  QVERIFY(expectItem("editorToolbarSaveAs")->isVisible());
+  QVERIFY(findObject("editorSaveButton") == nullptr);
+  QVERIFY(findObject("editorSaveAsButton") == nullptr);
+}
+
+/// Choosing Resize or Crop swaps the inspector's fields and Apply button. It is
+/// presentation state only: no command leaves the view until Apply is pressed.
+void TestEditor::thePaletteSelectsTheToolsOptions()
+{
+  setState(documentState());
+  QQuickItem* resizeApply = expectItem("applyResize");
+  QQuickItem* cropApply = expectItem("applyCrop");
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("resize"));
+  QVERIFY(resizeApply->isVisible());
+  QVERIFY(!cropApply->isVisible());
+  QVERIFY(!expectItem("cropX")->isVisible());
+  QVERIFY(!expectItem("cropY")->isVisible());
+
+  clickItem(expectItem("toolCrop"));
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("crop"));
+  QTRY_VERIFY(cropApply->isVisible());
+  QVERIFY(expectItem("cropX")->isVisible());
+  QVERIFY(expectItem("cropY")->isVisible());
+  QVERIFY(!resizeApply->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+
+  clickItem(expectItem("toolResize"));
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("resize"));
+  QTRY_VERIFY(resizeApply->isVisible());
+  QVERIFY(!cropApply->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// Reset clears the fields without sending a command, so a half-entered size
+/// never reaches Core.
+void TestEditor::resetClearsTheToolFields()
+{
+  setState(documentState());
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+  width->setProperty("text", QStringLiteral("800"));
+  height->setProperty("text", QStringLiteral("600"));
+  cropX->setProperty("text", QStringLiteral("4"));
+  cropY->setProperty("text", QStringLiteral("6"));
+
+  clickItem(expectItem("resetToolFields"));
+  QCOMPARE(width->property("text").toString(), QString());
+  QCOMPARE(height->property("text").toString(), QString());
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(m_commands->count(), 0);
 }
 
 /// Save is offered only when there is something to write, and both buttons send
@@ -443,7 +514,7 @@ void TestEditor::saveAndSaveAsEmitTheirCommands()
   QVariantMap editor = documentState();
   setState(editor);
 
-  QQuickItem* save = expectItem("editorSaveButton");
+  QQuickItem* save = expectItem("editorToolbarSave");
   QVERIFY2(!save->property("enabled").toBool(),
            "a document already on disk must not offer a save");
   clickItem(save);
@@ -462,7 +533,7 @@ void TestEditor::saveAndSaveAsEmitTheirCommands()
 
   // Save as… never writes by itself: it asks the shell for a path, and the Save
   // button are both disabled while the published `saving` flag is on.
-  QQuickItem* saveAs = expectItem("editorSaveAsButton");
+  QQuickItem* saveAs = expectItem("editorToolbarSaveAs");
   QSignalSpy requestSaveAs(m_editor, SIGNAL(requestSaveAs()));
   QVERIFY(requestSaveAs.isValid());
   clickItem(saveAs);
@@ -475,18 +546,16 @@ void TestEditor::saveAndSaveAsEmitTheirCommands()
   QVERIFY(!saveAs->property("enabled").toBool());
 }
 
-/// Tooltips name the key that reaches the same command, and only that key: an
-/// action without a shortcut (`Undo` has none) must not claim one.
+/// Tooltips name the key that reaches the same command, and only that key: the
+/// toolbar keeps the shortcuted Save pair, while the tool palette's Undo has no
+/// shortcut and so names none.
 void TestEditor::toolbarTooltipsNameTheirShortcuts()
 {
   const QList<QPair<QString, QString>> expected = {
     { QStringLiteral("editorToolbarSave"), QStringLiteral("Save (Ctrl+S)") },
     { QStringLiteral("editorToolbarSaveAs"), QStringLiteral("Save as… (Ctrl+Shift+S)") },
-    { QStringLiteral("editorSaveButton"),
-      QStringLiteral("Overwrite the file, keeping a .bak copy of the previous one (Ctrl+S)") },
-    { QStringLiteral("editorSaveAsButton"),
-      QStringLiteral("Write a copy and continue editing it (Ctrl+Shift+S)") },
-    { QStringLiteral("editorUndo"), QStringLiteral("Undo") },
+    { QStringLiteral("editorZoomIn"), QStringLiteral("Zoom in") },
+    { QStringLiteral("editorBack"), QStringLiteral("Back to browser") },
   };
   for (const auto& entry : expected) {
     const QByteArray name = entry.first.toLatin1();

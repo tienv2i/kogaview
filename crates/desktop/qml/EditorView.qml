@@ -6,9 +6,16 @@ import QtQuick.Layouts
 //
 // Core owns the working document and its history; this view renders
 // `state.editor` and turns clicks into editor_* commands. It keeps no domain
-// state of its own: which image is open, whether undo can do anything and the
-// history list all come from the snapshot, so a command that Core rejects
-// leaves the view showing the truth rather than an optimistic guess.
+// state of its own: which image is open, whether undo can do anything and
+// whether the document is saved all come from the snapshot, so a command that
+// Core rejects leaves the view showing the truth rather than an optimistic
+// guess.
+//
+// The layout is a tool palette, not a second copy of the toolbar: the left
+// column holds the actions and the tools, the right column holds the options of
+// the tool selected on the left (a resize or crop rectangle), and the toolbar
+// keeps only what is global — open, zoom, save, back and close. The history
+// itself stays in Core; the view no longer lists it.
 Item {
     id: view
 
@@ -17,7 +24,8 @@ Item {
     property var state: ({})
     property int leftPanelWidth: 220
     property int rightPanelWidth: 260
-    property var history: editor ? (editor.history || []) : []
+    /// Which tool's options the right column shows: `resize` or `crop`.
+    property string tool: "resize"
 
     /// Raised by the empty state and the toolbar's open button; Main owns the
     /// file chooser so the portal/fallback path stays in one place.
@@ -249,68 +257,6 @@ Item {
             }
             ToolbarSeparator { theme: view.theme }
             ToolbarButton {
-                objectName: "editorRotateLeft"
-                theme: view.theme
-                icon.name: "object-rotate-left-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.hasDocument
-                ToolTip.visible: hovered
-                ToolTip.text: view.theme.menuEntries[24]
-                onClicked: view.command({ type: "editor_rotate", degrees: -90 })
-            }
-            ToolbarButton {
-                objectName: "editorRotateRight"
-                theme: view.theme
-                icon.name: "object-rotate-right-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.hasDocument
-                ToolTip.visible: hovered
-                ToolTip.text: view.theme.menuEntries[25]
-                onClicked: view.command({ type: "editor_rotate", degrees: 90 })
-            }
-            ToolbarButton {
-                objectName: "editorFlipHorizontal"
-                theme: view.theme
-                icon.name: "object-flip-horizontal"
-                display: AbstractButton.IconOnly
-                enabled: view.hasDocument
-                ToolTip.visible: hovered
-                ToolTip.text: view.theme.menuEntries[26]
-                onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
-            }
-            ToolbarButton {
-                objectName: "editorFlipVertical"
-                theme: view.theme
-                icon.name: "object-flip-vertical"
-                display: AbstractButton.IconOnly
-                enabled: view.hasDocument
-                ToolTip.visible: hovered
-                ToolTip.text: view.theme.menuEntries[27]
-                onClicked: view.command({ type: "editor_flip", axis: "vertical" })
-            }
-            ToolbarSeparator { theme: view.theme }
-            ToolbarButton {
-                objectName: "editorUndo"
-                theme: view.theme
-                icon.name: "edit-undo-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: !!(view.editor && view.editor.canUndo)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Undo")
-                onClicked: view.command({ type: "editor_undo" })
-            }
-            ToolbarButton {
-                objectName: "editorRedo"
-                theme: view.theme
-                icon.name: "edit-redo-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: !!(view.editor && view.editor.canRedo)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Redo")
-                onClicked: view.command({ type: "editor_redo" })
-            }
-            ToolbarSeparator { theme: view.theme }
-            ToolbarButton {
                 objectName: "editorZoomOut"
                 theme: view.theme
                 icon.name: "zoom-out-symbolic"
@@ -408,13 +354,13 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // ----------------------------------------------------- edits (left)
-        // Every operation the Editor offers, and the history of the ones that
-        // were applied. The right sidebar only *interacts* with an operation
-        // (the numbers a resize or crop needs); a button that changes the
-        // image lives here, so the two sides cannot drift into a third place.
+        // -------------------------------------------------------- tools (left)
+        // Every action that changes the picture, plus the two tools whose
+        // options the right column shows. The history list is gone: Core still
+        // keeps the steps for undo, but a list of past edits is not a tool. The
+        // toolbar no longer repeats these actions, so an edit has one home.
         Rectangle {
-            objectName: "editorHistory"
+            objectName: "editorTools"
             Layout.preferredWidth: view.leftPanelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
@@ -426,89 +372,62 @@ Item {
 
                 Label {
                     objectName: "editsHeading"
-                    text: qsTr("Edits")
+                    text: qsTr("Tools")
                     color: view.theme.text
                     font.bold: true
                 }
 
-                GridLayout {
+                // A single column, not a 2 × 2 grid: at the default 220 px the
+                // grid cut "Flip horizontal" down to "Flip horizo…" in English
+                // and would do the same to the Vietnamese labels.
+                Button {
+                    objectName: "editsRotateLeft"
                     Layout.fillWidth: true
-                    columns: 2
-                    columnSpacing: 6
-                    rowSpacing: 6
-
-                    Button {
-                        objectName: "editsRotateLeft"
-                        Layout.fillWidth: true
-                        text: qsTr("Rotate left")
-                        enabled: view.hasDocument
-                        onClicked: view.command({ type: "editor_rotate", degrees: -90 })
-                    }
-                    Button {
-                        objectName: "editsRotateRight"
-                        Layout.fillWidth: true
-                        text: qsTr("Rotate right")
-                        enabled: view.hasDocument
-                        onClicked: view.command({ type: "editor_rotate", degrees: 90 })
-                    }
-                    Button {
-                        objectName: "editsFlipHorizontal"
-                        Layout.fillWidth: true
-                        text: qsTr("Flip horizontal")
-                        enabled: view.hasDocument
-                        onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
-                    }
-                    Button {
-                        objectName: "editsFlipVertical"
-                        Layout.fillWidth: true
-                        text: qsTr("Flip vertical")
-                        enabled: view.hasDocument
-                        onClicked: view.command({ type: "editor_flip", axis: "vertical" })
-                    }
+                    text: qsTr("Rotate left")
+                    enabled: view.hasDocument
+                    onClicked: view.command({ type: "editor_rotate", degrees: -90 })
+                }
+                Button {
+                    objectName: "editsRotateRight"
+                    Layout.fillWidth: true
+                    text: qsTr("Rotate right")
+                    enabled: view.hasDocument
+                    onClicked: view.command({ type: "editor_rotate", degrees: 90 })
+                }
+                Button {
+                    objectName: "editsFlipHorizontal"
+                    Layout.fillWidth: true
+                    text: qsTr("Flip horizontal")
+                    enabled: view.hasDocument
+                    onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
+                }
+                Button {
+                    objectName: "editsFlipVertical"
+                    Layout.fillWidth: true
+                    text: qsTr("Flip vertical")
+                    enabled: view.hasDocument
+                    onClicked: view.command({ type: "editor_flip", axis: "vertical" })
                 }
 
                 MenuSeparator {}
 
-                Label {
-                    text: qsTr("History")
-                    color: view.theme.text
-                    font.bold: true
-                }
-
-                ListView {
-                    id: historyList
-                    objectName: "historyList"
+                // Selecting a tool changes nothing but which options the right
+                // column shows; the command is sent by Apply.
+                Button {
+                    objectName: "toolResize"
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: view.history
-                    spacing: 2
-                    delegate: Rectangle {
-                        required property string modelData
-                        required property int index
-                        width: ListView.view.width
-                        height: 26
-                        radius: view.theme.radius
-                        color: "transparent"
-
-                        Label {
-                            anchors.fill: parent
-                            anchors.leftMargin: 6
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                            color: view.theme.text
-                            font.pixelSize: 12
-                            text: (index + 1) + ". " + modelData
-                        }
-                    }
+                    text: qsTr("Resize")
+                    highlighted: view.tool === "resize"
+                    enabled: view.hasDocument
+                    onClicked: view.tool = "resize"
                 }
-
-                Label {
+                Button {
+                    objectName: "toolCrop"
                     Layout.fillWidth: true
-                    visible: view.history.length === 0
-                    text: view.hasDocument ? qsTr("No edits yet") : qsTr("No image open")
-                    color: view.theme.textMuted
-                    font.pixelSize: 11
+                    text: qsTr("Crop")
+                    highlighted: view.tool === "crop"
+                    enabled: view.hasDocument
+                    onClicked: view.tool = "crop"
                 }
 
                 MenuSeparator {}
@@ -539,6 +458,8 @@ Item {
                     enabled: view.modified
                     onClicked: view.command({ type: "editor_reset" })
                 }
+
+                Item { Layout.fillHeight: true }
             }
         }
 
@@ -712,11 +633,12 @@ Item {
             onMoved: function(width) { view.rightPanelWidth = width }
         }
 
-        // ------------------------------------------- editor commands (right)
-        // Interactions with the operations the left sidebar offers: the numbers
-        // a resize or a crop needs, and where saving writes. Nothing here
-        // changes a pixel on its own except the Apply buttons, which send the
-        // same typed commands the edit list does.
+        // -------------------------------------------------- tool options (right)
+        // The options of the tool chosen on the left: a resize needs a new
+        // size, a crop needs the rectangle's corner as well. Apply sends the
+        // same typed command the palette does; Reset only clears the fields,
+        // so a half-entered size never reaches Core. Saving lives on the
+        // toolbar, where it is reachable from every tool.
         Rectangle {
             id: inspector
             objectName: "editorInspector"
@@ -760,25 +682,6 @@ Item {
                         color: view.theme.textMuted
                     }
 
-                    BusyIndicator {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 20
-                        Layout.preferredHeight: 20
-                        running: view.rendering
-                        visible: running
-                    }
-
-                    // ---------------------------------------------------- save
-                    MenuSeparator {}
-                    Label {
-                        objectName: "saveHeading"
-                        text: qsTr("Save")
-                        color: view.theme.text
-                        font.bold: true
-                    }
-
-                    // What the file list shows for the document's format, and
-                    // whether the pixels on disk are the ones on screen.
                     Label {
                         Layout.fillWidth: true
                         objectName: "saveTarget"
@@ -800,32 +703,6 @@ Item {
                         Layout.fillWidth: true
                         spacing: 6
 
-                        Button {
-                            objectName: "editorSaveButton"
-                            Layout.fillWidth: true
-                            text: qsTr("Save")
-                            // Save writes over the source: offered only when
-                            // there is something to write.
-                            enabled: view.hasDocument && !view.saved && !view.saving
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Overwrite the file, keeping a .bak copy of the previous one (Ctrl+S)")
-                            onClicked: view.command({ type: "editor_save" })
-                        }
-                        Button {
-                            objectName: "editorSaveAsButton"
-                            Layout.fillWidth: true
-                            text: qsTr("Save as…")
-                            enabled: view.hasDocument && !view.saving
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Write a copy and continue editing it (Ctrl+Shift+S)")
-                            onClicked: view.requestSaveAs()
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-
                         BusyIndicator {
                             Layout.preferredWidth: 18
                             Layout.preferredHeight: 18
@@ -841,11 +718,11 @@ Item {
                         }
                     }
 
-                    // -------------------------------------------------- resize
                     MenuSeparator {}
+
                     Label {
-                        objectName: "resizeHeading"
-                        text: qsTr("Resize")
+                        objectName: "toolOptionsHeading"
+                        text: view.tool === "crop" ? qsTr("Crop") : qsTr("Resize")
                         color: view.theme.text
                         font.bold: true
                     }
@@ -856,6 +733,36 @@ Item {
                         columnSpacing: 6
                         rowSpacing: 4
 
+                        Label {
+                            text: qsTr("X")
+                            visible: view.tool === "crop"
+                            color: view.theme.textMuted
+                        }
+                        TextField {
+                            id: cropX
+                            objectName: "cropX"
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            font.pixelSize: 12
+                            text: "0"
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            validator: IntValidator { bottom: 0; top: 20000 }
+                        }
+                        Label {
+                            text: qsTr("Y")
+                            visible: view.tool === "crop"
+                            color: view.theme.textMuted
+                        }
+                        TextField {
+                            id: cropY
+                            objectName: "cropY"
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            font.pixelSize: 12
+                            text: "0"
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            validator: IntValidator { bottom: 0; top: 20000 }
+                        }
                         Label {
                             text: qsTr("Width")
                             color: view.theme.textMuted
@@ -889,9 +796,27 @@ Item {
                         spacing: 6
 
                         Button {
+                            objectName: "halfSize"
+                            text: qsTr("Half")
+                            visible: view.tool === "resize"
+                            enabled: view.hasDocument
+                            onClicked: {
+                                widthField.text = String(Math.max(1, Math.round(view.editor.width / 2)))
+                                heightField.text = String(Math.max(1, Math.round(view.editor.height / 2)))
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Button {
                             objectName: "applyResize"
                             text: qsTr("Apply")
                             Layout.fillWidth: true
+                            visible: view.tool === "resize"
                             enabled: view.hasDocument
                                      && widthField.acceptableInput
                                      && heightField.acceptableInput
@@ -908,75 +833,47 @@ Item {
                             }
                         }
                         Button {
-                            objectName: "halfSize"
-                            text: qsTr("Half")
+                            objectName: "applyCrop"
+                            text: qsTr("Apply crop")
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            enabled: view.hasDocument
+                                     && cropX.acceptableInput
+                                     && cropY.acceptableInput
+                                     && widthField.acceptableInput
+                                     && heightField.acceptableInput
+                                     && parseInt(widthField.text) > 0
+                                     && parseInt(heightField.text) > 0
+                            onClicked: {
+                                view.command({
+                                    type: "editor_crop",
+                                    x: parseInt(cropX.text),
+                                    y: parseInt(cropY.text),
+                                    width: parseInt(widthField.text),
+                                    height: parseInt(heightField.text)
+                                })
+                                widthField.text = ""
+                                heightField.text = ""
+                                cropX.text = "0"
+                                cropY.text = "0"
+                            }
+                        }
+                        Button {
+                            objectName: "resetToolFields"
+                            text: qsTr("Reset")
                             enabled: view.hasDocument
                             onClicked: {
-                                widthField.text = String(Math.max(1, Math.round(view.editor.width / 2)))
-                                heightField.text = String(Math.max(1, Math.round(view.editor.height / 2)))
+                                widthField.text = ""
+                                heightField.text = ""
+                                cropX.text = "0"
+                                cropY.text = "0"
                             }
                         }
                     }
 
-                    // ---------------------------------------------------- crop
-                    MenuSeparator {}
-                    Label {
-                        objectName: "cropHeading"
-                        text: qsTr("Crop")
-                        color: view.theme.text
-                        font.bold: true
-                    }
-
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        columnSpacing: 6
-                        rowSpacing: 4
-
-                        Label { text: qsTr("X"); color: view.theme.textMuted }
-                        TextField {
-                            id: cropX
-                            objectName: "cropX"
-                            Layout.fillWidth: true
-                            font.pixelSize: 12
-                            text: "0"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 0; top: 20000 }
-                        }
-                        Label { text: qsTr("Y"); color: view.theme.textMuted }
-                        TextField {
-                            id: cropY
-                            objectName: "cropY"
-                            Layout.fillWidth: true
-                            font.pixelSize: 12
-                            text: "0"
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 0; top: 20000 }
-                        }
-                    }
-
-                    Button {
-                        objectName: "applyCrop"
-                        Layout.fillWidth: true
-                        text: qsTr("Apply crop")
-                        enabled: view.hasDocument
-                                 && cropX.acceptableInput
-                                 && cropY.acceptableInput
-                                 && widthField.acceptableInput
-                                 && heightField.acceptableInput
-                                 && parseInt(widthField.text) > 0
-                                 && parseInt(heightField.text) > 0
-                        onClicked: view.command({
-                            type: "editor_crop",
-                            x: parseInt(cropX.text),
-                            y: parseInt(cropY.text),
-                            width: parseInt(widthField.text),
-                            height: parseInt(heightField.text)
-                        })
-                    }
-
                     Label {
                         Layout.fillWidth: true
+                        visible: view.tool === "crop"
                         text: qsTr("Set Width/Height, then enter the rectangle's top-left corner.")
                         color: view.theme.textMuted
                         font.pixelSize: 11

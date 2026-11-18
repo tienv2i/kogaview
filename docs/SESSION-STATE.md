@@ -7,17 +7,19 @@ live and saves on Apply/OK, the toolbar drops its labels instead of being
 squashed while a shell-opened window is sized to the picture, the label threshold
 now follows the interface language instead of measuring English, the Browser
 and Viewer are operable from the keyboard, their tooltips name the keys, the
-burger menu opens a file, a folder or the Editor, and a modal dialog owns the
+burger menu opens a file, a folder or the Editor, a modal dialog owns the
 pointer so the Settings header drags in the Viewer instead of panning the
-picture behind it.
+picture behind it, and the Editor is a tool palette with an inspector rather
+than a second toolbar.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
 - Branch `main`, working tree clean. This session's commits are on top of
-  `d149152` and are listed in `git log`; the last three are the keyboard map,
-  the tooltip hints and the burger-menu fix.
+  `d149152` and are listed in `git log`; the newest are the keyboard map, the
+  tooltip hints, the burger-menu fix, the modal-pointer fix and the Editor
+  layout.
 - `cpp/main.cpp` is **unchanged** by the toolbar commit; the language follow-up
   changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now treats
   `isExposed()` as a hint (a covered window on this session reports itself
@@ -86,10 +88,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 143 strings in kogaview_vi.ts, 112 of them compiled into C++
+translations: 145 strings in kogaview_vi.ts, 112 of them compiled into C++
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
 cargo: 60 passed + 4 passed
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 19 · language 5 · toolbar 11
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 21 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` reports two
@@ -163,6 +165,28 @@ Workspace`/`Theme`), untouched by this change.
   `KogaViewBridge`, so `tst_settings` checks that the loader is gated and that
   every modal dialog feeds the property — the same substitute used for the
   shell-menu labels (row 50).
+
+## Design decisions, editor-layout session
+
+- **The toolbar is global, the palette is local.** Open, zoom, save, back and
+  close stay in the header; rotate/flip/undo/redo moved to the left column and
+  the header's duplicate icons were removed. `ToolbarMetrics` now counts 9
+  buttons and 4 separators, and `tst_toolbar` counts the real source, so a new
+  header button cannot outgrow the window floor.
+- **The left column holds tools, the right their options.** Resize and Crop are
+  selectors, not commands: they set `view.tool`, which swaps the inspector's
+  fields and Apply button. Apply sends the same typed `editor_resize` /
+  `editor_crop`; Reset only clears the fields. Save is not in the inspector any
+  more.
+- **The history list is gone, not the history.** Core still publishes `history`
+  and owns undo/redo; the view simply no longer draws a list of past steps.
+- **Labels, not a 2 × 2 grid.** At 220 px "Flip horizontal" was elided to
+  "Flip horizo…", so the four rotate/flip actions are one full-width column.
+  The Vietnamese labels are shorter, but the same column keeps both languages
+  whole.
+- **The layout is source-and-item tested.** `tst_editor` loads the real QML, so
+  the palette/inspector geometry, the hidden fields, the tool switch and Reset
+  are asserted through the real items; `tst_toolbar` still guards the counts.
 
 ## Design decisions, fit/settings session (ADR 0009)
 
