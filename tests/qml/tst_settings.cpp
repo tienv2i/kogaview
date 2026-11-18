@@ -57,6 +57,7 @@ private slots:
   void everyChangePreviewsImmediately();
   void cancelUndoesThePreview();
   void theCloseButtonStillClicksThroughTheDragHandler();
+  void theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen();
 
 private:
   /// The dialog is a `Popup`: its header, content and buttons are QObjects of
@@ -422,6 +423,36 @@ void TestSettings::theCloseButtonStillClicksThroughTheDragHandler()
   QTest::qWait(50);
 
   QVERIFY(!dialogVisible());
+}
+
+/// `Main.qml` cannot be instantiated here — it needs the real `KogaViewBridge` —
+/// so the shell half of the modal contract is asserted in its source: every
+/// modal dialog must switch the workspace loader off. Without that the Viewer's
+/// pan handler receives the pointer through the popup and steals the header
+/// drag (`tst_viewer::aModalDialogOwnsThePointer` covers the other half).
+void TestSettings::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen()
+{
+  QFile main(qmlDir() + QStringLiteral("/Main.qml"));
+  QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+  const QString source = QString::fromUtf8(main.readAll());
+
+  QVERIFY2(source.contains(QStringLiteral("enabled: !root.modalDialogOpen")),
+           "the workspace loader is not gated on the modal dialogs");
+
+  // The gate only helps if every modal dialog feeds the property. The block
+  // ends at the first blank line, so a dialog added elsewhere does not count.
+  const int start = source.indexOf(QStringLiteral("readonly property bool modalDialogOpen:"));
+  QVERIFY2(start >= 0, "Main.qml has no modalDialogOpen property");
+  const int end = source.indexOf(QStringLiteral("\n\n"), start);
+  QVERIFY(end > start);
+  const QString block = source.mid(start, end - start);
+  const char* dialogs[] = {"settingsDialog", "unsavedDialog", "deleteDialog",
+                           "fileFallback",   "folderFallback", "saveFallback"};
+  for (const char* dialog : dialogs) {
+    QVERIFY2(block.contains(QStringLiteral("%1.visible").arg(QLatin1String(dialog))),
+             qPrintable(QStringLiteral("%1 does not suspend the workspace")
+                          .arg(QLatin1String(dialog))));
+  }
 }
 
 QTEST_MAIN(TestSettings)

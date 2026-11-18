@@ -1483,6 +1483,71 @@ private slots:
     QCOMPARE(back.value(QStringLiteral("type")).toString(), QStringLiteral("set_workspace"));
     QCOMPARE(back.value(QStringLiteral("workspace")).toString(), QStringLiteral("browser"));
   }
+
+  /// A modal dialog owns the pointer. Qt still delivers pointer-handler events
+  /// to the items *under* a popup, so a drag on the Settings header used to
+  /// reach the Viewer's pan handler: the dialog stood still while the picture
+  /// slid behind it. `Main.qml` disables the workspace loader while a modal
+  /// dialog is visible; this pairs the real Viewer with the real dialog and
+  /// asserts both halves of the contract — the dialog moves, the picture does
+  /// not — and that the view takes the keyboard again once it is gone.
+  void aModalDialogOwnsThePointer()
+  {
+    zoomTo(2.0);
+    m_viewer->setProperty("offsetX", 0.0);
+    m_viewer->setProperty("offsetY", 0.0);
+    m_viewer->setProperty("rotationAngle", 0);
+    QCoreApplication::processEvents();
+
+    QQmlComponent component(&m_engine,
+                            QUrl::fromLocalFile(qmlDir() + QStringLiteral("/SettingsDialog.qml")));
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QScopedPointer<QObject> dialog(component.create());
+    QVERIFY(dialog != nullptr);
+    dialog->setParent(m_view);
+    dialog->setProperty("parent", QVariant::fromValue(m_view->contentItem()));
+    QMetaObject::invokeMethod(dialog.data(), "open");
+    QTest::qWait(50);
+    QVERIFY2(dialog->property("visible").toBool(), "the Settings dialog did not open");
+
+    // The shell's side of the contract: the workspace loader goes disabled
+    // while a modal dialog is open.
+    m_viewer->setProperty("enabled", false);
+    const qreal startX = dialog->property("x").toReal();
+    const qreal startY = dialog->property("y").toReal();
+
+    const QList<QQuickItem*> headers =
+      visualItems(m_view->contentItem(), QStringLiteral("settingsHeader"));
+    QVERIFY2(headers.size() == 1, "the dialog header is not in the window overlay");
+    QQuickItem* header = headers.first();
+    const QPoint from = header->mapToScene(QPointF(120, header->height() / 2.0)).toPoint();
+    const QPoint to = from + QPoint(-80, 40);
+    QTest::mousePress(m_view, Qt::LeftButton, Qt::NoModifier, from);
+    for (int step = 1; step <= 4; ++step) {
+      QTest::mouseMove(m_view, from + QPoint(-20 * step, 10 * step));
+    }
+    QTest::mouseRelease(m_view, Qt::LeftButton, Qt::NoModifier, to);
+    QTest::qWait(50);
+
+    QCOMPARE(dialog->property("x").toReal(), startX - 80.0);
+    QCOMPARE(dialog->property("y").toReal(), startY + 40.0);
+    QVERIFY2(qAbs(m_viewer->property("offsetX").toReal()) < 0.5,
+             "the drag panned the picture under the modal dialog");
+    QVERIFY2(qAbs(m_viewer->property("offsetY").toReal()) < 0.5,
+             "the drag panned the picture under the modal dialog");
+
+    // Closing the dialog brings the workspace back; the view must be the
+    // keyboard target again, not a disabled item that quietly swallowed keys.
+    QTest::keyClick(m_view, Qt::Key_Escape);
+    m_viewer->setProperty("enabled", true);
+    QTest::qWait(50);
+    QVERIFY2(!dialog->property("visible").toBool(), "Escape did not close the dialog");
+    QVERIFY2(m_viewer->property("activeFocus").toBool(),
+             "the Viewer did not take focus back after the dialog closed");
+    QTest::keyClick(m_view, Qt::Key_R);
+    QTest::qWait(50);
+    QCOMPARE(m_viewer->property("rotationAngle").toInt(), 90);
+  }
 };
 
 QTEST_MAIN(TestViewer)

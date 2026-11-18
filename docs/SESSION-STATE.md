@@ -6,8 +6,10 @@ reports, fit is a mode that survives a window resize while Settings previews
 live and saves on Apply/OK, the toolbar drops its labels instead of being
 squashed while a shell-opened window is sized to the picture, the label threshold
 now follows the interface language instead of measuring English, the Browser
-and Viewer are operable from the keyboard, their tooltips name the keys, and the
-burger menu opens a file, a folder or the Editor.
+and Viewer are operable from the keyboard, their tooltips name the keys, the
+burger menu opens a file, a folder or the Editor, and a modal dialog owns the
+pointer so the Settings header drags in the Viewer instead of panning the
+picture behind it.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -27,10 +29,12 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   the Vietnamese threshold), `KOGAVIEW_DEV_KEYS` (keyboard session; QTest
   key events through the real window's focus item),
   `KOGAVIEW_DEV_GRAB_POPUPS` (tooltip session; grabbed the window with a
-  tooltip forced open), and `KOGAVIEW_DEV_MAIN_MENU`/`KOGAVIEW_DEV_EDITOR_PICK`
-  (menu session; opened the shell menu and replayed the chooser's answer).
+  tooltip forced open), `KOGAVIEW_DEV_MAIN_MENU`/`KOGAVIEW_DEV_EDITOR_PICK`
+  (menu session; opened the shell menu and replayed the chooser's answer), and
+  `KOGAVIEW_DEV_UI_REQUEST=settings-drag` (modal-pointer session; dragged the
+  real Settings header with `QTest` and logged the dialog and Viewer offsets).
   `cpp/main.cpp` is byte-identical to `HEAD` again; only the evidence survives,
-  in rows 62–68 of `docs/M1-REPORT.md`.
+  in rows 62–69 of `docs/M1-REPORT.md`.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -75,6 +79,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 66 | The Browser and Viewer were mouse-only; no key walked the grid, stepped/zoomed/rotated the picture, trashed a file or switched workspace | QML suites: `viewer` 35 and `browser` 42 cases; real debug binary with a temporary `KOGAVIEW_DEV_KEYS` hook (QTest key events through the real focus path) + `KOGAVIEW_DEV_GEOM`/`KOGAVIEW_DEV_SCREENSHOT`; journals under `/tmp/opencode/kb/s*/kogaview-dev/journal/commands.jsonl`; pictures `docs/evidence/M1-keyboard-browser.png`, `docs/evidence/M1-keyboard-viewer.png` |
 | 67 | Tooltips described the controls but not the keys that reach them | three new QML cases reading each button's attached `ToolTip.text` (`viewer` 36, `browser` 44, `editor` 19 cases); `just test translations` (142 strings, 112 compiled into C++); real binary with a temporary `KOGAVIEW_DEV_GRAB_POPUPS` hook and a forced `ToolTip.visible` → `docs/evidence/M1-tooltip-shortcuts.png` (`Rotate left (Shift+R)`); dropping a key from a tooltip fails its suite, dropping it from the catalogue fails the translation gate |
 | 68 | The burger menu showed `Move down`/`Open file…` in its first two slots and had no explicit Editor entry | `tst_browser.cpp::shellMenuStartsWithTheOpenEntries` resolving `Theme.menuEntries[n]` to labels from `Main.qml` (browser now 45 cases); `just test translations` (143 strings); real binary with temporary `KOGAVIEW_DEV_MAIN_MENU`/`KOGAVIEW_DEV_EDITOR_PICK` hooks → `docs/evidence/M1-main-menu.png`, `docs/evidence/M1-open-in-editor.png`; journal `set_workspace` rev 3 then `editor_open` rev 4, Editor status `Editing M1-viewer.png` |
+| 69 | The Settings dialog could not be dragged by its header in the Viewer (the pan handler took the drag); it worked in the Editor | `tst_viewer.cpp::aModalDialogOwnsThePointer` (real Viewer + real Settings dialog, header drag moves the dialog and leaves the offsets at 0, then Escape/R prove focus returns), `tst_settings.cpp::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen` (source guard on `Main.qml`); real binary with a temporary `KOGAVIEW_DEV_UI_REQUEST=settings-drag` hook: header drag `(330,108) → (250,148)` moved the dialog, offsets stayed `0,0` (before the fix the dialog stayed put and the offsets went `-80,40`) |
 
 ## Test gate
 
@@ -84,7 +89,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 translations: 143 strings in kogaview_vi.ts, 112 of them compiled into C++
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
 cargo: 60 passed + 4 passed
-viewer 36 · browser 45 · cache 15 · state 7 · settings 13 · editor 19 · language 5 · toolbar 11
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 19 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` reports two
@@ -137,6 +142,28 @@ Workspace`/`Theme`), untouched by this change.
   from inside the Editor it sends the open command alone. The command pair goes
   through `sendSequence`, the same ordering fix the Browser's Edit entry uses.
 
+## Design decisions, modal-pointer session
+
+- **Pointer handlers are not occluded by a popup.** Qt's modal overlay blocks
+  *item* events, but pointer-handler delivery still reaches handlers attached to
+  items under the overlay, and two `DragHandler`s cannot take over from one
+  another by default. That is why the Viewer's pan handler won the Settings
+  header drag in the Viewer only: the pointer was inside the viewport rectangle,
+  and that handler is always armed (the Editor arms its pan only while the
+  pointer is over its canvas, which the header is not).
+- **The shell owns the gate.** `Main.qml` exposes `readonly property bool
+  modalDialogOpen` over Settings, the unsaved-changes dialog, the delete
+  confirmation and the three fallback choosers, and the workspace `Loader` is
+  `enabled: !root.modalDialogOpen`. One gate covers drags, the wheel, taps and
+  clicks instead of a per-handler flag. Menus are modeless and stay out.
+- **Focus returns.** Disabling the loader does not cost the workspace its
+  keyboard: after Escape the active focus is the Viewer again and `R` still
+  rotates (`aModalDialogOwnsThePointer` asserts both).
+- **The shell half is a source guard.** `Main.qml` needs the real
+  `KogaViewBridge`, so `tst_settings` checks that the loader is gated and that
+  every modal dialog feeds the property — the same substitute used for the
+  shell-menu labels (row 50).
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -183,6 +210,13 @@ Settings: removing the `onClosed` revert → `escapeRevertsThePreview` and
 `cancelUndoesThePreview` fail; removing the per-control previews →
 `everyChangePreviewsImmediately` and `cancelUndoesThePreview` fail; making Apply
 close → `applySavesAndLeavesTheDialogOpen` fails with "Apply closed the dialog".
+
+Modal pointer: dropping `enabled: !root.modalDialogOpen` from the workspace
+loader → `theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen` fails ("the
+workspace loader is not gated"); dropping `settingsDialog.visible` from
+`modalDialogOpen` → the same test names `settingsDialog`; removing the
+loader-disable from the pairing test (the control run) → `aModalDialogOwnsThePointer`
+fails with the dialog still at `330`, which is the reported bug.
 
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;

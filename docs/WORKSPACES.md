@@ -86,6 +86,17 @@
 - A handler cannot infer its view, so `view:` is set explicitly: a missing view
   scrolls nothing rather than silently scrolling the wrong item.
 
+## Modal dialogs own the pointer
+- Qt delivers pointer-handler events to items **under** a modal popup: the
+  overlay blocks item events, not handler grabs, so a background `DragHandler`
+  can win a drag that began on a dialog. `Main.qml` therefore disables the
+  workspace `Loader` while `modalDialogOpen` is true — Settings, the
+  unsaved-changes dialog, the delete confirmation and the fallback
+  file/folder/save choosers.
+- The Settings header moves the dialog in every workspace, and nothing pans or
+  zooms behind the dialog; focus returns to the view when the loader re-enables.
+  A `Menu` is modeless and deliberately not part of the gate.
+
 ## Keyboard operation
 - Plain-key shortcuts live in the workspace that owns them — `Keys.onPressed`
   on `BrowserView.qml` and `Viewer.qml` — not in a window-wide `Shortcut`, which

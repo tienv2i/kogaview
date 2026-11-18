@@ -127,6 +127,17 @@ ApplicationWindow {
     property var pendingDestination: null
     property var pendingDelete: null
     property string folderDialogPurpose: "open"
+    /// True while a modal dialog owns the window. Qt still delivers pointer
+    /// events to pointer handlers *under* a popup, so without this a drag on the
+    /// Settings header reached the Viewer's pan handler: the dialog stood still
+    /// while the picture slid behind it. Disabling the workspace loader is
+    /// also the modal contract for the wheel, taps and clicks, not just drags.
+    readonly property bool modalDialogOpen: settingsDialog.visible
+                                            || unsavedDialog.visible
+                                            || deleteDialog.visible
+                                            || fileFallback.visible
+                                            || folderFallback.visible
+                                            || saveFallback.visible
     /// The installer C++ exposed as the context property `Language`
     /// (`cpp/language.cpp`). It is not named `Language` here: QML already has a
     /// `Language` enum from QtQuick.Window, which shadows a context property of
@@ -739,6 +750,12 @@ ApplicationWindow {
     Loader {
         id: workspaceLoader
         anchors.fill: parent
+        // A modal dialog owns the pointer. Pointer handlers are not occluded by
+        // a popup (the Settings header drag used to pan the Viewer instead), so
+        // the workspace has to be switched off while one is open. Focus returns
+        // to the view when the loader comes back; `aModalDialogOwnsThePointer`
+        // pins that down.
+        enabled: !root.modalDialogOpen
         sourceComponent: {
             if (root.state.workspace === "viewer") return viewerComponent;
             if (root.state.workspace === "editor") return editorComponent;
