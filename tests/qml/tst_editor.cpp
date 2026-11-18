@@ -55,6 +55,8 @@ private slots:
   void resizeApplyEmitsTheTypedSize();
   void theResizePresetsAreMultiplesOf64();
   void typingOneSideKeepsTheChosenRatio();
+  void theCurrentRatioLocksTheTypedPair();
+  void theSizeSteppersNudgeBothSides();
   void resizeCarriesTheSquareFill();
   void theLivePreviewShowsTheDraftWithoutApplyingIt();
   void thePointerThumbnailCarriesThePreviewIdentity();
@@ -185,9 +187,15 @@ void TestEditor::init()
   m_editor->setProperty("resizeLivePreview", false);
   m_editor->setProperty("resizePadSquare", false);
   m_editor->setProperty("resizeFillColor", QColor(QStringLiteral("#ffffff")));
+  m_editor->setProperty("resizeCurrentRatio",
+                        QVariantMap{{QStringLiteral("width"), 0},
+                                    {QStringLiteral("height"), 0}});
   m_editor->setProperty("cropRatio", QStringLiteral("original"));
   m_editor->setProperty("cropAnchor", QStringLiteral("center"));
   m_editor->setProperty("cropLivePreview", false);
+  m_editor->setProperty("cropCurrentRatio",
+                        QVariantMap{{QStringLiteral("width"), 0},
+                                    {QStringLiteral("height"), 0}});
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
   for (const char* name : {"livePreviewButton", "cropLivePreviewButton", "padSquare"}) {
     if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
@@ -467,21 +475,32 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
   selectTool("resize");
 
   const QVariantList ratios = m_editor->property("sizeRatios").toList();
-  QVERIFY2(ratios.size() >= 8, "the common ratios are present");
+  // A short list: the common shapes plus Free/Original/Keep current. The rare crops
+  // that used to lengthen the dropdown (21:9, 5:4, 16:10, 2:3) stay out.
+  QVERIFY2(ratios.size() >= 6, "the common ratios are present");
+  QVERIFY2(ratios.size() <= 10, "the ratio list stayed short");
   QStringList ratioKeys;
   for (const QVariant& entry : ratios) {
     ratioKeys.append(entry.toMap().value("key").toString());
   }
   QVERIFY(ratioKeys.contains(QStringLiteral("free")));
   QVERIFY(ratioKeys.contains(QStringLiteral("original")));
+  QVERIFY(ratioKeys.contains(QStringLiteral("current")));
   QVERIFY(ratioKeys.contains(QStringLiteral("1:1")));
   QVERIFY(ratioKeys.contains(QStringLiteral("16:9")));
+  QVERIFY(!ratioKeys.contains(QStringLiteral("21:9")));
+  QVERIFY(!ratioKeys.contains(QStringLiteral("5:4")));
+  QVERIFY(!ratioKeys.contains(QStringLiteral("16:10")));
+  QVERIFY(!ratioKeys.contains(QStringLiteral("2:3")));
 
   const QVariantList presets = m_editor->property("sizePresets").toList();
-  QVERIFY2(presets.size() >= 20, "many ratio + pixel presets are offered");
+  // Three sizes per ratio, not every power of two: the list was cut from 47 to
+  // 18 entries so `Custom` is not buried under rare samples.
+  QVERIFY2(presets.size() >= 12, "concrete ratio + pixel presets are offered");
+  QVERIFY2(presets.size() <= 20, "the preset list stayed short");
   int squareIndex = -1;
   int smallSquareIndex = -1;
-  bool has768 = false;
+  bool hasLargeSquare = false;
   for (int index = 0; index < presets.size(); ++index) {
     const QVariantMap preset = presets.at(index).toMap();
     const QString label = preset.value("label").toString();
@@ -498,13 +517,13 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
     if (preset.value("width").toInt() == 512 && preset.value("height").toInt() == 512) {
       smallSquareIndex = index;
     }
-    if (preset.value("width").toInt() == 768 && preset.value("height").toInt() == 768) {
-      has768 = true;
+    if (preset.value("width").toInt() == 2048 && preset.value("height").toInt() == 2048) {
+      hasLargeSquare = true;
     }
   }
   QVERIFY2(squareIndex >= 0, "1:1 · 1024 × 1024 is missing");
   QVERIFY2(smallSquareIndex >= 0, "1:1 · 512 × 512 is missing");
-  QVERIFY2(has768, "1:1 · 768 × 768 is missing");
+  QVERIFY2(hasLargeSquare, "1:1 · 2048 × 2048 is missing");
 
   QQuickItem* dropdown = expectItem("sizePreset");
   QVERIFY(dropdown->isVisible());
@@ -561,6 +580,93 @@ void TestEditor::typingOneSideKeepsTheChosenRatio()
   typeInto(width, QStringLiteral("300"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("300"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
+}
+
+/// "Keep current ratio" is the lock the user described: it freezes the W:H pair on
+/// screen and keeps later edits at that shape instead of one of the fixed
+/// ratios. Each tool keeps its own snapshot.
+void TestEditor::theCurrentRatioLocksTheTypedPair()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("resize");
+
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  typeInto(width, QStringLiteral("1000"));
+  typeInto(height, QStringLiteral("700"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("700"));
+
+  // Picking it snapshots what the two fields hold, not the document's 4:3.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("current")))));
+  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("current"));
+  const QVariantMap captured = m_editor->property("resizeCurrentRatio").toMap();
+  QCOMPARE(captured.value("width").toInt(), 1000);
+  QCOMPARE(captured.value("height").toInt(), 700);
+
+  typeInto(width, QStringLiteral("2000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1400"));
+  typeInto(height, QStringLiteral("700"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
+
+  // Crop has its own snapshot: a 3:2 crop must not change the 10:7 resize.
+  selectTool("crop");
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  typeInto(width, QStringLiteral("300"));
+  typeInto(height, QStringLiteral("200"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("current")))));
+  typeInto(width, QStringLiteral("600"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("400"));
+
+  // Back on Resize the 10:7 pair is still the lock: 1500 wide gives 1050.
+  selectTool("resize");
+  typeInto(width, QStringLiteral("1500"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1050"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// Width and Height carry a small +/- pair. An empty field starts from the size
+/// its placeholder shows, and a step takes the same link path as typing; Free
+/// leaves the other side alone.
+void TestEditor::theSizeSteppersNudgeBothSides()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("resize");
+
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  for (const char* name : {"widthStepUp", "widthStepDown",
+                           "heightStepUp", "heightStepDown"}) {
+    QVERIFY2(expectItem(name)->isVisible(), name);
+  }
+
+  // The empty field shows 4000 as its placeholder; + starts there, not at 1.
+  clickItem(expectItem("widthStepUp"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3001"));
+  clickItem(expectItem("widthStepDown"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+
+  clickItem(expectItem("heightStepUp"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3001"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
+  clickItem(expectItem("heightStepDown"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+
+  // Free is the unlinked choice: nudging one side leaves the other.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  clickItem(expectItem("widthStepUp"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  QCOMPARE(m_commands->count(), 0);
 }
 
 /// The square fill travels with the typed command; the anchor does not exist

@@ -458,13 +458,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // The Resize panel without a pointer: the tool button and the live
         // preview toggle are `click()`ed (the same handler a press runs), and
         // the size dropdown is written the way its own selection writes it.
-        // `_ARG` is WIDTHxHEIGHT of a preset, default 1024x1024.
+        // `_ARG` is WIDTHxHEIGHT of a preset (default 1024x1024), or a custom
+        // pair when no preset matches; `_ARG2` optionally names a ratio key
+        // (e.g. `current`) to select after the pair is in place.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
           return;
         }
         const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
+        const QString ratioKey = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
         const QStringList parts = size.split(QLatin1Char('x'));
         const int wantedWidth = parts.value(0).toInt();
         const int wantedHeight = parts.value(1).toInt();
@@ -488,7 +491,22 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         if (preset != nullptr && index >= 0) {
           preset->setProperty("currentIndex", index);
         } else {
-          qWarning() << "KogaView dev ui request: no preset" << size;
+          // A custom pair: write the fields the way typing does, so a ratio
+          // such as `current` can snapshot it.
+          auto setField = [editor](const char* name, int value) {
+            QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
+            if (field != nullptr) {
+              field->setProperty("text", QString::number(value));
+            }
+          };
+          setField("widthField", wantedWidth);
+          setField("heightField", wantedHeight);
+          qInfo() << "KogaView dev ui request: custom size" << size << "(no preset)";
+        }
+        if (!ratioKey.isEmpty()) {
+          QMetaObject::invokeMethod(editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(ratioKey)));
+          QMetaObject::invokeMethod(editor, "relinkFields");
         }
         QObject* live = editor->findChild<QObject*>(QStringLiteral("livePreviewButton"));
         if (live != nullptr) {
@@ -499,7 +517,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << editor->property("resizeRatio") << "tool"
                           << editor->property("tool") << "live"
                           << editor->property("resizeLivePreview");
-        emitted = live != nullptr && index >= 0;
+        emitted = live != nullptr;
       } else if (uiRequest == QLatin1String("editor-crop")) {
         // The Crop panel without a pointer: the tool button, an anchor button
         // and the live toggle are `click()`ed, and the preset dropdown is

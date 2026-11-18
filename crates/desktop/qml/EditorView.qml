@@ -37,11 +37,17 @@ Item {
     property string tool: "pointer"
     /// Resize links Width and Height through this ratio, so the two fields can
     /// never describe a different shape than the one the user picked. `free` is
-    /// the only unlinked choice; `original` follows the document's own aspect.
+    /// the only unlinked choice; `original` follows the document's own aspect
+    /// and `current` the pair the user had on screen when it was picked.
     property string resizeRatio: "original"
     /// Crop links Width and Height the same way. `original` keeps the document's
     /// shape, which is the safest default for a crop.
     property string cropRatio: "original"
+    /// The pair captured when "Keep current ratio" was picked, one per tool so a
+    /// crop choice does not change the next resize. Zero means "not captured
+    /// yet": the document's aspect is the fallback.
+    property var resizeCurrentRatio: ({ width: 0, height: 0 })
+    property var cropCurrentRatio: ({ width: 0, height: 0 })
     /// Where the crop rectangle sits when its size changes: the anchor names the
     /// document corner, edge or centre the rectangle keeps. Typing X/Y by hand
     /// leaves it alone — the anchor is a placement shortcut, not a lock.
@@ -57,71 +63,43 @@ Item {
     /// cut, while the document, its history and its save target stay put.
     property bool cropLivePreview: false
 
-    /// The ratios both size tools offer. The first two keep the document's
-    /// shape or leave both fields alone; the rest link the sides.
+    /// The ratios both size tools offer. `Free` leaves both fields alone,
+    /// `Original` keeps the document's shape, `Keep current ratio` keeps whatever
+    /// pair is on screen when it is picked, and the common aspect ratios cover
+    /// the usual targets. Rare crops (21:9, 5:4, 16:10, 2:3) are deliberately
+    /// absent: they made the dropdown longer than it was useful.
     readonly property var sizeRatios: [
         { key: "free", label: qsTr("Free") },
         { key: "original", label: qsTr("Original") },
+        { key: "current", label: qsTr("Keep current ratio") },
         { key: "1:1", label: "1:1", width: 1, height: 1 },
         { key: "4:3", label: "4:3", width: 4, height: 3 },
         { key: "3:2", label: "3:2", width: 3, height: 2 },
         { key: "16:9", label: "16:9", width: 16, height: 9 },
-        { key: "16:10", label: "16:10", width: 16, height: 10 },
-        { key: "5:4", label: "5:4", width: 5, height: 4 },
-        { key: "21:9", label: "21:9", width: 21, height: 9 },
         { key: "3:4", label: "3:4", width: 3, height: 4 },
-        { key: "2:3", label: "2:3", width: 2, height: 3 },
         { key: "9:16", label: "9:16", width: 9, height: 16 }
     ]
-    /// Concrete sizes for those ratios. Both sides are multiples of 64, so a
+    /// Concrete sizes for those ratios: three per ratio, all useful magnitudes
+    /// rather than every power of two. Both sides stay multiples of 64, so a
     /// preset never produces fractional pixels at any scale. One flat list:
     /// the label carries the ratio, so the dropdown reads as sizes, not as a
     /// second ratio picker.
     readonly property var sizePresets: [
         { ratio: "1:1", label: "1:1 · 2048 × 2048", width: 2048, height: 2048 },
-        { ratio: "1:1", label: "1:1 · 1536 × 1536", width: 1536, height: 1536 },
         { ratio: "1:1", label: "1:1 · 1024 × 1024", width: 1024, height: 1024 },
-        { ratio: "1:1", label: "1:1 · 768 × 768", width: 768, height: 768 },
         { ratio: "1:1", label: "1:1 · 512 × 512", width: 512, height: 512 },
-        { ratio: "1:1", label: "1:1 · 256 × 256", width: 256, height: 256 },
         { ratio: "4:3", label: "4:3 · 2048 × 1536", width: 2048, height: 1536 },
-        { ratio: "4:3", label: "4:3 · 1536 × 1152", width: 1536, height: 1152 },
         { ratio: "4:3", label: "4:3 · 1024 × 768", width: 1024, height: 768 },
-        { ratio: "4:3", label: "4:3 · 768 × 576", width: 768, height: 576 },
         { ratio: "4:3", label: "4:3 · 512 × 384", width: 512, height: 384 },
-        { ratio: "4:3", label: "4:3 · 256 × 192", width: 256, height: 192 },
         { ratio: "3:2", label: "3:2 · 1536 × 1024", width: 1536, height: 1024 },
-        { ratio: "3:2", label: "3:2 · 1152 × 768", width: 1152, height: 768 },
         { ratio: "3:2", label: "3:2 · 768 × 512", width: 768, height: 512 },
-        { ratio: "3:2", label: "3:2 · 576 × 384", width: 576, height: 384 },
         { ratio: "3:2", label: "3:2 · 384 × 256", width: 384, height: 256 },
-        { ratio: "3:2", label: "3:2 · 192 × 128", width: 192, height: 128 },
         { ratio: "16:9", label: "16:9 · 3072 × 1728", width: 3072, height: 1728 },
         { ratio: "16:9", label: "16:9 · 2048 × 1152", width: 2048, height: 1152 },
         { ratio: "16:9", label: "16:9 · 1024 × 576", width: 1024, height: 576 },
-        { ratio: "16:10", label: "16:10 · 2048 × 1280", width: 2048, height: 1280 },
-        { ratio: "16:10", label: "16:10 · 1536 × 960", width: 1536, height: 960 },
-        { ratio: "16:10", label: "16:10 · 1024 × 640", width: 1024, height: 640 },
-        { ratio: "16:10", label: "16:10 · 512 × 320", width: 512, height: 320 },
-        { ratio: "5:4", label: "5:4 · 2560 × 2048", width: 2560, height: 2048 },
-        { ratio: "5:4", label: "5:4 · 1280 × 1024", width: 1280, height: 1024 },
-        { ratio: "5:4", label: "5:4 · 960 × 768", width: 960, height: 768 },
-        { ratio: "5:4", label: "5:4 · 640 × 512", width: 640, height: 512 },
-        { ratio: "5:4", label: "5:4 · 320 × 256", width: 320, height: 256 },
-        { ratio: "21:9", label: "21:9 · 2688 × 1152", width: 2688, height: 1152 },
-        { ratio: "21:9", label: "21:9 · 1344 × 576", width: 1344, height: 576 },
         { ratio: "3:4", label: "3:4 · 1536 × 2048", width: 1536, height: 2048 },
-        { ratio: "3:4", label: "3:4 · 1152 × 1536", width: 1152, height: 1536 },
         { ratio: "3:4", label: "3:4 · 768 × 1024", width: 768, height: 1024 },
-        { ratio: "3:4", label: "3:4 · 576 × 768", width: 576, height: 768 },
         { ratio: "3:4", label: "3:4 · 384 × 512", width: 384, height: 512 },
-        { ratio: "3:4", label: "3:4 · 192 × 256", width: 192, height: 256 },
-        { ratio: "2:3", label: "2:3 · 1024 × 1536", width: 1024, height: 1536 },
-        { ratio: "2:3", label: "2:3 · 768 × 1152", width: 768, height: 1152 },
-        { ratio: "2:3", label: "2:3 · 512 × 768", width: 512, height: 768 },
-        { ratio: "2:3", label: "2:3 · 384 × 576", width: 384, height: 576 },
-        { ratio: "2:3", label: "2:3 · 256 × 384", width: 256, height: 384 },
-        { ratio: "2:3", label: "2:3 · 128 × 192", width: 128, height: 192 },
         { ratio: "9:16", label: "9:16 · 1728 × 3072", width: 1728, height: 3072 },
         { ratio: "9:16", label: "9:16 · 1152 × 2048", width: 1152, height: 2048 },
         { ratio: "9:16", label: "9:16 · 576 × 1024", width: 576, height: 1024 }
@@ -154,6 +132,13 @@ Item {
             var entry = view.sizeRatios[index]
             if (entry.key !== key) continue
             if (entry.key === "free") return null
+            if (entry.key === "current") {
+                var captured = view.tool === "crop" ? view.cropCurrentRatio
+                                                     : view.resizeCurrentRatio
+                if (captured && captured.width > 0 && captured.height > 0) return captured
+                if (!view.hasDocument) return null
+                return { width: view.documentWidth, height: view.documentHeight }
+            }
             if (entry.key === "original") {
                 if (!view.hasDocument) return null
                 return { width: view.editor.width, height: view.editor.height }
@@ -291,10 +276,31 @@ Item {
         }
     }
 
+    /// Freeze the pair on screen as the "Keep current ratio" shape. Both fields must
+    /// hold a usable number; otherwise the document's own aspect is the honest
+    /// fallback, because that is what the empty placeholders show.
+    function captureCurrentRatio() {
+        var width = widthField.acceptableInput ? parseInt(widthField.text) : 0
+        var height = heightField.acceptableInput ? parseInt(heightField.text) : 0
+        if (!(width > 0) || !(height > 0)) {
+            if (!view.hasDocument) return
+            width = view.documentWidth
+            height = view.documentHeight
+        }
+        var captured = { width: width, height: height }
+        if (view.tool === "crop") {
+            view.cropCurrentRatio = captured
+        } else {
+            view.resizeCurrentRatio = captured
+        }
+    }
+
     /// Select a ratio for the active tool and mirror it in the right dropdown.
     /// The dropdown index is written imperatively because ComboBox owns
-    /// `currentIndex` itself.
+    /// `currentIndex` itself. Picking "Keep current ratio" snapshots the pair before
+    /// relinking, so the fields the user is looking at become the locked shape.
     function setRatio(key) {
+        if (key === "current") view.captureCurrentRatio()
         if (view.tool === "crop") {
             view.cropRatio = key
             cropRatioBox.currentIndex = view.cropRatioIndex
@@ -302,6 +308,25 @@ Item {
             view.resizeRatio = key
             resizeRatioBox.currentIndex = view.resizeRatioIndex
         }
+    }
+
+    /// One click of a field's +/- stepper. An empty field starts from the size
+    /// its placeholder shows, so the first nudge moves the document's own
+    /// dimension rather than jumping to 1. The other side follows the selected
+    /// ratio exactly as typing it would.
+    function stepField(field, delta, isWidth) {
+        var current = parseInt(field.text)
+        if (!(current > 0)) {
+            current = Math.round(isWidth ? view.documentWidth : view.documentHeight)
+        }
+        if (!(current > 0)) current = 1
+        field.text = String(Math.max(1, Math.min(20000, current + delta)))
+        if (isWidth) {
+            view.linkHeightFromWidth()
+        } else {
+            view.linkWidthFromHeight()
+        }
+        draftDebounce.restart()
     }
 
     function resizeFieldsValid() {
@@ -1210,7 +1235,7 @@ Item {
 
                         GridLayout {
                             Layout.fillWidth: true
-                            columns: 2
+                            columns: 3
                             columnSpacing: 6
                             rowSpacing: 4
 
@@ -1229,6 +1254,9 @@ Item {
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 0; top: 20000 }
                             }
+                            // X/Y have no steppers; the cell keeps the three
+                            // columns aligned without leaving a gap.
+                            Item { visible: view.tool === "crop" }
                             Label {
                                 text: qsTr("Y")
                                 visible: view.tool === "crop"
@@ -1244,6 +1272,7 @@ Item {
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 0; top: 20000 }
                             }
+                            Item { visible: view.tool === "crop" }
                             Label {
                                 text: qsTr("Width")
                                 color: view.theme.textMuted
@@ -1261,6 +1290,41 @@ Item {
                                     draftDebounce.restart()
                                 }
                             }
+                            // The steppers are the small +/- pair every size
+                            // field has: one pixel per click, and the linked
+                            // side follows because this is the same path as
+                            // typing. A single column keeps them inside the
+                            // 260 px panel next to a full-width field.
+                            Column {
+                                spacing: 0
+
+                                Button {
+                                    objectName: "widthStepUp"
+                                    implicitWidth: 22
+                                    implicitHeight: 14
+                                    padding: 0
+                                    font.pixelSize: 8
+                                    text: "\u25b2"
+                                    enabled: view.hasDocument
+                                    Accessible.name: qsTr("Increase width")
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("Increase width")
+                                    onClicked: view.stepField(widthField, 1, true)
+                                }
+                                Button {
+                                    objectName: "widthStepDown"
+                                    implicitWidth: 22
+                                    implicitHeight: 14
+                                    padding: 0
+                                    font.pixelSize: 8
+                                    text: "\u25bc"
+                                    enabled: view.hasDocument
+                                    Accessible.name: qsTr("Decrease width")
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("Decrease width")
+                                    onClicked: view.stepField(widthField, -1, true)
+                                }
+                            }
                             Label {
                                 text: qsTr("Height")
                                 color: view.theme.textMuted
@@ -1276,6 +1340,36 @@ Item {
                                 onTextEdited: {
                                     view.linkWidthFromHeight()
                                     draftDebounce.restart()
+                                }
+                            }
+                            Column {
+                                spacing: 0
+
+                                Button {
+                                    objectName: "heightStepUp"
+                                    implicitWidth: 22
+                                    implicitHeight: 14
+                                    padding: 0
+                                    font.pixelSize: 8
+                                    text: "\u25b2"
+                                    enabled: view.hasDocument
+                                    Accessible.name: qsTr("Increase height")
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("Increase height")
+                                    onClicked: view.stepField(heightField, 1, false)
+                                }
+                                Button {
+                                    objectName: "heightStepDown"
+                                    implicitWidth: 22
+                                    implicitHeight: 14
+                                    padding: 0
+                                    font.pixelSize: 8
+                                    text: "\u25bc"
+                                    enabled: view.hasDocument
+                                    Accessible.name: qsTr("Decrease height")
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("Decrease height")
+                                    onClicked: view.stepField(heightField, -1, false)
                                 }
                             }
                         }

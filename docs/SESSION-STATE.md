@@ -15,22 +15,26 @@ a ratio, offers many 64-divisible sizes and can render the result live before
 Apply — with the pointer thumbnail now keyed on the preview file's own identity
 instead of a name that repeats every run — and its Crop tool has the same linked
 sides and presets, a 3 × 3 anchor that places the rectangle and its own live
-preview.
+preview. The two size tools now also carry +/- steppers on Width and Height, a
+`Keep current ratio` lock for a custom pair, and a shorter list of ratios and
+samples.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The Crop rework (row 74) is the newest commit on top of
-  `bb473c3` (the Resize rework); the tree is clean after it. This session's
+- Branch `main`. The ratio/stepper follow-up (row 75) is the newest commit on
+  top of `158927a` (the Crop rework); the tree is clean after it. This session's
   earlier commits are on top of `d149152` and are listed in `git log`; the
   newest are the keyboard map, the tooltip hints, the burger-menu fix, the
   modal-pointer fix, the Editor layout and its pointer follow-up, and the two
   size tools.
 - `cpp/main.cpp` gained one permanent debug hook per size tool:
-  `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset)
-  clicks the real Resize tool button, writes the size dropdown the way its own
-  selection does and clicks Live preview, and `editor-crop` (`_ARG` =
+  `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset,
+  or a custom pair; `_ARG2` = an optional ratio key such as `current`) clicks
+  the real Resize tool button, writes the size dropdown the way its own
+  selection does (or the two fields for a custom pair), selects the ratio and
+  clicks Live preview, and `editor-crop` (`_ARG` =
   `WIDTHxHEIGHT`, `_ARG2` = an anchor key, default `center`) does the same for
   Crop including an anchor button — found by walking the item tree, because a
   `Repeater` delegate is not a QObject child. Both exist so the panel can be
@@ -112,16 +116,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 72 | Resize could only type two numbers: no anchor, no common sizes, no squaring | anchor pad + 64-divisible presets + pad-to-square colour, in Core (`pad_to_square`, `anchored_cover_rect`) and QML; `cargo` 63, `editor` 24, `translations` 161 strings; real window `docs/evidence/M1-editor-resize.png`, `M1-editor-resize-square.png`; mutations: pad ignoring the anchor, Resize not padding, preset auto-selected |
 | 73 | Resize's anchor belonged to Crop, Width/Height were not linked, the preset list was one size per ratio, there was no live preview, and the pointer thumbnail could show the previous run's picture | anchor removed from protocol/Core/QML and the pad centred; ratio-linked fields, 47 sizes and a live-preview Core draft (`editor_resize_preview`); thumbnail cache keyed on the published preview mtime/size. `cargo` 63 + 4, `editor` 27, `translations` 155 strings; real window `docs/evidence/M1-editor-resize-live.png`, `M1-editor-thumbnail-second-run.png`; mutations: thumbnail identity zeroed, `free` ratio left linked, pad not centred, preview stamp zeroed |
 | 74 | Crop still typed four numbers by hand: no linked sides, no presets, nowhere to say where inside the document the rectangle belongs, and no way to see the cut before applying it | shared `sizeRatios`/`sizePresets`, a fitting `cropPresets` list, a 3 × 3 `cropAnchors` pad that places X/Y, and `editor_crop_preview` reusing the draft with `kind: "crop"`. `cargo` 64 + 4, `editor` 31, `translations` 166 strings; real window `docs/evidence/M1-editor-crop-live.png` (512 × 384 at `bottom_right`, draft on canvas, status still 1254 × 1254); mutations: preset filter removed, draft kind ignored, anchor column fixed, Core kind swapped |
+| 75 | Width/Height were type-only, a custom W:H pair could not be locked, and 12 ratios / 47 samples made the panel longer than it was useful | `stepField` plus four arrow buttons, a per-tool `Keep current ratio` snapshot, six common ratios (21:9, 5:4, 16:10, 2:3 removed) and 18 presets (three per ratio); `editor-resize` also takes a custom pair and an `_ARG2` ratio key. `cargo` 64 + 4, `editor` 33, `translations` 171 strings; real window `docs/evidence/M1-editor-resize-current-ratio.png` (1000 × 700 with `Keep current ratio`, draft on canvas, status still 1254 × 1254); mutations: snapshot call removed (`captured.width` 0), stepper link removed, 21:9 restored |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 166 strings in kogaview_vi.ts, 110 of them compiled into C++, 162 drawn by the QML, 4 looked up by context
+translations: 171 strings in kogaview_vi.ts, 110 of them compiled into C++, 167 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
 cargo: 64 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 31 · language 5 · toolbar 11
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 33 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -286,6 +291,23 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   `cropPresets` offers only sizes whose both sides fit the document; a small
   picture simply has a shorter list and keeps the fields. The shared list stays
   one flat, 64-divisible set, so a preset is still a concrete size in pixels.
+- **A ratio can come from the fields themselves.** `Keep current ratio` is a
+  third source next to `Original` and the fixed shapes: picking it snapshots the
+  Width/Height pair on screen (or the document's aspect when the fields are
+  empty) into `resizeCurrentRatio`/`cropCurrentRatio`, and later edits keep that
+  shape. The snapshots are per tool, so locking a 3:2 crop does not change the
+  next resize. It is the "keep what I typed" lock, without a second control:
+  the Ratio combo already is the lock.
+- **Steppers are the same edit path as typing.** The +/- pair beside Width and
+  Height sets the text and calls `linkHeightFromWidth`/`linkWidthFromHeight`,
+  then the same 200 ms draft debounce. An empty field starts from the document
+  size its placeholder shows, not from 1, and `Free` leaves the other side
+  alone. Nothing is sent to Core until Apply or Live preview asks.
+- **The lists are short on purpose.** Twelve ratios and 47 samples buried
+  `Custom` and the useful targets. Six common ratios and three sizes each (18
+  entries) keep the dropdown scannable; the rare shapes (21:9, 5:4, 16:10, 2:3)
+  are still reachable by typing the numbers and choosing `Free`. Every preset
+  side stays a multiple of 64.
 - **Validity is the rectangle, not just two numbers.** `cropFieldsValid()`
   answers the same question Core will ask (`x + width ≤ document width`,
   `y + height ≤ document height`); Apply and the draft both use it, so a legal
@@ -374,6 +396,13 @@ column → `theCropAnchorPlacesTheRectangle` fails (`cropX` 1600, expected 0 for
 `top_left`); Core's `spawn_draft` labelling a crop `"resize"` →
 `a_crop_preview_is_a_draft_that_never_cuts` fails `left: "resize"`,
 `right: "crop"`. Each restored, then `just test` green.
+
+Steppers and the current-ratio lock: deleting the
+`captureCurrentRatio()` call from `setRatio` → `theCurrentRatioLocksTheTypedPair`
+fails (`captured.width` 0, expected 1000); removing the ratio link from
+`stepField` → `theSizeSteppersNudgeBothSides` fails on the first linked height;
+putting `21:9` back in `sizeRatios` → `theResizePresetsAreMultiplesOf64` fails
+on `!ratioKeys.contains("21:9")`. Each restored, then the suite green.
 
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;

@@ -61,27 +61,37 @@
   none is elided at the 220 px default.
 - **Pointer** is the no-op default and the Editor opens on it. Its right column
   shows the document title, size, save target, a cached thumbnail of the
-  current preview and the session history. Resize and Crop replace that with their options
-  (Width/Height for Resize, X/Y for Crop) and Apply/Apply crop. Clicking
-  the selected Resize/Crop again returns to Pointer.
+  current preview and the session history. Resize and Crop replace that with
+  their options (the shared Width/Height pair with +/- steppers, plus X/Y for
+  Crop) and Apply/Apply crop. Clicking the selected Resize/Crop again returns to
+  Pointer.
 - **Resize links the two sides through a ratio.** The Ratio combo offers `Free`,
-  `Original` and nine common ratios; typing one side recalculates the other, and
-  only `Free` leaves them independent. The Size combo lists 47 concrete sizes,
-  every side a multiple of 64 (for 1:1: 2048, 1536, 1024, 768, 512, 256), and
-  picking one also selects the ratio it belongs to. Nothing is armed until the
-  user acts: the list opens on `Custom` and Apply stays disabled while the
-  fields are empty.
+  `Original`, `Keep current ratio` and six common ratios (1:1, 4:3, 3:2, 16:9,
+  3:4, 9:16); typing or stepping one side recalculates the other, and only `Free`
+  leaves them independent. `Keep current ratio` freezes the Width/Height pair on
+  screen when it is picked, so a custom shape (say 1000 × 700) stays at that
+  shape for later edits; each tool snapshots its own pair. The Size combo lists
+  18 concrete sizes, three per ratio, every side a multiple of 64 (for 1:1:
+  2048, 1024, 512); picking one also selects the ratio it belongs to. Nothing is
+  armed until the user acts: the list opens on `Custom` and Apply stays disabled
+  while the fields are empty.
+- **Width and Height carry +/- steppers.** The pair of small arrow buttons next
+  to each field moves that side by one pixel. An empty field starts from the size
+  its placeholder shows (the document's own), and the step runs the same link
+  path as typing, so a locked ratio or Free is respected; the live preview and
+  the Crop anchor see the new size immediately.
 - **Resize has no anchor; Crop keeps its rectangle.** Where the cropped result
   sits is a Crop decision. When the target aspect differs, Core takes the
   centred cover rectangle before scaling, so pixels are never stretched.
 - **Crop has the anchor, a ratio and fitting presets.** Width/Height link through
-  the Crop Ratio combo (`Free`, `Original`, nine common ratios) exactly as Resize
-  does, and the Size preset list offers only concrete 64-divisible sizes both of
-  whose sides fit the document. The 3 × 3 anchor pad (four corners, four edges,
-  centre; arrows plus an accessible name and tooltip for each) decides where a
-  rectangle of that size sits: changing the size through the ratio, a preset or
-  Reset re-places X/Y, while typing X/Y is the user's own placement. Apply stays
-  disabled unless `x + width` and `y + height` stay inside the document.
+  the Crop Ratio combo (`Free`, `Original`, `Keep current ratio` and the same six
+  common ratios) exactly as Resize does, and the Size preset list offers only
+  concrete 64-divisible sizes both of whose sides fit the document. The 3 × 3
+  anchor pad (four corners, four edges, centre; arrows plus an accessible name
+  and tooltip for each) decides where a rectangle of that size sits: changing
+  the size through the ratio, a preset, a stepper or Reset re-places X/Y, while
+  typing X/Y is the user's own placement. Apply stays disabled unless
+  `x + width` and `y + height` stay inside the document.
 - **Live preview renders the target without editing.** The Live preview toggle
   asks Core for a draft at the chosen size; the canvas draws that draft (and the
   zoom refits to it) while the status bar and history keep describing the real

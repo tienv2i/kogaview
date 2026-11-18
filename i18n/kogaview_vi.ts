@@ -439,6 +439,31 @@
         <translation>Gốc</translation>
     </message>
     <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="55"/>
+        <source>Keep current ratio</source>
+        <translation>Giữ tỷ lệ hiện tại</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="56"/>
+        <source>Increase width</source>
+        <translation>Tăng chiều rộng</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="57"/>
+        <source>Decrease width</source>
+        <translation>Giảm chiều rộng</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="58"/>
+        <source>Increase height</source>
+        <translation>Tăng chiều cao</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="59"/>
+        <source>Decrease height</source>
+        <translation>Giảm chiều cao</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="1173"/>
         <source>Size preset</source>
         <translation>Mẫu kích thước</translation>
