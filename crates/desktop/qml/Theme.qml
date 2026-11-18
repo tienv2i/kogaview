@@ -66,7 +66,10 @@ QtObject {
         qsTr("Fit to window"), qsTr("Actual size"), qsTr("Rotate left"),
         qsTr("Rotate right"),
         qsTr("Flip horizontal"), qsTr("Flip vertical"), qsTr("Reset edits"),
-        qsTr("Close editor")
+        qsTr("Close editor"),
+        // Shell menu only: the explicit way into the Editor. Appended so the
+        // indices the Browser, Viewer and Editor menus already use do not move.
+        qsTr("Open in editor…")
     ]
     /// The labels the menus are built from (`Main.qml`, the Editor's canvas
     /// menu). Same list, kept as a name of its own so the views read

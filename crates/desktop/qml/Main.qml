@@ -261,8 +261,9 @@ ApplicationWindow {
         }
     }
 
-    /// The Editor's chooser. It uses the same portal/fallback route as
-    /// `chooseFiles`, but the picked file becomes an `editor_open` command.
+    /// The chooser behind the Editor's Open button and the shell menu's "Open
+    /// in editor…". It uses the same portal/fallback route as `chooseFiles`, but
+    /// the picked file becomes an `editor_open` command.
     function chooseEditorImage() {
         root.choosingForEditor = true;
         if (!Platform.requestOpenFile(qsTr("Open an image for editing"))) {
@@ -280,7 +281,15 @@ ApplicationWindow {
         }
         if (root.choosingForEditor) {
             root.choosingForEditor = false;
-            root.send({ type: "editor_open", path: paths[0] });
+            // Reached from the Editor's own button and from the shell menu, so
+            // the menu's path has to switch workspace first; when the Editor is
+            // already up, only the open command is sent.
+            var commands = [];
+            if (root.state.workspace !== "editor") {
+                commands.push({ type: "set_workspace", workspace: "editor" });
+            }
+            commands.push({ type: "editor_open", path: paths[0] });
+            root.sendSequence(commands);
         } else {
             root.send({ type: "open_file", paths: paths });
         }
@@ -816,17 +825,23 @@ ApplicationWindow {
 
     Menu {
         id: mainMenu
+        objectName: "mainMenu"
         implicitWidth: appTheme.menuWidth(appTheme.menuLabelWidths)
 
         MenuItem {
-            text: appTheme.menuEntries[15]
+            text: appTheme.menuEntries[16]
             icon.name: "document-open-symbolic"
             onTriggered: root.chooseFiles()
         }
         MenuItem {
-            text: appTheme.menuEntries[16]
+            text: appTheme.menuEntries[17]
             icon.name: "folder-open-symbolic"
             onTriggered: root.chooseFolder()
+        }
+        MenuItem {
+            text: appTheme.menuEntries[30]
+            icon.name: "document-edit-symbolic"
+            onTriggered: root.chooseEditorImage()
         }
         MenuSeparator {}
         MenuItem {

@@ -16,6 +16,7 @@
 | File manager Open With image | Viewer |
 | Browser double-click | Viewer |
 | Viewer Edit | Editor |
+| Main menu → Open in editor… | Editor, showing the chosen image (the explicit Editor entry point) |
 | Back from Viewer | Restore Browser selection, filter, scroll |
 | Back from Editor | Viewer, honoring unsaved edit/draft policy |
 

@@ -774,6 +774,11 @@
         <source>Close editor</source>
         <translation>Đóng trình chỉnh sửa</translation>
     </message>
+    <message>
+        <location filename="../crates/desktop/qml/Theme.qml" line="72"/>
+        <source>Open in editor…</source>
+        <translation>Mở trong trình chỉnh sửa…</translation>
+    </message>
 </context>
 <context>
     <name>Viewer</name>

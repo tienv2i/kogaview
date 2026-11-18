@@ -6,15 +6,16 @@ reports, fit is a mode that survives a window resize while Settings previews
 live and saves on Apply/OK, the toolbar drops its labels instead of being
 squashed while a shell-opened window is sized to the picture, the label threshold
 now follows the interface language instead of measuring English, the Browser
-and Viewer are operable from the keyboard, and their tooltips name the keys.
+and Viewer are operable from the keyboard, their tooltips name the keys, and the
+burger menu opens a file, a folder or the Editor.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
 - Branch `main`, working tree clean. This session's commits are on top of
-  `d149152` and are listed in `git log`; the last two are the keyboard map and
-  the tooltip hints that name its keys.
+  `d149152` and are listed in `git log`; the last three are the keyboard map,
+  the tooltip hints and the burger-menu fix.
 - `cpp/main.cpp` is **unchanged** by the toolbar commit; the language follow-up
   changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now treats
   `isExposed()` as a hint (a covered window on this session reports itself
@@ -24,10 +25,12 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `KOGAVIEW_DEV_RESIZE` and `KOGAVIEW_DEV_SETTINGS_STEPS` (fit/settings session),
   `KOGAVIEW_DEV_RESIZE` with `KOGAVIEW_DEV_RESIZE_SHOT` twice (toolbar, and
   the Vietnamese threshold), `KOGAVIEW_DEV_KEYS` (keyboard session; QTest
-  key events through the real window's focus item) and
+  key events through the real window's focus item),
   `KOGAVIEW_DEV_GRAB_POPUPS` (tooltip session; grabbed the window with a
-  tooltip forced open). `cpp/main.cpp` is byte-identical to `HEAD` again; only
-  the evidence survives, in rows 62–67 of `docs/M1-REPORT.md`.
+  tooltip forced open), and `KOGAVIEW_DEV_MAIN_MENU`/`KOGAVIEW_DEV_EDITOR_PICK`
+  (menu session; opened the shell menu and replayed the chooser's answer).
+  `cpp/main.cpp` is byte-identical to `HEAD` again; only the evidence survives,
+  in rows 62–68 of `docs/M1-REPORT.md`.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -71,16 +74,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 65 | Toolbar squashed below its floor; shell-opened windows ignored the picture's shape; the Vietnamese threshold was computed from English labels and the small-image hint had no translation | real window with a temporary resize hook: row 683 px compact / 921 px labelled (English Viewer), 1039 (English Editor), 1015 / 1133 (Vietnamese), floor **870** re-applied after requests for 200–869, labels on at exactly **1131** and off at 1130 in English, on at exactly **1225** and off at 1224 in Vietnamese (Editor); 2400×1600 → 1339×1086, 300×200 → 878×420 at 100 % with the hint, 9000×600 → 1731×420 at 19 %, 700×700 → 878×904; screenshots in `docs/evidence/M1-toolbar-*.png` and `M1-window-*.png` (Vietnamese ones suffixed `-vi`) |
 | 66 | The Browser and Viewer were mouse-only; no key walked the grid, stepped/zoomed/rotated the picture, trashed a file or switched workspace | QML suites: `viewer` 35 and `browser` 42 cases; real debug binary with a temporary `KOGAVIEW_DEV_KEYS` hook (QTest key events through the real focus path) + `KOGAVIEW_DEV_GEOM`/`KOGAVIEW_DEV_SCREENSHOT`; journals under `/tmp/opencode/kb/s*/kogaview-dev/journal/commands.jsonl`; pictures `docs/evidence/M1-keyboard-browser.png`, `docs/evidence/M1-keyboard-viewer.png` |
 | 67 | Tooltips described the controls but not the keys that reach them | three new QML cases reading each button's attached `ToolTip.text` (`viewer` 36, `browser` 44, `editor` 19 cases); `just test translations` (142 strings, 112 compiled into C++); real binary with a temporary `KOGAVIEW_DEV_GRAB_POPUPS` hook and a forced `ToolTip.visible` → `docs/evidence/M1-tooltip-shortcuts.png` (`Rotate left (Shift+R)`); dropping a key from a tooltip fails its suite, dropping it from the catalogue fails the translation gate |
+| 68 | The burger menu showed `Move down`/`Open file…` in its first two slots and had no explicit Editor entry | `tst_browser.cpp::shellMenuStartsWithTheOpenEntries` resolving `Theme.menuEntries[n]` to labels from `Main.qml` (browser now 45 cases); `just test translations` (143 strings); real binary with temporary `KOGAVIEW_DEV_MAIN_MENU`/`KOGAVIEW_DEV_EDITOR_PICK` hooks → `docs/evidence/M1-main-menu.png`, `docs/evidence/M1-open-in-editor.png`; journal `set_workspace` rev 3 then `editor_open` rev 4, Editor status `Editing M1-viewer.png` |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 142 strings in kogaview_vi.ts, 112 of them compiled into C++
+translations: 143 strings in kogaview_vi.ts, 112 of them compiled into C++
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
 cargo: 60 passed + 4 passed
-viewer 36 · browser 44 · cache 15 · state 7 · settings 13 · editor 19 · language 5 · toolbar 11
+viewer 36 · browser 45 · cache 15 · state 7 · settings 13 · editor 19 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` reports two
@@ -119,6 +123,19 @@ Workspace`/`Theme`), untouched by this change.
   shortcut keeps plain text; the Editor test pins `Undo` to `Undo` so a tooltip
   cannot claim a key that does nothing. The strings live in the QML layer that
   owns the key, and every one is in the `.ts` and the C++ table.
+
+## Design decisions, shell-menu session
+
+- **Indices are pinned by a test.** The Browser, Viewer and Editor menus already
+  address `Theme.menuEntries[n]` by number. The new `Open in editor…` label is
+  appended at slot 30 rather than inserted, so none of those numbers move; a new
+  `shellMenuStartsWithTheOpenEntries` case resolves the shell menu's first three
+  slots back to labels, which is what the old membership-only check missed.
+- **One chooser, two destinations.** `chooseEditorImage()` serves both the
+  Editor's toolbar button and the shell menu. `handleOpenedPaths` switches to the
+  Editor before `editor_open` only when the menu is used from another workspace;
+  from inside the Editor it sends the open command alone. The command pair goes
+  through `sendSequence`, the same ordering fix the Browser's Edit entry uses.
 
 ## Design decisions, fit/settings session (ADR 0009)
 
@@ -266,9 +283,10 @@ isolated `XDG_CONFIG_HOME` (`language: "vi"`, a 300×200 picture): it opened at
 the instance reported `profile="prod"`. The owner's own configuration and the
 `image/jpeg` default handler were not touched.
 
-The prefix binary was **not** reinstalled for the keyboard commit; it predates
-that change until the next `just install-dev` (or `just install`). The keyboard
-evidence comes from `build/dev/bin/kogaview`.
+The prefix binary was **not** reinstalled for the keyboard commit or the two
+follow-ups; it predates them until the next `just install-dev` (or `just
+install`). The keyboard, tooltip and menu evidence comes from
+`build/dev/bin/kogaview`.
 
 ## Next natural step
 

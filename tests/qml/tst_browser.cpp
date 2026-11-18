@@ -1634,6 +1634,28 @@ private slots:
     }
   }
 
+  /// The burger menu's first three entries are the three ways to open
+  /// something: a file in the Viewer, a folder in the Browser, and a file in
+  /// the Editor. They are drawn from `Theme.menuEntries[n]`; an index that
+  /// drifts shows the wrong label, which is the off-by-one this pins.
+  void shellMenuStartsWithTheOpenEntries()
+  {
+    QQuickItem* view = browserItem();
+    QObject* theme = view->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    QStringList catalogue;
+    for (const QVariant& label : theme->property("menuEntryLabels").value<QVariantList>()) {
+      catalogue.append(label.toString());
+    }
+    const QStringList labels =
+      menuItemLabelsIn(qmlDir() + QStringLiteral("/Main.qml"), catalogue);
+    QVERIFY2(labels.size() >= 3,
+             qPrintable(QStringLiteral("found only %1 shell menu labels").arg(labels.size())));
+    QCOMPARE(labels.at(0), QStringLiteral("Open file…"));
+    QCOMPARE(labels.at(1), QStringLiteral("Open folder…"));
+    QCOMPARE(labels.at(2), QStringLiteral("Open in editor…"));
+  }
+
   /// A menu follows a label that is longer than the style's fixed 200 px.
   ///
   /// Every real label fits the theme's 168 px floor at this font, so the
