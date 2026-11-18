@@ -806,7 +806,7 @@ Item {
                 icon.name: "go-previous-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Back to browser")
+                ToolTip.text: qsTr("Back to browser (Esc/Backspace)")
                 onClicked: view.command({ type: "set_workspace", workspace: "browser" })
             }
 
@@ -818,7 +818,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.images.length > 0
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Previous image")
+                ToolTip.text: qsTr("Previous image (Left)")
                 onClicked: view.command({ type: "viewer_previous" })
             }
             Label {
@@ -833,7 +833,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.images.length > 0
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Next image")
+                ToolTip.text: qsTr("Next image (Right)")
                 onClicked: view.command({ type: "viewer_next" })
             }
 
@@ -845,7 +845,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom in (scroll wheel)")
+                ToolTip.text: qsTr("Zoom in (+ or scroll wheel)")
                 onClicked: view.zoomIn()
             }
             ToolbarButton {
@@ -854,7 +854,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom out (scroll wheel)")
+                ToolTip.text: qsTr("Zoom out (- or scroll wheel)")
                 onClicked: view.zoomOut()
             }
             ToolbarButton {
@@ -863,7 +863,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Fit to window")
+                ToolTip.text: qsTr("Fit to window (F)")
                 onClicked: view.fit()
             }
             ToolbarButton {
@@ -872,7 +872,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Actual size (100%)")
+                ToolTip.text: qsTr("Actual size at 100% (0/1)")
                 onClicked: view.actualSize()
             }
 
@@ -884,7 +884,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Rotate left")
+                ToolTip.text: qsTr("Rotate left (Shift+R)")
                 onClicked: view.rotateLeft()
             }
             ToolbarButton {
@@ -893,7 +893,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Rotate right")
+                ToolTip.text: qsTr("Rotate right (R)")
                 onClicked: view.rotateRight()
             }
             ToolbarButton {
@@ -902,7 +902,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Flip horizontally")
+                ToolTip.text: qsTr("Flip horizontally (H)")
                 onClicked: view.toggleFlipH()
             }
             ToolbarButton {
@@ -911,7 +911,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Flip vertically")
+                ToolTip.text: qsTr("Flip vertically (V)")
                 onClicked: view.toggleFlipV()
             }
 
@@ -924,7 +924,7 @@ Item {
                 icon.name: "view-list-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Toggle thumbnail filmstrip")
+                ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
                 onClicked: view.command({ type: "toggle_filmstrip" })
             }
         }

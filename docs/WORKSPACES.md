@@ -115,6 +115,9 @@
   (Editor save/save-as), Ctrl+Q (quit), F5 (refresh) and Ctrl+1/2/3 (Browser/
   Viewer/Editor). Workspace switches go through the same guarded Editor-leave
   path as the switcher buttons.
+- Tooltips name the shortcut of the control they describe, in the form
+  `Rotate left (Shift+R)`. A control without a shortcut keeps its text plain, so
+  a tooltip never advertises a key that does nothing.
 
 ## Explorer refresh contract
 - Every operation that can change the folder tree on disk (copy, move, trash,

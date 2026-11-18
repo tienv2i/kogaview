@@ -26,19 +26,19 @@ RowLayout {
             name: "browser",
             label: qsTr("Browser"),
             icon: "view-grid-symbolic",
-            tip: qsTr("Browser workspace: folders and thumbnails")
+            tip: qsTr("Browser workspace: folders and thumbnails (Ctrl+1)")
         },
         {
             name: "viewer",
             label: qsTr("Viewer"),
             icon: "image-x-generic-symbolic",
-            tip: qsTr("Viewer workspace: zoom, pan, rotate")
+            tip: qsTr("Viewer workspace: zoom, pan, rotate (Ctrl+2)")
         },
         {
             name: "editor",
             label: qsTr("Editor"),
             icon: "document-edit-symbolic",
-            tip: qsTr("Editor workspace: non-destructive edits")
+            tip: qsTr("Editor workspace: non-destructive edits (Ctrl+3)")
         }
     ]
 

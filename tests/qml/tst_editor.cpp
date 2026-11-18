@@ -17,6 +17,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
 #include <QSignalSpy>
@@ -51,6 +52,7 @@ private slots:
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void theLeftSidebarHoldsTheEditsAndTheRightTheCommands();
   void saveAndSaveAsEmitTheirCommands();
+  void toolbarTooltipsNameTheirShortcuts();
   void saveAsSuggestsTheCurrentLocation();
   void canvasSupportsViewerStyleZoomAndPan();
   void aLargePicturePansFreelyInBothAxes();
@@ -62,6 +64,7 @@ private slots:
 private:
   QQuickItem* visualItem(const QString& name) const;
   QObject* findObject(const QString& name) const;
+  static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
   QVariantList commands() const { return m_commands->takeFirst(); }
   QVariantMap documentState() const;
@@ -166,6 +169,12 @@ QObject* TestEditor::findObject(const QString& name) const
 QQuickItem* TestEditor::visualItem(const QString& name) const
 {
   return qobject_cast<QQuickItem*>(findObject(name));
+}
+
+QVariant TestEditor::readQml(QObject* object, const QString& expression)
+{
+  QQmlExpression reader(QQmlEngine::contextForObject(object), object, expression);
+  return reader.evaluate();
 }
 
 QQuickItem* TestEditor::expectItem(const char* name) const
@@ -464,6 +473,26 @@ void TestEditor::saveAndSaveAsEmitTheirCommands()
   setState(editor);
   QVERIFY(!save->property("enabled").toBool());
   QVERIFY(!saveAs->property("enabled").toBool());
+}
+
+/// Tooltips name the key that reaches the same command, and only that key: an
+/// action without a shortcut (`Undo` has none) must not claim one.
+void TestEditor::toolbarTooltipsNameTheirShortcuts()
+{
+  const QList<QPair<QString, QString>> expected = {
+    { QStringLiteral("editorToolbarSave"), QStringLiteral("Save (Ctrl+S)") },
+    { QStringLiteral("editorToolbarSaveAs"), QStringLiteral("Save as… (Ctrl+Shift+S)") },
+    { QStringLiteral("editorSaveButton"),
+      QStringLiteral("Overwrite the file, keeping a .bak copy of the previous one (Ctrl+S)") },
+    { QStringLiteral("editorSaveAsButton"),
+      QStringLiteral("Write a copy and continue editing it (Ctrl+Shift+S)") },
+    { QStringLiteral("editorUndo"), QStringLiteral("Undo") },
+  };
+  for (const auto& entry : expected) {
+    const QByteArray name = entry.first.toLatin1();
+    QQuickItem* item = expectItem(name.constData());
+    QCOMPARE(readQml(item, QStringLiteral("ToolTip.text")).toString(), entry.second);
+  }
 }
 
 /// The save dialog opens on the document's current place and format, so a user

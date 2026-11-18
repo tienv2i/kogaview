@@ -367,7 +367,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.hasDocument && !view.saved && !view.saving
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Save")
+                ToolTip.text: qsTr("Save (Ctrl+S)")
                 onClicked: view.command({ type: "editor_save" })
             }
             ToolbarButton {
@@ -377,7 +377,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.hasDocument && !view.saving
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Save as…")
+                ToolTip.text: qsTr("Save as… (Ctrl+Shift+S)")
                 onClicked: view.requestSaveAs()
             }
             ToolbarSeparator { theme: view.theme }
@@ -808,7 +808,7 @@ Item {
                             // there is something to write.
                             enabled: view.hasDocument && !view.saved && !view.saving
                             ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Overwrite the file, keeping a .bak copy of the previous one")
+                            ToolTip.text: qsTr("Overwrite the file, keeping a .bak copy of the previous one (Ctrl+S)")
                             onClicked: view.command({ type: "editor_save" })
                         }
                         Button {
@@ -817,7 +817,7 @@ Item {
                             text: qsTr("Save as…")
                             enabled: view.hasDocument && !view.saving
                             ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Write a copy and continue editing it")
+                            ToolTip.text: qsTr("Write a copy and continue editing it (Ctrl+Shift+S)")
                             onClicked: view.requestSaveAs()
                         }
                     }

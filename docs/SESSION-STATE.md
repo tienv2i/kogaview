@@ -1,20 +1,20 @@
-# Session handoff — state at 2026-11-17
+# Session handoff — state at 2026-11-18
 
 Four sessions' worth of work on the same day: the launch surface speaks
 Vietnamese and the dock icon draws, the mouse wheel moves at the rate the device
 reports, fit is a mode that survives a window resize while Settings previews
 live and saves on Apply/OK, the toolbar drops its labels instead of being
 squashed while a shell-opened window is sized to the picture, the label threshold
-now follows the interface language instead of measuring English, and the Browser
-and Viewer are operable from the keyboard.
+now follows the interface language instead of measuring English, the Browser
+and Viewer are operable from the keyboard, and their tooltips name the keys.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
 - Branch `main`, working tree clean. This session's commits are on top of
-  `d149152` and are listed in `git log`; the last is the keyboard map, its tests
-  and their report row.
+  `d149152` and are listed in `git log`; the last two are the keyboard map and
+  the tooltip hints that name its keys.
 - `cpp/main.cpp` is **unchanged** by the toolbar commit; the language follow-up
   changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now treats
   `isExposed()` as a hint (a covered window on this session reports itself
@@ -23,10 +23,11 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `KOGAVIEW_DEV_WHEEL_LOG`, `KOGAVIEW_DEV_GRID_SCROLL` (wheel session),
   `KOGAVIEW_DEV_RESIZE` and `KOGAVIEW_DEV_SETTINGS_STEPS` (fit/settings session),
   `KOGAVIEW_DEV_RESIZE` with `KOGAVIEW_DEV_RESIZE_SHOT` twice (toolbar, and
-  the Vietnamese threshold), and `KOGAVIEW_DEV_KEYS` (keyboard session; QTest
-  key events through the real window's focus item). `cpp/main.cpp` is byte-
-  identical to `HEAD` again; only the evidence survives, in rows 62–66 of
-  `docs/M1-REPORT.md`.
+  the Vietnamese threshold), `KOGAVIEW_DEV_KEYS` (keyboard session; QTest
+  key events through the real window's focus item) and
+  `KOGAVIEW_DEV_GRAB_POPUPS` (tooltip session; grabbed the window with a
+  tooltip forced open). `cpp/main.cpp` is byte-identical to `HEAD` again; only
+  the evidence survives, in rows 62–67 of `docs/M1-REPORT.md`.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -69,16 +70,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 64 | Fit did not survive a resize (Viewer `fit()` cleared its own flag; neither view refitted on a window resize); Settings applied nothing until Save | real window: 1920×935 fit `1.52717` → 760×520 fit `0.539` → 1100×700 fit `0.833`, screenshot whole; settings preview `dark → light` with `config.json` untouched, Cancel restored, Apply wrote `set_settings` rev 2 and stayed open |
 | 65 | Toolbar squashed below its floor; shell-opened windows ignored the picture's shape; the Vietnamese threshold was computed from English labels and the small-image hint had no translation | real window with a temporary resize hook: row 683 px compact / 921 px labelled (English Viewer), 1039 (English Editor), 1015 / 1133 (Vietnamese), floor **870** re-applied after requests for 200–869, labels on at exactly **1131** and off at 1130 in English, on at exactly **1225** and off at 1224 in Vietnamese (Editor); 2400×1600 → 1339×1086, 300×200 → 878×420 at 100 % with the hint, 9000×600 → 1731×420 at 19 %, 700×700 → 878×904; screenshots in `docs/evidence/M1-toolbar-*.png` and `M1-window-*.png` (Vietnamese ones suffixed `-vi`) |
 | 66 | The Browser and Viewer were mouse-only; no key walked the grid, stepped/zoomed/rotated the picture, trashed a file or switched workspace | QML suites: `viewer` 35 and `browser` 42 cases; real debug binary with a temporary `KOGAVIEW_DEV_KEYS` hook (QTest key events through the real focus path) + `KOGAVIEW_DEV_GEOM`/`KOGAVIEW_DEV_SCREENSHOT`; journals under `/tmp/opencode/kb/s*/kogaview-dev/journal/commands.jsonl`; pictures `docs/evidence/M1-keyboard-browser.png`, `docs/evidence/M1-keyboard-viewer.png` |
+| 67 | Tooltips described the controls but not the keys that reach them | three new QML cases reading each button's attached `ToolTip.text` (`viewer` 36, `browser` 44, `editor` 19 cases); `just test translations` (142 strings, 112 compiled into C++); real binary with a temporary `KOGAVIEW_DEV_GRAB_POPUPS` hook and a forced `ToolTip.visible` → `docs/evidence/M1-tooltip-shortcuts.png` (`Rotate left (Shift+R)`); dropping a key from a tooltip fails its suite, dropping it from the catalogue fails the translation gate |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 134 strings in kogaview_vi.ts, 105 of them compiled into C++
+translations: 142 strings in kogaview_vi.ts, 112 of them compiled into C++
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
 cargo: 60 passed + 4 passed
-viewer 35 · browser 42 · cache 15 · state 7 · settings 13 · editor 18 · language 5 · toolbar 11
+viewer 36 · browser 44 · cache 15 · state 7 · settings 13 · editor 19 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` reports two
@@ -111,6 +113,12 @@ Workspace`/`Theme`), untouched by this change.
 - **Home/End in the Viewer** use `viewer_open` on the folder's ends instead of
   stepping through every image; previous/next stay Core's `viewer_next`/
   `viewer_previous`, including their wrap-around.
+- **Tooltips name only real keys**: the hint is appended to the sentence the
+  control already had (`Rotate left (Shift+R)`, `Go to parent folder
+  (Backspace)`, `Browser workspace: … (Ctrl+1)`). A button whose action has no
+  shortcut keeps plain text; the Editor test pins `Undo` to `Undo` so a tooltip
+  cannot claim a key that does nothing. The strings live in the QML layer that
+  owns the key, and every one is in the `.ts` and the C++ table.
 
 ## Design decisions, fit/settings session (ADR 0009)
 

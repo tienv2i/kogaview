@@ -568,6 +568,44 @@ private slots:
     QCOMPARE(commands.count(), 0);
   }
 
+  /// Every toolbar control whose action has a key names that key in its
+  /// tooltip; `Rotate left (Shift+R)` is the pattern. Reading the attached
+  /// `ToolTip.text` at the QML level is the only way to see what the popup
+  /// would draw without opening it.
+  void toolbarTooltipsNameTheirShortcuts()
+  {
+    QQuickItem* viewItem = browserItem();
+    auto* component = qobject_cast<QQmlComponent*>(viewItem->property("toolbar").value<QObject*>());
+    QVERIFY2(component != nullptr, "the browser has no toolbar component");
+    QScopedPointer<QObject> created(component->create(component->creationContext()));
+    QVERIFY2(created != nullptr, qPrintable(component->errorString()));
+    auto* row = qobject_cast<QQuickItem*>(created.data());
+    QVERIFY(row != nullptr);
+    row->setParentItem(viewItem);
+    row->setWidth(560);
+    row->setHeight(44);
+    settle();
+
+    const QList<QPair<QString, QString>> expected = {
+      { QStringLiteral("go-up-symbolic"), QStringLiteral("Go to parent folder (Backspace)") },
+      { QStringLiteral("view-refresh-symbolic"), QStringLiteral("Refresh (F5)") },
+      { QStringLiteral("folder-open-symbolic"),
+        QStringLiteral("Open folder… (Ctrl+Shift+O)") },
+    };
+    for (const auto& entry : expected) {
+      QQuickItem* button = nullptr;
+      for (QQuickItem* candidate : allDescendants(row)) {
+        if (readQml(candidate, QStringLiteral("icon.name")).toString() == entry.first) {
+          button = candidate;
+          break;
+        }
+      }
+      QVERIFY2(button != nullptr,
+               qPrintable(QStringLiteral("no %1 button").arg(entry.first)));
+      QCOMPARE(readQml(button, QStringLiteral("ToolTip.text")).toString(), entry.second);
+    }
+  }
+
   /// The quick-access/tree sidebar is resized by dragging its splitter, and the
   /// panel really gets wider — not just a stored number.
   void leftSidebarIsResizable()
@@ -657,6 +695,30 @@ private slots:
   }
 
   // ---------------------------------------------------------------- switcher
+
+  /// Each workspace button names its Ctrl shortcut in the tooltip. The keys
+  /// themselves live in `Main.qml` (the switcher is also in `Main.qml`), so the
+  /// tooltip is the only place the view can state them.
+  void switcherTooltipsNameTheWorkspaceShortcuts()
+  {
+    QQuickItem* switcher = m_switcher->rootObject();
+    QVERIFY(switcher != nullptr);
+
+    const QList<QPair<QString, QString>> expected = {
+      { QStringLiteral("browser"),
+        QStringLiteral("Browser workspace: folders and thumbnails (Ctrl+1)") },
+      { QStringLiteral("viewer"),
+        QStringLiteral("Viewer workspace: zoom, pan, rotate (Ctrl+2)") },
+      { QStringLiteral("editor"),
+        QStringLiteral("Editor workspace: non-destructive edits (Ctrl+3)") },
+    };
+    for (const auto& entry : expected) {
+      const QList<QQuickItem*> found =
+        items(switcher, QStringLiteral("workspaceButton-") + entry.first);
+      QCOMPARE(found.size(), 1);
+      QCOMPARE(readQml(found.first(), QStringLiteral("ToolTip.text")).toString(), entry.second);
+    }
+  }
 
   /// The mode buttons show `<icon> <text>` when the window can afford the
   /// labels, and drop to the icon square when it cannot — the two states this

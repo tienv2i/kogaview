@@ -18,10 +18,12 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QPointingDevice>
+#include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QScopedPointer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -76,6 +78,14 @@ private:
     return m_view->rootObject()->findChild<QObject*>(QString::fromLatin1(name));
   }
 
+  /// Read a property at the QML level, which is how grouped properties such as
+  /// `icon.name` and an attached `ToolTip.text` are reachable.
+  static QVariant readQml(QObject* object, const QString& expression)
+  {
+    QQmlExpression reader(QQmlEngine::contextForObject(object), object, expression);
+    return reader.evaluate();
+  }
+
   /// Every item called `name`, walking the visual tree: ListView delegates are
   /// `childItems` of the view's content item, not `QObject` children of the
   /// view root, so `findChildren` would not see them.
@@ -94,6 +104,14 @@ private:
     QList<QQuickItem*> found;
     collect(root, name, &found);
     return found;
+  }
+
+  static void collectAll(QQuickItem* root, QList<QQuickItem*>* out)
+  {
+    out->append(root);
+    for (QQuickItem* child : root->childItems()) {
+      collectAll(child, out);
+    }
   }
 
   /// The filmstrip tile drawing `path`, or nullptr when it is not on screen.
@@ -1208,6 +1226,64 @@ private slots:
     activate(QStringLiteral("Actual size"));
     QCOMPARE(zoom(), 1.0);
     QCOMPARE(commands.count(), 0);
+  }
+
+  // ---------------------------------------------------------------- toolbar
+
+  /// Every control whose action has a key names that key in its tooltip. Read
+  /// the attached property rather than opening the popup: the text the popup
+  /// would draw is the same string, without waiting for the hover delay.
+  void toolbarTooltipsNameTheirShortcuts()
+  {
+    QQuickItem* viewItem = m_view->rootObject();
+    auto* component = qobject_cast<QQmlComponent*>(viewItem->property("toolbar").value<QObject*>());
+    QVERIFY2(component != nullptr, "the viewer has no toolbar component");
+    QScopedPointer<QObject> created(component->create(component->creationContext()));
+    QVERIFY2(created != nullptr, qPrintable(component->errorString()));
+    auto* row = qobject_cast<QQuickItem*>(created.data());
+    QVERIFY(row != nullptr);
+    row->setParentItem(viewItem);
+    row->setWidth(1000);
+    row->setHeight(44);
+    QCoreApplication::processEvents();
+
+    const QList<QPair<QString, QString>> expected = {
+      { QStringLiteral("go-previous-symbolic"),
+        QStringLiteral("Back to browser (Esc/Backspace)") },
+      { QStringLiteral("media-skip-backward-symbolic"),
+        QStringLiteral("Previous image (Left)") },
+      { QStringLiteral("media-skip-forward-symbolic"),
+        QStringLiteral("Next image (Right)") },
+      { QStringLiteral("zoom-in-symbolic"), QStringLiteral("Zoom in (+ or scroll wheel)") },
+      { QStringLiteral("zoom-out-symbolic"), QStringLiteral("Zoom out (- or scroll wheel)") },
+      { QStringLiteral("zoom-fit-best-symbolic"), QStringLiteral("Fit to window (F)") },
+      { QStringLiteral("zoom-original-symbolic"),
+        QStringLiteral("Actual size at 100% (0/1)") },
+      { QStringLiteral("object-rotate-left-symbolic"),
+        QStringLiteral("Rotate left (Shift+R)") },
+      { QStringLiteral("object-rotate-right-symbolic"),
+        QStringLiteral("Rotate right (R)") },
+      { QStringLiteral("object-flip-horizontal-symbolic"),
+        QStringLiteral("Flip horizontally (H)") },
+      { QStringLiteral("object-flip-vertical-symbolic"),
+        QStringLiteral("Flip vertically (V)") },
+      { QStringLiteral("view-list-symbolic"),
+        QStringLiteral("Toggle thumbnail filmstrip (T)") },
+    };
+    QList<QQuickItem*> all;
+    collectAll(row, &all);
+    for (const auto& entry : expected) {
+      QQuickItem* button = nullptr;
+      for (QQuickItem* candidate : all) {
+        if (readQml(candidate, QStringLiteral("icon.name")).toString() == entry.first) {
+          button = candidate;
+          break;
+        }
+      }
+      QVERIFY2(button != nullptr,
+               qPrintable(QStringLiteral("no %1 button").arg(entry.first)));
+      QCOMPARE(readQml(button, QStringLiteral("ToolTip.text")).toString(), entry.second);
+    }
   }
 
   // ---------------------------------------------------------------- keyboard

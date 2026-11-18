@@ -206,19 +206,19 @@
         <translation>Tên thư mục</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1153"/>
-        <source>Go to parent folder</source>
-        <translation>Tới thư mục cha</translation>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1357"/>
+        <source>Go to parent folder (Backspace)</source>
+        <translation>Tới thư mục cha (Backspace)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1161"/>
-        <source>Refresh</source>
-        <translation>Làm mới</translation>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1365"/>
+        <source>Refresh (F5)</source>
+        <translation>Làm mới (F5)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1170"/>
-        <source>Open folder…</source>
-        <translation>Mở thư mục…</translation>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1374"/>
+        <source>Open folder… (Ctrl+Shift+O)</source>
+        <translation>Mở thư mục… (Ctrl+Shift+O)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/BrowserView.qml" line="1191"/>
@@ -363,13 +363,13 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="798"/>
-        <source>Overwrite the file, keeping a .bak copy of the previous one</source>
-        <translation>Ghi đè lên tệp, giữ lại một bản .bak của tệp cũ</translation>
+        <source>Overwrite the file, keeping a .bak copy of the previous one (Ctrl+S)</source>
+        <translation>Ghi đè lên tệp, giữ lại một bản .bak của tệp cũ (Ctrl+S)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="807"/>
-        <source>Write a copy and continue editing it</source>
-        <translation>Ghi ra một bản sao và tiếp tục chỉnh sửa bản đó</translation>
+        <source>Write a copy and continue editing it (Ctrl+Shift+S)</source>
+        <translation>Ghi ra một bản sao và tiếp tục chỉnh sửa bản đó (Ctrl+Shift+S)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="824"/>
@@ -425,6 +425,16 @@
         <location filename="../crates/desktop/qml/EditorView.qml" line="967"/>
         <source>Set Width/Height, then enter the rectangle&apos;s top-left corner.</source>
         <translation>Đặt Rộng/Cao, rồi nhập góc trên bên trái của vùng cắt.</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="370"/>
+        <source>Save (Ctrl+S)</source>
+        <translation>Lưu (Ctrl+S)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="380"/>
+        <source>Save as… (Ctrl+Shift+S)</source>
+        <translation>Lưu thành… (Ctrl+Shift+S)</translation>
     </message>
 </context>
 <context>
@@ -846,49 +856,64 @@
         <translation>Xoay phải</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="533"/>
-        <source>Back to browser</source>
-        <translation>Về trình duyệt</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="809"/>
+        <source>Back to browser (Esc/Backspace)</source>
+        <translation>Về trình duyệt (Esc/Backspace)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="545"/>
-        <source>Previous image</source>
-        <translation>Ảnh trước</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="821"/>
+        <source>Previous image (Left)</source>
+        <translation>Ảnh trước (Left)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="560"/>
-        <source>Next image</source>
-        <translation>Ảnh sau</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="836"/>
+        <source>Next image (Right)</source>
+        <translation>Ảnh sau (Right)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="572"/>
-        <source>Zoom in (scroll wheel)</source>
-        <translation>Phóng to (lăn chuột)</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="848"/>
+        <source>Zoom in (+ or scroll wheel)</source>
+        <translation>Phóng to (+ hoặc lăn chuột)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="581"/>
-        <source>Zoom out (scroll wheel)</source>
-        <translation>Thu nhỏ (lăn chuột)</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="857"/>
+        <source>Zoom out (- or scroll wheel)</source>
+        <translation>Thu nhỏ (- hoặc lăn chuột)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="599"/>
-        <source>Actual size (100%)</source>
-        <translation>Kích thước thật (100%)</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="875"/>
+        <source>Actual size at 100% (0/1)</source>
+        <translation>Kích thước thật 100% (0/1)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="629"/>
-        <source>Flip horizontally</source>
-        <translation>Lật ngang</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="905"/>
+        <source>Flip horizontally (H)</source>
+        <translation>Lật ngang (H)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="638"/>
-        <source>Flip vertically</source>
-        <translation>Lật dọc</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="914"/>
+        <source>Flip vertically (V)</source>
+        <translation>Lật dọc (V)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="651"/>
-        <source>Toggle thumbnail filmstrip</source>
-        <translation>Bật/tắt dải hình thu nhỏ</translation>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="927"/>
+        <source>Toggle thumbnail filmstrip (T)</source>
+        <translation>Bật/tắt dải hình thu nhỏ (T)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="866"/>
+        <source>Fit to window (F)</source>
+        <translation>Vừa cửa sổ (F)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="887"/>
+        <source>Rotate left (Shift+R)</source>
+        <translation>Xoay trái (Shift+R)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="896"/>
+        <source>Rotate right (R)</source>
+        <translation>Xoay phải (R)</translation>
     </message>
 </context>
 <context>
@@ -899,9 +924,9 @@
         <translation>Duyệt ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="26"/>
-        <source>Browser workspace: folders and thumbnails</source>
-        <translation>Không gian duyệt ảnh: thư mục và hình thu nhỏ</translation>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="29"/>
+        <source>Browser workspace: folders and thumbnails (Ctrl+1)</source>
+        <translation>Không gian duyệt ảnh: thư mục và hình thu nhỏ (Ctrl+1)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="30"/>
@@ -909,9 +934,9 @@
         <translation>Xem ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="32"/>
-        <source>Viewer workspace: zoom, pan, rotate</source>
-        <translation>Không gian xem ảnh: thu phóng, di chuyển, xoay</translation>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="35"/>
+        <source>Viewer workspace: zoom, pan, rotate (Ctrl+2)</source>
+        <translation>Không gian xem ảnh: thu phóng, di chuyển, xoay (Ctrl+2)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="36"/>
@@ -919,9 +944,9 @@
         <translation>Trình chỉnh sửa</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="38"/>
-        <source>Editor workspace: non-destructive edits</source>
-        <translation>Không gian chỉnh sửa: sửa ảnh không phá huỷ</translation>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="41"/>
+        <source>Editor workspace: non-destructive edits (Ctrl+3)</source>
+        <translation>Không gian chỉnh sửa: sửa ảnh không phá huỷ (Ctrl+3)</translation>
     </message>
 </context>
 </TS>

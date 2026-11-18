@@ -1354,7 +1354,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!view.state.currentFolder
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Go to parent folder")
+                ToolTip.text: qsTr("Go to parent folder (Backspace)")
                 onClicked: view.goUp()
             }
             ToolbarButton {
@@ -1362,7 +1362,7 @@ Item {
                 icon.name: "view-refresh-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Refresh")
+                ToolTip.text: qsTr("Refresh (F5)")
                 onClicked: view.command({ type: "refresh" })
             }
             ToolbarButton {
@@ -1371,7 +1371,7 @@ Item {
                 icon.name: "folder-open-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Open folder…")
+                ToolTip.text: qsTr("Open folder… (Ctrl+Shift+O)")
                 // The dialog lives in the shell, like "Open folder" in the menu,
                 // and the chosen folder re-roots the tree (open_folder).
                 onClicked: view.requestOpenFolder()
