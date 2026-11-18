@@ -80,7 +80,6 @@ static const Entry kEntries_vi[] = {
   { "Apply", "Áp dụng" },
   { "Crop", "Cắt" },
   { "Apply crop", "Áp dụng cắt" },
-  { "Set Width/Height, then enter the rectangle's top-left corner.", "Đặt Rộng/Cao, rồi nhập góc trên bên trái của vùng cắt." },
   // context: Main
   { "Open images", "Mở ảnh" },
   { "Open an image for editing", "Mở ảnh để chỉnh sửa" },

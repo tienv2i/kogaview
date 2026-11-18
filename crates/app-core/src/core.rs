@@ -82,6 +82,9 @@ pub struct Core {
     /// preview (or the other way round).
     editor_draft_path: Option<PathBuf>,
     editor_draft_size: (u32, u32),
+    /// The tool that asked for the draft (`resize` or `crop`), so the view can
+    /// hide it after a tool switch instead of painting the other result.
+    editor_draft_kind: String,
     editor_draft_generation: u64,
     /// True while a save is being encoded and written on a worker.
     editor_saving: bool,
@@ -141,6 +144,7 @@ impl Core {
             editor_preview_stamp: None,
             editor_draft_path: None,
             editor_draft_size: (0, 0),
+            editor_draft_kind: String::new(),
             editor_draft_generation: 0,
             editor_saving: false,
             editor_save_generation: 0,
@@ -236,6 +240,7 @@ impl Core {
             editor_preview_stamp: None,
             editor_draft_path: None,
             editor_draft_size: (0, 0),
+            editor_draft_kind: String::new(),
             editor_draft_generation: 0,
             editor_saving: false,
             editor_save_generation: 0,
@@ -647,6 +652,12 @@ impl Core {
                 width,
                 height,
             }),
+            Command::EditorCropPreview {
+                x,
+                y,
+                width,
+                height,
+            } => self.editor_crop_preview(x, y, width, height),
             Command::EditorRotate { degrees } => {
                 self.editor_apply(EditOperation::Rotate { degrees })
             }
@@ -1075,26 +1086,25 @@ impl Core {
         Ok(Some(operation.label()))
     }
 
-    /// Render what a resize *would* produce, without applying it.
+    /// Render what an edit *would* produce, without applying it.
     ///
     /// The draft is a separate preview file and its own generation, so the
     /// canvas can show the result while the document, the history and the save
-    /// target stay exactly as they were. Applying `EditorResize` afterwards is
-    /// what records the step; dismissing the tool or applying anything else
-    /// drops the draft file.
-    fn editor_resize_preview(
+    /// target stay exactly as they were. Applying the matching operation
+    /// afterwards is what records the step; dismissing the tool or applying
+    /// anything else drops the draft file.
+    fn editor_preview(
         &mut self,
-        width: u32,
-        height: u32,
-        fill: Option<[u8; 3]>,
+        operation: EditOperation,
+        noun: &str,
     ) -> Result<Option<String>, ProtocolError> {
         let Some(document) = &self.editor else {
             return Err(no_editor_document());
         };
-        let operation = EditOperation::Resize {
-            width,
-            height,
-            fill,
+        let (width, height) = match &operation {
+            EditOperation::Resize { width, height, .. }
+            | EditOperation::Crop { width, height, .. } => (*width, *height),
+            _ => (0, 0),
         };
         let changes = document
             .would_change(&operation)
@@ -1102,7 +1112,7 @@ impl Core {
         if !changes {
             self.clear_editor_draft();
             self.publish_editor();
-            return Ok(Some("That resize would not change the image".to_owned()));
+            return Ok(Some(format!("That {noun} would not change the image")));
         }
         let pixels = document.pixels();
         let Ok(dir) = self.editor_preview_dir() else {
@@ -1118,7 +1128,41 @@ impl Core {
             preview,
             self.editor_tx.clone(),
         );
-        Ok(Some(format!("Previewing a resize to {width} × {height}")))
+        Ok(Some(format!("Previewing a {noun} to {width} × {height}")))
+    }
+
+    fn editor_resize_preview(
+        &mut self,
+        width: u32,
+        height: u32,
+        fill: Option<[u8; 3]>,
+    ) -> Result<Option<String>, ProtocolError> {
+        self.editor_preview(
+            EditOperation::Resize {
+                width,
+                height,
+                fill,
+            },
+            "resize",
+        )
+    }
+
+    fn editor_crop_preview(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<String>, ProtocolError> {
+        self.editor_preview(
+            EditOperation::Crop {
+                x,
+                y,
+                width,
+                height,
+            },
+            "crop",
+        )
     }
 
     /// Drop the live-preview draft: remove its file and make any worker result
@@ -1126,6 +1170,7 @@ impl Core {
     fn clear_editor_draft(&mut self) {
         self.editor_draft_generation += 1;
         self.editor_draft_size = (0, 0);
+        self.editor_draft_kind.clear();
         if let Some(path) = self.editor_draft_path.take() {
             let _ = std::fs::remove_file(path);
         }
@@ -1436,6 +1481,7 @@ impl Core {
                 .editor_draft_path
                 .as_ref()
                 .map(|path| EditorPreviewDraft {
+                    kind: self.editor_draft_kind.clone(),
                     path: path.to_string_lossy().into_owned(),
                     width: self.editor_draft_size.0,
                     height: self.editor_draft_size.1,
@@ -1508,6 +1554,7 @@ impl Core {
             }
             EditorTask::Draft {
                 generation,
+                kind,
                 preview,
                 width,
                 height,
@@ -1520,6 +1567,7 @@ impl Core {
                     let _ = std::fs::remove_file(previous);
                 }
                 self.editor_draft_size = (width, height);
+                self.editor_draft_kind = kind;
                 self.publish_editor();
                 true
             }
@@ -3112,6 +3160,7 @@ mod tests {
             .clone()
             .expect("a draft is published");
         assert_eq!((draft.width, draft.height), (20, 20));
+        assert_eq!(draft.kind, "resize");
         let draft_path = PathBuf::from(&draft.path);
         assert!(draft_path.is_file());
         let decoded = image::open(&draft_path).unwrap();
@@ -3143,6 +3192,94 @@ mod tests {
         assert!(!editor.can_undo);
         assert!(!editor.modified);
 
+        remove_tree(&base);
+    }
+
+    /// A crop preview is a draft like the resize one: it renders the rectangle
+    /// Core would cut, publishes it under its own kind, and leaves the
+    /// document, its history and its preview alone. A no-op rectangle and an
+    /// out-of-bounds one are answered without rendering anything.
+    #[test]
+    fn a_crop_preview_is_a_draft_that_never_cuts() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+        core.dispatch(&editor_envelope(
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        ));
+        assert!(settle_editor(&mut core));
+        let document_preview = core.state.editor.as_ref().unwrap().preview_path.clone();
+
+        let response = core.dispatch(&editor_envelope(
+            "crop-preview-1",
+            r#"{"type":"editor_crop_preview","x":4,"y":2,"width":10,"height":8}"#,
+        ));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["ok"],
+            true,
+            "{response}"
+        );
+        assert!(settle_draft(&mut core), "the crop draft never landed");
+        let draft = core
+            .state
+            .editor
+            .as_ref()
+            .unwrap()
+            .preview_draft
+            .clone()
+            .expect("the crop draft is published");
+        assert_eq!(draft.kind, "crop");
+        assert_eq!((draft.width, draft.height), (10, 8));
+        let draft_path = PathBuf::from(&draft.path);
+        let decoded = image::open(&draft_path).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (10, 8));
+        {
+            let editor = core.state.editor.as_ref().unwrap();
+            assert_eq!((editor.width, editor.height), (40, 20));
+            assert!(editor.history.is_empty());
+            assert_eq!(editor.preview_path, document_preview);
+        }
+
+        // Any other edit drops the draft file and publishes no draft.
+        core.dispatch(&editor_envelope(
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        ));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert!(editor.preview_draft.is_none());
+        assert!(!draft_path.exists(), "another edit drops the crop draft");
+        assert!(settle_editor(&mut core));
+
+        // The whole image is not a crop: nothing is rendered and the message
+        // says why, rather than leaving a stale draft on screen.
+        let response = core.dispatch(&editor_envelope(
+            "crop-preview-2",
+            r#"{"type":"editor_crop_preview","x":0,"y":0,"width":20,"height":40}"#,
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], true, "{response}");
+        assert_eq!(parsed["message"], "That crop would not change the image");
+        assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
+
+        // Out of bounds is rejected at the gateway: no draft, no revision.
+        let revision = core.state.revision;
+        let response = core.dispatch(&editor_envelope(
+            "crop-preview-3",
+            r#"{"type":"editor_crop_preview","x":15,"y":0,"width":10,"height":10}"#,
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], false, "{response}");
+        assert_eq!(parsed["error"]["code"], "invalid_edit");
+        assert_eq!(core.state.revision, revision);
+        assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
+
+        core.dispatch(&editor_envelope("close-1", r#"{"type":"editor_close"}"#));
         remove_tree(&base);
     }
 }

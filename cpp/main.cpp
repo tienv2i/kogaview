@@ -475,7 +475,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         QMetaObject::invokeMethod(tool, "click");
         QObject* preset = editor->findChild<QObject*>(QStringLiteral("sizePreset"));
-        const QVariantList presets = editor->property("resizePresets").toList();
+        const QVariantList presets = editor->property("sizePresets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
           const QVariantMap entry = presets.at(i).toMap();
@@ -500,6 +500,82 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << editor->property("tool") << "live"
                           << editor->property("resizeLivePreview");
         emitted = live != nullptr && index >= 0;
+      } else if (uiRequest == QLatin1String("editor-crop")) {
+        // The Crop panel without a pointer: the tool button, an anchor button
+        // and the live toggle are `click()`ed, and the preset dropdown is
+        // written the way its own selection writes it. `_ARG` is
+        // WIDTHxHEIGHT of a preset (default 1024x1024); `_ARG2` names the
+        // anchor (default center).
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
+        const QString anchor = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const QString anchorKey = anchor.isEmpty() ? QStringLiteral("center") : anchor;
+        const QStringList parts = size.split(QLatin1Char('x'));
+        const int wantedWidth = parts.value(0).toInt();
+        const int wantedHeight = parts.value(1).toInt();
+        QObject* tool = editor->findChild<QObject*>(QStringLiteral("toolCrop"));
+        if (tool == nullptr) {
+          qWarning() << "KogaView dev ui request: Crop tool button missing";
+          return;
+        }
+        QMetaObject::invokeMethod(tool, "click");
+        QObject* preset = editor->findChild<QObject*>(QStringLiteral("cropPreset"));
+        const QVariantList presets = editor->property("cropPresets").toList();
+        int index = -1;
+        for (int i = 0; i < presets.size(); ++i) {
+          const QVariantMap entry = presets.at(i).toMap();
+          if (entry.value(QStringLiteral("width")).toInt() == wantedWidth &&
+              entry.value(QStringLiteral("height")).toInt() == wantedHeight) {
+            index = i;
+            break;
+          }
+        }
+        if (preset != nullptr && index >= 0) {
+          preset->setProperty("currentIndex", index);
+        } else {
+          qWarning() << "KogaView dev ui request: no fitting crop preset" << size;
+        }
+        // Repeater delegates are visual children, not QObject children of the
+        // view, so `findChild` cannot see the anchor buttons. Walk the item
+        // tree the way the QML test harness does.
+        QObject* anchorButton = nullptr;
+        const QString anchorName = QStringLiteral("cropAnchor_") + anchorKey;
+        if (auto* window = qobject_cast<QQuickWindow*>(rootObject)) {
+          QList<QQuickItem*> pending{window->contentItem()};
+          while (!pending.isEmpty()) {
+            QQuickItem* item = pending.takeFirst();
+            if (item->objectName() == anchorName) {
+              anchorButton = item;
+              break;
+            }
+            pending.append(item->childItems());
+          }
+        }
+        if (anchorButton != nullptr) {
+          QMetaObject::invokeMethod(anchorButton, "click");
+        } else {
+          qWarning() << "KogaView dev ui request: no crop anchor" << anchorKey;
+        }
+        QObject* live = editor->findChild<QObject*>(QStringLiteral("cropLivePreviewButton"));
+        if (live != nullptr) {
+          QMetaObject::invokeMethod(live, "click");
+        }
+        auto fieldText = [editor](const char* name) {
+          QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
+          return field != nullptr ? field->property("text") : QVariant();
+        };
+        qInfo().noquote() << "KogaView dev ui request editor-crop" << size << "preset"
+                          << index << "anchor" << editor->property("cropAnchor")
+                          << "ratio" << editor->property("cropRatio") << "tool"
+                          << editor->property("tool") << "live"
+                          << editor->property("cropLivePreview") << "rect"
+                          << fieldText("cropX") << fieldText("cropY")
+                          << fieldText("widthField") << fieldText("heightField");
+        emitted = live != nullptr && index >= 0 && anchorButton != nullptr;
       } else if (uiRequest == QLatin1String("editor-fit") ||
                  uiRequest == QLatin1String("editor-zoom") ||
                  uiRequest == QLatin1String("editor-pan") ||

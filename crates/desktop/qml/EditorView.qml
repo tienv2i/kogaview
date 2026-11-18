@@ -39,6 +39,13 @@ Item {
     /// never describe a different shape than the one the user picked. `free` is
     /// the only unlinked choice; `original` follows the document's own aspect.
     property string resizeRatio: "original"
+    /// Crop links Width and Height the same way. `original` keeps the document's
+    /// shape, which is the safest default for a crop.
+    property string cropRatio: "original"
+    /// Where the crop rectangle sits when its size changes: the anchor names the
+    /// document corner, edge or centre the rectangle keeps. Typing X/Y by hand
+    /// leaves it alone — the anchor is a placement shortcut, not a lock.
+    property string cropAnchor: "center"
     /// Resize pads the shorter side to the longer edge with this colour before
     /// cropping and scaling. Centred: Resize has no anchor.
     property bool resizePadSquare: false
@@ -46,10 +53,13 @@ Item {
     /// Live preview: each valid Width/Height change asks Core for a rendered
     /// draft at the target size, which the canvas shows without applying it.
     property bool resizeLivePreview: false
+    /// The same draft idea for Crop: the canvas shows the rectangle Core would
+    /// cut, while the document, its history and its save target stay put.
+    property bool cropLivePreview: false
 
-    /// The ratios the Resize tool offers. The first two keep the document's
+    /// The ratios both size tools offer. The first two keep the document's
     /// shape or leave both fields alone; the rest link the sides.
-    readonly property var resizeRatios: [
+    readonly property var sizeRatios: [
         { key: "free", label: qsTr("Free") },
         { key: "original", label: qsTr("Original") },
         { key: "1:1", label: "1:1", width: 1, height: 1 },
@@ -67,7 +77,7 @@ Item {
     /// preset never produces fractional pixels at any scale. One flat list:
     /// the label carries the ratio, so the dropdown reads as sizes, not as a
     /// second ratio picker.
-    readonly property var resizePresets: [
+    readonly property var sizePresets: [
         { ratio: "1:1", label: "1:1 · 2048 × 2048", width: 2048, height: 2048 },
         { ratio: "1:1", label: "1:1 · 1536 × 1536", width: 1536, height: 1536 },
         { ratio: "1:1", label: "1:1 · 1024 × 1024", width: 1024, height: 1024 },
@@ -116,17 +126,33 @@ Item {
         { ratio: "9:16", label: "9:16 · 1152 × 2048", width: 1152, height: 2048 },
         { ratio: "9:16", label: "9:16 · 576 × 1024", width: 576, height: 1024 }
     ]
+    /// The nine places a crop rectangle can hold in the document. The glyph
+    /// points at the corner or edge the rectangle keeps; `column`/`row` are the
+    /// 0/1/2 grid coordinates `applyCropAnchor` uses, so the arrows and the
+    /// placement cannot drift apart.
+    readonly property var cropAnchors: [
+        { key: "top_left", glyph: "\u2196", label: qsTr("Top left"), column: 0, row: 0 },
+        { key: "top", glyph: "\u2191", label: qsTr("Top"), column: 1, row: 0 },
+        { key: "top_right", glyph: "\u2197", label: qsTr("Top right"), column: 2, row: 0 },
+        { key: "left", glyph: "\u2190", label: qsTr("Left"), column: 0, row: 1 },
+        { key: "center", glyph: "\u25cf", label: qsTr("Center"), column: 1, row: 1 },
+        { key: "right", glyph: "\u2192", label: qsTr("Right"), column: 2, row: 1 },
+        { key: "bottom_left", glyph: "\u2199", label: qsTr("Bottom left"), column: 0, row: 2 },
+        { key: "bottom", glyph: "\u2193", label: qsTr("Bottom"), column: 1, row: 2 },
+        { key: "bottom_right", glyph: "\u2198", label: qsTr("Bottom right"), column: 2, row: 2 }
+    ]
+
     /// Split a QML `color` into the three bytes the typed command carries.
     function colorRgb(color) {
         return [Math.round(color.r * 255), Math.round(color.g * 255),
                 Math.round(color.b * 255)]
     }
 
-    /// The ratio entry for the current choice, or null when the ratio is free.
-    function ratioFactor() {
-        for (var index = 0; index < view.resizeRatios.length; ++index) {
-            var entry = view.resizeRatios[index]
-            if (entry.key !== view.resizeRatio) continue
+    /// The factor for a ratio key, or null when the sides are not linked.
+    function ratioFactor(key) {
+        for (var index = 0; index < view.sizeRatios.length; ++index) {
+            var entry = view.sizeRatios[index]
+            if (entry.key !== key) continue
             if (entry.key === "free") return null
             if (entry.key === "original") {
                 if (!view.hasDocument) return null
@@ -137,52 +163,145 @@ Item {
         return null
     }
 
-    /// Index of the current ratio in the dropdown, so the combo can be synced
-    /// without binding its `currentIndex` (which the control writes itself).
-    readonly property int resizeRatioIndex: {
-        for (var index = 0; index < view.resizeRatios.length; ++index) {
-            if (view.resizeRatios[index].key === view.resizeRatio) return index
+    /// Index of a ratio key in the dropdown, so a combo can be synced without
+    /// binding its `currentIndex` (which the control writes itself).
+    function ratioIndexFor(key) {
+        for (var index = 0; index < view.sizeRatios.length; ++index) {
+            if (view.sizeRatios[index].key === key) return index
         }
         return -1
     }
 
-    /// Index of the preset that matches both fields, or -1 for a custom size.
+    readonly property int resizeRatioIndex: view.ratioIndexFor(view.resizeRatio)
+    readonly property int cropRatioIndex: view.ratioIndexFor(view.cropRatio)
+
+    /// The ratio key the selected tool is using.
+    readonly property string activeRatio: view.tool === "crop" ? view.cropRatio : view.resizeRatio
+
+    /// Index of the resize preset that matches both fields, or -1 for custom.
     function matchingPreset() {
         if (!widthField.acceptableInput || !heightField.acceptableInput) return -1
         var w = parseInt(widthField.text)
         var h = parseInt(heightField.text)
-        for (var index = 0; index < view.resizePresets.length; ++index) {
-            var preset = view.resizePresets[index]
+        for (var index = 0; index < view.sizePresets.length; ++index) {
+            var preset = view.sizePresets[index]
             if (preset.width === w && preset.height === h) return index
         }
         return -1
     }
 
+    /// Crop presets are the concrete sizes that fit inside the document. A
+    /// preset the document cannot hold is not offered, so picking one always
+    /// describes a legal rectangle; a tiny document simply has a shorter list.
+    readonly property var cropPresets: {
+        var fits = []
+        if (!view.hasDocument) return fits
+        for (var index = 0; index < view.sizePresets.length; ++index) {
+            var preset = view.sizePresets[index]
+            if (preset.width <= view.documentWidth && preset.height <= view.documentHeight) {
+                fits.push(preset)
+            }
+        }
+        return fits
+    }
+
+    /// Index of the crop preset that matches both fields, or -1 for custom.
+    function matchingCropPreset() {
+        if (!widthField.acceptableInput || !heightField.acceptableInput) return -1
+        var w = parseInt(widthField.text)
+        var h = parseInt(heightField.text)
+        for (var index = 0; index < view.cropPresets.length; ++index) {
+            var preset = view.cropPresets[index]
+            if (preset.width === w && preset.height === h) return index
+        }
+        return -1
+    }
+
+    /// Place X/Y from the anchor and the current Width/Height. Only the size
+    /// moves the rectangle: typing X/Y is the user's own placement and must not
+    /// be overwritten. A rectangle smaller than the document keeps the named
+    /// corner, edge or centre of the document.
+    function applyCropAnchor() {
+        if (!view.hasDocument || !widthField.acceptableInput || !heightField.acceptableInput) return
+        var width = parseInt(widthField.text)
+        var height = parseInt(heightField.text)
+        if (!(width > 0) || !(height > 0)) return
+        var anchor = view.cropAnchors[0]
+        for (var index = 0; index < view.cropAnchors.length; ++index) {
+            if (view.cropAnchors[index].key === view.cropAnchor) {
+                anchor = view.cropAnchors[index]
+                break
+            }
+        }
+        cropX.text = String(Math.max(0, Math.round((view.documentWidth - width) * anchor.column / 2)))
+        cropY.text = String(Math.max(0, Math.round((view.documentHeight - height) * anchor.row / 2)))
+    }
+
+    /// Select an anchor and move the rectangle to it.
+    function setCropAnchor(key) {
+        view.cropAnchor = key
+        view.applyCropAnchor()
+        draftDebounce.restart()
+    }
+
     /// Typing one side keeps the other on the chosen ratio. Programmatic writes
     /// (a preset, Reset) do not come through here, so they never feed back.
+    /// A crop is re-placed through its anchor even when the ratio is free: the
+    /// anchor is about where the rectangle sits, not about linking the sides.
     function linkHeightFromWidth() {
-        var factor = view.ratioFactor()
-        if (!factor || !widthField.acceptableInput) return
+        if (!widthField.acceptableInput) return
         var width = parseInt(widthField.text)
         if (!(width > 0)) return
-        heightField.text = String(Math.max(1, Math.round(width * factor.height / factor.width)))
-        sizePreset.currentIndex = view.matchingPreset()
+        var factor = view.ratioFactor(view.activeRatio)
+        if (factor) {
+            heightField.text = String(Math.max(1, Math.round(width * factor.height / factor.width)))
+        }
+        if (view.tool === "crop") {
+            view.applyCropAnchor()
+            cropPreset.currentIndex = view.matchingCropPreset()
+        } else {
+            sizePreset.currentIndex = view.matchingPreset()
+        }
     }
 
     function linkWidthFromHeight() {
-        var factor = view.ratioFactor()
-        if (!factor || !heightField.acceptableInput) return
+        if (!heightField.acceptableInput) return
         var height = parseInt(heightField.text)
         if (!(height > 0)) return
-        widthField.text = String(Math.max(1, Math.round(height * factor.width / factor.height)))
-        sizePreset.currentIndex = view.matchingPreset()
+        var factor = view.ratioFactor(view.activeRatio)
+        if (factor) {
+            widthField.text = String(Math.max(1, Math.round(height * factor.width / factor.height)))
+        }
+        if (view.tool === "crop") {
+            view.applyCropAnchor()
+            cropPreset.currentIndex = view.matchingCropPreset()
+        } else {
+            sizePreset.currentIndex = view.matchingPreset()
+        }
     }
 
-    /// Select a ratio and mirror it in the dropdown. The dropdown index is
-    /// written imperatively because ComboBox owns `currentIndex` itself.
+    /// Keep the fields on the selected ratio when the ratio itself is picked:
+    /// a 16:9 choice with 1024 × 1024 typed must not leave a square pair on a
+    /// 16:9 label. The first typed side wins, width first.
+    function relinkFields() {
+        if (widthField.acceptableInput && parseInt(widthField.text) > 0) {
+            view.linkHeightFromWidth()
+        } else if (heightField.acceptableInput && parseInt(heightField.text) > 0) {
+            view.linkWidthFromHeight()
+        }
+    }
+
+    /// Select a ratio for the active tool and mirror it in the right dropdown.
+    /// The dropdown index is written imperatively because ComboBox owns
+    /// `currentIndex` itself.
     function setRatio(key) {
-        view.resizeRatio = key
-        ratioBox.currentIndex = view.resizeRatioIndex
+        if (view.tool === "crop") {
+            view.cropRatio = key
+            cropRatioBox.currentIndex = view.cropRatioIndex
+        } else {
+            view.resizeRatio = key
+            resizeRatioBox.currentIndex = view.resizeRatioIndex
+        }
     }
 
     function resizeFieldsValid() {
@@ -190,18 +309,43 @@ Item {
                 && parseInt(widthField.text) > 0 && parseInt(heightField.text) > 0
     }
 
-    /// Ask Core to render the resize without applying it. The debounce keeps a
-    /// typed width from spawning a render per key: the previous draft stays on
-    /// screen until the newest one lands.
-    function requestResizeDraft() {
+    /// A crop is only sendable when its rectangle really fits the document, so
+    /// Apply and the draft both answer the same question Core will ask.
+    function cropFieldsValid() {
+        if (!resizeFieldsValid()) return false
+        if (!cropX.acceptableInput || !cropY.acceptableInput) return false
+        var width = parseInt(widthField.text)
+        var height = parseInt(heightField.text)
+        var x = parseInt(cropX.text)
+        var y = parseInt(cropY.text)
+        return x >= 0 && y >= 0
+                && x + width <= view.documentWidth
+                && y + height <= view.documentHeight
+    }
+
+    /// Ask Core to render the selected tool's draft without applying it. The
+    /// debounce keeps a typed width from spawning a render per key: the previous
+    /// draft stays on screen until the newest one lands. The draft carries its
+    /// tool, so a switch cannot paint the other tool's result.
+    function requestDraft() {
         draftDebounce.stop()
-        if (!view.resizeLivePreview || view.tool !== "resize" || !view.resizeFieldsValid()) return
-        view.command({
-            type: "editor_resize_preview",
-            width: parseInt(widthField.text),
-            height: parseInt(heightField.text),
-            fill: view.resizePadSquare ? view.colorRgb(view.resizeFillColor) : null
-        })
+        if (!view.hasDocument) return
+        if (view.tool === "resize" && view.resizeLivePreview && view.resizeFieldsValid()) {
+            view.command({
+                type: "editor_resize_preview",
+                width: parseInt(widthField.text),
+                height: parseInt(heightField.text),
+                fill: view.resizePadSquare ? view.colorRgb(view.resizeFillColor) : null
+            })
+        } else if (view.tool === "crop" && view.cropLivePreview && view.cropFieldsValid()) {
+            view.command({
+                type: "editor_crop_preview",
+                x: parseInt(cropX.text),
+                y: parseInt(cropY.text),
+                width: parseInt(widthField.text),
+                height: parseInt(heightField.text)
+            })
+        }
     }
 
     /// Raised by the empty state and the toolbar's open button; Main owns the
@@ -263,18 +407,22 @@ Item {
     readonly property real documentWidth: hasDocument ? editor.width : 0
     readonly property real documentHeight: hasDocument ? editor.height : 0
 
-    /// The live-preview resize the canvas should be showing, if any. It is
-    /// presentation gating on purpose: Core keeps the draft until a resize is
-    /// applied or the document changes, and leaving the Resize tool must hide
-    /// it again without another command.
-    readonly property var resizeDraft: {
-        if (tool !== "resize" || !resizeLivePreview || !editor) return null
-        return editor.previewDraft || null
+    /// The live-preview draft the canvas should be showing, if any. It is
+    /// presentation gating on purpose: Core keeps the draft until an edit lands
+    /// or the document changes, and leaving the tool must hide it again without
+    /// another command. The draft's own `kind` is checked as well, so a switch
+    /// from Crop to Resize cannot paint the crop result for a frame.
+    readonly property var previewDraft: {
+        if (!editor || !editor.previewDraft) return null
+        var draft = editor.previewDraft
+        if (tool === "resize" && resizeLivePreview && draft.kind === "resize") return draft
+        if (tool === "crop" && cropLivePreview && draft.kind === "crop") return draft
+        return null
     }
-    /// What the canvas draws: the draft's target size while a resize is being
+    /// What the canvas draws: the draft's target size while an edit is being
     /// previewed, the document's own size otherwise.
-    readonly property real displayedWidth: resizeDraft ? resizeDraft.width : documentWidth
-    readonly property real displayedHeight: resizeDraft ? resizeDraft.height : documentHeight
+    readonly property real displayedWidth: previewDraft ? previewDraft.width : documentWidth
+    readonly property real displayedHeight: previewDraft ? previewDraft.height : documentHeight
 
     function sizeLabel() {
         if (!hasDocument) return "—"
@@ -394,13 +542,16 @@ Item {
     // hand-chosen zoom alone (only re-clamping it to the new edges).
     onDisplayedWidthChanged: view.refitOrClamp()
     onDisplayedHeightChanged: view.refitOrClamp()
+    // A tool switch keeps one live preview per tool: the newly selected tool's
+    // toggle decides whether Core is asked for a draft of its own.
+    onToolChanged: draftDebounce.restart()
 
     /// The debounce behind the live preview: typing a width must not render the
     /// whole document on every key.
     Timer {
         id: draftDebounce
         interval: 200
-        onTriggered: view.requestResizeDraft()
+        onTriggered: view.requestDraft()
     }
 
     /// The pointer inspector's preview comes from the same cache the browser's
@@ -723,8 +874,8 @@ Item {
                 fillMode: Image.Stretch
                 asynchronous: false
                 cache: false
-                source: view.resizeDraft
-                        ? "file://" + view.resizeDraft.path
+                source: view.previewDraft
+                        ? "file://" + view.previewDraft.path
                         : (view.editor && view.editor.previewPath
                            ? "file://" + view.editor.previewPath
                            : "")
@@ -1106,12 +1257,8 @@ Item {
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
                                 onTextEdited: {
-                                    if (view.tool === "resize") {
-                                        view.linkHeightFromWidth()
-                                        draftDebounce.restart()
-                                    } else {
-                                        sizePreset.currentIndex = -1
-                                    }
+                                    view.linkHeightFromWidth()
+                                    draftDebounce.restart()
                                 }
                             }
                             Label {
@@ -1127,12 +1274,8 @@ Item {
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
                                 onTextEdited: {
-                                    if (view.tool === "resize") {
-                                        view.linkWidthFromHeight()
-                                        draftDebounce.restart()
-                                    } else {
-                                        sizePreset.currentIndex = -1
-                                    }
+                                    view.linkWidthFromHeight()
+                                    draftDebounce.restart()
                                 }
                             }
                         }
@@ -1150,17 +1293,21 @@ Item {
                                 color: view.theme.textMuted
                             }
                             ComboBox {
-                                id: ratioBox
+                                id: resizeRatioBox
                                 objectName: "resizeRatio"
                                 Layout.fillWidth: true
-                                model: view.resizeRatios
+                                model: view.sizeRatios
                                 textRole: "label"
                                 // Set imperatively: ComboBox owns currentIndex,
                                 // so a binding here would break on the first
                                 // pick. `setRatio` keeps the two in step.
                                 currentIndex: view.resizeRatioIndex
                                 Component.onCompleted: currentIndex = view.resizeRatioIndex
-                                onActivated: view.setRatio(view.resizeRatios[currentIndex].key)
+                                onActivated: {
+                                    view.setRatio(view.sizeRatios[currentIndex].key)
+                                    view.relinkFields()
+                                    draftDebounce.restart()
+                                }
                             }
                         }
 
@@ -1183,13 +1330,13 @@ Item {
                                 // A matching pick is still reflected when the
                                 // typed size happens to be one of these.
                                 currentIndex: -1
-                                model: view.resizePresets
+                                model: view.sizePresets
                                 textRole: "label"
                                 displayText: currentIndex < 0 ? qsTr("Custom") : currentText
                                 onCurrentIndexChanged: {
-                                    if (currentIndex < 0 || !view.resizePresets[currentIndex])
+                                    if (currentIndex < 0 || !view.sizePresets[currentIndex])
                                         return
-                                    var preset = view.resizePresets[currentIndex]
+                                    var preset = view.sizePresets[currentIndex]
                                     widthField.text = String(preset.width)
                                     heightField.text = String(preset.height)
                                     view.setRatio(preset.ratio)
@@ -1268,6 +1415,124 @@ Item {
                             }
                         }
 
+                        // Crop: the same linked sides, but the rectangle has a
+                        // place as well as a size. The preset list only offers
+                        // sizes the document can hold, and the anchor pad moves
+                        // the rectangle to a document corner, edge or centre.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            spacing: 8
+
+                            Label {
+                                text: qsTr("Ratio")
+                                color: view.theme.textMuted
+                            }
+                            ComboBox {
+                                id: cropRatioBox
+                                objectName: "cropRatio"
+                                Layout.fillWidth: true
+                                model: view.sizeRatios
+                                textRole: "label"
+                                currentIndex: view.cropRatioIndex
+                                Component.onCompleted: currentIndex = view.cropRatioIndex
+                                onActivated: {
+                                    view.setRatio(view.sizeRatios[currentIndex].key)
+                                    view.relinkFields()
+                                    draftDebounce.restart()
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            spacing: 2
+
+                            Label {
+                                text: qsTr("Size preset")
+                                color: view.theme.textMuted
+                            }
+                            ComboBox {
+                                id: cropPreset
+                                objectName: "cropPreset"
+                                Layout.fillWidth: true
+                                currentIndex: -1
+                                model: view.cropPresets
+                                textRole: "label"
+                                displayText: currentIndex < 0 ? qsTr("Custom") : currentText
+                                onCurrentIndexChanged: {
+                                    if (currentIndex < 0 || !view.cropPresets[currentIndex])
+                                        return
+                                    var preset = view.cropPresets[currentIndex]
+                                    widthField.text = String(preset.width)
+                                    heightField.text = String(preset.height)
+                                    view.setRatio(preset.ratio)
+                                    view.applyCropAnchor()
+                                    draftDebounce.restart()
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            spacing: 8
+
+                            Label {
+                                text: qsTr("Anchor")
+                                color: view.theme.textMuted
+                            }
+                            Grid {
+                                objectName: "cropAnchorPad"
+                                columns: 3
+                                columnSpacing: 2
+                                rowSpacing: 2
+
+                                Repeater {
+                                    // The arrow points at the corner or edge
+                                    // of the document the rectangle keeps.
+                                    model: view.cropAnchors
+
+                                    Button {
+                                        required property var modelData
+                                        objectName: "cropAnchor_" + modelData.key
+                                        width: 24
+                                        height: 24
+                                        text: modelData.glyph
+                                        font.pixelSize: 12
+                                        // The glyph alone in a 24 px square
+                                        // needs the button padding removed.
+                                        padding: 0
+                                        highlighted: view.cropAnchor === modelData.key
+                                        enabled: view.hasDocument
+                                        onClicked: view.setCropAnchor(modelData.key)
+                                        Accessible.name: modelData.label
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: modelData.label
+                                    }
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Button {
+                            objectName: "cropLivePreviewButton"
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            enabled: view.hasDocument
+                            text: qsTr("Live preview")
+                            checkable: true
+                            checked: view.cropLivePreview
+                            highlighted: checked
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Show the cropped image before applying it")
+                            onToggled: {
+                                view.cropLivePreview = checked
+                                draftDebounce.restart()
+                            }
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
@@ -1301,13 +1566,7 @@ Item {
                                 text: qsTr("Apply crop")
                                 Layout.fillWidth: true
                                 visible: view.tool === "crop"
-                                enabled: view.hasDocument
-                                         && cropX.acceptableInput
-                                         && cropY.acceptableInput
-                                         && widthField.acceptableInput
-                                         && heightField.acceptableInput
-                                         && parseInt(widthField.text) > 0
-                                         && parseInt(heightField.text) > 0
+                                enabled: view.cropFieldsValid()
                                 onClicked: {
                                     view.command({
                                         type: "editor_crop",
@@ -1321,6 +1580,7 @@ Item {
                                     cropX.text = "0"
                                     cropY.text = "0"
                                     sizePreset.currentIndex = -1
+                                    cropPreset.currentIndex = -1
                                 }
                             }
                             Button {
@@ -1333,6 +1593,7 @@ Item {
                                     cropX.text = "0"
                                     cropY.text = "0"
                                     sizePreset.currentIndex = -1
+                                    cropPreset.currentIndex = -1
                                 }
                             }
                         }
@@ -1340,7 +1601,7 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             visible: view.tool === "crop"
-                            text: qsTr("Set Width/Height, then enter the rectangle's top-left corner.")
+                            text: qsTr("The anchor keeps the chosen corner, edge or centre of the document.")
                             color: view.theme.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap

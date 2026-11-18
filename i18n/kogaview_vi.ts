@@ -454,6 +454,66 @@
         <translation>Hiện ảnh đã đổi kích thước trước khi áp dụng</translation>
     </message>
     <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="1426"/>
+        <source>Show the cropped image before applying it</source>
+        <translation>Hiện ảnh đã cắt trước khi áp dụng</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="130"/>
+        <source>Top left</source>
+        <translation>Trên trái</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="131"/>
+        <source>Top</source>
+        <translation>Trên</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="132"/>
+        <source>Top right</source>
+        <translation>Trên phải</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="133"/>
+        <source>Left</source>
+        <translation>Trái</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="134"/>
+        <source>Center</source>
+        <translation>Giữa</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="135"/>
+        <source>Right</source>
+        <translation>Phải</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="136"/>
+        <source>Bottom left</source>
+        <translation>Dưới trái</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="137"/>
+        <source>Bottom</source>
+        <translation>Dưới</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="138"/>
+        <source>Bottom right</source>
+        <translation>Dưới phải</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="1492"/>
+        <source>Anchor</source>
+        <translation>Neo</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="1602"/>
+        <source>The anchor keeps the chosen corner, edge or centre of the document.</source>
+        <translation>Neo giữ góc, cạnh hoặc tâm đã chọn của ảnh.</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="1205"/>
         <source>Pad to square</source>
         <translation>Đệm thành ảnh vuông</translation>
@@ -478,11 +538,6 @@
         <location filename="../crates/desktop/qml/EditorView.qml" line="1149"/>
         <source>Reset</source>
         <translation>Đặt lại</translation>
-    </message>
-    <message>
-        <location filename="../crates/desktop/qml/EditorView.qml" line="1164"/>
-        <source>Set Width/Height, then enter the rectangle&apos;s top-left corner.</source>
-        <translation>Đặt Rộng/Cao, rồi nhập góc trên bên trái của vùng cắt.</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="361"/>

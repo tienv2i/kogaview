@@ -59,6 +59,10 @@ private slots:
   void theLivePreviewShowsTheDraftWithoutApplyingIt();
   void thePointerThumbnailCarriesThePreviewIdentity();
   void cropApplyEmitsTheTypedRectangle();
+  void theCropPresetsFitInsideTheDocument();
+  void theCropRatioLinksTheSides();
+  void theCropAnchorPlacesTheRectangle();
+  void theLiveCropShowsOnlyItsOwnDraft();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
   void thePaletteSelectsTheToolsOptions();
@@ -181,8 +185,11 @@ void TestEditor::init()
   m_editor->setProperty("resizeLivePreview", false);
   m_editor->setProperty("resizePadSquare", false);
   m_editor->setProperty("resizeFillColor", QColor(QStringLiteral("#ffffff")));
+  m_editor->setProperty("cropRatio", QStringLiteral("original"));
+  m_editor->setProperty("cropAnchor", QStringLiteral("center"));
+  m_editor->setProperty("cropLivePreview", false);
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
-  for (const char* name : {"livePreviewButton", "padSquare"}) {
+  for (const char* name : {"livePreviewButton", "cropLivePreviewButton", "padSquare"}) {
     if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
       toggle->setProperty("checked", false);
     }
@@ -459,7 +466,7 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
   setState(documentState());
   selectTool("resize");
 
-  const QVariantList ratios = m_editor->property("resizeRatios").toList();
+  const QVariantList ratios = m_editor->property("sizeRatios").toList();
   QVERIFY2(ratios.size() >= 8, "the common ratios are present");
   QStringList ratioKeys;
   for (const QVariant& entry : ratios) {
@@ -470,7 +477,7 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
   QVERIFY(ratioKeys.contains(QStringLiteral("1:1")));
   QVERIFY(ratioKeys.contains(QStringLiteral("16:9")));
 
-  const QVariantList presets = m_editor->property("resizePresets").toList();
+  const QVariantList presets = m_editor->property("sizePresets").toList();
   QVERIFY2(presets.size() >= 20, "many ratio + pixel presets are offered");
   int squareIndex = -1;
   int smallSquareIndex = -1;
@@ -598,6 +605,7 @@ void TestEditor::theLivePreviewShowsTheDraftWithoutApplyingIt()
 {
   QVariantMap draft;
   draft.insert(QStringLiteral("path"), m_previewTwo);
+  draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
   draft.insert(QStringLiteral("width"), 1024);
   draft.insert(QStringLiteral("height"), 1024);
   QVariantMap editor = documentState();
@@ -703,6 +711,230 @@ void TestEditor::cropApplyEmitsTheTypedRectangle()
   QCOMPARE(command.value("y").toInt(), 6);
   QCOMPARE(command.value("width").toInt(), 100);
   QCOMPARE(command.value("height").toInt(), 50);
+}
+
+/// A crop preset is a concrete size the document can really hold: offering one
+/// that is wider or taller than the picture would arm Apply with a rectangle
+/// Core has to reject.
+void TestEditor::theCropPresetsFitInsideTheDocument()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("crop");
+
+  const QVariantList presets = m_editor->property("cropPresets").toList();
+  QVERIFY2(presets.size() >= 10, "the fitting sizes are offered");
+  int squareIndex = -1;
+  for (int index = 0; index < presets.size(); ++index) {
+    const QVariantMap preset = presets.at(index).toMap();
+    const int width = preset.value("width").toInt();
+    const int height = preset.value("height").toInt();
+    const QString label = preset.value("label").toString();
+    QVERIFY(!label.isEmpty());
+    QVERIFY2(width <= 4000 && height <= 3000,
+             qPrintable(QStringLiteral("%1 does not fit the document").arg(label)));
+    QVERIFY2(width % 64 == 0,
+             qPrintable(QStringLiteral("%1 width is not a multiple of 64").arg(label)));
+    QVERIFY2(height % 64 == 0,
+             qPrintable(QStringLiteral("%1 height is not a multiple of 64").arg(label)));
+    if (width == 1024 && height == 1024) {
+      squareIndex = index;
+    }
+  }
+  QVERIFY2(squareIndex >= 0, "1:1 · 1024 × 1024 fits and is offered");
+
+  QQuickItem* dropdown = expectItem("cropPreset");
+  QVERIFY(dropdown->isVisible());
+  QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
+  QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
+  dropdown->setProperty("currentIndex", squareIndex);
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
+  QTRY_COMPARE(height->property("text").toString(), QStringLiteral("1024"));
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("1:1"));
+  QCOMPARE(dropdown->property("displayText").toString(),
+           QStringLiteral("1:1 · 1024 × 1024"));
+  // The default centre anchor places the rectangle, not the top-left corner.
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("1488"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("988"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// Crop links Width and Height the same way Resize does, and each size change
+/// re-places the rectangle through the selected anchor.
+void TestEditor::theCropRatioLinksTheSides()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("crop");
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("original"));
+
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+
+  // The document's own 4:3 shape, centred.
+  typeInto(width, QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1200"));
+
+  // A square ratio keeps both sides equal, and the rectangle stays centred.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("1:1")))));
+  typeInto(width, QStringLiteral("512"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("512"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1744"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1244"));
+
+  // Free stops linking: the other side stays where it was.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  typeInto(width, QStringLiteral("300"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("300"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("512"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1850"));
+
+  // A ratio picked directly re-links the pair: 16:9 on a 300 px width is 169.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("16:9")))));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "relinkFields"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("169"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1416"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The anchor pad is what gives the crop rectangle a place: a corner pins that
+/// corner of the document, an edge pins that edge, and the centre keeps the
+/// rectangle centred. Typing X/Y is the user's own placement and is left alone.
+void TestEditor::theCropAnchorPlacesTheRectangle()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("crop");
+  QVERIFY(findObject(QStringLiteral("cropAnchor_center")) != nullptr);
+  QVERIFY(findObject(QStringLiteral("cropAnchor_top_left")) != nullptr);
+  QVERIFY(findObject(QStringLiteral("cropAnchor_bottom_right")) != nullptr);
+
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("1:1")))));
+  typeInto(width, QStringLiteral("800"));
+  typeInto(height, QStringLiteral("800"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1100"));
+
+  clickItem(expectItem("cropAnchor_top_left"));
+  QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("top_left"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+
+  clickItem(expectItem("cropAnchor_bottom_right"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("3200"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("2200"));
+
+  clickItem(expectItem("cropAnchor_right"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("3200"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1100"));
+
+  clickItem(expectItem("cropAnchor_top"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+
+  // A hand-typed corner is not overwritten until the size changes again.
+  QQuickItem* x = expectItem("cropX");
+  QQuickItem* y = expectItem("cropY");
+  x->setProperty("text", QStringLiteral("50"));
+  y->setProperty("text", QStringLiteral("60"));
+  QCOMPARE(x->property("text").toString(), QStringLiteral("50"));
+  QCOMPARE(y->property("text").toString(), QStringLiteral("60"));
+
+  // Picking a preset re-places the rectangle at the anchor too.
+  QQuickItem* dropdown = expectItem("cropPreset");
+  const QVariantList presets = m_editor->property("cropPresets").toList();
+  int index = -1;
+  for (int i = 0; i < presets.size(); ++i) {
+    if (presets.at(i).toMap().value("width").toInt() == 512) {
+      index = i;
+      break;
+    }
+  }
+  QVERIFY(index >= 0);
+  dropdown->setProperty("currentIndex", index);
+  QTRY_COMPARE(x->property("text").toString(), QStringLiteral("1744"));
+  QTRY_COMPARE(y->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The crop draft is shown only under Crop with its toggle on, and only when
+/// Core says it is a crop. A resize draft left in the state must not paint a
+/// crop result, and the command that asks for one names the rectangle.
+void TestEditor::theLiveCropShowsOnlyItsOwnDraft()
+{
+  QVariantMap draft;
+  draft.insert(QStringLiteral("path"), m_previewTwo);
+  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
+  draft.insert(QStringLiteral("width"), 200);
+  draft.insert(QStringLiteral("height"), 150);
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("previewDraft"), draft);
+
+  setState(editor);
+  selectTool("crop");
+  QQuickItem* canvas = expectItem("canvas");
+  QQuickItem* toggle = expectItem("cropLivePreviewButton");
+  QVERIFY(toggle->isVisible());
+  QVERIFY(!m_editor->property("cropLivePreview").toBool());
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+
+  clickItem(toggle);
+  QVERIFY(m_editor->property("cropLivePreview").toBool());
+  QVERIFY(toggle->property("checked").toBool());
+  QVERIFY(toggle->property("highlighted").toBool());
+  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
+  QCOMPARE(canvas->property("width").toDouble(), 200.0);
+  QCOMPARE(canvas->property("height").toDouble(), 150.0);
+  // The document did not move: the draft is a preview, not a cut.
+  QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
+  QCOMPARE(m_editor->property("modified").toBool(), false);
+
+  // A resize draft under Crop is the other tool's result: it stays hidden.
+  draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+
+  // And under Resize with its own toggle armed, a draft that says `crop` is
+  // still the other tool's result and stays hidden.
+  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  selectTool("resize");
+  clickItem(expectItem("livePreviewButton"));
+  QVERIFY(m_editor->property("resizeLivePreview").toBool());
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+
+  // The command that asks Core for a crop draft carries the whole rectangle.
+  m_commands->clear();
+  selectTool("crop");
+  m_editor->setProperty("cropLivePreview", false);
+  expectItem("cropX")->setProperty("text", QStringLiteral("20"));
+  expectItem("cropY")->setProperty("text", QStringLiteral("30"));
+  expectItem("widthField")->setProperty("text", QStringLiteral("200"));
+  expectItem("heightField")->setProperty("text", QStringLiteral("150"));
+  clickItem(expectItem("cropLivePreviewButton"));
+  QTRY_COMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_crop_preview"));
+  QCOMPARE(command.value("x").toInt(), 20);
+  QCOMPARE(command.value("y").toInt(), 30);
+  QCOMPARE(command.value("width").toInt(), 200);
+  QCOMPARE(command.value("height").toInt(), 150);
 }
 
 void TestEditor::anInvalidOrEmptySizeKeepsApplyDisabled()

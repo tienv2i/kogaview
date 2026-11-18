@@ -10,26 +10,32 @@ and Viewer are operable from the keyboard, their tooltips name the keys, the
 burger menu opens a file, a folder or the Editor, a modal dialog owns the
 pointer so the Settings header drags in the Viewer instead of panning the
 picture behind it, the Editor is a tool palette with a pointer inspector
-rather than a second toolbar, and its Resize tool links Width and Height through
+rather than a second toolbar, its Resize tool links Width and Height through
 a ratio, offers many 64-divisible sizes and can render the result live before
 Apply — with the pointer thumbnail now keyed on the preview file's own identity
-instead of a name that repeats every run.
+instead of a name that repeats every run — and its Crop tool has the same linked
+sides and presets, a 3 × 3 anchor that places the rectangle and its own live
+preview.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The Resize rework (row 73) is the newest commit on top of
-  `8bec1b7` (the anchored Resize that it supersedes); the tree is clean after
-  it. This session's earlier commits are on top of
-  `d149152` and are listed in `git log`; the newest are the keyboard map, the
-  tooltip hints, the burger-menu fix, the modal-pointer fix, the Editor
-  layout and its pointer follow-up.
-- `cpp/main.cpp` gained one permanent debug hook in row 73:
+- Branch `main`. The Crop rework (row 74) is the newest commit on top of
+  `bb473c3` (the Resize rework); the tree is clean after it. This session's
+  earlier commits are on top of `d149152` and are listed in `git log`; the
+  newest are the keyboard map, the tooltip hints, the burger-menu fix, the
+  modal-pointer fix, the Editor layout and its pointer follow-up, and the two
+  size tools.
+- `cpp/main.cpp` gained one permanent debug hook per size tool:
   `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset)
   clicks the real Resize tool button, writes the size dropdown the way its own
-  selection does and clicks Live preview, so the render can be photographed on
-  a session where XTEST pointer warps do not move the pointer. The language
+  selection does and clicks Live preview, and `editor-crop` (`_ARG` =
+  `WIDTHxHEIGHT`, `_ARG2` = an anchor key, default `center`) does the same for
+  Crop including an anchor button — found by walking the item tree, because a
+  `Repeater` delegate is not a QObject child. Both exist so the panel can be
+  photographed on a session where XTEST pointer warps do not move the pointer.
+  The language
   follow-up changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now
   treats `isExposed()` as a hint (a covered window on this session reports
   itself unexposed while `grabWindow()` still renders), waiting up to 8 s and
@@ -45,8 +51,8 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   (menu session; opened the shell menu and replayed the chooser's answer), and
   `KOGAVIEW_DEV_UI_REQUEST=settings-drag` (modal-pointer session; dragged the
   real Settings header with `QTest` and logged the dialog and Viewer offsets).
-  Every temporary hook is gone again; the only surviving debug addition is the
-  permanent `editor-resize` request above.
+  Every temporary hook is gone again; the only surviving debug additions are the
+  permanent `editor-resize` and `editor-crop` requests above.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -86,7 +92,9 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
   it does not touch the compositor's own windows. On the row 73 runs the same
   trick did not reproduce: `xdotool mousemove` reported success but
   `getmouselocation` never changed, so the panel was driven by the
-  `editor-resize` request instead (synthetic state, real QML handlers).
+  `editor-resize` request instead (synthetic state, real QML handlers); the row
+  74 crop panel used `editor-crop` for the same reason, including a real click
+  on the anchor button found through the item tree.
 
 ## What changed
 
@@ -103,16 +111,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 69 | The Settings dialog could not be dragged by its header in the Viewer (the pan handler took the drag); it worked in the Editor | `tst_viewer.cpp::aModalDialogOwnsThePointer` (real Viewer + real Settings dialog, header drag moves the dialog and leaves the offsets at 0, then Escape/R prove focus returns), `tst_settings.cpp::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen` (source guard on `Main.qml`); real binary with a temporary `KOGAVIEW_DEV_UI_REQUEST=settings-drag` hook: header drag `(330,108) → (250,148)` moved the dialog, offsets stayed `0,0` (before the fix the dialog stayed put and the offsets went `-80,40`) |
 | 72 | Resize could only type two numbers: no anchor, no common sizes, no squaring | anchor pad + 64-divisible presets + pad-to-square colour, in Core (`pad_to_square`, `anchored_cover_rect`) and QML; `cargo` 63, `editor` 24, `translations` 161 strings; real window `docs/evidence/M1-editor-resize.png`, `M1-editor-resize-square.png`; mutations: pad ignoring the anchor, Resize not padding, preset auto-selected |
 | 73 | Resize's anchor belonged to Crop, Width/Height were not linked, the preset list was one size per ratio, there was no live preview, and the pointer thumbnail could show the previous run's picture | anchor removed from protocol/Core/QML and the pad centred; ratio-linked fields, 47 sizes and a live-preview Core draft (`editor_resize_preview`); thumbnail cache keyed on the published preview mtime/size. `cargo` 63 + 4, `editor` 27, `translations` 155 strings; real window `docs/evidence/M1-editor-resize-live.png`, `M1-editor-thumbnail-second-run.png`; mutations: thumbnail identity zeroed, `free` ratio left linked, pad not centred, preview stamp zeroed |
+| 74 | Crop still typed four numbers by hand: no linked sides, no presets, nowhere to say where inside the document the rectangle belongs, and no way to see the cut before applying it | shared `sizeRatios`/`sizePresets`, a fitting `cropPresets` list, a 3 × 3 `cropAnchors` pad that places X/Y, and `editor_crop_preview` reusing the draft with `kind: "crop"`. `cargo` 64 + 4, `editor` 31, `translations` 166 strings; real window `docs/evidence/M1-editor-crop-live.png` (512 × 384 at `bottom_right`, draft on canvas, status still 1254 × 1254); mutations: preset filter removed, draft kind ignored, anchor column fixed, Core kind swapped |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 155 strings in kogaview_vi.ts, 111 of them compiled into C++, 151 drawn by the QML, 4 looked up by context
+translations: 166 strings in kogaview_vi.ts, 110 of them compiled into C++, 162 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
-cargo: 63 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 27 · language 5 · toolbar 11
+cargo: 64 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 31 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -256,6 +265,42 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   `previewSize`) and the pointer's `CachedThumbnail` passes them, which is what
   the cache actually keys on.
 
+## Design decisions, crop session
+
+- **The anchor is Crop's, and it places rather than locks.** Nine document
+  points (four corners, four edges, centre) decide where a rectangle of the
+  current Width/Height sits; the pad's glyph points at the kept corner or edge
+  and its `column`/`row` are the same numbers `applyCropAnchor` uses, so an
+  arrow cannot say one thing while the rectangle does another. Typing X/Y is
+  the user's own placement and is never overwritten; changing a size through
+  the ratio link, a preset or Reset re-places the rectangle. This is the idea
+  row 73 took out of Resize and returned to Crop.
+- **The two tools share one ratio table, not one choice.** `sizeRatios` and
+  `sizePresets` are read-only data both tools use; `resizeRatio` and
+  `cropRatio` are separate properties, so a 1:1 crop does not turn the next
+  resize into a square. Picking a ratio re-links the fields immediately
+  (`relinkFields`), so a 16:9 label with a 1024 × 1024 pair typed earlier is
+  corrected at the moment the ratio changes.
+- **Crop presets are filtered, Resize presets are not.** A crop preset the
+  document cannot hold would arm Apply with a rectangle Core rejects, so
+  `cropPresets` offers only sizes whose both sides fit the document; a small
+  picture simply has a shorter list and keeps the fields. The shared list stays
+  one flat, 64-divisible set, so a preset is still a concrete size in pixels.
+- **Validity is the rectangle, not just two numbers.** `cropFieldsValid()`
+  answers the same question Core will ask (`x + width ≤ document width`,
+  `y + height ≤ document height`); Apply and the draft both use it, so a legal
+  rectangle is visible in both places and an illegal one reaches neither.
+- **Live crop is the Resize draft with a kind.** `editor_crop_preview` goes
+  through the same `editor_preview` path as `editor_resize_preview`: it
+  validates with `would_change`, renders on a worker to `draft-{generation}.png`
+  and publishes `editor.previewDraft {kind, path, width, height}` without
+  touching the document, its history or its save target. The canvas draws a
+  draft only when the selected tool and the draft's `kind` agree and that
+  tool's toggle is on, so switching Resize ↔ Crop cannot paint the other
+  tool's result for a frame, and leaving to Pointer hides it with no command.
+  Every applied edit, undo/redo/reset, a new open and close still drop the
+  draft file.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -320,6 +365,15 @@ fails (`left: Rgba([10, 20, 30, 255])`, the source pixel where the fill was
 expected); `install_editor_preview` publishing `Some((0,0))` as the stamp →
 `editor_resize_crop_and_flip_change_the_published_size` fails
 (`editor.preview_modified > 0`). Each restored, then `just test` green.
+
+Crop: `cropPresets` keeping a size the document cannot hold → 
+`theCropPresetsFitInsideTheDocument` fails on `9:16 · 1728 × 3072`; the canvas
+dropping the draft's `kind` check → `theLiveCropShowsOnlyItsOwnDraft` fails
+(a resize draft painted under Crop); `applyCropAnchor` using a fixed centre
+column → `theCropAnchorPlacesTheRectangle` fails (`cropX` 1600, expected 0 for
+`top_left`); Core's `spawn_draft` labelling a crop `"resize"` →
+`a_crop_preview_is_a_draft_that_never_cuts` fails `left: "resize"`,
+`right: "crop"`. Each restored, then `just test` green.
 
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;

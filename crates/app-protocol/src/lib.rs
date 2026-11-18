@@ -271,6 +271,16 @@ pub enum Command {
         width: u32,
         height: u32,
     },
+    /// Render the crop in the canvas without cutting the document: the pixels,
+    /// the history and the save target stay as they are until `EditorCrop` is
+    /// applied. The draft is published as `editor.previewDraft` with
+    /// `kind: "crop"`.
+    EditorCropPreview {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
     /// Rotate the working document clockwise; degrees must be 90, 180 or 270
     /// (negative values rotate counter-clockwise).
     EditorRotate {
@@ -323,6 +333,7 @@ impl Command {
             Self::EditorResize { .. } => "editor_resize",
             Self::EditorResizePreview { .. } => "editor_resize_preview",
             Self::EditorCrop { .. } => "editor_crop",
+            Self::EditorCropPreview { .. } => "editor_crop_preview",
             Self::EditorRotate { .. } => "editor_rotate",
             Self::EditorFlip { .. } => "editor_flip",
             Self::EditorUndo => "editor_undo",
@@ -424,6 +435,15 @@ mod tests {
                 },
                 "editor_crop",
             ),
+            (
+                Command::EditorCropPreview {
+                    x: 10,
+                    y: 20,
+                    width: 300,
+                    height: 400,
+                },
+                "editor_crop_preview",
+            ),
             (Command::EditorRotate { degrees: 90 }, "editor_rotate"),
             (
                 Command::EditorFlip {
@@ -489,5 +509,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env.command.name(), "editor_resize_preview");
+
+        // A crop preview is the same rectangle as the applied crop and has its
+        // own name, so a journal line can never read as a cut.
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"r","command":{"type":"editor_crop_preview","x":4,"y":2,"width":10,"height":8}}"#,
+        )
+        .unwrap();
+        match env.command {
+            Command::EditorCropPreview {
+                x,
+                y,
+                width,
+                height,
+            } => assert_eq!((x, y, width, height), (4, 2, 10, 8)),
+            other => panic!("unexpected command {other:?}"),
+        }
     }
 }

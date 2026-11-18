@@ -795,9 +795,12 @@ pub enum EditorTask {
         preview: PathBuf,
     },
     /// A preview of an edit that has not been applied, rendered at the target
-    /// size rather than the document's. It never touches the document.
+    /// size rather than the document's. It never touches the document. `kind`
+    /// names the tool that asked for it (`resize` or `crop`), so the view can
+    /// refuse to draw the other tool's draft after a switch.
     Draft {
         generation: u64,
+        kind: String,
         preview: PathBuf,
         width: u32,
         height: u32,
@@ -874,9 +877,10 @@ pub fn spawn_draft(
     preview: PathBuf,
     sender: Sender<EditorTask>,
 ) {
-    let (width, height) = match &operation {
-        EditOperation::Resize { width, height, .. } => (*width, *height),
-        _ => (0, 0),
+    let (kind, width, height) = match &operation {
+        EditOperation::Resize { width, height, .. } => ("resize", *width, *height),
+        EditOperation::Crop { width, height, .. } => ("crop", *width, *height),
+        _ => ("", 0, 0),
     };
     std::thread::spawn(move || {
         let task = match render_operation(&pixels, &operation)
@@ -884,6 +888,7 @@ pub fn spawn_draft(
         {
             Ok(()) => EditorTask::Draft {
                 generation,
+                kind: kind.to_owned(),
                 preview,
                 width,
                 height,

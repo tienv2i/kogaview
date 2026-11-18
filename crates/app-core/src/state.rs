@@ -37,11 +37,15 @@ pub struct SelectionInfo {
     pub height: Option<u32>,
 }
 
-/// A resize rendered for the live preview only: the target size and where the
-/// pixels are, so the canvas can draw the result without the document moving.
+/// A live-preview render: which tool produced it (`resize` or `crop`), the
+/// target size and where the pixels are, so the canvas can draw the result
+/// without the document moving.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorPreviewDraft {
+    /// `resize` or `crop`; the view shows a draft only while its tool is
+    /// selected, so switching tools never paints the other tool's result.
+    pub kind: String,
     pub path: String,
     pub width: u32,
     pub height: u32,

@@ -74,11 +74,20 @@
 - **Resize has no anchor; Crop keeps its rectangle.** Where the cropped result
   sits is a Crop decision. When the target aspect differs, Core takes the
   centred cover rectangle before scaling, so pixels are never stretched.
+- **Crop has the anchor, a ratio and fitting presets.** Width/Height link through
+  the Crop Ratio combo (`Free`, `Original`, nine common ratios) exactly as Resize
+  does, and the Size preset list offers only concrete 64-divisible sizes both of
+  whose sides fit the document. The 3 × 3 anchor pad (four corners, four edges,
+  centre; arrows plus an accessible name and tooltip for each) decides where a
+  rectangle of that size sits: changing the size through the ratio, a preset or
+  Reset re-places X/Y, while typing X/Y is the user's own placement. Apply stays
+  disabled unless `x + width` and `y + height` stay inside the document.
 - **Live preview renders the target without editing.** The Live preview toggle
   asks Core for a draft at the chosen size; the canvas draws that draft (and the
   zoom refits to it) while the status bar and history keep describing the real
-  document. Toggling it off, leaving Resize, applying the resize, any other edit
-  or undo/redo/reset drops the draft.
+  document. Crop uses the same draft, tagged `kind: "crop"`, so the canvas shows
+  it only under Crop and never under Resize; toggling it off, leaving the tool,
+  applying the edit, any other edit or undo/redo/reset drops the draft.
 - **Pad to square runs before the scale.** Ticking it adds a fill colour picker
   (disabled while unticked) and Core pads the shorter side out to the longer one,
   centred, then takes the centred aspect cover and scales: a 1200 × 1600 portrait
