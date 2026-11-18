@@ -242,12 +242,13 @@ pub enum Command {
     EditorSaveAs {
         path: String,
     },
-    /// Scale the working document to fit exactly `width` × `height`. When the
-    /// target aspect differs the source is cropped around its centre before
-    /// scaling, so pixels are never stretched. An optional `fill` colour pads
-    /// the shorter side to a square (side = the longer edge) first, also
-    /// centred. Resize is not anchored: where the result sits is a Crop
-    /// decision, not a Resize one.
+    /// Scale the working document to exactly `width` × `height`. Without a
+    /// `fill`, the target aspect is covered by a centred crop before scaling,
+    /// so pixels are never stretched. With a `fill`, the whole source is scaled
+    /// to fit inside the target and the leftover is padded with that RGB
+    /// colour, centred; the pad is only square when the target is square.
+    /// Resize is not anchored: where the result sits is a Crop decision, not a
+    /// Resize one.
     EditorResize {
         width: u32,
         height: u32,

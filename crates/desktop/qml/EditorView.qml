@@ -52,9 +52,12 @@ Item {
     /// document corner, edge or centre the rectangle keeps. Typing X/Y by hand
     /// leaves it alone — the anchor is a placement shortcut, not a lock.
     property string cropAnchor: "center"
-    /// Resize pads the shorter side to the longer edge with this colour before
-    /// cropping and scaling. Centred: Resize has no anchor.
-    property bool resizePadSquare: false
+    /// Resize either covers the target by cropping (the default) or fits the
+    /// whole image inside it and pads the leftover with this colour. The pad
+    /// follows the target: a letterbox for a wider frame, a pillarbox for a
+    /// taller one, and a square only when the target is square. Centred:
+    /// Resize has no anchor.
+    property bool resizePadFit: false
     property color resizeFillColor: "#ffffff"
     /// Live preview: each valid Width/Height change asks Core for a rendered
     /// draft at the target size, which the canvas shows without applying it.
@@ -239,7 +242,8 @@ Item {
         if (!(width > 0)) return
         var factor = view.ratioFactor(view.activeRatio)
         if (factor) {
-            heightField.text = String(Math.max(1, Math.round(width * factor.height / factor.width)))
+            heightField.text = String(Math.max(1, Math.min(20000,
+                    Math.round(width * factor.height / factor.width))))
         }
         if (view.tool === "crop") {
             view.applyCropAnchor()
@@ -255,7 +259,8 @@ Item {
         if (!(height > 0)) return
         var factor = view.ratioFactor(view.activeRatio)
         if (factor) {
-            widthField.text = String(Math.max(1, Math.round(height * factor.width / factor.height)))
+            widthField.text = String(Math.max(1, Math.min(20000,
+                    Math.round(height * factor.width / factor.height))))
         }
         if (view.tool === "crop") {
             view.applyCropAnchor()
@@ -310,22 +315,52 @@ Item {
         }
     }
 
-    /// One click of a field's +/- stepper. An empty field starts from the size
-    /// its placeholder shows, so the first nudge moves the document's own
-    /// dimension rather than jumping to 1. The other side follows the selected
-    /// ratio exactly as typing it would.
+    /// One click of a field's +/- stepper. An empty or invalid field starts
+    /// from the size its placeholder shows, so the first nudge moves the
+    /// document's own dimension rather than jumping to 1. The other side
+    /// follows the selected ratio exactly as typing it would, clamped to the
+    /// same 1–20000 range the fields accept.
     function stepField(field, delta, isWidth) {
-        var current = parseInt(field.text)
+        var current = field.acceptableInput ? parseInt(field.text) : 0
         if (!(current > 0)) {
             current = Math.round(isWidth ? view.documentWidth : view.documentHeight)
         }
-        if (!(current > 0)) current = 1
+        if (!(current > 0)) return
         field.text = String(Math.max(1, Math.min(20000, current + delta)))
         if (isWidth) {
             view.linkHeightFromWidth()
         } else {
             view.linkWidthFromHeight()
         }
+        draftDebounce.restart()
+    }
+
+    /// Apply one of the concrete sizes from Resize's dropdown. `onActivated`
+    /// calls this for a real pick; a programmatic `currentIndex` change (the
+    /// field/link code mirrors a matching size) must not re-apply it. The Crop
+    /// list is filtered by the document, so with `onCurrentIndexChanged` its
+    /// first fitting preset applied itself when a document arrived — into the
+    /// shared Width/Height fields, even while Resize was the visible tool.
+    function chooseResizePreset(index) {
+        if (index < 0 || index >= view.sizePresets.length) return
+        var preset = view.sizePresets[index]
+        widthField.text = String(preset.width)
+        heightField.text = String(preset.height)
+        view.setRatio(preset.ratio)
+        sizePreset.currentIndex = index
+        draftDebounce.restart()
+    }
+
+    /// The same for Crop: the preset changes the size *and* re-places the
+    /// rectangle through the selected anchor.
+    function chooseCropPreset(index) {
+        if (index < 0 || index >= view.cropPresets.length) return
+        var preset = view.cropPresets[index]
+        widthField.text = String(preset.width)
+        heightField.text = String(preset.height)
+        view.setRatio(preset.ratio)
+        cropPreset.currentIndex = index
+        view.applyCropAnchor()
         draftDebounce.restart()
     }
 
@@ -360,7 +395,7 @@ Item {
                 type: "editor_resize_preview",
                 width: parseInt(widthField.text),
                 height: parseInt(heightField.text),
-                fill: view.resizePadSquare ? view.colorRgb(view.resizeFillColor) : null
+                fill: view.resizePadFit ? view.colorRgb(view.resizeFillColor) : null
             })
         } else if (view.tool === "crop" && view.cropLivePreview && view.cropFieldsValid()) {
             view.command({
@@ -1291,21 +1326,26 @@ Item {
                                 }
                             }
                             // The steppers are the small +/- pair every size
-                            // field has: one pixel per click, and the linked
-                            // side follows because this is the same path as
-                            // typing. A single column keeps them inside the
-                            // 260 px panel next to a full-width field.
+                            // field has: one pixel per press, auto-repeat for a
+                            // held button, and the linked side follows because
+                            // this is the same path as typing. A single column
+                            // keeps them inside the 260 px panel next to a
+                            // full-width field.
                             Column {
                                 spacing: 0
 
                                 Button {
                                     objectName: "widthStepUp"
-                                    implicitWidth: 22
-                                    implicitHeight: 14
+                                    implicitWidth: 24
+                                    implicitHeight: 16
                                     padding: 0
-                                    font.pixelSize: 8
+                                    font.pixelSize: 9
                                     text: "\u25b2"
                                     enabled: view.hasDocument
+                                    focusPolicy: Qt.NoFocus
+                                    autoRepeat: true
+                                    autoRepeatDelay: 350
+                                    autoRepeatInterval: 60
                                     Accessible.name: qsTr("Increase width")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Increase width")
@@ -1313,12 +1353,16 @@ Item {
                                 }
                                 Button {
                                     objectName: "widthStepDown"
-                                    implicitWidth: 22
-                                    implicitHeight: 14
+                                    implicitWidth: 24
+                                    implicitHeight: 16
                                     padding: 0
-                                    font.pixelSize: 8
+                                    font.pixelSize: 9
                                     text: "\u25bc"
                                     enabled: view.hasDocument
+                                    focusPolicy: Qt.NoFocus
+                                    autoRepeat: true
+                                    autoRepeatDelay: 350
+                                    autoRepeatInterval: 60
                                     Accessible.name: qsTr("Decrease width")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Decrease width")
@@ -1347,12 +1391,16 @@ Item {
 
                                 Button {
                                     objectName: "heightStepUp"
-                                    implicitWidth: 22
-                                    implicitHeight: 14
+                                    implicitWidth: 24
+                                    implicitHeight: 16
                                     padding: 0
-                                    font.pixelSize: 8
+                                    font.pixelSize: 9
                                     text: "\u25b2"
                                     enabled: view.hasDocument
+                                    focusPolicy: Qt.NoFocus
+                                    autoRepeat: true
+                                    autoRepeatDelay: 350
+                                    autoRepeatInterval: 60
                                     Accessible.name: qsTr("Increase height")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Increase height")
@@ -1360,12 +1408,16 @@ Item {
                                 }
                                 Button {
                                     objectName: "heightStepDown"
-                                    implicitWidth: 22
-                                    implicitHeight: 14
+                                    implicitWidth: 24
+                                    implicitHeight: 16
                                     padding: 0
-                                    font.pixelSize: 8
+                                    font.pixelSize: 9
                                     text: "\u25bc"
                                     enabled: view.hasDocument
+                                    focusPolicy: Qt.NoFocus
+                                    autoRepeat: true
+                                    autoRepeatDelay: 350
+                                    autoRepeatInterval: 60
                                     Accessible.name: qsTr("Decrease height")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Decrease height")
@@ -1375,7 +1427,7 @@ Item {
                         }
 
                         // Resize: the ratio that links Width/Height, a list of
-                        // concrete sizes, and the optional square pad. No
+                        // concrete sizes, and the optional pad-to-fit fill. No
                         // anchor: where the result sits is a Crop decision.
                         RowLayout {
                             Layout.fillWidth: true
@@ -1418,43 +1470,40 @@ Item {
                                 id: sizePreset
                                 objectName: "sizePreset"
                                 Layout.fillWidth: true
-                                // No preset is applied until the user picks
-                                // one: an automatically selected preset would
-                                // arm Apply with a size the user never chose.
-                                // A matching pick is still reflected when the
-                                // typed size happens to be one of these.
+                                // Nothing is applied until the user activates
+                                // the list: `onCurrentIndexChanged` fires for a
+                                // programmatic index write too, and the Crop
+                                // list is rebuilt from the document (its first
+                                // row then wrote 2048 × 2048 into the shared
+                                // fields on open). The link code still mirrors
+                                // a matching size by writing `currentIndex`,
+                                // and that must not re-apply it.
                                 currentIndex: -1
                                 model: view.sizePresets
                                 textRole: "label"
                                 displayText: currentIndex < 0 ? qsTr("Custom") : currentText
-                                onCurrentIndexChanged: {
-                                    if (currentIndex < 0 || !view.sizePresets[currentIndex])
-                                        return
-                                    var preset = view.sizePresets[currentIndex]
-                                    widthField.text = String(preset.width)
-                                    heightField.text = String(preset.height)
-                                    view.setRatio(preset.ratio)
-                                    draftDebounce.restart()
-                                }
+                                onActivated: view.chooseResizePreset(currentIndex)
                             }
                         }
 
                         CheckBox {
-                            objectName: "padSquare"
+                            objectName: "padToFit"
                             Layout.fillWidth: true
                             visible: view.tool === "resize"
-                            text: qsTr("Pad to square")
-                            checked: view.resizePadSquare
+                            text: qsTr("Pad to fit")
+                            checked: view.resizePadFit
                             enabled: view.hasDocument
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Keep the whole image in shape and fill the leftover with the fill color")
                             onToggled: {
-                                view.resizePadSquare = checked
+                                view.resizePadFit = checked
                                 draftDebounce.restart()
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            visible: view.tool === "resize" && view.resizePadSquare
+                            visible: view.tool === "resize" && view.resizePadFit
                             spacing: 6
 
                             Rectangle {
@@ -1482,8 +1531,8 @@ Item {
 
                         Label {
                             Layout.fillWidth: true
-                            visible: view.tool === "resize" && view.resizePadSquare
-                            text: qsTr("Pads the shorter side to the longer one.")
+                            visible: view.tool === "resize" && view.resizePadFit
+                            text: qsTr("Scales the whole image to fit and fills the leftover with this color.")
                             color: view.theme.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap
@@ -1551,20 +1600,15 @@ Item {
                                 id: cropPreset
                                 objectName: "cropPreset"
                                 Layout.fillWidth: true
+                                // This model is filtered by the document, so it
+                                // changes when a document arrives; an
+                                // `onCurrentIndexChanged` handler would apply
+                                // its first row then. Only a real pick counts.
                                 currentIndex: -1
                                 model: view.cropPresets
                                 textRole: "label"
                                 displayText: currentIndex < 0 ? qsTr("Custom") : currentText
-                                onCurrentIndexChanged: {
-                                    if (currentIndex < 0 || !view.cropPresets[currentIndex])
-                                        return
-                                    var preset = view.cropPresets[currentIndex]
-                                    widthField.text = String(preset.width)
-                                    heightField.text = String(preset.height)
-                                    view.setRatio(preset.ratio)
-                                    view.applyCropAnchor()
-                                    draftDebounce.restart()
-                                }
+                                onActivated: view.chooseCropPreset(currentIndex)
                             }
                         }
 
@@ -1646,7 +1690,7 @@ Item {
                                         type: "editor_resize",
                                         width: parseInt(widthField.text),
                                         height: parseInt(heightField.text),
-                                        fill: view.resizePadSquare
+                                        fill: view.resizePadFit
                                               ? view.colorRgb(view.resizeFillColor)
                                               : null
                                     })

@@ -47,6 +47,7 @@ class TestEditor : public QObject
 private slots:
   void initTestCase();
   void init();
+  void theFreshResizeFieldsStayEmpty();
   void thePointerShowsTheDocumentAndHistory();
   void emptyStateOffersToOpenAnImage();
   void theViewFollowsThePublishedDocument();
@@ -57,7 +58,7 @@ private slots:
   void typingOneSideKeepsTheChosenRatio();
   void theCurrentRatioLocksTheTypedPair();
   void theSizeSteppersNudgeBothSides();
-  void resizeCarriesTheSquareFill();
+  void resizeCarriesThePadFill();
   void theLivePreviewShowsTheDraftWithoutApplyingIt();
   void thePointerThumbnailCarriesThePreviewIdentity();
   void cropApplyEmitsTheTypedRectangle();
@@ -185,7 +186,7 @@ void TestEditor::init()
   // writes itself, so reset both sides.
   m_editor->setProperty("resizeRatio", QStringLiteral("original"));
   m_editor->setProperty("resizeLivePreview", false);
-  m_editor->setProperty("resizePadSquare", false);
+  m_editor->setProperty("resizePadFit", false);
   m_editor->setProperty("resizeFillColor", QColor(QStringLiteral("#ffffff")));
   m_editor->setProperty("resizeCurrentRatio",
                         QVariantMap{{QStringLiteral("width"), 0},
@@ -197,7 +198,7 @@ void TestEditor::init()
                         QVariantMap{{QStringLiteral("width"), 0},
                                     {QStringLiteral("height"), 0}});
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
-  for (const char* name : {"livePreviewButton", "cropLivePreviewButton", "padSquare"}) {
+  for (const char* name : {"livePreviewButton", "cropLivePreviewButton", "padToFit"}) {
     if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
       toggle->setProperty("checked", false);
     }
@@ -316,6 +317,25 @@ void TestEditor::setState(const QVariantMap& editor)
   state.insert(QStringLiteral("editor"), editor);
   m_editor->setProperty("state", state);
   QTest::qWait(40);
+}
+
+void TestEditor::theFreshResizeFieldsStayEmpty()
+{
+  setState(documentState());
+  selectTool("resize");
+  // Crop's preset list is filtered by the document, so it is rebuilt when the
+  // state arrives; with `onCurrentIndexChanged` its first fitting row applied
+  // itself and wrote 2048 × 2048 into the shared Width/Height fields, even
+  // though Resize is the visible tool. Waiting past the debounce makes that
+  // old race visible here.
+  QTest::qWait(200);
+  QCOMPARE(expectItem("widthField")->property("text").toString(), QString());
+  QCOMPARE(expectItem("heightField")->property("text").toString(), QString());
+  QCOMPARE(expectItem("sizePreset")->property("currentIndex").toInt(), -1);
+  QCOMPARE(expectItem("sizePreset")->property("displayText").toString(),
+           QStringLiteral("Custom"));
+  QCOMPARE(m_commands->count(), 0);
+  selectTool("pointer");
 }
 
 void TestEditor::thePointerShowsTheDocumentAndHistory()
@@ -527,13 +547,17 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
 
   QQuickItem* dropdown = expectItem("sizePreset");
   QVERIFY(dropdown->isVisible());
-  // Nothing is armed on open: a preset that selected itself filled the fields
-  // with a size the user never picked.
-  QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
-  QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
-  dropdown->setProperty("currentIndex", squareIndex);
   QQuickItem* width = expectItem("widthField");
   QQuickItem* height = expectItem("heightField");
+  // Nothing is armed on open: the dropdown starts on `Custom` and the fields
+  // stay empty. `onActivated` (not `onCurrentIndexChanged`) is what makes an
+  // index change the user's action, so a preset only lands when picked.
+  QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
+  QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
+  QCOMPARE(width->property("text").toString(), QString());
+  QCOMPARE(height->property("text").toString(), QString());
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseResizePreset",
+                                    Q_ARG(QVariant, squareIndex)));
   QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
   QTRY_COMPARE(height->property("text").toString(), QStringLiteral("1024"));
   QCOMPARE(dropdown->property("displayText").toString(),
@@ -660,18 +684,47 @@ void TestEditor::theSizeSteppersNudgeBothSides()
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
 
+  // Three presses in a row keep moving both linked sides; the initial race
+  // that filled 2048 × 2048 showed up as a jump here.
+  for (int press = 1; press <= 3; ++press) {
+    clickItem(expectItem("widthStepUp"));
+    QCOMPARE(width->property("text").toString(), QString::number(4000 + press));
+  }
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3002"));
+  for (int press = 1; press <= 3; ++press) {
+    clickItem(expectItem("widthStepDown"));
+  }
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+
+  // Both ends stay inside the validators instead of making the linked field
+  // invalid and disabling Apply.
+  width->setProperty("text", QStringLiteral("20000"));
+  height->setProperty("text", QStringLiteral("20000"));
+  clickItem(expectItem("widthStepUp"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("20000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("15000"));
+  width->setProperty("text", QStringLiteral("1"));
+  height->setProperty("text", QStringLiteral("1"));
+  clickItem(expectItem("widthStepDown"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1"));
+
   // Free is the unlinked choice: nudging one side leaves the other.
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  width->setProperty("text", QStringLiteral("4000"));
+  height->setProperty("text", QStringLiteral("3000"));
   clickItem(expectItem("widthStepUp"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The square fill travels with the typed command; the anchor does not exist
-/// any more. The pad is centred, which is Core's job, not the view's.
-void TestEditor::resizeCarriesTheSquareFill()
+/// The pad colour travels with the typed command; the anchor does not exist any
+/// more. Fitting the whole image and centring the leftover is Core's job, not
+/// the view's.
+void TestEditor::resizeCarriesThePadFill()
 {
   setState(documentState());
   selectTool("resize");
@@ -682,9 +735,9 @@ void TestEditor::resizeCarriesTheSquareFill()
   QVERIFY(findObject(QStringLiteral("anchor_top_left")) == nullptr);
   QVERIFY(findObject(QStringLiteral("halfSize")) == nullptr);
 
-  QQuickItem* pad = expectItem("padSquare");
+  QQuickItem* pad = expectItem("padToFit");
   clickItem(pad);
-  QTRY_VERIFY(m_editor->property("resizePadSquare").toBool());
+  QTRY_VERIFY(m_editor->property("resizePadFit").toBool());
   QVERIFY(expectItem("fillColorButton")->isVisible());
 
   m_editor->setProperty("resizeFillColor", QColor(255, 0, 0));
@@ -852,7 +905,8 @@ void TestEditor::theCropPresetsFitInsideTheDocument()
   QVERIFY(dropdown->isVisible());
   QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
   QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
-  dropdown->setProperty("currentIndex", squareIndex);
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropPreset",
+                                    Q_ARG(QVariant, squareIndex)));
   QQuickItem* width = expectItem("widthField");
   QQuickItem* height = expectItem("heightField");
   QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
@@ -958,7 +1012,6 @@ void TestEditor::theCropAnchorPlacesTheRectangle()
   QCOMPARE(y->property("text").toString(), QStringLiteral("60"));
 
   // Picking a preset re-places the rectangle at the anchor too.
-  QQuickItem* dropdown = expectItem("cropPreset");
   const QVariantList presets = m_editor->property("cropPresets").toList();
   int index = -1;
   for (int i = 0; i < presets.size(); ++i) {
@@ -968,7 +1021,8 @@ void TestEditor::theCropAnchorPlacesTheRectangle()
     }
   }
   QVERIFY(index >= 0);
-  dropdown->setProperty("currentIndex", index);
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropPreset",
+                                    Q_ARG(QVariant, index)));
   QTRY_COMPARE(x->property("text").toString(), QStringLiteral("1744"));
   QTRY_COMPARE(y->property("text").toString(), QStringLiteral("0"));
   QCOMPARE(m_commands->count(), 0);
@@ -1110,7 +1164,7 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   selectTool("resize");
   for (const char* option : {"toolOptionsHeading", "widthField", "heightField",
                              "applyResize", "resetToolFields", "sizePreset", "resizeRatio",
-                             "livePreviewButton", "padSquare"}) {
+                             "livePreviewButton", "padToFit"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
                                                  .arg(QString::fromLatin1(option))));
@@ -1144,7 +1198,7 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(!resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
   QVERIFY(!expectItem("sizePreset")->isVisible());
-  QVERIFY(!expectItem("padSquare")->isVisible());
+  QVERIFY(!expectItem("padToFit")->isVisible());
   QVERIFY(!expectItem("cropX")->isVisible());
   QVERIFY(!expectItem("cropY")->isVisible());
 
@@ -1156,7 +1210,7 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("cropY")->isVisible());
   QVERIFY(!expectItem("sizePreset")->isVisible());
-  QVERIFY(!expectItem("padSquare")->isVisible());
+  QVERIFY(!expectItem("padToFit")->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QCOMPARE(m_commands->count(), 0);
 

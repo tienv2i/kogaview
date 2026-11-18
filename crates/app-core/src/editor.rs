@@ -15,7 +15,6 @@
 //! without copying the whole buffer. This module owns pixels and history only;
 //! file paths, the command gateway and UI state stay in Core.
 
-use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -59,8 +58,9 @@ pub enum EditOperation {
     Resize {
         width: u32,
         height: u32,
-        /// When present, pad the shorter side to a square with this RGB colour
-        /// before the centred crop and scale.
+        /// When present, scale the whole source to fit inside the target and
+        /// fill the leftover with this RGB colour. Without it the target aspect
+        /// is filled by a centred crop instead.
         fill: Option<[u8; 3]>,
     },
 }
@@ -93,7 +93,7 @@ impl EditOperation {
             } => {
                 let mut label = format!("Resize {width} × {height}");
                 if let Some([r, g, b]) = fill {
-                    label.push_str(&format!(" · square #{r:02x}{g:02x}{b:02x}"));
+                    label.push_str(&format!(" · pad #{r:02x}{g:02x}{b:02x}"));
                 }
                 label
             }
@@ -556,13 +556,13 @@ impl EditorDocument {
             EditOperation::Resize {
                 width: w,
                 height: h,
-                fill,
                 ..
             } => {
                 validate_resize(*w, *h)?;
-                // A square source has no shorter side to fill, so the pad is
-                // only a real change on a non-square document.
-                Ok(*w == width && *h == height && (fill.is_none() || width == height))
+                // Same dimensions are the only no-op: a pad colour on the same
+                // target would fit the whole source exactly, so nothing is
+                // added.
+                Ok(*w == width && *h == height)
             }
         }
     }
@@ -639,17 +639,46 @@ fn validate_resize(width: u32, height: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Pad a shorter side to a square of the longer edge with a solid colour,
-/// centred: there is no anchor on Resize, so the added fill is split evenly on
-/// the two sides that are short.
-fn pad_to_square(image: &RgbaImage, color: [u8; 3]) -> RgbaImage {
-    let (w, h) = image.dimensions();
-    let side = w.max(h);
-    let mut canvas =
-        RgbaImage::from_pixel(side, side, image::Rgba([color[0], color[1], color[2], 255]));
-    let x = (side - w) / 2;
-    let y = (side - h) / 2;
-    imageops::overlay(&mut canvas, image, i64::from(x), i64::from(y));
+/// Scale the whole source down (or up) to the largest box of the source's own
+/// shape that fits inside `target_width` × `target_height`, then centre it on a
+/// target-sized canvas of `color`. Nothing is stretched and nothing is cut: the
+/// target shape is the frame, the source shape is what fills it, and the
+/// leftover is the pad. The pad is a letterbox or a pillarbox — only a square
+/// when the target itself is square.
+fn fit_with_padding(
+    image: &RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    color: [u8; 3],
+) -> RgbaImage {
+    let (source_width, source_height) = image.dimensions();
+    let source_width_64 = u64::from(source_width);
+    let source_height_64 = u64::from(source_height);
+    let target_width_64 = u64::from(target_width);
+    let target_height_64 = u64::from(target_height);
+
+    // The target is the tighter constraint on width when its aspect is narrower
+    // than the source's; otherwise height is. Rounded to the nearest pixel and
+    // clamped so integer rounding can never spill outside the frame.
+    let (content_width, content_height) = if target_width_64 * source_height_64
+        <= target_height_64 * source_width_64
+    {
+        let height = (source_height_64 * target_width_64 + source_width_64 / 2) / source_width_64;
+        (target_width, height.clamp(1, target_height_64) as u32)
+    } else {
+        let width = (source_width_64 * target_height_64 + source_height_64 / 2) / source_height_64;
+        (width.clamp(1, target_width_64) as u32, target_height)
+    };
+
+    let content = imageops::resize(image, content_width, content_height, FilterType::Lanczos3);
+    let mut canvas = RgbaImage::from_pixel(
+        target_width,
+        target_height,
+        image::Rgba([color[0], color[1], color[2], 255]),
+    );
+    let x = (target_width - content_width) / 2;
+    let y = (target_height - content_height) / 2;
+    imageops::overlay(&mut canvas, &content, i64::from(x), i64::from(y));
     canvas
 }
 
@@ -716,16 +745,14 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
             fill,
         } => {
             validate_resize(*w, *h)?;
-            // Fill to a square on the longer edge, then crop the target aspect
-            // around the centre and scale. The crop keeps the result from
-            // stretching when the target aspect differs.
-            let source = match fill {
-                Some([r, g, b]) => Cow::Owned(pad_to_square(image, [*r, *g, *b])),
-                None => Cow::Borrowed(image),
-            };
-            let rect = cover_rect(source.width(), source.height(), *w, *h);
-            let cropped =
-                imageops::crop_imm(source.as_ref(), rect.0, rect.1, rect.2, rect.3).to_image();
+            // With a fill, fit the whole source inside the target and pad the
+            // leftover: no pixels are stretched or thrown away. Without one,
+            // cover the target by cropping around the centre and scale.
+            if let Some([r, g, b]) = fill {
+                return Ok(fit_with_padding(image, *w, *h, [*r, *g, *b]));
+            }
+            let rect = cover_rect(width, height, *w, *h);
+            let cropped = imageops::crop_imm(image, rect.0, rect.1, rect.2, rect.3).to_image();
             Ok(imageops::resize(&cropped, *w, *h, FilterType::Lanczos3))
         }
     }
@@ -1109,29 +1136,58 @@ mod tests {
     }
 
     #[test]
-    fn square_pad_is_centred_and_uses_the_colour() {
+    fn fit_padding_centres_the_source_in_a_square_target() {
         let image = RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]));
-        let padded = pad_to_square(&image, [1, 2, 3]);
-        assert_eq!(padded.dimensions(), (4, 4));
-        // Two rows of fill above and below the centred source, never all on
-        // one side.
-        assert_eq!(padded.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
-        assert_eq!(padded.get_pixel(0, 1), &image::Rgba([10, 20, 30, 255]));
-        assert_eq!(padded.get_pixel(3, 2), &image::Rgba([10, 20, 30, 255]));
-        assert_eq!(padded.get_pixel(3, 3), &image::Rgba([1, 2, 3, 255]));
+        let fitted = fit_with_padding(&image, 4, 4, [1, 2, 3]);
+        assert_eq!(fitted.dimensions(), (4, 4));
+        // One row of fill above and below the centred source, never all on one
+        // side.
+        assert_eq!(fitted.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
+        assert_eq!(fitted.get_pixel(0, 1), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(fitted.get_pixel(3, 2), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(fitted.get_pixel(3, 3), &image::Rgba([1, 2, 3, 255]));
         // A tall source is padded left and right instead.
         let tall = RgbaImage::from_pixel(2, 4, image::Rgba([10, 20, 30, 255]));
-        let padded = pad_to_square(&tall, [9, 8, 7]);
-        assert_eq!(padded.get_pixel(0, 0), &image::Rgba([9, 8, 7, 255]));
-        assert_eq!(padded.get_pixel(1, 0), &image::Rgba([10, 20, 30, 255]));
-        assert_eq!(padded.get_pixel(2, 3), &image::Rgba([10, 20, 30, 255]));
+        let fitted = fit_with_padding(&tall, 4, 4, [9, 8, 7]);
+        assert_eq!(fitted.get_pixel(0, 0), &image::Rgba([9, 8, 7, 255]));
+        assert_eq!(fitted.get_pixel(1, 0), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(fitted.get_pixel(2, 3), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(fitted.get_pixel(3, 3), &image::Rgba([9, 8, 7, 255]));
     }
 
     #[test]
-    fn resize_can_fill_a_square_with_the_chosen_colour() {
+    fn fit_padding_keeps_a_non_square_target() {
+        let image = RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]));
+        // An 8 × 4 target has the source's 2:1 shape: the whole frame is the
+        // image and the colour is never used.
+        let exact = fit_with_padding(&image, 8, 4, [1, 2, 3]);
+        assert_eq!(exact.dimensions(), (8, 4));
+        assert_eq!(exact.get_pixel(0, 0), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(exact.get_pixel(7, 3), &image::Rgba([10, 20, 30, 255]));
+        // An 8 × 6 target is taller than the source: a 1 px band on top and
+        // bottom, not a square.
+        let wide = fit_with_padding(&image, 8, 6, [1, 2, 3]);
+        assert_eq!(wide.dimensions(), (8, 6));
+        assert_eq!(wide.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
+        assert_eq!(wide.get_pixel(0, 1), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(wide.get_pixel(7, 4), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(wide.get_pixel(7, 5), &image::Rgba([1, 2, 3, 255]));
+        // A portrait source in an 8 × 4 frame is pillarboxed, not squared.
+        let tall = RgbaImage::from_pixel(2, 4, image::Rgba([10, 20, 30, 255]));
+        let pillarboxed = fit_with_padding(&tall, 8, 4, [4, 5, 6]);
+        assert_eq!(pillarboxed.dimensions(), (8, 4));
+        assert_eq!(pillarboxed.get_pixel(0, 0), &image::Rgba([4, 5, 6, 255]));
+        assert_eq!(pillarboxed.get_pixel(3, 0), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(pillarboxed.get_pixel(4, 3), &image::Rgba([10, 20, 30, 255]));
+        assert_eq!(pillarboxed.get_pixel(7, 0), &image::Rgba([4, 5, 6, 255]));
+    }
+
+    #[test]
+    fn resize_can_fit_the_whole_image_with_the_chosen_colour() {
         let dir = temp_dir();
         let path = source_file(&dir, "photo.png", 8, 4);
         let mut document = open_document(&path).unwrap();
+        let source_pixel = *document.pixels().get_pixel(0, 2);
         assert!(document
             .apply(EditOperation::Resize {
                 width: 8,
@@ -1143,9 +1199,14 @@ mod tests {
         assert_eq!(
             document.pixels().get_pixel(0, 7),
             &image::Rgba([255, 0, 0, 255]),
-            "the added square area is the chosen colour"
+            "the leftover band is the chosen colour"
         );
-        assert_eq!(document.history(), vec!["Resize 8 × 8 · square #ff0000"]);
+        assert_eq!(
+            document.pixels().get_pixel(0, 4),
+            &source_pixel,
+            "the source was not stretched to the square"
+        );
+        assert_eq!(document.history(), vec!["Resize 8 × 8 · pad #ff0000"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

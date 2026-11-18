@@ -74,15 +74,25 @@
   18 concrete sizes, three per ratio, every side a multiple of 64 (for 1:1:
   2048, 1024, 512); picking one also selects the ratio it belongs to. Nothing is
   armed until the user acts: the list opens on `Custom` and Apply stays disabled
-  while the fields are empty.
+  while the fields are empty. Both size combos apply a preset from their
+  `onActivated`, i.e. only when the user picks it. Crop's list is filtered by
+  the document, so it is rebuilt when a document arrives; an
+  `onCurrentIndexChanged` handler applied its first fitting row then and wrote
+  2048 × 2048 into the shared fields, even under Resize. A programmatic index
+  write (the link code showing that a typed pair matches a preset) must not fill
+  the fields either.
 - **Width and Height carry +/- steppers.** The pair of small arrow buttons next
-  to each field moves that side by one pixel. An empty field starts from the size
-  its placeholder shows (the document's own), and the step runs the same link
-  path as typing, so a locked ratio or Free is respected; the live preview and
-  the Crop anchor see the new size immediately.
+  to each field moves that side by one pixel and auto-repeats while held. An
+  empty (or invalid) field starts from the size its placeholder shows (the
+  document's own), and the step runs the same link path as typing, so a locked
+  ratio or Free is respected; the linked side and the Apply state stay inside the
+  same 1–20000 range. The live preview and the Crop anchor see the new size
+  immediately.
 - **Resize has no anchor; Crop keeps its rectangle.** Where the cropped result
-  sits is a Crop decision. When the target aspect differs, Core takes the
-  centred cover rectangle before scaling, so pixels are never stretched.
+  sits is a Crop decision. By default, when the target aspect differs, Core takes
+  the centred cover rectangle before scaling, so pixels are never stretched.
+  `Pad to fit` is the other choice: the whole image is scaled down to fit inside
+  the target and the leftover is filled, so nothing is cut.
 - **Crop has the anchor, a ratio and fitting presets.** Width/Height link through
   the Crop Ratio combo (`Free`, `Original`, `Keep current ratio` and the same six
   common ratios) exactly as Resize does, and the Size preset list offers only
@@ -98,12 +108,13 @@
   document. Crop uses the same draft, tagged `kind: "crop"`, so the canvas shows
   it only under Crop and never under Resize; toggling it off, leaving the tool,
   applying the edit, any other edit or undo/redo/reset drops the draft.
-- **Pad to square runs before the scale.** Ticking it adds a fill colour picker
-  (disabled while unticked) and Core pads the shorter side out to the longer one,
-  centred, then takes the centred aspect cover and scales: a 1200 × 1600 portrait
-  squared and scaled to 512 × 512 gets 64 px bands left and right of the
-  picture. The history line names the fill
-  (`Resize 512 × 512 · square #ff0000`).
+- **Pad to fit keeps the whole picture in the target's frame.** Ticking it adds
+  a fill colour picker (disabled while unticked) and Core scales the source to
+  the largest box of its own shape that fits inside Width × Height, centres it,
+  and fills the rest with that colour. The pad is a letterbox or a pillarbox —
+  only square when the target is square — so a 1595 × 2048 portrait resized to
+  1003 × 698 gets two wide bands, not a 2048-square. The history line names the
+  pad (`Resize 1003 × 698 · pad #ff2d2d`).
 - **The pointer thumbnail is the current preview, not the source.** It goes
   through the shared `ThumbnailCache`, which keys on the file's path *and* its
   mtime/size; Core publishes both for the preview, because the preview names

@@ -2,6 +2,7 @@
 #include "language.h"
 #include "thumbnailcache.h"
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -460,7 +461,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // the size dropdown is written the way its own selection writes it.
         // `_ARG` is WIDTHxHEIGHT of a preset (default 1024x1024), or a custom
         // pair when no preset matches; `_ARG2` optionally names a ratio key
-        // (e.g. `current`) to select after the pair is in place.
+        // (e.g. `current`) to select after the pair is in place; `_ARG3` is a
+        // fill colour that also arms Pad to fit; `_ARG4` is stepper taps such
+        // as `w+3,h-2`, clicked through the same buttons a hand uses.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
@@ -468,6 +471,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
         const QString ratioKey = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const QString fillArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        const QString stepArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
         const QStringList parts = size.split(QLatin1Char('x'));
         const int wantedWidth = parts.value(0).toInt();
         const int wantedHeight = parts.value(1).toInt();
@@ -477,7 +482,6 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           return;
         }
         QMetaObject::invokeMethod(tool, "click");
-        QObject* preset = editor->findChild<QObject*>(QStringLiteral("sizePreset"));
         const QVariantList presets = editor->property("sizePresets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
@@ -488,8 +492,12 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             break;
           }
         }
-        if (preset != nullptr && index >= 0) {
-          preset->setProperty("currentIndex", index);
+        if (index >= 0) {
+          // The combo applies a preset from `onActivated`, which a programmatic
+          // `currentIndex` write does not emit; call the same helper the user's
+          // selection calls.
+          QMetaObject::invokeMethod(editor, "chooseResizePreset",
+                                    Q_ARG(QVariant, QVariant(index)));
         } else {
           // A custom pair: write the fields the way typing does, so a ratio
           // such as `current` can snapshot it.
@@ -507,6 +515,42 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           QMetaObject::invokeMethod(editor, "setRatio",
                                     Q_ARG(QVariant, QVariant(ratioKey)));
           QMetaObject::invokeMethod(editor, "relinkFields");
+        }
+        if (!fillArg.isEmpty()) {
+          QObject* pad = editor->findChild<QObject*>(QStringLiteral("padToFit"));
+          if (pad != nullptr && !pad->property("checked").toBool()) {
+            QMetaObject::invokeMethod(pad, "click");
+          }
+          const QString color = fillArg.startsWith(QLatin1Char('#'))
+                                  ? fillArg
+                                  : QLatin1Char('#') + fillArg;
+          editor->setProperty("resizeFillColor", QColor(color));
+          qInfo() << "KogaView dev ui request: pad fill" << color << "armed"
+                  << editor->property("resizePadFit");
+        }
+        if (!stepArg.isEmpty()) {
+          auto clickSteps = [editor](const QString& tap) {
+            if (tap.size() < 3) return;
+            const bool width = tap.at(0) == QLatin1Char('w');
+            const bool up = tap.at(1) == QLatin1Char('+');
+            const int count = tap.mid(2).toInt();
+            const char* name = width ? (up ? "widthStepUp" : "widthStepDown")
+                                     : (up ? "heightStepUp" : "heightStepDown");
+            QObject* button = editor->findChild<QObject*>(QString::fromLatin1(name));
+            if (button == nullptr) return;
+            for (int i = 0; i < count; ++i) {
+              QMetaObject::invokeMethod(button, "click");
+            }
+          };
+          for (const QString& tap : stepArg.split(QLatin1Char(','))) {
+            clickSteps(tap.trimmed());
+          }
+          auto fieldText = [editor](const char* name) {
+            QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
+            return field != nullptr ? field->property("text") : QVariant();
+          };
+          qInfo() << "KogaView dev ui request: stepped" << stepArg << "to"
+                  << fieldText("widthField") << "×" << fieldText("heightField");
         }
         QObject* live = editor->findChild<QObject*>(QStringLiteral("livePreviewButton"));
         if (live != nullptr) {
@@ -541,7 +585,6 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           return;
         }
         QMetaObject::invokeMethod(tool, "click");
-        QObject* preset = editor->findChild<QObject*>(QStringLiteral("cropPreset"));
         const QVariantList presets = editor->property("cropPresets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
@@ -552,8 +595,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             break;
           }
         }
-        if (preset != nullptr && index >= 0) {
-          preset->setProperty("currentIndex", index);
+        if (index >= 0) {
+          QMetaObject::invokeMethod(editor, "chooseCropPreset",
+                                    Q_ARG(QVariant, QVariant(index)));
         } else {
           qWarning() << "KogaView dev ui request: no fitting crop preset" << size;
         }

@@ -17,24 +17,29 @@ instead of a name that repeats every run — and its Crop tool has the same link
 sides and presets, a 3 × 3 anchor that places the rectangle and its own live
 preview. The two size tools now also carry +/- steppers on Width and Height, a
 `Keep current ratio` lock for a custom pair, and a shorter list of ratios and
-samples.
+samples; this follow-up makes the steppers auto-repeat and starts them from the
+document size, fixes the Crop preset list that filled the fields on open, and
+turns the old square pad into `Pad to fit` — the whole picture fits the target
+and only the leftover is filled, square or not.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The ratio/stepper follow-up (row 75) is the newest commit on
-  top of `158927a` (the Crop rework); the tree is clean after it. This session's
-  earlier commits are on top of `d149152` and are listed in `git log`; the
-  newest are the keyboard map, the tooltip hints, the burger-menu fix, the
-  modal-pointer fix, the Editor layout and its pointer follow-up, and the two
-  size tools.
+- Branch `main`. The pad/stepper follow-up (row 76) is the newest commit on top
+  of `bc9cd54` (the size steppers and current-ratio lock); the tree is clean
+  after it. This session's earlier commits are on top of `d149152` and are
+  listed in `git log`; the newest are the keyboard map, the tooltip hints, the
+  burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
+  follow-up, and the two size tools.
 - `cpp/main.cpp` gained one permanent debug hook per size tool:
   `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset,
-  or a custom pair; `_ARG2` = an optional ratio key such as `current`) clicks
-  the real Resize tool button, writes the size dropdown the way its own
-  selection does (or the two fields for a custom pair), selects the ratio and
-  clicks Live preview, and `editor-crop` (`_ARG` =
+  or a custom pair; `_ARG2` = an optional ratio key such as `current`; `_ARG3` =
+  a fill colour that arms `Pad to fit`; `_ARG4` = stepper taps such as
+  `w+3,h-2`) clicks the real Resize tool button, applies the size through the
+  same helper the dropdown's selection calls (or writes the two fields for a
+  custom pair), arms the pad, clicks the stepper buttons and Live preview, and
+  `editor-crop` (`_ARG` =
   `WIDTHxHEIGHT`, `_ARG2` = an anchor key, default `center`) does the same for
   Crop including an anchor button — found by walking the item tree, because a
   `Repeater` delegate is not a QObject child. Both exist so the panel can be
@@ -117,16 +122,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 73 | Resize's anchor belonged to Crop, Width/Height were not linked, the preset list was one size per ratio, there was no live preview, and the pointer thumbnail could show the previous run's picture | anchor removed from protocol/Core/QML and the pad centred; ratio-linked fields, 47 sizes and a live-preview Core draft (`editor_resize_preview`); thumbnail cache keyed on the published preview mtime/size. `cargo` 63 + 4, `editor` 27, `translations` 155 strings; real window `docs/evidence/M1-editor-resize-live.png`, `M1-editor-thumbnail-second-run.png`; mutations: thumbnail identity zeroed, `free` ratio left linked, pad not centred, preview stamp zeroed |
 | 74 | Crop still typed four numbers by hand: no linked sides, no presets, nowhere to say where inside the document the rectangle belongs, and no way to see the cut before applying it | shared `sizeRatios`/`sizePresets`, a fitting `cropPresets` list, a 3 × 3 `cropAnchors` pad that places X/Y, and `editor_crop_preview` reusing the draft with `kind: "crop"`. `cargo` 64 + 4, `editor` 31, `translations` 166 strings; real window `docs/evidence/M1-editor-crop-live.png` (512 × 384 at `bottom_right`, draft on canvas, status still 1254 × 1254); mutations: preset filter removed, draft kind ignored, anchor column fixed, Core kind swapped |
 | 75 | Width/Height were type-only, a custom W:H pair could not be locked, and 12 ratios / 47 samples made the panel longer than it was useful | `stepField` plus four arrow buttons, a per-tool `Keep current ratio` snapshot, six common ratios (21:9, 5:4, 16:10, 2:3 removed) and 18 presets (three per ratio); `editor-resize` also takes a custom pair and an `_ARG2` ratio key. `cargo` 64 + 4, `editor` 33, `translations` 171 strings; real window `docs/evidence/M1-editor-resize-current-ratio.png` (1000 × 700 with `Keep current ratio`, draft on canvas, status still 1254 × 1254); mutations: snapshot call removed (`captured.width` 0), stepper link removed, 21:9 restored |
+| 76 | The steppers felt stuck or bounded, the shared Width/Height fields showed 2048 × 2048 on a fresh Resize panel, and `Pad to square` forced a square frame instead of the requested fit-inside-and-fill | `stepField` starts from an empty/invalid field's placeholder and clamps both sides to 1–20000, the four arrow buttons auto-repeat and are 24 × 16, both preset dropdowns apply only from `onActivated` (Crop's document-filtered model was re-applying its first row when a document arrived), and `pad_to_square` became `fit_with_padding` in Core: scale the whole source into the target and fill the leftover, letterbox or pillarbox. `cargo` 65 + 4, `editor` 34, `translations` 172 strings; real window `docs/evidence/M1-editor-resize-pad-fit.png` (1003 × 698 target from a 1595 × 2048 portrait, red bars, `Pad to fit`, status still 1595 × 2048); mutations: ratio link removed from `stepField`, the Crop dropdown reverted to `onCurrentIndexChanged`, `fit_with_padding` stretched to the target |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 171 strings in kogaview_vi.ts, 110 of them compiled into C++, 167 drawn by the QML, 4 looked up by context
+translations: 172 strings in kogaview_vi.ts, 110 of them compiled into C++, 168 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
-cargo: 64 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 33 · language 5 · toolbar 11
+cargo: 65 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 34 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -300,9 +306,27 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   the Ratio combo already is the lock.
 - **Steppers are the same edit path as typing.** The +/- pair beside Width and
   Height sets the text and calls `linkHeightFromWidth`/`linkWidthFromHeight`,
-  then the same 200 ms draft debounce. An empty field starts from the document
-  size its placeholder shows, not from 1, and `Free` leaves the other side
-  alone. Nothing is sent to Core until Apply or Live preview asks.
+  then the same 200 ms draft debounce. An empty or invalid field starts from the
+  document size its placeholder shows, not from 1, the linked side is clamped to
+  the fields' 1–20000 range, and `Free` leaves the other side alone. Each button
+  auto-repeats while held, so a long nudge does not need hundreds of clicks.
+  Nothing is sent to Core until Apply or Live preview asks.
+- **Pad to fit is not pad to square.** The old checkbox squared the canvas before
+  covering it, so a 1003 × 698 target became a 2048-square first. `fit_with_padding`
+  instead computes the largest box of the *source's* shape that fits inside the
+  target, resizes the source once into it, and centres it on a target-sized fill
+  canvas. The leftover is a letterbox, a pillarbox, or nothing — only the target
+  being square makes the frame square. Without the checkbox, Resize keeps the
+  existing centred cover-and-crop so nothing is ever stretched.
+- **A preset is applied on activation, never on an index change.** Both Size
+  dropdowns use `onActivated`, and the concrete size + ratio work lives in
+  `chooseResizePreset`/`chooseCropPreset`. Crop's list is filtered by the
+  document, so it is rebuilt when a document arrives; with
+  `onCurrentIndexChanged` its first fitting row (1:1 · 2048 × 2048) applied
+  itself then and wrote the shared Width/Height fields, which is why a fresh
+  Resize panel showed 2048 × 2048 while the Size control still read `Custom`.
+  Writing `currentIndex` from `matchingPreset()` now only mirrors a typed pair
+  in the dropdown and cannot re-apply it.
 - **The lists are short on purpose.** Twelve ratios and 47 samples buried
   `Custom` and the useful targets. Six common ratios and three sizes each (18
   entries) keep the dropdown scannable; the rare shapes (21:9, 5:4, 16:10, 2:3)
@@ -403,6 +427,16 @@ fails (`captured.width` 0, expected 1000); removing the ratio link from
 `stepField` → `theSizeSteppersNudgeBothSides` fails on the first linked height;
 putting `21:9` back in `sizeRatios` → `theResizePresetsAreMultiplesOf64` fails
 on `!ratioKeys.contains("21:9")`. Each restored, then the suite green.
+
+Pad to fit and the startup race: making `fit_with_padding` stretch to the target
+(use the target size as the content box) → `fit_padding_keeps_a_non_square_target`
+and `resize_can_fit_the_whole_image_with_the_chosen_colour` fail; reverting the
+Size dropdown to `onCurrentIndexChanged` → nothing (its model is constant);
+reverting the Crop dropdown to `onCurrentIndexChanged` →
+`theFreshResizeFieldsStayEmpty` fails with `2048` in Width and Height, because
+its document-filtered model rebuilds when the state arrives; removing the link
+calls from `stepField` → `theSizeSteppersNudgeBothSides` fails on the first
+linked height. Each restored, then the suite green.
 
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;

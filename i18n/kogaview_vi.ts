@@ -539,20 +539,25 @@
         <translation>Neo giữ góc, cạnh hoặc tâm đã chọn của ảnh.</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorView.qml" line="1205"/>
-        <source>Pad to square</source>
-        <translation>Đệm thành ảnh vuông</translation>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="1492"/>
+        <source>Pad to fit</source>
+        <translation>Vừa khung, tô nền</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="1498"/>
+        <source>Keep the whole image in shape and fill the leftover with the fill color</source>
+        <translation>Giữ nguyên hình dạng ảnh và tô màu vào phần trống</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="1052"/>
         <location filename="../crates/desktop/qml/EditorView.qml" line="1180"/>
         <source>Fill color</source>
-        <translation>Màu lấp đầy</translation>
+        <translation>Màu tô nền</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorView.qml" line="1067"/>
-        <source>Pads the shorter side to the longer one.</source>
-        <translation>Cạnh ngắn được đệm cho bằng cạnh dài.</translation>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="1513"/>
+        <source>Scales the whole image to fit and fills the leftover with this color.</source>
+        <translation>Thu toàn bộ ảnh cho vừa khung và tô màu vào phần trống.</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="1122"/>
