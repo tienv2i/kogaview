@@ -27,6 +27,8 @@
 #include <QVariantMap>
 #include <QWheelEvent>
 
+#include "stubthumbnailcache.h"
+
 namespace {
 
 QString qmlDir()
@@ -52,7 +54,10 @@ private slots:
   void undoRedoResetAndCloseEmitCommands();
   void resizeApplyEmitsTheTypedSize();
   void theResizePresetsAreMultiplesOf64();
-  void resizeCarriesTheAnchorAndSquareFill();
+  void typingOneSideKeepsTheChosenRatio();
+  void resizeCarriesTheSquareFill();
+  void theLivePreviewShowsTheDraftWithoutApplyingIt();
+  void thePointerThumbnailCarriesThePreviewIdentity();
   void cropApplyEmitsTheTypedRectangle();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
@@ -73,6 +78,7 @@ private:
   QObject* findObject(const QString& name) const;
   static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
+  void typeInto(QQuickItem* field, const QString& text);
   void selectTool(const char* name);
   QVariantList commands() const { return m_commands->takeFirst(); }
   QVariantMap documentState() const;
@@ -168,6 +174,19 @@ void TestEditor::init()
       field->setProperty("text", QStringLiteral("0"));
     }
   }
+  // Tool options are view state, and a case that changed them must not decide
+  // what the next one sees. The two toggles also own a `checked` the control
+  // writes itself, so reset both sides.
+  m_editor->setProperty("resizeRatio", QStringLiteral("original"));
+  m_editor->setProperty("resizeLivePreview", false);
+  m_editor->setProperty("resizePadSquare", false);
+  m_editor->setProperty("resizeFillColor", QColor(QStringLiteral("#ffffff")));
+  m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
+  for (const char* name : {"livePreviewButton", "padSquare"}) {
+    if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
+      toggle->setProperty("checked", false);
+    }
+  }
 }
 
 QObject* TestEditor::findObject(const QString& name) const
@@ -220,6 +239,21 @@ void TestEditor::clickItem(QQuickItem* item)
   QTest::qWait(20);
 }
 
+/// Type into a field the way a hand does: focus it, select what is there and
+/// key the new value in. Setting `text` from C++ is not the same path: it does
+/// not emit `textEdited`, so it would skip the ratio link the user gets.
+void TestEditor::typeInto(QQuickItem* field, const QString& text)
+{
+  QVERIFY(field != nullptr);
+  field->forceActiveFocus();
+  QTest::qWait(10);
+  QTest::keyClick(m_view, Qt::Key_A, Qt::ControlModifier);
+  for (const QChar character : text) {
+    QTest::keyClick(m_view, static_cast<Qt::Key>(character.unicode()));
+  }
+  QTest::qWait(20);
+}
+
 /// Select a tool through the palette. Clicking the already selected Resize or
 /// Crop returns to the pointer, so a case that merely wants a tool must not
 /// click its button twice.
@@ -248,6 +282,9 @@ QVariantMap TestEditor::documentState() const
   editor.insert(QStringLiteral("redoCount"), 0);
   editor.insert(QStringLiteral("previewPath"), m_previewOne);
   editor.insert(QStringLiteral("previewRevision"), 1);
+  editor.insert(QStringLiteral("previewModified"), Q_INT64_C(1700000000001));
+  editor.insert(QStringLiteral("previewSize"), Q_INT64_C(2048));
+  editor.insert(QStringLiteral("previewDraft"), QVariant());
   editor.insert(QStringLiteral("rendering"), false);
   editor.insert(QStringLiteral("savePath"), QStringLiteral("/pics/photo.png"));
   editor.insert(QStringLiteral("saved"), true);
@@ -409,30 +446,58 @@ void TestEditor::resizeApplyEmitsTheTypedSize()
   QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
   QCOMPARE(command.value("width").toInt(), 800);
   QCOMPARE(command.value("height").toInt(), 600);
-  QCOMPARE(command.value("anchor").toString(), QStringLiteral("center"));
+  // Resize has no anchor: where the result sits is a Crop decision.
+  QVERIFY(!command.contains(QStringLiteral("anchor")));
   QVERIFY(command.value("fill").isNull());
 }
 
-/// The dropdown offers common ratios whose sides are exact multiples of 64, so
-/// a preset never produces fractional pixels at any scale. Choosing one fills
-/// both fields.
+/// The dropdown offers concrete sizes for every ratio, whose sides are exact
+/// multiples of 64, so a preset never produces fractional pixels at any scale.
+/// Choosing one fills both fields and selects the ratio that goes with them.
 void TestEditor::theResizePresetsAreMultiplesOf64()
 {
   setState(documentState());
   selectTool("resize");
 
-  const QVariantList presets = m_editor->property("sizePresets").toList();
-  QVERIFY2(presets.size() >= 6, "the common ratios are present");
-  for (const QVariant& entry : presets) {
-    const QVariantMap preset = entry.toMap();
-    QVERIFY(!preset.value("label").toString().isEmpty());
-    QVERIFY2(preset.value("width").toInt() % 64 == 0,
-             qPrintable(QStringLiteral("%1 width is not a multiple of 64")
-                            .arg(preset.value("label").toString())));
-    QVERIFY2(preset.value("height").toInt() % 64 == 0,
-             qPrintable(QStringLiteral("%1 height is not a multiple of 64")
-                            .arg(preset.value("label").toString())));
+  const QVariantList ratios = m_editor->property("resizeRatios").toList();
+  QVERIFY2(ratios.size() >= 8, "the common ratios are present");
+  QStringList ratioKeys;
+  for (const QVariant& entry : ratios) {
+    ratioKeys.append(entry.toMap().value("key").toString());
   }
+  QVERIFY(ratioKeys.contains(QStringLiteral("free")));
+  QVERIFY(ratioKeys.contains(QStringLiteral("original")));
+  QVERIFY(ratioKeys.contains(QStringLiteral("1:1")));
+  QVERIFY(ratioKeys.contains(QStringLiteral("16:9")));
+
+  const QVariantList presets = m_editor->property("resizePresets").toList();
+  QVERIFY2(presets.size() >= 20, "many ratio + pixel presets are offered");
+  int squareIndex = -1;
+  int smallSquareIndex = -1;
+  bool has768 = false;
+  for (int index = 0; index < presets.size(); ++index) {
+    const QVariantMap preset = presets.at(index).toMap();
+    const QString label = preset.value("label").toString();
+    QVERIFY(!label.isEmpty());
+    QVERIFY2(ratioKeys.contains(preset.value("ratio").toString()),
+             qPrintable(QStringLiteral("%1 has an unknown ratio").arg(label)));
+    QVERIFY2(preset.value("width").toInt() % 64 == 0,
+             qPrintable(QStringLiteral("%1 width is not a multiple of 64").arg(label)));
+    QVERIFY2(preset.value("height").toInt() % 64 == 0,
+             qPrintable(QStringLiteral("%1 height is not a multiple of 64").arg(label)));
+    if (preset.value("width").toInt() == 1024 && preset.value("height").toInt() == 1024) {
+      squareIndex = index;
+    }
+    if (preset.value("width").toInt() == 512 && preset.value("height").toInt() == 512) {
+      smallSquareIndex = index;
+    }
+    if (preset.value("width").toInt() == 768 && preset.value("height").toInt() == 768) {
+      has768 = true;
+    }
+  }
+  QVERIFY2(squareIndex >= 0, "1:1 · 1024 × 1024 is missing");
+  QVERIFY2(smallSquareIndex >= 0, "1:1 · 512 × 512 is missing");
+  QVERIFY2(has768, "1:1 · 768 × 768 is missing");
 
   QQuickItem* dropdown = expectItem("sizePreset");
   QVERIFY(dropdown->isVisible());
@@ -440,24 +505,69 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
   // with a size the user never picked.
   QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
   QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
-  dropdown->setProperty("currentIndex", 3);
+  dropdown->setProperty("currentIndex", squareIndex);
   QQuickItem* width = expectItem("widthField");
   QQuickItem* height = expectItem("heightField");
   QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
-  QTRY_COMPARE(height->property("text").toString(), QStringLiteral("576"));
-  QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("16:9 · 1024 × 576"));
+  QTRY_COMPARE(height->property("text").toString(), QStringLiteral("1024"));
+  QCOMPARE(dropdown->property("displayText").toString(),
+           QStringLiteral("1:1 · 1024 × 1024"));
+  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("1:1"));
 }
 
-/// The anchor and the square fill travel with the typed command: the UI must not
-/// keep them in a different place from the size.
-void TestEditor::resizeCarriesTheAnchorAndSquareFill()
+/// Resize lines the two sides up through the chosen ratio: typing one side
+/// recalculates the other, so a field pair can never describe a shape the user
+/// did not pick. "Free" is the only unlinked choice.
+void TestEditor::typingOneSideKeepsTheChosenRatio()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("resize");
+  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("original"));
+
+  QQuickItem* width = expectItem("widthField");
+  QQuickItem* height = expectItem("heightField");
+
+  // The document's own 4:3 shape by default.
+  typeInto(width, QStringLiteral("800"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+  typeInto(height, QStringLiteral("1200"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1200"));
+
+  // A square ratio keeps both sides equal.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("1:1")))));
+  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("1:1"));
+  typeInto(width, QStringLiteral("512"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("512"));
+
+  // A 16:9 ratio is exact on both sides.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("16:9")))));
+  typeInto(width, QStringLiteral("1024"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
+
+  // Free stops linking: the other side stays where it was.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  typeInto(width, QStringLiteral("300"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("300"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
+}
+
+/// The square fill travels with the typed command; the anchor does not exist
+/// any more. The pad is centred, which is Core's job, not the view's.
+void TestEditor::resizeCarriesTheSquareFill()
 {
   setState(documentState());
   selectTool("resize");
 
-  QQuickItem* anchor = expectItem("anchor_bottom_right");
-  clickItem(anchor);
-  QCOMPARE(m_editor->property("resizeAnchor").toString(), QStringLiteral("bottom_right"));
+  // An anchor is a Crop idea: Resize must not have the 3 × 3 pad, nor a Half
+  // shortcut.
+  QVERIFY(findObject(QStringLiteral("anchor_center")) == nullptr);
+  QVERIFY(findObject(QStringLiteral("anchor_top_left")) == nullptr);
+  QVERIFY(findObject(QStringLiteral("halfSize")) == nullptr);
 
   QQuickItem* pad = expectItem("padSquare");
   clickItem(pad);
@@ -473,12 +583,93 @@ void TestEditor::resizeCarriesTheAnchorAndSquareFill()
   QCOMPARE(m_commands->count(), 1);
   const QVariantMap command = m_commands->at(0).at(0).toMap();
   QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
-  QCOMPARE(command.value("anchor").toString(), QStringLiteral("bottom_right"));
+  QVERIFY(!command.contains(QStringLiteral("anchor")));
   const QVariantList fill = command.value("fill").toList();
   QCOMPARE(fill.size(), 3);
   QCOMPARE(fill.at(0).toInt(), 255);
   QCOMPARE(fill.at(1).toInt(), 0);
   QCOMPARE(fill.at(2).toInt(), 0);
+}
+
+/// Live preview draws Core's draft at the target size and changes nothing in
+/// the document: no history, no size, no save target. Turning it off hides the
+/// draft again, and the fields are what ask Core for a new render.
+void TestEditor::theLivePreviewShowsTheDraftWithoutApplyingIt()
+{
+  QVariantMap draft;
+  draft.insert(QStringLiteral("path"), m_previewTwo);
+  draft.insert(QStringLiteral("width"), 1024);
+  draft.insert(QStringLiteral("height"), 1024);
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  selectTool("resize");
+
+  QQuickItem* canvas = expectItem("canvas");
+  QQuickItem* toggle = expectItem("livePreviewButton");
+  QVERIFY(toggle->isVisible());
+  QVERIFY(!m_editor->property("resizeLivePreview").toBool());
+  // With the toggle off the canvas draws the document preview, whatever draft
+  // Core still holds.
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+
+  clickItem(toggle);
+  QVERIFY(m_editor->property("resizeLivePreview").toBool());
+  // The armed state is visible, not only internal: `checked` alone barely
+  // changes this style's button face.
+  QVERIFY(toggle->property("checked").toBool());
+  QVERIFY(toggle->property("highlighted").toBool());
+  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
+  QCOMPARE(canvas->property("width").toDouble(), 1024.0);
+  QCOMPARE(canvas->property("height").toDouble(), 1024.0);
+  // The document did not move: the draft is a preview, not an edit.
+  QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
+  QCOMPARE(m_editor->property("modified").toBool(), false);
+  QCOMPARE(m_commands->count(), 0);
+
+  clickItem(toggle);
+  QVERIFY(!m_editor->property("resizeLivePreview").toBool());
+  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QCOMPARE(m_commands->count(), 0);
+
+  // Arming it with a size asks Core for the draft, under the preview name so a
+  // journal never mistakes it for an applied resize.
+  expectItem("widthField")->setProperty("text", QStringLiteral("800"));
+  expectItem("heightField")->setProperty("text", QStringLiteral("800"));
+  clickItem(toggle);
+  QTRY_COMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize_preview"));
+  QCOMPARE(command.value("width").toInt(), 800);
+  QCOMPARE(command.value("height").toInt(), 800);
+}
+
+/// The sidebar thumbnail must give the shared cache the preview file's identity,
+/// not just its path. The preview names repeat every run (`preview-1.png`), so a
+/// key of (path, edge, 0, 0) answered a fresh document with the previous run's
+/// thumbnail: the canvas was right and the small preview was another picture.
+void TestEditor::thePointerThumbnailCarriesThePreviewIdentity()
+{
+  StubThumbnailCache cache;
+  m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(&cache)));
+
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("previewModified"), Q_INT64_C(1700000000123));
+  editor.insert(QStringLiteral("previewSize"), Q_INT64_C(4096));
+  setState(editor);
+  selectTool("pointer");
+
+  QTRY_VERIFY_WITH_TIMEOUT(!cache.callsFor(m_previewOne).isEmpty(), 2000);
+  const StubThumbnailCache::Call call = cache.lastCallFor(m_previewOne);
+  QCOMPARE(call.modified, Q_INT64_C(1700000000123));
+  QCOMPARE(call.size, Q_INT64_C(4096));
+  // The thumbnail is the preview, not the source: asking for the source would
+  // show the unedited original.
+  QVERIFY(cache.callsFor(QStringLiteral("/pics/photo.png")).isEmpty());
+
+  m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
 }
 
 void TestEditor::cropApplyEmitsTheTypedRectangle()
@@ -579,9 +770,9 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
 
   // A tool: only its options, inside the same inspector.
   selectTool("resize");
-  for (const char* option : {"toolOptionsHeading", "widthField", "heightField", "halfSize",
-                             "applyResize", "resetToolFields", "sizePreset", "anchor_center",
-                             "anchor_top_left", "anchor_bottom_right", "padSquare"}) {
+  for (const char* option : {"toolOptionsHeading", "widthField", "heightField",
+                             "applyResize", "resetToolFields", "sizePreset", "resizeRatio",
+                             "livePreviewButton", "padSquare"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
                                                  .arg(QString::fromLatin1(option))));

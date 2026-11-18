@@ -454,6 +454,52 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         qInfo().noquote() << "KogaView dev ui request leave-guard"
                           << (emitted ? "handled" : "not found");
+      } else if (uiRequest == QLatin1String("editor-resize")) {
+        // The Resize panel without a pointer: the tool button and the live
+        // preview toggle are `click()`ed (the same handler a press runs), and
+        // the size dropdown is written the way its own selection writes it.
+        // `_ARG` is WIDTHxHEIGHT of a preset, default 1024x1024.
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
+        const QStringList parts = size.split(QLatin1Char('x'));
+        const int wantedWidth = parts.value(0).toInt();
+        const int wantedHeight = parts.value(1).toInt();
+        QObject* tool = editor->findChild<QObject*>(QStringLiteral("toolResize"));
+        if (tool == nullptr) {
+          qWarning() << "KogaView dev ui request: Resize tool button missing";
+          return;
+        }
+        QMetaObject::invokeMethod(tool, "click");
+        QObject* preset = editor->findChild<QObject*>(QStringLiteral("sizePreset"));
+        const QVariantList presets = editor->property("resizePresets").toList();
+        int index = -1;
+        for (int i = 0; i < presets.size(); ++i) {
+          const QVariantMap entry = presets.at(i).toMap();
+          if (entry.value(QStringLiteral("width")).toInt() == wantedWidth &&
+              entry.value(QStringLiteral("height")).toInt() == wantedHeight) {
+            index = i;
+            break;
+          }
+        }
+        if (preset != nullptr && index >= 0) {
+          preset->setProperty("currentIndex", index);
+        } else {
+          qWarning() << "KogaView dev ui request: no preset" << size;
+        }
+        QObject* live = editor->findChild<QObject*>(QStringLiteral("livePreviewButton"));
+        if (live != nullptr) {
+          QMetaObject::invokeMethod(live, "click");
+        }
+        qInfo().noquote() << "KogaView dev ui request editor-resize" << size
+                          << "preset" << index << "ratio"
+                          << editor->property("resizeRatio") << "tool"
+                          << editor->property("tool") << "live"
+                          << editor->property("resizeLivePreview");
+        emitted = live != nullptr && index >= 0;
       } else if (uiRequest == QLatin1String("editor-fit") ||
                  uiRequest == QLatin1String("editor-zoom") ||
                  uiRequest == QLatin1String("editor-pan") ||

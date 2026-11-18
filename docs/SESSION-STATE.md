@@ -10,23 +10,31 @@ and Viewer are operable from the keyboard, their tooltips name the keys, the
 burger menu opens a file, a folder or the Editor, a modal dialog owns the
 pointer so the Settings header drags in the Viewer instead of panning the
 picture behind it, the Editor is a tool palette with a pointer inspector
-rather than a second toolbar, and its Resize tool frames the picture with an
-anchor pad, 64-divisible presets and a pad-to-square fill.
+rather than a second toolbar, and its Resize tool links Width and Height through
+a ratio, offers many 64-divisible sizes and can render the result live before
+Apply — with the pointer thumbnail now keyed on the preview file's own identity
+instead of a name that repeats every run.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The Resize follow-up (row 72) is the newest commit on top of
-  `e9e2e12` (the pointer inspector); the tree is clean after it. This session's earlier commits are on top of
+- Branch `main`. The Resize rework (row 73) is the newest commit on top of
+  `8bec1b7` (the anchored Resize that it supersedes); the tree is clean after
+  it. This session's earlier commits are on top of
   `d149152` and are listed in `git log`; the newest are the keyboard map, the
   tooltip hints, the burger-menu fix, the modal-pointer fix, the Editor
   layout and its pointer follow-up.
-- `cpp/main.cpp` is **unchanged** by the toolbar commit; the language follow-up
-  changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now treats
-  `isExposed()` as a hint (a covered window on this session reports itself
-  unexposed while `grabWindow()` still renders), waiting up to 8 s and then
-  grabbing anyway. Temporary hooks used on the real window and removed again:
+- `cpp/main.cpp` gained one permanent debug hook in row 73:
+  `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset)
+  clicks the real Resize tool button, writes the size dropdown the way its own
+  selection does and clicks Live preview, so the render can be photographed on
+  a session where XTEST pointer warps do not move the pointer. The language
+  follow-up changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now
+  treats `isExposed()` as a hint (a covered window on this session reports
+  itself unexposed while `grabWindow()` still renders), waiting up to 8 s and
+  then grabbing anyway. Temporary hooks used on the real window and removed
+  again:
   `KOGAVIEW_DEV_WHEEL_LOG`, `KOGAVIEW_DEV_GRID_SCROLL` (wheel session),
   `KOGAVIEW_DEV_RESIZE` and `KOGAVIEW_DEV_SETTINGS_STEPS` (fit/settings session),
   `KOGAVIEW_DEV_RESIZE` with `KOGAVIEW_DEV_RESIZE_SHOT` twice (toolbar, and
@@ -37,8 +45,8 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   (menu session; opened the shell menu and replayed the chooser's answer), and
   `KOGAVIEW_DEV_UI_REQUEST=settings-drag` (modal-pointer session; dragged the
   real Settings header with `QTest` and logged the dialog and Viewer offsets).
-  `cpp/main.cpp` is byte-identical to `HEAD` again; only the evidence survives,
-  in rows 62–69 of `docs/M1-REPORT.md`.
+  Every temporary hook is gone again; the only surviving debug addition is the
+  permanent `editor-resize` request above.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -75,7 +83,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
   `QT_QPA_PLATFORM=xcb`**, and only while that launch keeps focus; a warm-up
   click on the "Editor" tab was what let a later click reach a field. That is
   how the Resize panel was typed into (row 72); it is still not a human hand, and
-  it does not touch the compositor's own windows.
+  it does not touch the compositor's own windows. On the row 73 runs the same
+  trick did not reproduce: `xdotool mousemove` reported success but
+  `getmouselocation` never changed, so the panel was driven by the
+  `editor-resize` request instead (synthetic state, real QML handlers).
 
 ## What changed
 
@@ -91,22 +102,25 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 70–71 | The Editor's sidebars duplicated the toolbar, then kept Undo/Redo/Reset in the palette with no home for the document itself | palette Pointer/Resize/Crop with per-tool inspector, header Undo/Redo/Reset (12 buttons, 5 separators), Pointer default showing details, cached thumbnail and history; `editor` 22 cases at that point (`docs/evidence/M1-editor-tools.png`, `M1-editor-pointer.png`) |
 | 69 | The Settings dialog could not be dragged by its header in the Viewer (the pan handler took the drag); it worked in the Editor | `tst_viewer.cpp::aModalDialogOwnsThePointer` (real Viewer + real Settings dialog, header drag moves the dialog and leaves the offsets at 0, then Escape/R prove focus returns), `tst_settings.cpp::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen` (source guard on `Main.qml`); real binary with a temporary `KOGAVIEW_DEV_UI_REQUEST=settings-drag` hook: header drag `(330,108) → (250,148)` moved the dialog, offsets stayed `0,0` (before the fix the dialog stayed put and the offsets went `-80,40`) |
 | 72 | Resize could only type two numbers: no anchor, no common sizes, no squaring | anchor pad + 64-divisible presets + pad-to-square colour, in Core (`pad_to_square`, `anchored_cover_rect`) and QML; `cargo` 63, `editor` 24, `translations` 161 strings; real window `docs/evidence/M1-editor-resize.png`, `M1-editor-resize-square.png`; mutations: pad ignoring the anchor, Resize not padding, preset auto-selected |
+| 73 | Resize's anchor belonged to Crop, Width/Height were not linked, the preset list was one size per ratio, there was no live preview, and the pointer thumbnail could show the previous run's picture | anchor removed from protocol/Core/QML and the pad centred; ratio-linked fields, 47 sizes and a live-preview Core draft (`editor_resize_preview`); thumbnail cache keyed on the published preview mtime/size. `cargo` 63 + 4, `editor` 27, `translations` 155 strings; real window `docs/evidence/M1-editor-resize-live.png`, `M1-editor-thumbnail-second-run.png`; mutations: thumbnail identity zeroed, `free` ratio left linked, pad not centred, preview stamp zeroed |
 
 ## Test gate
 
 `PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
 
 ```
-translations: 161 strings in kogaview_vi.ts, 112 of them compiled into C++, 157 drawn by the QML, 4 looked up by context
+translations: 155 strings in kogaview_vi.ts, 111 of them compiled into C++, 151 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named …
 cargo: 63 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 24 · language 5 · toolbar 11
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 27 · language 5 · toolbar 11
 ```
 
-`cargo fmt --check` clean. `cargo clippy --workspace --all-targets -- -D warnings` still reports
-the two pre-existing `derivable_impls` warnings in `crates/app-protocol/src/lib.rs`
-(`impl Default for Workspace`/`Theme`, lines 53 and 173); the Resize change adds no new warning
-(the protocol's `Anchor` derives `Default` with `Center` marked `#[default]`).
+`cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
+still reports the two pre-existing `derivable_impls` warnings in
+`crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
+the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
+`field_reassign_with_default`, `needless_return`); the Resize rework adds no new warning
+(the protocol's `Anchor` and the anchored Core helpers are gone).
 
 ## Design decisions, keyboard session
 
@@ -208,34 +222,39 @@ the two pre-existing `derivable_impls` warnings in `crates/app-protocol/src/lib.
   hidden fields and Reset are asserted through the real items; `tst_toolbar`
   still guards the counts.
 
-## Design decisions, resize session
+## Design decisions, resize rework session
 
-- **The anchor is one value used twice, not two controls.** `Anchor` (nine
-  snake_case variants, `Center` default) travels in `editor_resize` with an
-  optional `fill: [r, g, b]`. Core pads the shorter side to the longer one
-  around it, then takes the cover rectangle for the target aspect around it
-  again — so a picture is never stretched, and the same pad tells the user which
-  part of the frame survives.
-- **The protocol stays backward compatible.** `anchor` and `fill` carry
-  `#[serde(default)]`, so an `editor_resize` written before this change still
-  parses as centre-without-padding; the round-trip test asserts that, and that
-  `bottom_right` + `[1,2,3]` parses back out.
-- **Square is a pre-step, not a mode.** `fill: Some(..)` is the whole feature:
-  `None` is exactly the old cover-and-scale, so undo/redo, the no-op check and
-  the preview path did not change. The history label names the fill
-  (`Resize 512 × 512 · square #ff0000`) and only mentions the anchor when the
-  target aspect is not 1:1.
-- **Presets are a convenience, not a constraint.** Width and Height stay free
-  text fields; the dropdown only writes them (±64 on both sides so a preset
-  never lands on a fractional pixel at any scale). Editing either field, or
-  pressing Half, sets the label back to `Custom`.
-- **Nothing is armed by itself.** The dropdown starts at `currentIndex: -1`, so
-  Apply stays disabled until a size is really chosen; a default selection of
-  `1024 × 1024` would have been one click away from a resize the user never
-  asked for. `tst_editor` asserts the initial `-1`/`Custom`.
-- **The anchor pad is glyphs with names.** 24 px buttons with arrows (centre is a
-  dot), `objectName: anchor_<variant>` for the tests, a tooltip and an
-  `Accessible.name` for every button, because an arrow alone is not a name.
+- **Resize has no anchor; Crop keeps its rectangle.** The `Anchor` enum is gone
+  from protocol, Core and QML, and `editor_resize` is `{width, height, fill}`.
+  The older payload's `anchor` field is ignored (the round-trip test asserts
+  that), so a stale client cannot move the crop. Core always takes the centred
+  cover rectangle, and the square pad adds its fill evenly on the two short
+  sides — where the result sits is a Crop decision, not a Resize one.
+- **Width and Height are one shape.** A ratio combo (`Free`, `Original` plus
+  nine common ratios) decides what typing one side does to the other; `free` is
+  the only unlinked choice and `original` follows the document. Programmatic
+  writes (a preset, Reset) do not come through `textEdited`, so the link cannot
+  feed back on itself. A preset also selects its ratio, so the two controls
+  never describe different shapes.
+- **The presets are concrete sizes, not ratios.** 47 entries, every side a
+  multiple of 64, grouped by ratio in one flat list labelled `1:1 · 1024 × 1024`
+  style — including 1024/768/512 squares for 1:1. `Custom` is the initial
+  state (`currentIndex: -1`): nothing is armed until the user acts.
+- **Live preview is a Core draft, not an edit.** `editor_resize_preview` renders
+  the operation on a worker to `draft-{generation}.png` and publishes
+  `editor.previewDraft {path,width,height}`; the document, its history and its
+  save target do not move (the status bar still reads the old size and the
+  journal line says `Previewing a resize to …`). The canvas draws the draft only
+  while Resize is selected *and* the toggle is on, so leaving the tool hides it
+  without another command. Applying the real `editor_resize`, any other edit,
+  undo/redo/reset, a new open and close all drop the draft file.
+- **The preview thumbnail is keyed on the file, not its name.** Preview files
+  are named `preview-{generation}.png` and the generation restarts at 1 each
+  process, so the persistent `ThumbnailCache` answered a fresh preview with the
+  previous run's thumbnail when it was handed `(path, edge, 0, 0)`. Core now
+  publishes the preview file's real mtime and size (`previewModified`,
+  `previewSize`) and the pointer's `CachedThumbnail` passes them, which is what
+  the cache actually keys on.
 
 ## Design decisions, fit/settings session (ADR 0009)
 
@@ -291,13 +310,16 @@ workspace loader is not gated"); dropping `settingsDialog.visible` from
 loader-disable from the pairing test (the control run) → `aModalDialogOwnsThePointer`
 fails with the dialog still at `330`, which is the reported bug.
 
-Resize: `pad_to_square` placing the source at `0,0` and ignoring the anchor →
-`square_pad_uses_the_anchor_and_colour` fails (`left: Rgba([10, 20, 30, 255])`,
-the source pixel where the fill was expected); the Resize branch borrowing the
-image instead of padding it → `resize_can_fill_a_square_with_the_chosen_colour`
-fails ("the added square area is the chosen colour"); the preset list defaulting
-to `currentIndex: 0` → `theResizePresetsAreMultiplesOf64` fails
-(`currentIndex` 0, expected -1). Each restored, then `just test` green.
+Resize rework: the pointer thumbnail binding dropping `modified`/`fileSize`
+(→ 0,0) → `thePointerThumbnailCarriesThePreviewIdentity` fails
+(`call.modified` 0, expected `1700000000123`), which is the exact cross-run key
+that showed the wrong picture; `ratioFactor()` no longer returning `null` for
+`free` → `typingOneSideKeepsTheChosenRatio` fails on `NaN` in Height;
+`pad_to_square` placing the source at `0,0` → `square_pad_is_centred_and_uses_the_colour`
+fails (`left: Rgba([10, 20, 30, 255])`, the source pixel where the fill was
+expected); `install_editor_preview` publishing `Some((0,0))` as the stamp →
+`editor_resize_crop_and_flip_change_the_published_size` fails
+(`editor.preview_modified > 0`). Each restored, then `just test` green.
 
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;

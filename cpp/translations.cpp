@@ -78,7 +78,6 @@ static const Entry kEntries_vi[] = {
   { "Width", "Rộng" },
   { "Height", "Cao" },
   { "Apply", "Áp dụng" },
-  { "Half", "Một nửa" },
   { "Crop", "Cắt" },
   { "Apply crop", "Áp dụng cắt" },
   { "Set Width/Height, then enter the rectangle's top-left corner.", "Đặt Rộng/Cao, rồi nhập góc trên bên trái của vùng cắt." },

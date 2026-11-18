@@ -67,44 +67,6 @@ pub enum FlipAxis {
     Vertical,
 }
 
-/// Which part of the source survives when a resize changes the aspect ratio,
-/// and where the source sits inside the optional square pad. The nine values
-/// are a 3 × 3 grid read row by row.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Anchor {
-    TopLeft,
-    Top,
-    TopRight,
-    Left,
-    #[default]
-    Center,
-    Right,
-    BottomLeft,
-    Bottom,
-    BottomRight,
-}
-
-impl Anchor {
-    /// Horizontal position in the grid: 0 (left), 1 (centre), 2 (right).
-    pub const fn column(self) -> u8 {
-        match self {
-            Self::TopLeft | Self::Left | Self::BottomLeft => 0,
-            Self::Top | Self::Center | Self::Bottom => 1,
-            Self::TopRight | Self::Right | Self::BottomRight => 2,
-        }
-    }
-
-    /// Vertical position in the grid: 0 (top), 1 (centre), 2 (bottom).
-    pub const fn row(self) -> u8 {
-        match self {
-            Self::TopLeft | Self::Top | Self::TopRight => 0,
-            Self::Left | Self::Center | Self::Right => 1,
-            Self::BottomLeft | Self::Bottom | Self::BottomRight => 2,
-        }
-    }
-}
-
 /// Interface language. The UI text is translated at runtime from `.ts` files
 /// compiled into the binary; Core only carries the selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,15 +243,24 @@ pub enum Command {
         path: String,
     },
     /// Scale the working document to fit exactly `width` × `height`. When the
-    /// target aspect differs the source is cropped around `anchor` before
+    /// target aspect differs the source is cropped around its centre before
     /// scaling, so pixels are never stretched. An optional `fill` colour pads
     /// the shorter side to a square (side = the longer edge) first, also
-    /// positioned by `anchor`.
+    /// centred. Resize is not anchored: where the result sits is a Crop
+    /// decision, not a Resize one.
     EditorResize {
         width: u32,
         height: u32,
         #[serde(default)]
-        anchor: Anchor,
+        fill: Option<[u8; 3]>,
+    },
+    /// Render the resize in the canvas without changing the document: the
+    /// pixels, the history and the save target stay as they are until
+    /// `EditorResize` is applied. The draft preview is published as
+    /// `editor.previewDraft`.
+    EditorResizePreview {
+        width: u32,
+        height: u32,
         #[serde(default)]
         fill: Option<[u8; 3]>,
     },
@@ -350,6 +321,7 @@ impl Command {
             Self::EditorSave => "editor_save",
             Self::EditorSaveAs { .. } => "editor_save_as",
             Self::EditorResize { .. } => "editor_resize",
+            Self::EditorResizePreview { .. } => "editor_resize_preview",
             Self::EditorCrop { .. } => "editor_crop",
             Self::EditorRotate { .. } => "editor_rotate",
             Self::EditorFlip { .. } => "editor_flip",
@@ -431,10 +403,17 @@ mod tests {
                 Command::EditorResize {
                     width: 800,
                     height: 600,
-                    anchor: Anchor::Center,
                     fill: None,
                 },
                 "editor_resize",
+            ),
+            (
+                Command::EditorResizePreview {
+                    width: 800,
+                    height: 600,
+                    fill: Some([1, 2, 3]),
+                },
+                "editor_resize_preview",
             ),
             (
                 Command::EditorCrop {
@@ -475,21 +454,20 @@ mod tests {
                 .unwrap();
         assert_eq!(env.command.name(), "editor_rotate");
 
-        // Older resize commands carry no anchor or fill; they mean centre,
-        // no padding. The new fields are plain snake_case values.
+        // Older resize commands carry no fill; the field defaults to no
+        // padding. An `anchor` from the short-lived anchored design is simply
+        // ignored, because Resize no longer has one.
         let env: Envelope = serde_json::from_str(
             r#"{"id":"r","command":{"type":"editor_resize","width":64,"height":32}}"#,
         )
         .unwrap();
         match env.command {
             Command::EditorResize {
-                anchor,
                 fill,
                 width,
                 height,
             } => {
                 assert_eq!((width, height), (64, 32));
-                assert_eq!(anchor, Anchor::Center);
                 assert_eq!(fill, None);
             }
             other => panic!("unexpected command {other:?}"),
@@ -499,11 +477,17 @@ mod tests {
         )
         .unwrap();
         match env.command {
-            Command::EditorResize { anchor, fill, .. } => {
-                assert_eq!(anchor, Anchor::BottomRight);
+            Command::EditorResize { fill, .. } => {
                 assert_eq!(fill, Some([1, 2, 3]));
             }
             other => panic!("unexpected command {other:?}"),
         }
+        // The draft preview is the same shape and is journalled under its own
+        // name, so a preview never looks like an applied resize.
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"r","command":{"type":"editor_resize_preview","width":1024,"height":1024}}"#,
+        )
+        .unwrap();
+        assert_eq!(env.command.name(), "editor_resize_preview");
     }
 }

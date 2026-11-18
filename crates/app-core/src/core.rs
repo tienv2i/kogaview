@@ -17,7 +17,7 @@ use crate::editor::{self, EditOperation, EditorDocument, EditorTask};
 use crate::journal::{Journal, JournalEntry};
 use crate::ops;
 use crate::paths::AppPaths;
-use crate::state::{Crumb, EditorState, FolderListing, SelectionInfo, UiState};
+use crate::state::{Crumb, EditorPreviewDraft, EditorState, FolderListing, SelectionInfo, UiState};
 use crate::AppIdentity;
 
 struct ScanResult {
@@ -73,6 +73,16 @@ pub struct Core {
     /// Preview PNG currently referenced by the UI. Replaced (and deleted) when
     /// the next one is installed.
     editor_preview_path: Option<PathBuf>,
+    /// Identity of that file — modification time in milliseconds and size in
+    /// bytes — published so caches keyed on a path cannot answer a reused
+    /// preview name with an older image.
+    editor_preview_stamp: Option<(u64, u64)>,
+    /// The live-preview resize: its PNG and its own generation, separate from
+    /// `editor_generation` so a draft can never be mistaken for the document's
+    /// preview (or the other way round).
+    editor_draft_path: Option<PathBuf>,
+    editor_draft_size: (u32, u32),
+    editor_draft_generation: u64,
     /// True while a save is being encoded and written on a worker.
     editor_saving: bool,
     /// Bumped for every save, so a result for a superseded save is dropped.
@@ -128,6 +138,10 @@ impl Core {
             editor_generation: 0,
             editor_rendering: false,
             editor_preview_path: None,
+            editor_preview_stamp: None,
+            editor_draft_path: None,
+            editor_draft_size: (0, 0),
+            editor_draft_generation: 0,
             editor_saving: false,
             editor_save_generation: 0,
             pending_save: None,
@@ -219,6 +233,10 @@ impl Core {
             editor_generation: 0,
             editor_rendering: false,
             editor_preview_path: None,
+            editor_preview_stamp: None,
+            editor_draft_path: None,
+            editor_draft_size: (0, 0),
+            editor_draft_generation: 0,
             editor_saving: false,
             editor_save_generation: 0,
             pending_save: None,
@@ -607,14 +625,17 @@ impl Core {
             Command::EditorResize {
                 width,
                 height,
-                anchor,
                 fill,
             } => self.editor_apply(EditOperation::Resize {
                 width,
                 height,
-                anchor,
                 fill,
             }),
+            Command::EditorResizePreview {
+                width,
+                height,
+                fill,
+            } => self.editor_resize_preview(width, height, fill),
             Command::EditorCrop {
                 x,
                 y,
@@ -1005,6 +1026,8 @@ impl Core {
         if let Some(previous) = self.editor_preview_path.take() {
             let _ = std::fs::remove_file(previous);
         }
+        self.editor_preview_stamp = None;
+        self.clear_editor_draft();
         self.editor = None;
         self.editor_rendering = true;
         self.state.workspace = Workspace::Editor;
@@ -1024,6 +1047,9 @@ impl Core {
             redo_count: 0,
             preview_path: None,
             preview_revision: generation,
+            preview_modified: 0,
+            preview_size: 0,
+            preview_draft: None,
             rendering: true,
             saved: true,
             format: save_format_label(&source),
@@ -1043,9 +1069,66 @@ impl Core {
         if !changed {
             return Ok(Some("That edit would not change the image".to_owned()));
         }
+        self.clear_editor_draft();
         self.schedule_editor_preview();
         self.refresh_editor_status();
         Ok(Some(operation.label()))
+    }
+
+    /// Render what a resize *would* produce, without applying it.
+    ///
+    /// The draft is a separate preview file and its own generation, so the
+    /// canvas can show the result while the document, the history and the save
+    /// target stay exactly as they were. Applying `EditorResize` afterwards is
+    /// what records the step; dismissing the tool or applying anything else
+    /// drops the draft file.
+    fn editor_resize_preview(
+        &mut self,
+        width: u32,
+        height: u32,
+        fill: Option<[u8; 3]>,
+    ) -> Result<Option<String>, ProtocolError> {
+        let Some(document) = &self.editor else {
+            return Err(no_editor_document());
+        };
+        let operation = EditOperation::Resize {
+            width,
+            height,
+            fill,
+        };
+        let changes = document
+            .would_change(&operation)
+            .map_err(|message| ProtocolError::new("invalid_edit", message))?;
+        if !changes {
+            self.clear_editor_draft();
+            self.publish_editor();
+            return Ok(Some("That resize would not change the image".to_owned()));
+        }
+        let pixels = document.pixels();
+        let Ok(dir) = self.editor_preview_dir() else {
+            return Ok(Some("Could not create the preview folder".to_owned()));
+        };
+        self.editor_draft_generation += 1;
+        let generation = self.editor_draft_generation;
+        let preview = dir.join(format!("draft-{generation}.png"));
+        editor::spawn_draft(
+            pixels,
+            operation,
+            generation,
+            preview,
+            self.editor_tx.clone(),
+        );
+        Ok(Some(format!("Previewing a resize to {width} × {height}")))
+    }
+
+    /// Drop the live-preview draft: remove its file and make any worker result
+    /// for it stale before the next state is published.
+    fn clear_editor_draft(&mut self) {
+        self.editor_draft_generation += 1;
+        self.editor_draft_size = (0, 0);
+        if let Some(path) = self.editor_draft_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     fn editor_step(&mut self, undo: bool) -> Result<Option<String>, ProtocolError> {
@@ -1067,6 +1150,7 @@ impl Core {
                 .to_owned(),
             ));
         }
+        self.clear_editor_draft();
         self.schedule_editor_preview();
         self.refresh_editor_status();
         Ok(Some(if undo { "Undo" } else { "Redo" }.to_owned()))
@@ -1079,6 +1163,7 @@ impl Core {
         if !document.reset() {
             return Ok(Some("The image has no edits to reset".to_owned()));
         }
+        self.clear_editor_draft();
         self.schedule_editor_preview();
         self.refresh_editor_status();
         Ok(Some("Reset to the original image".to_owned()))
@@ -1261,9 +1346,11 @@ impl Core {
         self.editor_rendering = false;
         self.state.editor = None;
         self.state.busy = false;
+        self.clear_editor_draft();
         if let Some(preview) = self.editor_preview_path.take() {
             let _ = std::fs::remove_file(preview);
         }
+        self.editor_preview_stamp = None;
         self.state.status = "Editor closed".to_owned();
         Ok(Some("Closed the editor document".to_owned()))
     }
@@ -1324,6 +1411,7 @@ impl Core {
         let save_path = save_path.to_string_lossy().into_owned();
         let format = save_format_label(Path::new(&save_path));
         let previous = self.state.editor.take();
+        let (preview_modified, preview_size) = self.editor_preview_stamp.unwrap_or((0, 0));
         self.state.editor = Some(EditorState {
             path,
             name,
@@ -1342,6 +1430,16 @@ impl Core {
                 .as_ref()
                 .map(|editor| editor.preview_revision)
                 .unwrap_or(0),
+            preview_modified,
+            preview_size,
+            preview_draft: self
+                .editor_draft_path
+                .as_ref()
+                .map(|path| EditorPreviewDraft {
+                    path: path.to_string_lossy().into_owned(),
+                    width: self.editor_draft_size.0,
+                    height: self.editor_draft_size.1,
+                }),
             rendering: self.editor_rendering,
             save_path,
             saved,
@@ -1408,6 +1506,41 @@ impl Core {
                 self.publish_editor();
                 true
             }
+            EditorTask::Draft {
+                generation,
+                preview,
+                width,
+                height,
+            } => {
+                if generation != self.editor_draft_generation {
+                    let _ = std::fs::remove_file(preview);
+                    return false;
+                }
+                if let Some(previous) = self.editor_draft_path.replace(preview) {
+                    let _ = std::fs::remove_file(previous);
+                }
+                self.editor_draft_size = (width, height);
+                self.publish_editor();
+                true
+            }
+            EditorTask::DraftFailed {
+                generation,
+                message,
+            } => {
+                if generation != self.editor_draft_generation {
+                    return false;
+                }
+                tracing::warn!(
+                    target: "kogaview::editor",
+                    %message,
+                    "editor draft preview failed"
+                );
+                // The document is untouched, so there is nothing to explain in
+                // the status line: drop the stale draft and show the document.
+                self.clear_editor_draft();
+                self.publish_editor();
+                true
+            }
             EditorTask::Failed {
                 generation,
                 message,
@@ -1441,9 +1574,28 @@ impl Core {
                 let _ = std::fs::remove_file(previous);
             }
         }
+        // The cache that resolves the thumbnail keys on the file's identity, so
+        // record what it needs while the file is known to be complete.
+        self.editor_preview_stamp = std::fs::metadata(path).ok().map(|metadata| {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|age| age.as_millis() as u64)
+                .unwrap_or(0);
+            (modified, metadata.len())
+        });
         if let Some(editor) = &mut self.state.editor {
             editor.preview_path = Some(path.to_string_lossy().into_owned());
             editor.preview_revision = generation;
+            editor.preview_modified = self
+                .editor_preview_stamp
+                .map(|stamp| stamp.0)
+                .unwrap_or_default();
+            editor.preview_size = self
+                .editor_preview_stamp
+                .map(|stamp| stamp.1)
+                .unwrap_or_default();
             editor.rendering = false;
         }
     }
@@ -2678,6 +2830,22 @@ mod tests {
         false
     }
 
+    /// Wait for a live-preview draft to land. `settle_editor` cannot stand in
+    /// for this: the document is not rendering, so it returns before the draft
+    /// worker has answered.
+    fn settle_draft(core: &mut Core) -> bool {
+        for _ in 0..3000 {
+            core.poll();
+            if let Some(editor) = &core.state.editor {
+                if editor.preview_draft.is_some() {
+                    return true;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
     fn write_png(path: &Path, width: u32, height: u32) {
         let image = image::RgbaImage::from_fn(width, height, |x, y| {
             image::Rgba([(x % 251) as u8, (y % 251) as u8, 90, 255])
@@ -2889,6 +3057,11 @@ mod tests {
         ));
         let editor = core.state.editor.as_ref().unwrap();
         assert_eq!((editor.width, editor.height), (25, 25));
+        // The published preview carries its own identity, not just a name the
+        // next run will reuse: this is what keeps a thumbnail cache from
+        // answering with an older document's image.
+        assert!(editor.preview_modified > 0);
+        assert!(editor.preview_size > 0);
 
         core.dispatch(&editor_envelope(
             "flip-1",
@@ -2907,6 +3080,60 @@ mod tests {
         assert_eq!(parsed["ok"], false);
         assert_eq!(parsed["error"]["code"], "invalid_edit");
         assert_eq!(core.state.editor.as_ref().unwrap().history.len(), 3);
+
+        // The live preview is a draft: it publishes its own path and target
+        // size, and leaves the document, its history and its save target alone.
+        let before_history = core.state.editor.as_ref().unwrap().history.clone();
+        let response = core.dispatch(&editor_envelope(
+            "draft-1",
+            r#"{"type":"editor_resize_preview","width":20,"height":20}"#,
+        ));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["ok"],
+            true,
+            "{response}"
+        );
+        {
+            let editor = core.state.editor.as_ref().unwrap();
+            assert_eq!((editor.width, editor.height), (25, 25));
+            assert_eq!(editor.history, before_history);
+            assert!(
+                editor.preview_draft.is_none(),
+                "the draft renders on a worker"
+            );
+        }
+        assert!(settle_draft(&mut core), "the draft preview never landed");
+        let draft = core
+            .state
+            .editor
+            .as_ref()
+            .unwrap()
+            .preview_draft
+            .clone()
+            .expect("a draft is published");
+        assert_eq!((draft.width, draft.height), (20, 20));
+        let draft_path = PathBuf::from(&draft.path);
+        assert!(draft_path.is_file());
+        let decoded = image::open(&draft_path).unwrap();
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (20, 20),
+            "the draft is rendered at the target size"
+        );
+
+        // Applying the same size records the step and drops the draft file.
+        core.dispatch(&editor_envelope(
+            "resize-2",
+            r#"{"type":"editor_resize","width":20,"height":20}"#,
+        ));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!((editor.width, editor.height), (20, 20));
+        assert!(editor.preview_draft.is_none());
+        assert!(!draft_path.exists(), "the applied draft file is cleaned up");
+        assert_eq!(
+            editor.history.last().map(String::as_str),
+            Some("Resize 20 × 20")
+        );
 
         // Reset drops every step, back to the source size.
         core.dispatch(&editor_envelope("reset-1", r#"{"type":"editor_reset"}"#));

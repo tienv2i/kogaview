@@ -35,30 +35,173 @@ Item {
     /// pointer is the default and the no-op tool, so opening the Editor never
     /// leaves an Apply button armed.
     property string tool: "pointer"
-    /// Resize keeps the anchored part of the source when the target aspect
-    /// differs, and uses the same anchor to place the source in the square pad.
-    property string resizeAnchor: "center"
+    /// Resize links Width and Height through this ratio, so the two fields can
+    /// never describe a different shape than the one the user picked. `free` is
+    /// the only unlinked choice; `original` follows the document's own aspect.
+    property string resizeRatio: "original"
     /// Resize pads the shorter side to the longer edge with this colour before
-    /// cropping and scaling.
+    /// cropping and scaling. Centred: Resize has no anchor.
     property bool resizePadSquare: false
     property color resizeFillColor: "#ffffff"
-    /// Common ratios whose two sides are multiples of 64. Selecting one fills
-    /// Width/Height; editing either field goes back to Custom.
-    readonly property var sizePresets: [
-        { label: "1:1 · 1024 × 1024", width: 1024, height: 1024 },
-        { label: "4:3 · 1024 × 768", width: 1024, height: 768 },
-        { label: "3:2 · 1152 × 768", width: 1152, height: 768 },
-        { label: "16:9 · 1024 × 576", width: 1024, height: 576 },
-        { label: "9:16 · 576 × 1024", width: 576, height: 1024 },
-        { label: "3:4 · 768 × 1024", width: 768, height: 1024 },
-        { label: "2:3 · 768 × 1152", width: 768, height: 1152 },
-        { label: "5:4 · 1280 × 1024", width: 1280, height: 1024 },
-        { label: "21:9 · 1344 × 576", width: 1344, height: 576 }
+    /// Live preview: each valid Width/Height change asks Core for a rendered
+    /// draft at the target size, which the canvas shows without applying it.
+    property bool resizeLivePreview: false
+
+    /// The ratios the Resize tool offers. The first two keep the document's
+    /// shape or leave both fields alone; the rest link the sides.
+    readonly property var resizeRatios: [
+        { key: "free", label: qsTr("Free") },
+        { key: "original", label: qsTr("Original") },
+        { key: "1:1", label: "1:1", width: 1, height: 1 },
+        { key: "4:3", label: "4:3", width: 4, height: 3 },
+        { key: "3:2", label: "3:2", width: 3, height: 2 },
+        { key: "16:9", label: "16:9", width: 16, height: 9 },
+        { key: "16:10", label: "16:10", width: 16, height: 10 },
+        { key: "5:4", label: "5:4", width: 5, height: 4 },
+        { key: "21:9", label: "21:9", width: 21, height: 9 },
+        { key: "3:4", label: "3:4", width: 3, height: 4 },
+        { key: "2:3", label: "2:3", width: 2, height: 3 },
+        { key: "9:16", label: "9:16", width: 9, height: 16 }
+    ]
+    /// Concrete sizes for those ratios. Both sides are multiples of 64, so a
+    /// preset never produces fractional pixels at any scale. One flat list:
+    /// the label carries the ratio, so the dropdown reads as sizes, not as a
+    /// second ratio picker.
+    readonly property var resizePresets: [
+        { ratio: "1:1", label: "1:1 · 2048 × 2048", width: 2048, height: 2048 },
+        { ratio: "1:1", label: "1:1 · 1536 × 1536", width: 1536, height: 1536 },
+        { ratio: "1:1", label: "1:1 · 1024 × 1024", width: 1024, height: 1024 },
+        { ratio: "1:1", label: "1:1 · 768 × 768", width: 768, height: 768 },
+        { ratio: "1:1", label: "1:1 · 512 × 512", width: 512, height: 512 },
+        { ratio: "1:1", label: "1:1 · 256 × 256", width: 256, height: 256 },
+        { ratio: "4:3", label: "4:3 · 2048 × 1536", width: 2048, height: 1536 },
+        { ratio: "4:3", label: "4:3 · 1536 × 1152", width: 1536, height: 1152 },
+        { ratio: "4:3", label: "4:3 · 1024 × 768", width: 1024, height: 768 },
+        { ratio: "4:3", label: "4:3 · 768 × 576", width: 768, height: 576 },
+        { ratio: "4:3", label: "4:3 · 512 × 384", width: 512, height: 384 },
+        { ratio: "4:3", label: "4:3 · 256 × 192", width: 256, height: 192 },
+        { ratio: "3:2", label: "3:2 · 1536 × 1024", width: 1536, height: 1024 },
+        { ratio: "3:2", label: "3:2 · 1152 × 768", width: 1152, height: 768 },
+        { ratio: "3:2", label: "3:2 · 768 × 512", width: 768, height: 512 },
+        { ratio: "3:2", label: "3:2 · 576 × 384", width: 576, height: 384 },
+        { ratio: "3:2", label: "3:2 · 384 × 256", width: 384, height: 256 },
+        { ratio: "3:2", label: "3:2 · 192 × 128", width: 192, height: 128 },
+        { ratio: "16:9", label: "16:9 · 3072 × 1728", width: 3072, height: 1728 },
+        { ratio: "16:9", label: "16:9 · 2048 × 1152", width: 2048, height: 1152 },
+        { ratio: "16:9", label: "16:9 · 1024 × 576", width: 1024, height: 576 },
+        { ratio: "16:10", label: "16:10 · 2048 × 1280", width: 2048, height: 1280 },
+        { ratio: "16:10", label: "16:10 · 1536 × 960", width: 1536, height: 960 },
+        { ratio: "16:10", label: "16:10 · 1024 × 640", width: 1024, height: 640 },
+        { ratio: "16:10", label: "16:10 · 512 × 320", width: 512, height: 320 },
+        { ratio: "5:4", label: "5:4 · 2560 × 2048", width: 2560, height: 2048 },
+        { ratio: "5:4", label: "5:4 · 1280 × 1024", width: 1280, height: 1024 },
+        { ratio: "5:4", label: "5:4 · 960 × 768", width: 960, height: 768 },
+        { ratio: "5:4", label: "5:4 · 640 × 512", width: 640, height: 512 },
+        { ratio: "5:4", label: "5:4 · 320 × 256", width: 320, height: 256 },
+        { ratio: "21:9", label: "21:9 · 2688 × 1152", width: 2688, height: 1152 },
+        { ratio: "21:9", label: "21:9 · 1344 × 576", width: 1344, height: 576 },
+        { ratio: "3:4", label: "3:4 · 1536 × 2048", width: 1536, height: 2048 },
+        { ratio: "3:4", label: "3:4 · 1152 × 1536", width: 1152, height: 1536 },
+        { ratio: "3:4", label: "3:4 · 768 × 1024", width: 768, height: 1024 },
+        { ratio: "3:4", label: "3:4 · 576 × 768", width: 576, height: 768 },
+        { ratio: "3:4", label: "3:4 · 384 × 512", width: 384, height: 512 },
+        { ratio: "3:4", label: "3:4 · 192 × 256", width: 192, height: 256 },
+        { ratio: "2:3", label: "2:3 · 1024 × 1536", width: 1024, height: 1536 },
+        { ratio: "2:3", label: "2:3 · 768 × 1152", width: 768, height: 1152 },
+        { ratio: "2:3", label: "2:3 · 512 × 768", width: 512, height: 768 },
+        { ratio: "2:3", label: "2:3 · 384 × 576", width: 384, height: 576 },
+        { ratio: "2:3", label: "2:3 · 256 × 384", width: 256, height: 384 },
+        { ratio: "2:3", label: "2:3 · 128 × 192", width: 128, height: 192 },
+        { ratio: "9:16", label: "9:16 · 1728 × 3072", width: 1728, height: 3072 },
+        { ratio: "9:16", label: "9:16 · 1152 × 2048", width: 1152, height: 2048 },
+        { ratio: "9:16", label: "9:16 · 576 × 1024", width: 576, height: 1024 }
     ]
     /// Split a QML `color` into the three bytes the typed command carries.
     function colorRgb(color) {
         return [Math.round(color.r * 255), Math.round(color.g * 255),
                 Math.round(color.b * 255)]
+    }
+
+    /// The ratio entry for the current choice, or null when the ratio is free.
+    function ratioFactor() {
+        for (var index = 0; index < view.resizeRatios.length; ++index) {
+            var entry = view.resizeRatios[index]
+            if (entry.key !== view.resizeRatio) continue
+            if (entry.key === "free") return null
+            if (entry.key === "original") {
+                if (!view.hasDocument) return null
+                return { width: view.editor.width, height: view.editor.height }
+            }
+            return entry
+        }
+        return null
+    }
+
+    /// Index of the current ratio in the dropdown, so the combo can be synced
+    /// without binding its `currentIndex` (which the control writes itself).
+    readonly property int resizeRatioIndex: {
+        for (var index = 0; index < view.resizeRatios.length; ++index) {
+            if (view.resizeRatios[index].key === view.resizeRatio) return index
+        }
+        return -1
+    }
+
+    /// Index of the preset that matches both fields, or -1 for a custom size.
+    function matchingPreset() {
+        if (!widthField.acceptableInput || !heightField.acceptableInput) return -1
+        var w = parseInt(widthField.text)
+        var h = parseInt(heightField.text)
+        for (var index = 0; index < view.resizePresets.length; ++index) {
+            var preset = view.resizePresets[index]
+            if (preset.width === w && preset.height === h) return index
+        }
+        return -1
+    }
+
+    /// Typing one side keeps the other on the chosen ratio. Programmatic writes
+    /// (a preset, Reset) do not come through here, so they never feed back.
+    function linkHeightFromWidth() {
+        var factor = view.ratioFactor()
+        if (!factor || !widthField.acceptableInput) return
+        var width = parseInt(widthField.text)
+        if (!(width > 0)) return
+        heightField.text = String(Math.max(1, Math.round(width * factor.height / factor.width)))
+        sizePreset.currentIndex = view.matchingPreset()
+    }
+
+    function linkWidthFromHeight() {
+        var factor = view.ratioFactor()
+        if (!factor || !heightField.acceptableInput) return
+        var height = parseInt(heightField.text)
+        if (!(height > 0)) return
+        widthField.text = String(Math.max(1, Math.round(height * factor.width / factor.height)))
+        sizePreset.currentIndex = view.matchingPreset()
+    }
+
+    /// Select a ratio and mirror it in the dropdown. The dropdown index is
+    /// written imperatively because ComboBox owns `currentIndex` itself.
+    function setRatio(key) {
+        view.resizeRatio = key
+        ratioBox.currentIndex = view.resizeRatioIndex
+    }
+
+    function resizeFieldsValid() {
+        return !!view.hasDocument && widthField.acceptableInput && heightField.acceptableInput
+                && parseInt(widthField.text) > 0 && parseInt(heightField.text) > 0
+    }
+
+    /// Ask Core to render the resize without applying it. The debounce keeps a
+    /// typed width from spawning a render per key: the previous draft stays on
+    /// screen until the newest one lands.
+    function requestResizeDraft() {
+        draftDebounce.stop()
+        if (!view.resizeLivePreview || view.tool !== "resize" || !view.resizeFieldsValid()) return
+        view.command({
+            type: "editor_resize_preview",
+            width: parseInt(widthField.text),
+            height: parseInt(heightField.text),
+            fill: view.resizePadSquare ? view.colorRgb(view.resizeFillColor) : null
+        })
     }
 
     /// Raised by the empty state and the toolbar's open button; Main owns the
@@ -120,6 +263,19 @@ Item {
     readonly property real documentWidth: hasDocument ? editor.width : 0
     readonly property real documentHeight: hasDocument ? editor.height : 0
 
+    /// The live-preview resize the canvas should be showing, if any. It is
+    /// presentation gating on purpose: Core keeps the draft until a resize is
+    /// applied or the document changes, and leaving the Resize tool must hide
+    /// it again without another command.
+    readonly property var resizeDraft: {
+        if (tool !== "resize" || !resizeLivePreview || !editor) return null
+        return editor.previewDraft || null
+    }
+    /// What the canvas draws: the draft's target size while a resize is being
+    /// previewed, the document's own size otherwise.
+    readonly property real displayedWidth: resizeDraft ? resizeDraft.width : documentWidth
+    readonly property real displayedHeight: resizeDraft ? resizeDraft.height : documentHeight
+
     function sizeLabel() {
         if (!hasDocument) return "—"
         return editor.width + " × " + editor.height
@@ -151,8 +307,8 @@ Item {
     /// 786 × 736 host could be panned left and right but not up and down.
     function clampOffsets() {
         if (!hostReady) return
-        var shownX = documentWidth * view.zoom
-        var shownY = documentHeight * view.zoom
+        var shownX = displayedWidth * view.zoom
+        var shownY = displayedHeight * view.zoom
         var maxX = Math.max(0, (shownX - canvasHost.width) / 2) + view.panMargin
         var maxY = Math.max(0, (shownY - canvasHost.height) / 2) + view.panMargin
         view.offsetX = Math.max(-maxX, Math.min(maxX, view.offsetX))
@@ -165,8 +321,8 @@ Item {
         }
         var pad = 32
         view.zoom = Math.max(0.02, Math.min(16,
-            Math.min((canvasHost.width - pad) / documentWidth,
-                     (canvasHost.height - pad) / documentHeight)))
+            Math.min((canvasHost.width - pad) / displayedWidth,
+                     (canvasHost.height - pad) / displayedHeight)))
         view.offsetX = 0
         view.offsetY = 0
         view.autoFit = true
@@ -233,10 +389,19 @@ Item {
         }
     }
 
-    // An edit that changes the document's size keeps a fitted view fitted and
-    // leaves a hand-chosen zoom alone (only re-clamping it to the new edges).
-    onDocumentWidthChanged: view.refitOrClamp()
-    onDocumentHeightChanged: view.refitOrClamp()
+    // An edit that changes the drawn size — a resize or crop landing, or a
+    // live-preview draft appearing — keeps a fitted view fitted and leaves a
+    // hand-chosen zoom alone (only re-clamping it to the new edges).
+    onDisplayedWidthChanged: view.refitOrClamp()
+    onDisplayedHeightChanged: view.refitOrClamp()
+
+    /// The debounce behind the live preview: typing a width must not render the
+    /// whole document on every key.
+    Timer {
+        id: draftDebounce
+        interval: 200
+        onTriggered: view.requestResizeDraft()
+    }
 
     /// The pointer inspector's preview comes from the same cache the browser's
     /// grid uses, so it is a fast, small image rather than a second decode of
@@ -547,8 +712,8 @@ Item {
             Image {
                 id: canvas
                 objectName: "canvas"
-                width: Math.max(1, view.documentWidth)
-                height: Math.max(1, view.documentHeight)
+                width: Math.max(1, view.displayedWidth)
+                height: Math.max(1, view.displayedHeight)
                 scale: view.zoom
                 x: (canvasHost.width - width) / 2 + view.offsetX
                 y: (canvasHost.height - height) / 2 + view.offsetY
@@ -558,9 +723,11 @@ Item {
                 fillMode: Image.Stretch
                 asynchronous: false
                 cache: false
-                source: view.editor && view.editor.previewPath
-                        ? "file://" + view.editor.previewPath
-                        : ""
+                source: view.resizeDraft
+                        ? "file://" + view.resizeDraft.path
+                        : (view.editor && view.editor.previewPath
+                           ? "file://" + view.editor.previewPath
+                           : "")
                 opacity: view.rendering ? 0.65 : 1.0
                 Behavior on opacity {
                     NumberAnimation { duration: 120 }
@@ -815,8 +982,17 @@ Item {
                                 // a new preview path after each edit refreshes
                                 // it. The QML harness passes no cache and uses
                                 // fake paths, so it draws the placeholder.
+                                //
+                                // The preview names repeat on every run
+                                // (`preview-1.png` …), so the path alone cannot
+                                // identify the pixels: `modified`/`fileSize`
+                                // carry the file's identity, without which the
+                                // cache answered a fresh preview with the
+                                // thumbnail of the last run's document.
                                 path: view.hasDocument && view.thumbnails
-                                      ? (view.editor.previewPath || view.editor.path) : ""
+                                      ? (view.editor.previewPath || "") : ""
+                                modified: view.editor ? (view.editor.previewModified || 0) : 0
+                                fileSize: view.editor ? (view.editor.previewSize || 0) : 0
                                 thumbnailable: view.hasDocument
                                 fillMode: Image.PreserveAspectFit
                             }
@@ -929,7 +1105,14 @@ Item {
                                 placeholderText: view.hasDocument ? String(view.editor.width) : "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
-                                onTextEdited: sizePreset.currentIndex = -1
+                                onTextEdited: {
+                                    if (view.tool === "resize") {
+                                        view.linkHeightFromWidth()
+                                        draftDebounce.restart()
+                                    } else {
+                                        sizePreset.currentIndex = -1
+                                    }
+                                }
                             }
                             Label {
                                 text: qsTr("Height")
@@ -943,60 +1126,42 @@ Item {
                                 placeholderText: view.hasDocument ? String(view.editor.height) : "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
-                                onTextEdited: sizePreset.currentIndex = -1
+                                onTextEdited: {
+                                    if (view.tool === "resize") {
+                                        view.linkWidthFromHeight()
+                                        draftDebounce.restart()
+                                    } else {
+                                        sizePreset.currentIndex = -1
+                                    }
+                                }
                             }
                         }
 
-                        // Resize: anchor, preset sizes and the square pad.
+                        // Resize: the ratio that links Width/Height, a list of
+                        // concrete sizes, and the optional square pad. No
+                        // anchor: where the result sits is a Crop decision.
                         RowLayout {
                             Layout.fillWidth: true
                             visible: view.tool === "resize"
                             spacing: 8
 
                             Label {
-                                text: qsTr("Anchor")
+                                text: qsTr("Ratio")
                                 color: view.theme.textMuted
                             }
-                            Grid {
-                                columns: 3
-                                columnSpacing: 2
-                                rowSpacing: 2
-
-                                Repeater {
-                                    // The arrow points at the corner or edge
-                                    // of the frame the source keeps.
-                                    model: [
-                                        { key: "top_left", glyph: "\u2196", label: qsTr("Top left") },
-                                        { key: "top", glyph: "\u2191", label: qsTr("Top") },
-                                        { key: "top_right", glyph: "\u2197", label: qsTr("Top right") },
-                                        { key: "left", glyph: "\u2190", label: qsTr("Left") },
-                                        { key: "center", glyph: "\u25cf", label: qsTr("Center") },
-                                        { key: "right", glyph: "\u2192", label: qsTr("Right") },
-                                        { key: "bottom_left", glyph: "\u2199", label: qsTr("Bottom left") },
-                                        { key: "bottom", glyph: "\u2193", label: qsTr("Bottom") },
-                                        { key: "bottom_right", glyph: "\u2198", label: qsTr("Bottom right") }
-                                    ]
-
-                                    Button {
-                                        required property var modelData
-                                        objectName: "anchor_" + modelData.key
-                                        width: 24
-                                        height: 24
-                                        text: modelData.glyph
-                                        font.pixelSize: 12
-                                        // The glyph alone in a 24 px square
-                                        // needs the button padding removed.
-                                        padding: 0
-                                        highlighted: view.resizeAnchor === modelData.key
-                                        enabled: view.hasDocument
-                                        onClicked: view.resizeAnchor = modelData.key
-                                        Accessible.name: modelData.label
-                                        ToolTip.visible: hovered
-                                        ToolTip.text: modelData.label
-                                    }
-                                }
+                            ComboBox {
+                                id: ratioBox
+                                objectName: "resizeRatio"
+                                Layout.fillWidth: true
+                                model: view.resizeRatios
+                                textRole: "label"
+                                // Set imperatively: ComboBox owns currentIndex,
+                                // so a binding here would break on the first
+                                // pick. `setRatio` keeps the two in step.
+                                currentIndex: view.resizeRatioIndex
+                                Component.onCompleted: currentIndex = view.resizeRatioIndex
+                                onActivated: view.setRatio(view.resizeRatios[currentIndex].key)
                             }
-                            Item { Layout.fillWidth: true }
                         }
 
                         ColumnLayout {
@@ -1005,7 +1170,7 @@ Item {
                             spacing: 2
 
                             Label {
-                                text: qsTr("Preset")
+                                text: qsTr("Size preset")
                                 color: view.theme.textMuted
                             }
                             ComboBox {
@@ -1015,15 +1180,20 @@ Item {
                                 // No preset is applied until the user picks
                                 // one: an automatically selected preset would
                                 // arm Apply with a size the user never chose.
+                                // A matching pick is still reflected when the
+                                // typed size happens to be one of these.
                                 currentIndex: -1
-                                model: view.sizePresets
+                                model: view.resizePresets
                                 textRole: "label"
                                 displayText: currentIndex < 0 ? qsTr("Custom") : currentText
                                 onCurrentIndexChanged: {
-                                    if (currentIndex < 0 || !view.sizePresets[currentIndex])
+                                    if (currentIndex < 0 || !view.resizePresets[currentIndex])
                                         return
-                                    widthField.text = String(view.sizePresets[currentIndex].width)
-                                    heightField.text = String(view.sizePresets[currentIndex].height)
+                                    var preset = view.resizePresets[currentIndex]
+                                    widthField.text = String(preset.width)
+                                    heightField.text = String(preset.height)
+                                    view.setRatio(preset.ratio)
+                                    draftDebounce.restart()
                                 }
                             }
                         }
@@ -1035,7 +1205,10 @@ Item {
                             text: qsTr("Pad to square")
                             checked: view.resizePadSquare
                             enabled: view.hasDocument
-                            onToggled: view.resizePadSquare = checked
+                            onToggled: {
+                                view.resizePadSquare = checked
+                                draftDebounce.restart()
+                            }
                         }
 
                         RowLayout {
@@ -1075,22 +1248,24 @@ Item {
                             wrapMode: Text.WordWrap
                         }
 
-                        RowLayout {
+                        Button {
+                            objectName: "livePreviewButton"
                             Layout.fillWidth: true
-                            spacing: 6
-
-                            Button {
-                                objectName: "halfSize"
-                                text: qsTr("Half")
-                                visible: view.tool === "resize"
-                                enabled: view.hasDocument
-                                onClicked: {
-                                    widthField.text = String(Math.max(1, Math.round(view.editor.width / 2)))
-                                    heightField.text = String(Math.max(1, Math.round(view.editor.height / 2)))
-                                    sizePreset.currentIndex = -1
-                                }
+                            visible: view.tool === "resize"
+                            enabled: view.hasDocument
+                            text: qsTr("Live preview")
+                            checkable: true
+                            checked: view.resizeLivePreview
+                            // Checked is the state; highlighted is the visible
+                            // one. A plain checked Button is too quiet on this
+                            // style, and "is the preview live?" must be obvious.
+                            highlighted: checked
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Show the resized image before applying it")
+                            onToggled: {
+                                view.resizeLivePreview = checked
+                                draftDebounce.restart()
                             }
-                            Item { Layout.fillWidth: true }
                         }
 
                         RowLayout {
@@ -1112,7 +1287,6 @@ Item {
                                         type: "editor_resize",
                                         width: parseInt(widthField.text),
                                         height: parseInt(heightField.text),
-                                        anchor: view.resizeAnchor,
                                         fill: view.resizePadSquare
                                               ? view.colorRgb(view.resizeFillColor)
                                               : null
@@ -1184,6 +1358,9 @@ Item {
         objectName: "fillColorDialog"
         title: qsTr("Fill color")
         selectedColor: view.resizeFillColor
-        onAccepted: view.resizeFillColor = selectedColor
+        onAccepted: {
+            view.resizeFillColor = selectedColor
+            draftDebounce.restart()
+        }
     }
 }

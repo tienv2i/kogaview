@@ -36,6 +36,7 @@ console (a piped run looks silent; `qWarning` still appears).
 | `KOGAVIEW_DEV_UI_REQUEST=editor-fit` / `editor-zoom` / `editor-pan` | `fit`, two `zoomIn`s, or "zoom until both axes overflow, then drag (120, 90)" through the view's own functions and handlers; each logs the presentation state before and after | Editor toolbar zoom, and a real pan through `DragHandler` |
 | `KOGAVIEW_DEV_UI_REQUEST_ARG` (with `editor-pan`) | unused now — the hook zooms until it overflows instead of taking a step count | |
 | `KOGAVIEW_DEV_UI_REQUEST=editor-pan-as` | zooms until both axes overflow, then drags 64 px on each axis through the real `DragHandler`, logging `offsetX`/`offsetY` before and after | the freer pan margin (a picture that overflows only slightly must still move) |
+| `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (+ `_ARG` = `WIDTHxHEIGHT` of a preset, default `1024x1024`) | clicks the real Resize tool button, writes the size dropdown through its own selection handler, then clicks Live preview; logs the preset index, ratio, tool and toggle | the Resize panel and the live draft on the real window when pointer warps do not reach it (the request is synthetic; no hand is on the mouse) |
 
 Four notches are deliberate: one notch from fit only widens the picture past the
 host horizontally, and `clampOffsets` correctly pins a shorter axis to 0, so an

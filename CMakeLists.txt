@@ -197,7 +197,8 @@ if(KOGAVIEW_BUILD_TESTS)
     endif()
     # The thumbnail stub is a QObject both view suites drive; listing the header
     # is what lets AUTOMOC generate its meta-object into these targets.
-    if(target STREQUAL "kogaview_qml_tests" OR target STREQUAL "kogaview_browser_qml_tests")
+    if(target STREQUAL "kogaview_qml_tests" OR target STREQUAL "kogaview_browser_qml_tests"
+       OR target STREQUAL "kogaview_editor_tests")
       list(APPEND suite_sources tests/qml/stubthumbnailcache.h)
     endif()
     add_executable(${target} ${suite_sources})

@@ -37,6 +37,16 @@ pub struct SelectionInfo {
     pub height: Option<u32>,
 }
 
+/// A resize rendered for the live preview only: the target size and where the
+/// pixels are, so the canvas can draw the result without the document moving.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorPreviewDraft {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// What the Editor paints, projected from the Core-owned working document.
 ///
 /// The pixels stay in Core; this is the serializable description the UI needs:
@@ -60,6 +70,15 @@ pub struct EditorState {
     pub redo_count: usize,
     pub preview_path: Option<String>,
     pub preview_revision: u64,
+    /// Identity of the preview file (milliseconds since the epoch, and its
+    /// size in bytes). The thumbnail cache keys on these, so a preview file
+    /// whose name is reused by a later run can never answer with an older
+    /// thumbnail — the paths repeat every run, the timestamps do not.
+    pub preview_modified: u64,
+    pub preview_size: u64,
+    /// The live-preview resize, when one is armed. Independent of the document
+    /// and its history: `null` while nothing is being previewed.
+    pub preview_draft: Option<EditorPreviewDraft>,
     pub rendering: bool,
     /// Where saving would write. It follows the source until a save-as or a
     /// save to another file moves it.
