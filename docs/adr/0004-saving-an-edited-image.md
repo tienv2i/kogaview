@@ -64,6 +64,14 @@ about to replace is still the one it read?
   versioned history uses `Save as` or their own tooling.
 - A save that overwrites reports `Saved <name>` and a save that writes a copy
   reports the same, because from the user's point of view both produced a file.
-- **Not covered here:** export presets, quality settings (JPEG is written with
-  the encoder's default), metadata/EXIF preservation, and writing to a path the
-  sandbox has not granted. Those are export-milestone decisions.
+- **Export is a third command, with its own options.** `editor_export
+  { path, quality, metadata }` writes a delivery copy and never moves the save
+  target, the `saved` flag or the history; a destination equal to the
+  document's own path is refused with `invalid_destination`, because that
+  operation already exists and is `Save`. JPEG takes an explicit quality
+  (`DEFAULT_JPEG_QUALITY = 92` when the caller sends none) and, JPEG→JPEG only,
+  carries the source's APP1/APP2/APP13 segments verbatim rather than
+  re-encoding them; a lossless target ignores both and the dialog says so.
+- **Still not covered here:** export presets (resize-on-export, colour
+  profiles), writing to a path the sandbox has not granted, and metadata
+  editing. Those stay explicit decisions.

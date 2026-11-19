@@ -59,7 +59,7 @@ Item {
     readonly property int browserSeparators: 1
     readonly property int viewerButtons: 12
     readonly property int viewerSeparators: 4
-    readonly property int editorButtons: 12
+    readonly property int editorButtons: 13
     readonly property int editorSeparators: 5
 
     /// `EditorView`'s zoom readout is a fixed 48 px (`Layout.preferredWidth`),

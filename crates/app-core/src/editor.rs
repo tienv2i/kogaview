@@ -25,6 +25,8 @@ use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, ImageRea
 use kogaview_protocol::FlipAxis;
 use serde::Serialize;
 
+use crate::state::UiText;
+
 /// Refuse documents larger than this; a full RGBA buffer at 80 MP is already
 /// 320 MB and this slice has no tiling, so a bigger image would risk the app
 /// instead of editing it. The message says so rather than failing silently.
@@ -66,37 +68,51 @@ pub enum EditOperation {
 }
 
 impl EditOperation {
-    /// The label the History panel shows. Kept next to the operation so a new
-    /// operation cannot be added without deciding how it is named.
-    pub fn label(&self) -> String {
+    /// The label the History panel shows: a stable code plus the numbers the
+    /// sentence mentions, never an English string. Kept next to the operation
+    /// so a new operation cannot be added without deciding how it is named;
+    /// `crates/desktop/qml/UiLines.qml` owns the wording.
+    pub fn label(&self) -> UiText {
         match self {
             Self::Rotate { degrees } => match degrees.rem_euclid(360) {
-                90 => "Rotate right 90°".to_owned(),
-                180 => "Rotate 180°".to_owned(),
-                270 => "Rotate left 90°".to_owned(),
-                other => format!("Rotate {other}°"),
+                90 => UiText::new("rotate_right"),
+                180 => UiText::new("rotate_half"),
+                270 => UiText::new("rotate_left"),
+                other => UiText::with("rotate_degrees", [other.to_string()]),
             },
             Self::Flip { axis } => match axis {
-                FlipAxis::Horizontal => "Flip horizontal".to_owned(),
-                FlipAxis::Vertical => "Flip vertical".to_owned(),
+                FlipAxis::Horizontal => UiText::new("flip_horizontal"),
+                FlipAxis::Vertical => UiText::new("flip_vertical"),
             },
             Self::Crop {
                 x,
                 y,
                 width,
                 height,
-            } => format!("Crop {width} × {height} at {x},{y}"),
+            } => UiText::with(
+                "crop",
+                [
+                    width.to_string(),
+                    height.to_string(),
+                    x.to_string(),
+                    y.to_string(),
+                ],
+            ),
             Self::Resize {
                 width,
                 height,
                 fill,
-            } => {
-                let mut label = format!("Resize {width} × {height}");
-                if let Some([r, g, b]) = fill {
-                    label.push_str(&format!(" · pad #{r:02x}{g:02x}{b:02x}"));
-                }
-                label
-            }
+            } => match fill {
+                Some([r, g, b]) => UiText::with(
+                    "resize_pad",
+                    [
+                        width.to_string(),
+                        height.to_string(),
+                        format!("#{r:02x}{g:02x}{b:02x}"),
+                    ],
+                ),
+                None => UiText::with("resize", [width.to_string(), height.to_string()]),
+            },
         }
     }
 }
@@ -166,6 +182,24 @@ impl SaveFormat {
 /// Encoded bytes for `image` in `format`. JPEG has no alpha, so it is
 /// composited over white instead of silently turning transparency black.
 pub fn encode(image: &RgbaImage, format: SaveFormat) -> Result<Vec<u8>, String> {
+    encode_with(image, format, None)
+}
+
+/// The quality a save uses when the caller does not pick one. Export lets the
+/// user choose; Save stays predictable.
+pub const DEFAULT_JPEG_QUALITY: u8 = 92;
+
+/// Encode `image`, with `quality` (1–100) applied to the lossy encoders. Only
+/// JPEG is lossy in this build; the WebP encoder is lossless, so a quality
+/// value is ignored there rather than silently degrading a lossless file.
+pub fn encode_with(
+    image: &RgbaImage,
+    format: SaveFormat,
+    quality: Option<u8>,
+) -> Result<Vec<u8>, String> {
+    let quality = quality
+        .map(|value| value.clamp(1, 100))
+        .unwrap_or(DEFAULT_JPEG_QUALITY);
     let mut bytes = Vec::new();
     match format {
         SaveFormat::Jpeg => {
@@ -177,7 +211,8 @@ pub fn encode(image: &RgbaImage, format: SaveFormat) -> Result<Vec<u8>, String> 
                 };
                 image::Rgb([over(pixel[0]), over(pixel[1]), over(pixel[2])])
             });
-            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 92);
+            let mut encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality);
             encoder
                 .encode_image(&rgb)
                 .map_err(|error| format!("could not encode JPEG: {error}"))?;
@@ -315,6 +350,109 @@ pub fn save_pixels(source: &Path, pixels: &RgbaImage, path: &Path) -> Result<(),
     write_atomically(path, &bytes)
 }
 
+/// Write a delivery copy of `pixels`, leaving the document untouched.
+///
+/// This is `Save as` with the export decisions ADR 0004 deferred: the JPEG
+/// quality is the user's, and the source's metadata segments can travel with
+/// the picture. Only JPEG→JPEG metadata is transplanted: EXIF, XMP, ICC and
+/// IPTC live in APP segments there, while PNG/TIFF metadata would need a
+/// different (chunk/IFD) rewrite this slice does not own. The write is atomic
+/// like a save, and no `.bak` is made because the target is not the source.
+pub fn export_pixels(
+    source: &Path,
+    pixels: &RgbaImage,
+    path: &Path,
+    quality: Option<u8>,
+    metadata: bool,
+) -> Result<(), String> {
+    let format = SaveFormat::from_path(path).ok_or_else(|| {
+        format!(
+            "cannot export as {}; use one of {}",
+            path.display(),
+            SaveFormat::CHOICES
+        )
+    })?;
+    let mut bytes = encode_with(pixels, format, quality)?;
+    if metadata
+        && format == SaveFormat::Jpeg
+        && SaveFormat::from_path(source) == Some(SaveFormat::Jpeg)
+    {
+        match std::fs::read(source) {
+            Ok(original) => bytes = splice_jpeg_metadata(&original, bytes),
+            Err(error) => tracing::warn!(
+                target: "kogaview::editor",
+                path = %source.display(),
+                %error,
+                "export without metadata: the source could not be read"
+            ),
+        }
+    }
+    write_atomically(path, &bytes)
+}
+
+/// The APP segments of a JPEG that carry metadata rather than pixels.
+///
+/// APP1 holds EXIF and XMP, APP2 the ICC profile, APP13 IPTC/Photoshop data;
+/// APP0 is skipped because it describes the JFIF encoding the new file already
+/// has. Anything unparsable ends the scan instead of being copied.
+fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return Vec::new();
+    }
+    let mut segments = Vec::new();
+    let mut position = 2;
+    while position + 4 <= bytes.len() {
+        if bytes[position] != 0xFF {
+            break;
+        }
+        let mut marker_at = position;
+        while marker_at + 1 < bytes.len() && bytes[marker_at + 1] == 0xFF {
+            marker_at += 1;
+        }
+        let marker = bytes[marker_at + 1];
+        let length_at = marker_at + 2;
+        // Standalone markers (RSTn, TEM) have no length field.
+        if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+            position = length_at;
+            continue;
+        }
+        // Start of scan: everything after it is entropy-coded pixels.
+        if marker == 0xDA || length_at + 2 > bytes.len() {
+            break;
+        }
+        let length = usize::from(u16::from_be_bytes([bytes[length_at], bytes[length_at + 1]]));
+        let segment_end = length_at + length;
+        if length < 2 || segment_end > bytes.len() {
+            break;
+        }
+        if matches!(marker, 0xE1 | 0xE2 | 0xED) {
+            segments.push(&bytes[position..segment_end]);
+        }
+        position = segment_end;
+    }
+    segments
+}
+
+/// Copy `original`'s metadata segments into `encoded`, right after its SOI.
+///
+/// The bytes are carried verbatim so an ICC profile or an orientation tag keeps
+/// its exact encoding. A file that is not a JPEG, or an encode that is not one,
+/// is returned unchanged: a broken export is worse than one without metadata.
+pub fn splice_jpeg_metadata(original: &[u8], encoded: Vec<u8>) -> Vec<u8> {
+    let segments = jpeg_metadata_segments(original);
+    if segments.is_empty() || encoded.len() < 2 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
+        return encoded;
+    }
+    let extra: usize = segments.iter().map(|segment| segment.len()).sum();
+    let mut out = Vec::with_capacity(encoded.len() + extra);
+    out.extend_from_slice(&encoded[..2]);
+    for segment in segments {
+        out.extend_from_slice(segment);
+    }
+    out.extend_from_slice(&encoded[2..]);
+    out
+}
+
 /// Size and modification time of a file, or `None` when it cannot be read.
 fn file_stamp(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -446,7 +584,7 @@ impl EditorDocument {
     }
 
     /// Labels of the applied operations, oldest first.
-    pub fn history(&self) -> Vec<String> {
+    pub fn history(&self) -> Vec<UiText> {
         self.undo
             .iter()
             .map(|step| step.operation.label())
@@ -792,26 +930,58 @@ pub fn open_document(path: &Path) -> Result<EditorDocument, String> {
     Ok(EditorDocument::from_image(path.to_path_buf(), image))
 }
 
+/// The size a preview of `width` × `height` is rendered at.
+pub fn preview_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= PREVIEW_LONG_EDGE {
+        return (width.max(1), height.max(1));
+    }
+    let scale = f64::from(PREVIEW_LONG_EDGE) / f64::from(longest);
+    (
+        ((f64::from(width) * scale).round() as u32).max(1),
+        ((f64::from(height) * scale).round() as u32).max(1),
+    )
+}
+
 /// Write the QML preview: PNG, downscaled to [`PREVIEW_LONG_EDGE`] on the long
 /// edge. Runs on a worker thread; the document keeps full resolution.
 pub fn render_preview(image: &RgbaImage, path: &Path) -> Result<(), String> {
-    let (width, height) = image.dimensions();
-    let longest = width.max(height);
-    let preview = if longest > PREVIEW_LONG_EDGE {
-        let scale = PREVIEW_LONG_EDGE as f64 / f64::from(longest);
-        let target_w = ((f64::from(width) * scale).round() as u32).max(1);
-        let target_h = ((f64::from(height) * scale).round() as u32).max(1);
-        imageops::resize(image, target_w, target_h, FilterType::Triangle)
-    } else {
-        image.clone()
-    };
-    DynamicImage::ImageRgba8(preview)
+    DynamicImage::ImageRgba8(preview_pixels(image))
         .save_with_format(path, ImageFormat::Png)
         .map_err(|error| format!("could not write the preview {}: {error}", path.display()))
 }
 
+/// The pixels a preview of `image` is drawn from.
+///
+/// Box sampling, not a general resampler: a preview is looked at, never
+/// measured, and `imageops::resize` spends seconds on a 27 MP frame deciding
+/// where a Lanczos lobe should fall. `imageops::thumbnail` averages the source
+/// block behind each target pixel — the right filter for a downscale this
+/// large, and the cheap one.
+fn preview_pixels(image: &RgbaImage) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    if width.max(height) > PREVIEW_LONG_EDGE {
+        let (target_w, target_h) = preview_dimensions(width, height);
+        imageops::thumbnail(image, target_w, target_h)
+    } else {
+        image.clone()
+    }
+}
+
 /// A result produced on a worker thread and consumed by Core's poll loop.
 pub enum EditorTask {
+    /// The preview is ready but the document is not: the canvas can paint it
+    /// while the full frame decodes. `source` and the two dimensions are the
+    /// document's own, read from the file's header before decoding, so the
+    /// window can name the picture and its size at reduced detail instead of
+    /// showing an empty canvas.
+    FirstPreview {
+        generation: u64,
+        source: PathBuf,
+        preview: PathBuf,
+        width: u32,
+        height: u32,
+    },
     Opened {
         generation: u64,
         document: EditorDocument,
@@ -846,10 +1016,42 @@ pub enum EditorTask {
 pub fn spawn_open(source: PathBuf, generation: u64, preview: PathBuf, sender: Sender<EditorTask>) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
-        let task = match open_document(&source)
-            .and_then(|document| render_preview(&document.pixels(), &preview).map(|()| document))
-        {
+        // First stage: a JPEG preview decoded at a reduced DCT scale. It is
+        // published on its own so the canvas paints something as soon as the
+        // file's header allowed it, while the full frame is still decoding.
+        // Everything else — and any failure here — falls through to the
+        // one-stage path below, which is the behaviour every format had.
+        let mut preview_written = false;
+        if let Ok(Some((image, width, height))) = scaled_jpeg_preview(&source) {
+            if render_preview(&image, &preview).is_ok() {
+                preview_written = true;
+                let _ = sender.send(EditorTask::FirstPreview {
+                    generation,
+                    source: source.clone(),
+                    preview: preview.clone(),
+                    width,
+                    height,
+                });
+                tracing::debug!(
+                    target: "kogaview::editor",
+                    generation,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "editor first preview written"
+                );
+            }
+        }
+
+        let task = match open_document(&source) {
             Ok(document) => {
+                if !preview_written {
+                    if let Err(message) = render_preview(&document.pixels(), &preview) {
+                        let _ = sender.send(EditorTask::Failed {
+                            generation,
+                            message,
+                        });
+                        return;
+                    }
+                }
                 tracing::debug!(
                     target: "kogaview::editor",
                     generation,
@@ -869,6 +1071,68 @@ pub fn spawn_open(source: PathBuf, generation: u64, preview: PathBuf, sender: Se
         };
         let _ = sender.send(task);
     });
+}
+
+/// A preview-sized decode of a large JPEG, or `None` when this is not the case.
+///
+/// A JPEG's DCT lets a decoder produce 1/2, 1/4 or 1/8 of the frame without
+/// decoding the pixels it would throw away, and `image` does not expose that.
+/// The result is only ever used for the *first* preview: the document still
+/// decodes at full resolution, and every later preview is rendered from those
+/// pixels. A file that fails here is simply decoded the ordinary way.
+fn scaled_jpeg_preview(path: &Path) -> Result<Option<(RgbaImage, u32, u32)>, String> {
+    let reader = ImageReader::open(path)
+        .map_err(|error| error.to_string())?
+        .with_guessed_format()
+        .map_err(|error| error.to_string())?;
+    if reader.format() != Some(ImageFormat::Jpeg) {
+        return Ok(None);
+    }
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|error| error.to_string())?;
+    if width.max(height) <= PREVIEW_LONG_EDGE {
+        // Already preview-sized: a scaled decode would only lose quality, and
+        // the ordinary path cheaply produces the same file.
+        return Ok(None);
+    }
+    let (target_w, target_h) = preview_dimensions(width, height);
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::BufReader::new(file));
+    // `scale` answers with the size it will really produce: the smallest of
+    // 1/8, 1/4 and 1/2 that still covers the request, so the preview is never
+    // an upscale of a too-small decode.
+    let (decoded_w, decoded_h) = decoder
+        .scale(target_w as u16, target_h as u16)
+        .map_err(|error| error.to_string())?;
+    let pixels = decoder.decode().map_err(|error| error.to_string())?;
+    let info = decoder.info().ok_or("the JPEG has no frame information")?;
+    let image = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => {
+            RgbaImage::from_raw(decoded_w.into(), decoded_h.into(), rgb_to_rgba(&pixels))
+                .ok_or("the JPEG decoder returned the wrong number of pixels")?
+        }
+        jpeg_decoder::PixelFormat::L8 => {
+            let mut rgba = Vec::with_capacity(pixels.len() * 4);
+            for value in pixels {
+                rgba.extend_from_slice(&[value, value, value, 255]);
+            }
+            RgbaImage::from_raw(decoded_w.into(), decoded_h.into(), rgba)
+                .ok_or("the JPEG decoder returned the wrong number of pixels")?
+        }
+        // CMYK JPEGs are rare and the colour conversion is not this path's job:
+        // fall back to the ordinary decode rather than guessing at it.
+        _ => return Ok(None),
+    };
+    Ok(Some((image, width, height)))
+}
+
+fn rgb_to_rgba(pixels: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(pixels.len() / 3 * 4);
+    for chunk in pixels.chunks_exact(3) {
+        rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+    }
+    rgba
 }
 
 /// Render a preview of the pixels Core just produced.
@@ -967,6 +1231,146 @@ mod tests {
         path
     }
 
+    /// A JPEG larger than one DCT halving of the preview edge, so the scaled
+    /// decode has a scale to choose (1/2 must still cover 2048 px).
+    fn wide_jpeg(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
+        let path = dir.join(name);
+        let image = pattern(width, height);
+        let bytes = encode_with(&image, SaveFormat::Jpeg, Some(92)).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn mean_absolute_difference(left: &RgbaImage, right: &RgbaImage) -> f64 {
+        assert_eq!(left.dimensions(), right.dimensions());
+        let mut total: u64 = 0;
+        for (a, b) in left.pixels().zip(right.pixels()) {
+            for channel in 0..3 {
+                total += u64::from(a.0[channel].abs_diff(b.0[channel]));
+            }
+        }
+        total as f64 / (left.pixels().len() * 3) as f64
+    }
+
+    /// A photograph-like frame: smooth gradients plus a low-frequency
+    /// undulation. `pattern` above is deliberately high frequency, which is the
+    /// worst case for a decoder that keeps only the low DCT bands; a preview's
+    /// job is to look like the picture, so it is judged on this one.
+    fn smooth_pattern(width: u32, height: u32) -> RgbaImage {
+        RgbaImage::from_fn(width, height, |x, y| {
+            let fx = x as f64 / f64::from(width);
+            let fy = y as f64 / f64::from(height);
+            let wave = (fx * 6.0 * std::f64::consts::PI).sin() * 24.0;
+            image::Rgba([
+                (fx * 255.0).clamp(0.0, 255.0) as u8,
+                ((fy * 180.0 + 40.0 + wave).clamp(0.0, 255.0)) as u8,
+                (((fx + fy) * 110.0).clamp(0.0, 255.0)) as u8,
+                255,
+            ])
+        })
+    }
+
+    fn wide_smooth_jpeg(dir: &Path, name: &str, width: u32, height: u32) -> PathBuf {
+        let path = dir.join(name);
+        let bytes =
+            encode_with(&smooth_pattern(width, height), SaveFormat::Jpeg, Some(92)).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_scaled_jpeg_preview_matches_the_full_decode() {
+        let dir = temp_dir();
+        let path = wide_smooth_jpeg(&dir, "wide.jpg", 4200, 600);
+
+        let (scaled, full_w, full_h) = scaled_jpeg_preview(&path)
+            .unwrap()
+            .expect("a 4200 px JPEG has a halved decode");
+        assert_eq!(
+            (full_w, full_h),
+            (4200, 600),
+            "the header size is the document's"
+        );
+        assert!(
+            scaled.width() < 4200,
+            "the preview decode was not scaled down: {} px",
+            scaled.width()
+        );
+
+        let full = open_document(&path).unwrap();
+        let (width, height) = full.dimensions();
+        let (target_w, target_h) = preview_dimensions(width, height);
+        let fast = imageops::thumbnail(&scaled, target_w, target_h);
+        let accurate = preview_pixels(&full.pixels());
+        let difference = mean_absolute_difference(&fast, &accurate);
+        assert!(
+            difference < 4.0,
+            "the halved decode differs from the full one by {difference:.2} levels"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_small_jpeg_is_not_decoded_twice() {
+        let dir = temp_dir();
+        // 1200 px is already preview-sized: the ordinary path is used, so no
+        // quality is lost and no second decode is paid for.
+        let path = wide_jpeg(&dir, "small.jpg", 1200, 800);
+        assert!(scaled_jpeg_preview(&path).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn opening_a_large_jpeg_publishes_the_preview_before_the_document() {
+        let dir = temp_dir();
+        let source = wide_jpeg(&dir, "wide.jpg", 4200, 600);
+        let preview = dir.join("preview.png");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        spawn_open(source.clone(), 7, preview.clone(), sender);
+
+        let first = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the worker must report something");
+        match first {
+            EditorTask::FirstPreview {
+                generation,
+                source: from,
+                preview: fast,
+                width,
+                height,
+            } => {
+                assert_eq!(generation, 7);
+                assert_eq!(from, source);
+                // The published size is the document's, not the reduced
+                // decode's: the footer must not show 2048 px and then jump.
+                assert_eq!((width, height), (4200, 600));
+                assert!(fast.is_file(), "the first preview was not written");
+            }
+            other => panic!(
+                "the first message must be the preview, not {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+
+        let second = receiver
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the document must follow the preview");
+        match second {
+            EditorTask::Opened {
+                generation,
+                document,
+                preview: written,
+            } => {
+                assert_eq!(generation, 7);
+                assert_eq!(document.dimensions(), (4200, 600));
+                assert_eq!(written, preview);
+                assert!(written.is_file(), "the document had no preview");
+            }
+            _ => panic!("the second message must be the decoded document"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     fn open(dir: &Path) -> EditorDocument {
         let path = source_file(dir, "source.png", 64, 32);
         open_document(&path).unwrap()
@@ -1006,7 +1410,7 @@ mod tests {
         assert_eq!(document.dimensions(), (32, 64));
         assert_eq!(
             document.history(),
-            vec!["Rotate right 90°", "Flip vertical"]
+            vec![UiText::new("rotate_right"), UiText::new("flip_vertical")]
         );
         assert!(document.undo());
         assert!(document.undo());
@@ -1115,7 +1519,10 @@ mod tests {
             })
             .unwrap());
         assert!(!document.can_redo());
-        assert_eq!(document.history(), vec!["Resize 32 × 16"]);
+        assert_eq!(
+            document.history(),
+            vec![UiText::with("resize", ["32", "16"])]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1206,7 +1613,10 @@ mod tests {
             &source_pixel,
             "the source was not stretched to the square"
         );
-        assert_eq!(document.history(), vec!["Resize 8 × 8 · pad #ff0000"]);
+        assert_eq!(
+            document.history(),
+            vec![UiText::with("resize_pad", ["8", "8", "#ff0000"])]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1379,21 +1789,24 @@ mod tests {
     }
 
     #[test]
-    fn operation_labels_are_stable() {
+    fn operation_labels_are_codes_not_sentences() {
+        // The wording lives in `UiLines.qml`; Core only names the operation and
+        // the numbers. A translated history line in Core would be English in a
+        // Vietnamese window, which is the bug this shape exists to prevent.
         assert_eq!(
             EditOperation::Rotate { degrees: 90 }.label(),
-            "Rotate right 90°"
+            UiText::new("rotate_right")
         );
         assert_eq!(
             EditOperation::Rotate { degrees: -90 }.label(),
-            "Rotate left 90°"
+            UiText::new("rotate_left")
         );
         assert_eq!(
             EditOperation::Flip {
                 axis: FlipAxis::Horizontal
             }
             .label(),
-            "Flip horizontal"
+            UiText::new("flip_horizontal")
         );
         assert_eq!(
             EditOperation::Crop {
@@ -1403,7 +1816,41 @@ mod tests {
                 height: 4
             }
             .label(),
-            "Crop 3 × 4 at 1,2"
+            UiText::with("crop", ["3", "4", "1", "2"])
         );
+        assert_eq!(
+            EditOperation::Resize {
+                width: 512,
+                height: 512,
+                fill: None
+            }
+            .label(),
+            UiText::with("resize", ["512", "512"])
+        );
+        // The label must name the colour it padded with, not only the size.
+        assert_eq!(
+            EditOperation::Resize {
+                width: 512,
+                height: 512,
+                fill: Some([255, 0, 0])
+            }
+            .label(),
+            UiText::with("resize_pad", ["512", "512", "#ff0000"])
+        );
+        // No code ever arrives with a formatted sentence in it.
+        for operation in [
+            EditOperation::Rotate { degrees: 45 },
+            EditOperation::Resize {
+                width: 3,
+                height: 4,
+                fill: Some([1, 2, 3]),
+            },
+        ] {
+            let label = operation.label();
+            assert!(
+                !label.code.contains(' ') && !label.code.contains('×'),
+                "the code must be a stable key, not a sentence: {label:?}"
+            );
+        }
     }
 }

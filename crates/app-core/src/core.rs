@@ -17,7 +17,9 @@ use crate::editor::{self, EditOperation, EditorDocument, EditorTask};
 use crate::journal::{Journal, JournalEntry};
 use crate::ops;
 use crate::paths::AppPaths;
-use crate::state::{Crumb, EditorPreviewDraft, EditorState, FolderListing, SelectionInfo, UiState};
+use crate::state::{
+    Crumb, EditorPreviewDraft, EditorState, FolderListing, SelectionInfo, UiState, UiText,
+};
 use crate::AppIdentity;
 
 struct ScanResult {
@@ -40,9 +42,47 @@ struct EditorSaveResult {
     result: Result<(), String>,
 }
 
+struct EditorExportResult {
+    save: u64,
+    destination: PathBuf,
+    result: Result<(), String>,
+}
+
+/// Which size tool a live preview belongs to.
+///
+/// The two tools share one draft pipeline and differ only in what the interface
+/// calls the result, so the codes live here as literals: the QML line table is
+/// checked against them by `scripts/check_translations.py`, and a `format!`ed
+/// code would slip past that gate.
+#[derive(Clone, Copy)]
+enum PreviewKind {
+    Resize,
+    Crop,
+}
+
+impl PreviewKind {
+    /// The line for "that rectangle/size changes nothing".
+    fn noop(self) -> UiText {
+        match self {
+            Self::Resize => UiText::new("resize_noop"),
+            Self::Crop => UiText::new("crop_noop"),
+        }
+    }
+
+    /// The line for "rendering a draft of …".
+    fn preview(self, width: u32, height: u32) -> UiText {
+        match self {
+            Self::Resize => UiText::with("resize_preview", [width.to_string(), height.to_string()]),
+            Self::Crop => UiText::with("crop_preview", [width.to_string(), height.to_string()]),
+        }
+    }
+}
+
 struct OpResult {
     ok: bool,
-    message: String,
+    /// The line the status bar shows when the operation finishes, as a code so
+    /// the interface can say it in its own language.
+    message: UiText,
     refresh: bool,
 }
 
@@ -92,6 +132,7 @@ pub struct Core {
     editor_save_generation: u64,
     /// The worker's answer for the save in flight.
     pending_save: Option<Receiver<EditorSaveResult>>,
+    pending_export: Option<Receiver<EditorExportResult>>,
     /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
     /// listing on its own and only re-sends it when this changes, because it is
     /// the one part of the snapshot that grows with the folder.
@@ -149,6 +190,7 @@ impl Core {
             editor_saving: false,
             editor_save_generation: 0,
             pending_save: None,
+            pending_export: None,
             listing_epoch: 0,
         };
 
@@ -245,6 +287,7 @@ impl Core {
             editor_saving: false,
             editor_save_generation: 0,
             pending_save: None,
+            pending_export: None,
             listing_epoch: 0,
         }
     }
@@ -315,7 +358,7 @@ impl Core {
         self.state.revision
     }
 
-    pub fn status(&self) -> &str {
+    pub fn status(&self) -> &UiText {
         &self.state.status
     }
 
@@ -352,11 +395,16 @@ impl Core {
                     revision = self.state.revision,
                     "command completed"
                 );
+                // `message` stays the English rendering, because the journal,
+                // the CLI and the log read it; `ui` is the same line as a code
+                // so a front end with a translator can word it itself.
+                let line = result.as_ref().ok().and_then(|line| line.clone());
                 json!({
                     "id": envelope.id,
                     "ok": true,
                     "revision": self.state.revision,
-                    "message": result.as_ref().ok().and_then(|message| message.clone()),
+                    "message": line.as_ref().map(UiText::english),
+                    "ui": line,
                 })
                 .to_string()
             }
@@ -455,7 +503,7 @@ impl Core {
                 Err(TryRecvError::Disconnected) => {
                     self.scan_rx = None;
                     self.state.busy = false;
-                    self.state.status = "Folder scan failed".to_owned();
+                    self.state.status = UiText::new("folder_scan_failed");
                     changed = true;
                 }
             }
@@ -481,7 +529,7 @@ impl Core {
                     self.op_rx = None;
                     self.cancel_op = None;
                     self.state.busy = false;
-                    self.state.status = "File operation failed".to_owned();
+                    self.state.status = UiText::new("file_operation_failed");
                     changed = true;
                 }
             }
@@ -508,7 +556,23 @@ impl Core {
                 Err(TryRecvError::Disconnected) => {
                     self.pending_save = None;
                     self.editor_saving = false;
-                    self.state.status = "The save did not finish".to_owned();
+                    self.state.status = UiText::new("save_incomplete");
+                    changed = true;
+                }
+            }
+        }
+
+        if let Some(receiver) = &self.pending_export {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.pending_export = None;
+                    changed |= self.apply_export_result(result);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.pending_export = None;
+                    self.editor_saving = false;
+                    self.state.status = UiText::new("export_incomplete");
                     changed = true;
                 }
             }
@@ -520,7 +584,7 @@ impl Core {
         changed
     }
 
-    fn execute(&mut self, command: Command) -> Result<Option<String>, ProtocolError> {
+    fn execute(&mut self, command: Command) -> Result<Option<UiText>, ProtocolError> {
         match command {
             Command::OpenFile { paths } => self.open_file(paths),
             Command::OpenFolder { path } => self.open_folder(PathBuf::from(path), true),
@@ -528,7 +592,7 @@ impl Core {
             Command::Refresh => {
                 self.state.tree_revision += 1;
                 self.refresh_current();
-                Ok(Some("Refreshed".to_owned()))
+                Ok(Some(UiText::new("refreshed")))
             }
             Command::Select { paths } => {
                 self.set_selection(paths);
@@ -550,7 +614,7 @@ impl Core {
                 // describes what the workspace shows: "Editing …" would claim
                 // the Browser is the Editor.
                 if workspace != Workspace::Editor && self.editor.is_some() {
-                    self.state.status.clear();
+                    self.state.status = UiText::empty();
                 }
                 Ok(None)
             }
@@ -580,14 +644,17 @@ impl Core {
                 self.remember_explorer_folders();
                 self.save_config();
                 self.state.bump();
-                Ok(Some("Settings saved".to_owned()))
+                Ok(Some(UiText::new("settings_saved")))
             }
             Command::SetLanguage { language } => {
                 self.config.language = language;
                 self.state.language = language;
                 self.save_config();
                 self.state.bump();
-                Ok(Some(format!("Interface language: {}", language.as_str())))
+                Ok(Some(UiText::with(
+                    "language_set",
+                    [language.as_str().to_owned()],
+                )))
             }
             Command::ToggleTheme => {
                 self.set_theme(self.config.theme.toggled());
@@ -664,6 +731,11 @@ impl Core {
             Command::EditorFlip { axis } => self.editor_apply(EditOperation::Flip { axis }),
             Command::EditorSave => self.editor_save(None),
             Command::EditorSaveAs { path } => self.editor_save(Some(&path)),
+            Command::EditorExport {
+                path,
+                quality,
+                metadata,
+            } => self.editor_export(&path, quality, metadata),
             Command::EditorUndo => self.editor_step(true),
             Command::EditorRedo => self.editor_step(false),
             Command::EditorReset => self.editor_reset(),
@@ -671,8 +743,8 @@ impl Core {
             Command::CancelOperation => {
                 if let Some(cancel) = &self.cancel_op {
                     cancel.store(true, Ordering::SeqCst);
-                    self.state.status = "Cancelling…".to_owned();
-                    Ok(Some("Cancelling current operation".to_owned()))
+                    self.state.status = UiText::new("cancelling");
+                    Ok(Some(UiText::new("cancelling")))
                 } else {
                     Err(ProtocolError::new(
                         "not_running",
@@ -683,7 +755,7 @@ impl Core {
         }
     }
 
-    fn open_file(&mut self, paths: Vec<String>) -> Result<Option<String>, ProtocolError> {
+    fn open_file(&mut self, paths: Vec<String>) -> Result<Option<UiText>, ProtocolError> {
         let first = paths.first().ok_or_else(|| {
             ProtocolError::new("invalid_path", "open_file requires at least one path")
         })?;
@@ -720,9 +792,13 @@ impl Core {
             scanned_paths
         });
         self.start_scan(parent, true, false);
-        Ok(Some(format!(
-            "Opening {}",
-            first.file_name().unwrap_or_default().to_string_lossy()
+        Ok(Some(UiText::with(
+            "opening_file",
+            [first
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()],
         )))
     }
 
@@ -730,7 +806,7 @@ impl Core {
         &mut self,
         path: PathBuf,
         set_browser_workspace: bool,
-    ) -> Result<Option<String>, ProtocolError> {
+    ) -> Result<Option<UiText>, ProtocolError> {
         // A symlinked folder opens like any other folder: the path the user
         // asked for stays in the breadcrumbs, the tree root and the grid, so
         // navigating into the link does not teleport to its target.
@@ -763,7 +839,10 @@ impl Core {
         self.save_explorer_folders(root_label, folder_label);
 
         self.start_scan(path.clone(), true, false);
-        Ok(Some(format!("Opened {}", path.display())))
+        Ok(Some(UiText::with(
+            "folder_opened",
+            [path.display().to_string()],
+        )))
     }
 
     fn refresh_current(&mut self) {
@@ -790,10 +869,11 @@ impl Core {
             self.state.selection.clear();
             self.state.selection_info = None;
         }
+        let folder_label = folder.display().to_string();
         self.state.status = if restore {
-            "Restoring last folder…".to_owned()
+            UiText::new("restoring_folder")
         } else {
-            format!("Loading {}…", folder.display())
+            UiText::with("loading_folder", [folder_label])
         };
 
         let thread_folder = folder.clone();
@@ -841,9 +921,12 @@ impl Core {
                 self.sync_viewer();
                 self.state.selection_info = self.build_selection_info();
                 self.state.busy = false;
-                self.state.status = format!(
-                    "{} items · {} images",
-                    self.state.item_count, self.state.image_count
+                self.state.status = UiText::with(
+                    "folder_contents",
+                    [
+                        self.state.item_count.to_string(),
+                        self.state.image_count.to_string(),
+                    ],
                 );
                 tracing::info!(
                     target: "kogaview::scan",
@@ -859,7 +942,7 @@ impl Core {
                 self.state.item_count = 0;
                 self.state.image_count = 0;
                 self.state.busy = false;
-                self.state.status = error.clone();
+                self.state.status = UiText::with("folder_error", [error.clone()]);
                 tracing::error!(
                     target: "kogaview::scan",
                     folder = %result.folder.display(),
@@ -968,7 +1051,7 @@ impl Core {
         }
     }
 
-    fn open_viewer_image(&mut self, path: &str) -> Result<Option<String>, ProtocolError> {
+    fn open_viewer_image(&mut self, path: &str) -> Result<Option<UiText>, ProtocolError> {
         let index = self
             .state
             .viewer_images
@@ -984,7 +1067,7 @@ impl Core {
         Ok(None)
     }
 
-    fn step_viewer(&mut self, delta: isize) -> Result<Option<String>, ProtocolError> {
+    fn step_viewer(&mut self, delta: isize) -> Result<Option<UiText>, ProtocolError> {
         if self.state.viewer_images.is_empty() {
             return Err(ProtocolError::new(
                 "no_images",
@@ -1007,7 +1090,7 @@ impl Core {
     /// The file is only read. Decoding and the first preview run on a worker
     /// thread, so a large photo does not stall the window; the UI publishes a
     /// spinner and the name until `apply_editor_task` installs the document.
-    fn open_editor(&mut self, path: &str) -> Result<Option<String>, ProtocolError> {
+    fn open_editor(&mut self, path: &str) -> Result<Option<UiText>, ProtocolError> {
         let source = ops::normalize_path(Path::new(path));
         if !source.is_file() {
             return Err(ProtocolError::new(
@@ -1044,7 +1127,8 @@ impl Core {
         self.state.workspace = Workspace::Editor;
         self.set_selection(vec![path_label.clone()]);
         self.state.busy = true;
-        self.state.status = format!("Opening {name} in the editor…");
+        let opening = UiText::with("opening_in_editor", [name.clone()]);
+        self.state.status = opening.clone();
         self.state.editor = Some(EditorState {
             save_path: path_label.clone(),
             path: path_label,
@@ -1065,12 +1149,15 @@ impl Core {
             saved: true,
             format: save_format_label(&source),
             saving: false,
+            // Width stays 0 until the header is read, so `hasDocument` is
+            // false: the placeholder, not a canvas, until the first decode.
+            opening: false,
         });
         editor::spawn_open(source, generation, preview, self.editor_tx.clone());
-        Ok(Some("Opening the image in the editor".to_owned()))
+        Ok(Some(opening))
     }
 
-    fn editor_apply(&mut self, operation: EditOperation) -> Result<Option<String>, ProtocolError> {
+    fn editor_apply(&mut self, operation: EditOperation) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &mut self.editor else {
             return Err(no_editor_document());
         };
@@ -1078,11 +1165,13 @@ impl Core {
             .apply(operation.clone())
             .map_err(|message| ProtocolError::new("invalid_edit", message))?;
         if !changed {
-            return Ok(Some("That edit would not change the image".to_owned()));
+            return Ok(Some(UiText::new("edit_noop")));
         }
         self.clear_editor_draft();
         self.schedule_editor_preview();
         self.refresh_editor_status();
+        // The same line the History panel records, so the toast and the history
+        // cannot word one operation two ways.
         Ok(Some(operation.label()))
     }
 
@@ -1096,8 +1185,8 @@ impl Core {
     fn editor_preview(
         &mut self,
         operation: EditOperation,
-        noun: &str,
-    ) -> Result<Option<String>, ProtocolError> {
+        kind: PreviewKind,
+    ) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &self.editor else {
             return Err(no_editor_document());
         };
@@ -1112,11 +1201,11 @@ impl Core {
         if !changes {
             self.clear_editor_draft();
             self.publish_editor();
-            return Ok(Some(format!("That {noun} would not change the image")));
+            return Ok(Some(kind.noop()));
         }
         let pixels = document.pixels();
         let Ok(dir) = self.editor_preview_dir() else {
-            return Ok(Some("Could not create the preview folder".to_owned()));
+            return Ok(Some(UiText::new("preview_folder_failed")));
         };
         self.editor_draft_generation += 1;
         let generation = self.editor_draft_generation;
@@ -1128,7 +1217,7 @@ impl Core {
             preview,
             self.editor_tx.clone(),
         );
-        Ok(Some(format!("Previewing a {noun} to {width} × {height}")))
+        Ok(Some(kind.preview(width, height)))
     }
 
     fn editor_resize_preview(
@@ -1136,14 +1225,14 @@ impl Core {
         width: u32,
         height: u32,
         fill: Option<[u8; 3]>,
-    ) -> Result<Option<String>, ProtocolError> {
+    ) -> Result<Option<UiText>, ProtocolError> {
         self.editor_preview(
             EditOperation::Resize {
                 width,
                 height,
                 fill,
             },
-            "resize",
+            PreviewKind::Resize,
         )
     }
 
@@ -1153,7 +1242,7 @@ impl Core {
         y: u32,
         width: u32,
         height: u32,
-    ) -> Result<Option<String>, ProtocolError> {
+    ) -> Result<Option<UiText>, ProtocolError> {
         self.editor_preview(
             EditOperation::Crop {
                 x,
@@ -1161,7 +1250,7 @@ impl Core {
                 width,
                 height,
             },
-            "crop",
+            PreviewKind::Crop,
         )
     }
 
@@ -1176,7 +1265,7 @@ impl Core {
         }
     }
 
-    fn editor_step(&mut self, undo: bool) -> Result<Option<String>, ProtocolError> {
+    fn editor_step(&mut self, undo: bool) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &mut self.editor else {
             return Err(no_editor_document());
         };
@@ -1186,32 +1275,36 @@ impl Core {
             document.redo()
         };
         if !moved {
-            return Ok(Some(
-                if undo {
-                    "Nothing to undo"
-                } else {
-                    "Nothing to redo"
-                }
-                .to_owned(),
-            ));
+            return Ok(Some(if undo {
+                UiText::new("nothing_to_undo")
+            } else {
+                UiText::new("nothing_to_redo")
+            }));
         }
         self.clear_editor_draft();
         self.schedule_editor_preview();
         self.refresh_editor_status();
-        Ok(Some(if undo { "Undo" } else { "Redo" }.to_owned()))
+        // A literal per branch, not one code chosen by an expression: the
+        // catalogue gate reads the codes out of the source, and a code built
+        // inside `if`/`else` would be invisible to it.
+        Ok(Some(if undo {
+            UiText::new("undo")
+        } else {
+            UiText::new("redo")
+        }))
     }
 
-    fn editor_reset(&mut self) -> Result<Option<String>, ProtocolError> {
+    fn editor_reset(&mut self) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &mut self.editor else {
             return Err(no_editor_document());
         };
         if !document.reset() {
-            return Ok(Some("The image has no edits to reset".to_owned()));
+            return Ok(Some(UiText::new("nothing_to_reset")));
         }
         self.clear_editor_draft();
         self.schedule_editor_preview();
         self.refresh_editor_status();
-        Ok(Some("Reset to the original image".to_owned()))
+        Ok(Some(UiText::new("reset_done")))
     }
 
     /// Write the working pixels to `path`, or to the document's own save path
@@ -1224,7 +1317,7 @@ impl Core {
     /// writing would then silently discard whatever changed it. Encoding and
     /// writing run on a worker; the document keeps rendering its preview and
     /// `saved` flips only when the bytes are really there.
-    fn editor_save(&mut self, path: Option<&str>) -> Result<Option<String>, ProtocolError> {
+    fn editor_save(&mut self, path: Option<&str>) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &self.editor else {
             return Err(no_editor_document());
         };
@@ -1288,7 +1381,7 @@ impl Core {
         self.editor_save_generation += 1;
         let save = self.editor_save_generation;
         self.editor_saving = true;
-        self.state.status = format!("Saving {label}…");
+        self.state.status = UiText::with("saving", [label.clone()]);
         self.publish_editor();
         let (sender, receiver) = mpsc::channel();
         let thread_source = source.clone();
@@ -1301,13 +1394,112 @@ impl Core {
             });
         });
         self.pending_save = Some(receiver);
-        self.state.status = format!("Saving {label}…");
         // `saving` travels in the snapshot, so the view's spinner and the
         // disabled buttons are Core's answer rather than a local guess. The
         // status line names the file; `Toast` would speak over it.
         self.publish_editor();
         self.state.bump();
-        Ok(Some(format!("Saving {label}…")))
+        Ok(Some(UiText::with("saving", [label])))
+    }
+
+    /// Write a delivery copy of the working document.
+    ///
+    /// Nothing about the document moves: the save target stays where it was,
+    /// `saved` keeps describing those pixels, and the history is untouched. The
+    /// one thing this refuses is the document's own file — replacing that is
+    /// `editor_save`, with its backup and its source check.
+    fn editor_export(
+        &mut self,
+        path: &str,
+        quality: Option<u8>,
+        metadata: bool,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &self.editor else {
+            return Err(no_editor_document());
+        };
+        if document.dimensions().0 == 0 {
+            return Err(ProtocolError::new(
+                "busy",
+                "the document is still being decoded",
+            ));
+        }
+        if self.editor_saving {
+            return Err(ProtocolError::new("busy", "a write is already in flight"));
+        }
+        let destination = ops::normalize_path(&PathBuf::from(path));
+        if destination == document.source_path() {
+            return Err(ProtocolError::new(
+                "invalid_destination",
+                "exporting onto the open document would replace it; use Save",
+            ));
+        }
+        if editor::SaveFormat::from_path(&destination).is_none() {
+            return Err(ProtocolError::new(
+                "invalid_destination",
+                format!(
+                    "cannot export as {}; use one of {}",
+                    destination.display(),
+                    editor::SaveFormat::CHOICES
+                ),
+            ));
+        }
+        let label = destination
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| destination.to_string_lossy().into_owned());
+        let source = document.source_path().to_path_buf();
+        let pixels = document.pixels();
+        self.editor_save_generation += 1;
+        let save = self.editor_save_generation;
+        self.editor_saving = true;
+        self.state.status = UiText::with("exporting", [label.clone()]);
+        self.publish_editor();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = editor::export_pixels(&source, &pixels, &destination, quality, metadata);
+            let _ = sender.send(EditorExportResult {
+                save,
+                destination,
+                result,
+            });
+        });
+        self.pending_export = Some(receiver);
+        self.state.bump();
+        Ok(Some(UiText::with("exporting", [label])))
+    }
+
+    /// Finish an export a worker completed.
+    fn apply_export_result(&mut self, result: EditorExportResult) -> bool {
+        if result.save != self.editor_save_generation {
+            return false;
+        }
+        self.editor_saving = false;
+        let label = result
+            .destination
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match result.result {
+            Ok(()) => {
+                tracing::info!(
+                    target: "kogaview::editor",
+                    path = %result.destination.display(),
+                    "editor export written"
+                );
+                self.state.status = UiText::with("exported", [label]);
+            }
+            Err(message) => {
+                tracing::warn!(
+                    target: "kogaview::editor",
+                    path = %result.destination.display(),
+                    %message,
+                    "editor export failed"
+                );
+                self.state.status = UiText::with("export_error", [message]);
+            }
+        }
+        self.publish_editor();
+        true
     }
 
     /// Finish a write that a worker completed.
@@ -1333,7 +1525,7 @@ impl Core {
                         document.remember_source();
                     }
                 }
-                self.state.status = format!("Saved {label}");
+                self.state.status = UiText::with("saved", [label]);
             }
             Err(message) => {
                 tracing::warn!(
@@ -1342,7 +1534,7 @@ impl Core {
                     %message,
                     "editor save failed"
                 );
-                self.state.status = message;
+                self.state.status = UiText::with("save_error", [message]);
             }
         }
         self.publish_editor();
@@ -1368,7 +1560,7 @@ impl Core {
             },
         };
         if !editor::has_decoder(Path::new(&path)) {
-            self.state.status = format!("Cannot open {}: no decoder for this format", path);
+            self.state.status = UiText::with("no_decoder", [path]);
             return;
         }
         let opened = self.open_editor(&path);
@@ -1380,7 +1572,7 @@ impl Core {
         );
     }
 
-    fn editor_close(&mut self) -> Result<Option<String>, ProtocolError> {
+    fn editor_close(&mut self) -> Result<Option<UiText>, ProtocolError> {
         if self.editor.is_none() {
             return Err(no_editor_document());
         }
@@ -1396,8 +1588,8 @@ impl Core {
             let _ = std::fs::remove_file(preview);
         }
         self.editor_preview_stamp = None;
-        self.state.status = "Editor closed".to_owned();
-        Ok(Some("Closed the editor document".to_owned()))
+        self.state.status = UiText::new("editor_closed");
+        Ok(Some(UiText::new("editor_closed")))
     }
 
     /// Republish the Editor projection after a synchronous edit, then ask a
@@ -1415,7 +1607,7 @@ impl Core {
         self.publish_editor();
         let Ok(dir) = self.editor_preview_dir() else {
             self.editor_rendering = false;
-            self.state.status = "Could not create the preview folder".to_owned();
+            self.state.status = UiText::new("preview_folder_failed");
             self.publish_editor();
             return;
         };
@@ -1436,7 +1628,7 @@ impl Core {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "image".to_owned());
-        self.state.status = format!("Editing {name} · {width} × {height}");
+        self.state.status = UiText::with("editing", [name, width.to_string(), height.to_string()]);
     }
 
     /// Project the Core-owned document into the serializable UI state.
@@ -1491,6 +1683,56 @@ impl Core {
             saved,
             format,
             saving: self.editor_saving,
+            opening: false,
+        });
+    }
+
+    /// Publish the first, reduced decode of an image whose full frame is still
+    /// decoding: the canvas can draw the picture and the footer the real size
+    /// while the tools stay disabled (`opening: true`).
+    ///
+    /// This is the same `EditorState` the document publishes two seconds later,
+    /// so nothing jumps when the full frame lands — only `opening` flips and
+    /// the sharper preview replaces the soft one.
+    fn publish_opening_preview(
+        &mut self,
+        source: &Path,
+        preview: PathBuf,
+        generation: u64,
+        width: u32,
+        height: u32,
+    ) {
+        self.install_editor_preview(&preview, generation);
+        let (preview_modified, preview_size) = self.editor_preview_stamp.unwrap_or((0, 0));
+        let name = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| source.to_string_lossy().into_owned());
+        let path = source.to_string_lossy().into_owned();
+        let format = save_format_label(source);
+        self.state.editor = Some(EditorState {
+            name,
+            width,
+            height,
+            can_undo: false,
+            can_redo: false,
+            modified: false,
+            history: Vec::new(),
+            redo_count: 0,
+            preview_path: Some(preview.to_string_lossy().into_owned()),
+            preview_revision: generation,
+            preview_modified,
+            preview_size,
+            preview_draft: None,
+            rendering: true,
+            save_path: path.clone(),
+            // Untouched so far, and the pixels on disk at `save_path` are the
+            // ones being decoded: Save has nothing to write until an edit.
+            saved: true,
+            format,
+            saving: false,
+            opening: true,
+            path,
         });
     }
 
@@ -1509,6 +1751,31 @@ impl Core {
     /// preview file they wrote.
     fn apply_editor_task(&mut self, task: EditorTask) -> bool {
         match task {
+            EditorTask::FirstPreview {
+                generation,
+                source,
+                preview,
+                width,
+                height,
+            } => {
+                if generation != self.editor_generation {
+                    let _ = std::fs::remove_file(preview);
+                    return false;
+                }
+                // The picture is what the user is waiting for; the pixels that
+                // editing needs are still decoding, so `rendering` stays true
+                // and the canvas dims the preview until the document lands.
+                self.publish_opening_preview(&source, preview, generation, width, height);
+                tracing::debug!(
+                    target: "kogaview::editor",
+                    generation,
+                    "editor first preview installed"
+                );
+                // No `publish_editor()` here: it takes its size and history from
+                // the document, which is still decoding, and would wipe the
+                // provisional state this line just published.
+                true
+            }
             EditorTask::Opened {
                 generation,
                 document,
@@ -1535,7 +1802,8 @@ impl Core {
                 self.editor = Some(document);
                 self.editor_rendering = false;
                 self.state.busy = false;
-                self.state.status = format!("Editing {name} · {width} × {height}");
+                self.state.status =
+                    UiText::with("editing", [name, width.to_string(), height.to_string()]);
                 self.publish_editor();
                 true
             }
@@ -1603,10 +1871,16 @@ impl Core {
                 );
                 self.editor_rendering = false;
                 self.state.busy = false;
-                self.state.status = message;
+                self.state.status = UiText::with("edit_error", [message]);
                 // An open that never produced a document leaves the workspace
-                // empty; an edit failure keeps the last good preview.
+                // empty — including the fast preview it may have shown first,
+                // which would otherwise sit in the cache with nothing behind
+                // it. An edit failure keeps the last good preview.
                 if self.editor.is_none() {
+                    if let Some(path) = self.editor_preview_path.take() {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    self.editor_preview_stamp = None;
                     self.state.editor = None;
                 } else {
                     self.publish_editor();
@@ -1654,13 +1928,16 @@ impl Core {
         self.save_config();
     }
 
-    fn new_folder(&mut self, parent: PathBuf, name: &str) -> Result<Option<String>, ProtocolError> {
+    fn new_folder(&mut self, parent: PathBuf, name: &str) -> Result<Option<UiText>, ProtocolError> {
         let parent = ops::normalize_path(&parent);
         let created = ops::create_folder(&parent, name)
             .map_err(|error| ProtocolError::new("io_error", error))?;
         self.state.tree_revision += 1;
         self.refresh_current();
-        Ok(Some(format!("Created {}", created.display())))
+        Ok(Some(UiText::with(
+            "created",
+            [created.display().to_string()],
+        )))
     }
 
     fn transfer(
@@ -1668,7 +1945,7 @@ impl Core {
         paths: Vec<String>,
         destination: PathBuf,
         move_paths: bool,
-    ) -> Result<Option<String>, ProtocolError> {
+    ) -> Result<Option<UiText>, ProtocolError> {
         if self.state.busy {
             return Err(ProtocolError::new(
                 "busy",
@@ -1704,81 +1981,114 @@ impl Core {
             }
         }
 
-        let label = if move_paths { "Moving" } else { "Copying" };
         let count = sources.len();
-        self.start_operation(format!("{label} {count} item(s)…"), move |cancel| {
-            let mut failures = Vec::new();
-            let mut moved = 0;
-            for source in &sources {
-                if cancel.load(Ordering::SeqCst) {
-                    return OpResult {
-                        ok: false,
-                        message: format!("Cancelled after {moved} item(s)"),
-                        refresh: true,
+        let moving = move_paths;
+        self.start_operation(
+            if moving {
+                UiText::with("moving", [count.to_string()])
+            } else {
+                UiText::with("copying", [count.to_string()])
+            },
+            move |cancel| {
+                let mut failures = Vec::new();
+                let mut moved = 0;
+                for source in &sources {
+                    if cancel.load(Ordering::SeqCst) {
+                        return OpResult {
+                            ok: false,
+                            message: UiText::with("cancelled_after", [moved.to_string()]),
+                            refresh: true,
+                        };
+                    }
+                    let result = if moving {
+                        ops::move_path(source, &destination)
+                    } else {
+                        ops::copy_path(source, &destination)
                     };
+                    match result {
+                        Ok(_) => moved += 1,
+                        Err(error) => failures.push(error),
+                    }
                 }
-                let result = if move_paths {
-                    ops::move_path(source, &destination)
-                } else {
-                    ops::copy_path(source, &destination)
-                };
-                match result {
-                    Ok(_) => moved += 1,
-                    Err(error) => failures.push(error),
-                }
-            }
-            OpResult {
-                ok: failures.is_empty(),
-                message: if failures.is_empty() {
-                    format!("{label} {moved} item(s) to {}", destination.display())
-                } else {
-                    format!(
-                        "{label} finished with {} error(s): {}",
-                        failures.len(),
-                        failures[0]
+                let line = if failures.is_empty() {
+                    if moving {
+                        UiText::with(
+                            "moved_to",
+                            [moved.to_string(), destination.display().to_string()],
+                        )
+                    } else {
+                        UiText::with(
+                            "copied_to",
+                            [moved.to_string(), destination.display().to_string()],
+                        )
+                    }
+                } else if moving {
+                    UiText::with(
+                        "move_failed",
+                        [
+                            moved.to_string(),
+                            failures.len().to_string(),
+                            failures[0].clone(),
+                        ],
                     )
-                },
-                refresh: true,
-            }
-        });
-        Ok(Some(format!("{label} {count} item(s)…")))
+                } else {
+                    UiText::with(
+                        "copy_failed",
+                        [
+                            moved.to_string(),
+                            failures.len().to_string(),
+                            failures[0].clone(),
+                        ],
+                    )
+                };
+                OpResult {
+                    ok: failures.is_empty(),
+                    message: line,
+                    refresh: true,
+                }
+            },
+        );
+        Ok(Some(UiText::with(
+            if move_paths { "moving" } else { "copying" },
+            [count.to_string()],
+        )))
     }
 
-    fn trash_paths(&mut self, paths: Vec<String>) -> Result<Option<String>, ProtocolError> {
+    fn trash_paths(&mut self, paths: Vec<String>) -> Result<Option<UiText>, ProtocolError> {
         let paths = self.validated_deletion_paths(paths)?;
         let count = paths.len();
         self.start_operation(
-            format!("Moving {count} item(s) to trash…"),
+            UiText::with("moving_to_trash", [count.to_string()]),
             move |cancel| {
                 if cancel.load(Ordering::SeqCst) {
                     return OpResult {
                         ok: false,
-                        message: "Cancelled".to_owned(),
+                        message: UiText::new("cancelled"),
                         refresh: true,
                     };
                 }
                 match ops::trash_paths(&paths) {
                     Ok(()) => OpResult {
                         ok: true,
-                        message: format!("Moved {count} item(s) to trash"),
+                        message: UiText::with("moved_to_trash", [count.to_string()]),
                         refresh: true,
                     },
                     Err(error) => OpResult {
                         ok: false,
-                        message: format!("Move to trash failed: {error}"),
+                        message: UiText::with("trash_failed", [error]),
                         refresh: false,
                     },
                 }
             },
         );
-        Ok(Some(format!("Moving {count} item(s) to trash…")))
+        Ok(Some(UiText::with("moving_to_trash", [count.to_string()])))
     }
 
-    fn delete_paths(&mut self, paths: Vec<String>) -> Result<Option<String>, ProtocolError> {
+    fn delete_paths(&mut self, paths: Vec<String>) -> Result<Option<UiText>, ProtocolError> {
         let paths = self.validated_deletion_paths(paths)?;
         let count = paths.len();
         self.start_operation(
-            format!("Deleting {count} item(s) permanently…"),
+            UiText::with("deleting_permanently", [count.to_string()]),
             move |cancel| {
                 let mut failures = Vec::new();
                 let mut deleted = 0;
@@ -1786,7 +2096,7 @@ impl Core {
                     if cancel.load(Ordering::SeqCst) {
                         return OpResult {
                             ok: false,
-                            message: format!("Cancelled after deleting {deleted} item(s)"),
+                            message: UiText::with("cancelled_after_delete", [deleted.to_string()]),
                             refresh: true,
                         };
                     }
@@ -1798,19 +2108,25 @@ impl Core {
                 OpResult {
                     ok: failures.is_empty(),
                     message: if failures.is_empty() {
-                        format!("Permanently deleted {deleted} item(s)")
+                        UiText::with("deleted_permanently", [deleted.to_string()])
                     } else {
-                        format!(
-                            "Deleted {deleted} item(s); {} error(s): {}",
-                            failures.len(),
-                            failures[0]
+                        UiText::with(
+                            "delete_failed",
+                            [
+                                deleted.to_string(),
+                                failures.len().to_string(),
+                                failures[0].clone(),
+                            ],
                         )
                     },
                     refresh: true,
                 }
             },
         );
-        Ok(Some(format!("Deleting {count} item(s) permanently…")))
+        Ok(Some(UiText::with(
+            "deleting_permanently",
+            [count.to_string()],
+        )))
     }
 
     fn validated_deletion_paths(&self, paths: Vec<String>) -> Result<Vec<PathBuf>, ProtocolError> {
@@ -1839,7 +2155,7 @@ impl Core {
         Ok(result)
     }
 
-    fn start_operation<F>(&mut self, status: String, work: F)
+    fn start_operation<F>(&mut self, status: UiText, work: F)
     where
         F: FnOnce(Arc<AtomicBool>) -> OpResult + Send + 'static,
     {
@@ -1854,7 +2170,7 @@ impl Core {
         });
     }
 
-    fn add_favorite(&mut self, path: PathBuf) -> Result<Option<String>, ProtocolError> {
+    fn add_favorite(&mut self, path: PathBuf) -> Result<Option<UiText>, ProtocolError> {
         let path = ops::normalize_path(&path);
         if !path.is_dir() {
             return Err(ProtocolError::new(
@@ -1868,10 +2184,13 @@ impl Core {
             self.state.favorites = self.config.quick_access.clone();
             self.save_config();
         }
-        Ok(Some(format!("Added {} to quick access", path.display())))
+        Ok(Some(UiText::with(
+            "quick_access_added",
+            [path.display().to_string()],
+        )))
     }
 
-    fn remove_favorite(&mut self, path: &str) -> Result<Option<String>, ProtocolError> {
+    fn remove_favorite(&mut self, path: &str) -> Result<Option<UiText>, ProtocolError> {
         let before = self.config.quick_access.len();
         self.config.quick_access.retain(|favorite| favorite != path);
         if self.config.quick_access.len() == before {
@@ -1882,14 +2201,14 @@ impl Core {
         }
         self.state.favorites = self.config.quick_access.clone();
         self.save_config();
-        Ok(Some("Removed from quick access".to_owned()))
+        Ok(Some(UiText::new("quick_access_removed")))
     }
 
     fn move_favorite(
         &mut self,
         path: &str,
         direction: MoveDirection,
-    ) -> Result<Option<String>, ProtocolError> {
+    ) -> Result<Option<UiText>, ProtocolError> {
         let Some(index) = self
             .config
             .quick_access
@@ -1959,7 +2278,7 @@ impl Core {
                 %error,
                 "cannot save configuration"
             );
-            self.state.status = format!("Cannot save configuration: {error}");
+            self.state.status = UiText::with("config_save_failed", [error.to_string()]);
         }
     }
 
@@ -2623,6 +2942,131 @@ mod tests {
         serde_json::from_str(&core.dispatch(&editor_envelope(id, command))).unwrap()
     }
 
+    /// Wait for an export worker to finish writing `path`.
+    fn settle_export(core: &mut Core, path: &Path) -> bool {
+        for _ in 0..4000 {
+            core.poll();
+            if !core.editor_saving() && path.is_file() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// A JPEG whose entropy-coded data changes with the quality setting, with
+    /// an EXIF APP1 segment a reader can look for after an export.
+    fn write_jpeg_with_exif(path: &Path, width: u32, height: u32) {
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba([
+                ((x * 37 + y * 11) % 256) as u8,
+                ((x * 13 + y * 29) % 256) as u8,
+                ((x * x + y * y) % 256) as u8,
+                255,
+            ])
+        });
+        let encoded = editor::encode_with(&image, editor::SaveFormat::Jpeg, Some(95)).unwrap();
+        let payload = b"Exif\0\0KogaViewExportTest";
+        let length = (payload.len() + 2) as u16;
+        let mut bytes = encoded[..2].to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xE1, (length >> 8) as u8, length as u8]);
+        bytes.extend_from_slice(payload);
+        bytes.extend_from_slice(&encoded[2..]);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn export_writes_a_copy_with_the_chosen_quality_and_keeps_the_document() {
+        let base = temp_dir();
+        let photo = base.join("photo.jpg");
+        write_jpeg_with_exif(&photo, 160, 120);
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(r#"{{"type":"editor_open","path":"{}"}}"#, photo.display()),
+        );
+        assert!(settle_editor(&mut core), "the document never opened");
+
+        // An edit makes `saved` false; an export must not touch that, nor move
+        // the save target.
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+        let before = core.state.editor.clone().unwrap();
+        assert!(!before.saved, "the edit must leave the document unsaved");
+
+        let small = base.join("small.jpg");
+        let large = base.join("large.jpg");
+        // `plain` differs from `large` in the metadata flag only, so a size
+        // comparison between `small` and `plain` measures the quality setting
+        // alone — comparing against `large` would measure the APP1 segment it
+        // carries as well.
+        let plain = base.join("plain.jpg");
+        for (path, quality, metadata, id) in [
+            (&small, 20, false, "export-1"),
+            (&large, 95, true, "export-2"),
+            (&plain, 95, false, "export-3"),
+        ] {
+            let response = dispatch_json(
+                &mut core,
+                id,
+                &format!(
+                    r#"{{"type":"editor_export","path":"{}","quality":{quality},"metadata":{metadata}}}"#,
+                    path.display()
+                ),
+            );
+            assert_eq!(response["ok"], true, "{response}");
+            assert!(
+                settle_export(&mut core, path),
+                "no file at {}",
+                path.display()
+            );
+        }
+
+        let after = core.state.editor.as_ref().unwrap();
+        assert_eq!(
+            after.save_path, before.save_path,
+            "export moved the save target"
+        );
+        assert_eq!(after.saved, before.saved, "export changed the saved flag");
+        assert_eq!(after.history, before.history, "export changed the history");
+        assert_eq!(core.state.status.code, "exported");
+        assert_eq!(core.state.status.args[0], "plain.jpg");
+
+        let small_len = std::fs::metadata(&small).unwrap().len();
+        let plain_len = std::fs::metadata(&plain).unwrap().len();
+        assert!(
+            small_len < plain_len,
+            "quality 20 wrote {small_len} bytes, quality 95 wrote {plain_len}"
+        );
+
+        // Metadata is the caller's choice, and only JPEG carries it. The fake
+        // APP1 the source holds must be in the copy that asked for it.
+        let with_meta = std::fs::read(&large).unwrap();
+        let without = std::fs::read(&plain).unwrap();
+        assert!(
+            with_meta.windows(9).any(|window| window == b"KogaViewE"),
+            "the export dropped the source metadata"
+        );
+        assert!(
+            !without.windows(9).any(|window| window == b"KogaViewE"),
+            "an export that refused metadata copied it anyway"
+        );
+
+        // Exporting onto the document's own file is refused: that is Save.
+        let refused = dispatch_json(
+            &mut core,
+            "export-3",
+            &format!(r#"{{"type":"editor_export","path":"{}"}}"#, photo.display()),
+        );
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(refused["error"]["code"], "invalid_destination");
+        remove_tree(&base);
+    }
+
     #[test]
     fn save_overwrites_the_source_with_the_edit_and_keeps_a_backup() {
         let base = temp_dir();
@@ -2838,11 +3282,12 @@ mod tests {
             .expect("the editor must open the viewed image");
         assert_eq!(editor.path, shown);
         assert!(settle_editor(&mut core));
-        assert!(
-            core.state.status.starts_with("Editing "),
+        assert_eq!(
+            core.state.status.code, "editing",
             "the editor must say it is editing: {:?}",
             core.state.status
         );
+        assert_eq!(core.state.status.args[0], "one.png");
 
         // A second switch back does not reload, and a document already open
         // wins over the Viewer's current image.
@@ -2854,7 +3299,7 @@ mod tests {
         );
         let status = core.state.status.clone();
         assert!(
-            !status.starts_with("Editing "),
+            status.is_empty(),
             "the Browser still claimed to be editing: {status:?}"
         );
         dispatch_json(
@@ -2948,7 +3393,7 @@ mod tests {
         );
         let editor = core.state.editor.as_ref().unwrap();
         assert_eq!((editor.width, editor.height), (20, 40));
-        assert_eq!(editor.history, vec!["Rotate right 90°"]);
+        assert_eq!(editor.history, vec![UiText::new("rotate_right")]);
         assert!(editor.can_undo);
         assert!(!editor.can_redo);
         assert!(settle_editor(&mut core), "the preview never landed");
@@ -3092,10 +3537,15 @@ mod tests {
         ));
         let editor = core.state.editor.as_ref().unwrap();
         assert_eq!((editor.width, editor.height), (10, 8));
-        assert_eq!(editor.history, vec!["Crop 10 × 8 at 4,2"]);
-        assert!(
-            core.state.status.contains("10 × 8"),
-            "the status line must follow the document size: {}",
+        assert_eq!(
+            editor.history,
+            vec![UiText::with("crop", ["10", "8", "4", "2"])]
+        );
+        assert_eq!(core.state.status.code, "editing");
+        assert_eq!(
+            &core.state.status.args[1..],
+            ["10", "8"],
+            "the status line must follow the document size: {:?}",
             core.state.status
         );
 
@@ -3180,8 +3630,8 @@ mod tests {
         assert!(editor.preview_draft.is_none());
         assert!(!draft_path.exists(), "the applied draft file is cleaned up");
         assert_eq!(
-            editor.history.last().map(String::as_str),
-            Some("Resize 20 × 20")
+            editor.history.last(),
+            Some(&UiText::with("resize", ["20", "20"]))
         );
 
         // Reset drops every step, back to the source size.
@@ -3264,7 +3714,8 @@ mod tests {
         ));
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["ok"], true, "{response}");
-        assert_eq!(parsed["message"], "That crop would not change the image");
+        assert_eq!(parsed["message"], "crop noop");
+        assert_eq!(parsed["ui"]["code"], "crop_noop");
         assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
 
         // Out of bounds is rejected at the gateway: no draft, no revision.

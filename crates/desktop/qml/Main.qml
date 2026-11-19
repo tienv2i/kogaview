@@ -20,6 +20,12 @@ ApplicationWindow {
     title: qsTr("KogaView") + (bridge.profile === "dev" ? " " + qsTr("(Dev)") : "")
     color: appTheme.background
 
+    /// Turns Core's `{ code, args }` lines into sentences in the interface
+    /// language (see `UiLines.qml`).
+    UiLines {
+        id: uiLines
+    }
+
     Theme {
         id: appTheme
         // Core owns the stored theme. While the Settings dialog previews one,
@@ -219,8 +225,15 @@ ApplicationWindow {
         if (result) {
             if (!result.ok && result.error) {
                 root.showToast(result.error.message);
-            } else if (result.message && command.type !== "select") {
-                root.showToast(result.message);
+            } else if (command.type !== "select") {
+                // The typed line first: Core publishes `{code, args}` so the
+                // toast speaks the interface language. `message` is the English
+                // rendering kept for the journal and for callers without one.
+                if (result.ui && result.ui.code) {
+                    root.showToast(uiLines.text(result.ui, root.state.language));
+                } else if (result.message) {
+                    root.showToast(result.message);
+                }
             }
         }
         return result;
@@ -318,6 +331,15 @@ ApplicationWindow {
         var editor = workspaceLoader.item;
         saveFallback.currentFile = "file://" + (editor && editor.saveAsPath ? editor.saveAsPath : "")
         saveFallback.open();
+    }
+
+    /// Export's Browse: the chooser suggests the same delivery name the dialog
+    /// opened on, and its answer is written back into that dialog's field.
+    function chooseEditorExportPath() {
+        var editor = workspaceLoader.item;
+        exportFallback.currentFile = "file://"
+                + (editor && editor.exportPath ? editor.exportPath : "")
+        exportFallback.open()
     }
 
     /// A request to leave the Editor while edits are unsaved. `action` is what
@@ -705,7 +727,7 @@ ApplicationWindow {
             spacing: 10
 
             Label {
-                text: bridge.statusMessage
+                text: uiLines.text(root.state.status, root.state.language)
                 color: appTheme.textMuted
                 elide: Text.ElideRight
                 Layout.fillWidth: true
@@ -838,6 +860,7 @@ ApplicationWindow {
             onCommand: function(command) { root.send(command); }
             onRequestOpen: root.chooseEditorImage()
             onRequestSaveAs: root.chooseEditorSaveAs()
+            onRequestExportPath: root.chooseEditorExportPath()
         }
     }
 
@@ -981,6 +1004,22 @@ ApplicationWindow {
         onAccepted: {
             var path = root.toLocalPath(selectedFile);
             if (path) root.send({ type: "editor_save_as", path: path });
+        }
+    }
+
+    // Export picks a destination only; the quality and metadata live in the
+    // Editor's own dialog, which the chosen path is written back into.
+    FileDialog {
+        id: exportFallback
+        objectName: "exportFallback"
+        title: qsTr("Export image as")
+        fileMode: FileDialog.SaveFile
+        nameFilters: Platform.saveNameFilters()
+        defaultSuffix: "jpg"
+        onAccepted: {
+            var path = root.toLocalPath(selectedFile);
+            var editor = workspaceLoader.item;
+            if (path && editor && editor.applyExportPath) editor.applyExportPath(path);
         }
     }
 

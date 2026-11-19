@@ -47,7 +47,6 @@ pub mod qobject {
         /// full serialise, a 200 KB copy and a 200 KB JSON parse in QML.
         #[qproperty(QString, listingJson)]
         #[qproperty(u64, listingEpoch)]
-        #[qproperty(QString, statusMessage)]
         #[qproperty(bool, busy)]
         #[qproperty(u64, revision)]
         /// The configured interface language. It only exists so the C++ side
@@ -90,7 +89,6 @@ pub struct KogaViewBridgeRust {
     stateJson: QString,
     listingJson: QString,
     listingEpoch: u64,
-    statusMessage: QString,
     busy: bool,
     revision: u64,
     language: QString,
@@ -111,7 +109,6 @@ impl Default for KogaViewBridgeRust {
             stateJson: core.meta_json().into(),
             listingJson: core.folder_json().into(),
             listingEpoch: core.listing_epoch(),
-            statusMessage: core.status().into(),
             busy: core.busy(),
             revision: core.revision(),
             language: core.language().into(),
@@ -150,7 +147,7 @@ impl qobject::KogaViewBridge {
         // The listing is only re-serialised when its epoch moved, which is what
         // keeps a `select` — one click, one arrow key — as cheap in a folder of
         // five thousand photos as in a folder of five.
-        let (listing_changed, listing_epoch, listing_json, state, status, busy, revision, language) = {
+        let (listing_changed, listing_epoch, listing_json, state, busy, revision, language) = {
             let this = self.as_mut().rust_mut().get_mut();
             let epoch = this.core.listing_epoch();
             let changed = epoch != this.listingEpoch;
@@ -163,7 +160,6 @@ impl qobject::KogaViewBridge {
                     String::new()
                 },
                 this.core.meta_json(),
-                this.core.status().to_owned(),
                 this.core.busy(),
                 this.core.revision(),
                 this.core.language().to_owned(),
@@ -175,7 +171,6 @@ impl qobject::KogaViewBridge {
             self.as_mut().set_listingEpoch(listing_epoch);
         }
         self.as_mut().set_stateJson(state.into());
-        self.as_mut().set_statusMessage(status.into());
         self.as_mut().set_busy(busy);
         self.as_mut().set_revision(revision);
         self.as_mut().set_language(language.into());

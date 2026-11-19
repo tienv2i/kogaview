@@ -6,6 +6,70 @@
 use kogaview_protocol::{Language, Theme, Workspace};
 use serde::Serialize;
 
+/// A line meant for the interface, with its wording kept out of Core.
+///
+/// Core knows *what* happened — a folder loaded, a resize was applied — and the
+/// interface knows *how to say it* in the current language. Publishing a `code`
+/// plus positional `args` instead of a formatted English sentence is what lets
+/// the QML translate at the edge, where the active translator lives. The codes
+/// are part of the published contract: `crates/desktop/qml/UiLines.qml` is the
+/// one place that maps them to sentences, and an unknown code falls back to
+/// joining its arguments so a newer Core cannot blank the status bar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiText {
+    pub code: String,
+    pub args: Vec<String>,
+}
+
+impl UiText {
+    /// A line with no arguments.
+    pub fn new(code: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            args: Vec::new(),
+        }
+    }
+
+    /// A line whose sentence is completed by the given positional arguments.
+    pub fn with(code: &str, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            code: code.to_owned(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// The empty line, used to hide the status bar's message.
+    pub fn empty() -> Self {
+        Self::new("")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.code.is_empty()
+    }
+
+    /// The English rendering used by the command journal, the structured log
+    /// and any front end that has no translator: the code with its underscores
+    /// opened up, followed by the arguments.
+    ///
+    /// It is deliberately mechanical rather than a second table of sentences:
+    /// the interface's wording lives in the QML (one `qsTr` per code), and a
+    /// paraphrase here would be a translation nobody maintains. A reader of
+    /// `journal/commands.jsonl` has the command name next to it, so
+    /// `editor_export` + `exporting pic-export.jpg` reads unambiguously.
+    pub fn english(&self) -> String {
+        if self.code.is_empty() {
+            return String::new();
+        }
+        let mut text = self.code.replace('_', " ");
+        for argument in &self.args {
+            text.push(' ');
+            text.push_str(argument);
+        }
+        text
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -69,8 +133,10 @@ pub struct EditorState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub modified: bool,
-    /// Labels of the applied operations, oldest first.
-    pub history: Vec<String>,
+    /// Labels of the applied operations, oldest first. Each is a code plus the
+    /// numbers it mentions, so the History panel can speak the interface
+    /// language without Core knowing which language that is.
+    pub history: Vec<UiText>,
     pub redo_count: usize,
     pub preview_path: Option<String>,
     pub preview_revision: u64,
@@ -94,6 +160,11 @@ pub struct EditorState {
     pub format: String,
     /// True while the pixels are being encoded and written on a worker.
     pub saving: bool,
+    /// True while what the canvas shows is the first, reduced decode of an
+    /// image whose full frame is still being decoded. The picture and the
+    /// document size are already right, so the window can draw it; the tools
+    /// wait, because Core has no pixels to edit yet.
+    pub opening: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,7 +205,8 @@ pub struct UiState {
     /// live in Core's `EditorDocument`; this is the published description.
     pub editor: Option<EditorState>,
     pub busy: bool,
-    pub status: String,
+    /// What the status bar says, as a translatable line.
+    pub status: UiText,
     pub config_path: String,
     pub home: String,
     pub item_count: usize,
@@ -176,7 +248,7 @@ impl UiState {
             viewer_path: None,
             editor: None,
             busy: false,
-            status: "Ready".to_owned(),
+            status: UiText::new("ready"),
             config_path,
             home: crate::paths::home_dir().to_string_lossy().into_owned(),
             item_count: 0,
@@ -267,7 +339,7 @@ pub struct StateMeta<'a> {
     pub viewer_path: &'a Option<String>,
     pub editor: &'a Option<EditorState>,
     pub busy: bool,
-    pub status: &'a str,
+    pub status: &'a UiText,
     pub config_path: &'a str,
     pub home: &'a str,
     pub item_count: usize,

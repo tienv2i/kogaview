@@ -324,6 +324,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //   KOGAVIEW_DEV_UI_REQUEST=settings          -> `openSettings()` on the shell,
   //     the same function the "Settings…" menu entry calls, for a screenshot of
   //     the dialog
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-resize     -> click the Resize tool, fill
+  //     its fields from a preset (or a typed pair), optionally arm the pad and
+  //     the steppers, then click Live preview
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
+  //     one of the nine anchor buttons
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-export     -> click the toolbar's Export
+  //     button, write the dialog's path/quality, and optionally press Export
+  //   The three editor requests exist because this session's compositor does not
+  //   deliver synthetic pointer moves to the window; each one calls the handler
+  //   the real control calls, and none of them invents a command of its own.
   //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
   //   "a dismissed dialog does not block the next one" path is observed.
   const QString uiRequest = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST");
@@ -638,6 +648,45 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << fieldText("cropX") << fieldText("cropY")
                           << fieldText("widthField") << fieldText("heightField");
         emitted = live != nullptr && index >= 0 && anchorButton != nullptr;
+      } else if (uiRequest == QLatin1String("editor-export")) {
+        // The toolbar's Export button is `click()`ed, which is the same handler
+        // a press runs, and the dialog's fields are written the way the dialog's
+        // own controls write them. `_ARG` is the destination path, `_ARG2` the
+        // quality, `_ARG3` the literal `confirm` to press Export.
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        QObject* button = rootObject->findChild<QObject*>(QStringLiteral("editorToolbarExport"));
+        if (editor == nullptr || button == nullptr) {
+          qWarning() << "KogaView dev ui request: export button or editor missing";
+          return;
+        }
+        QMetaObject::invokeMethod(button, "click");
+        QCoreApplication::processEvents();
+        const QString destination = requestArg;
+        const QString quality = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const QString confirm = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        if (!destination.isEmpty()) {
+          editor->setProperty("exportPath", destination);
+        }
+        if (!quality.isEmpty()) {
+          editor->setProperty("exportQuality", quality.toInt());
+        }
+        QCoreApplication::processEvents();
+        QObject* dialog = rootObject->findChild<QObject*>(QStringLiteral("exportDialog"));
+        qInfo().noquote() << "KogaView dev ui request editor-export"
+                          << "open" << (dialog != nullptr && dialog->property("visible").toBool())
+                          << "path" << editor->property("exportPath")
+                          << "quality" << editor->property("exportQuality")
+                          << "metadata" << editor->property("exportMetadata")
+                          << "lossy" << editor->property("exportTargetIsLossy")
+                          << "valid" << editor->property("exportPathValid");
+        if (confirm == QLatin1String("confirm")) {
+          QObject* accept = rootObject->findChild<QObject*>(QStringLiteral("exportConfirm"));
+          if (accept != nullptr) {
+            QMetaObject::invokeMethod(accept, "click");
+            QCoreApplication::processEvents();
+          }
+        }
+        emitted = dialog != nullptr && dialog->property("visible").toBool();
       } else if (uiRequest == QLatin1String("editor-fit") ||
                  uiRequest == QLatin1String("editor-zoom") ||
                  uiRequest == QLatin1String("editor-pan") ||

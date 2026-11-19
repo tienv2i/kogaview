@@ -14,6 +14,7 @@ fn main() {
         "qml/ThumbnailBook.qml",
         "qml/WheelScroll.qml",
         "qml/StateSnapshot.qml",
+        "qml/UiLines.qml",
         "qml/CachedThumbnail.qml",
         "qml/BrowserView.qml",
         "qml/Viewer.qml",

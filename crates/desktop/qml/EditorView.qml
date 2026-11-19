@@ -29,6 +29,11 @@ Item {
     property var thumbnails: null
     /// The published Core state; `editor` is null until a document is open.
     property var state: ({})
+
+    /// Turns Core's `{ code, args }` history lines into sentences.
+    UiLines {
+        id: uiLines
+    }
     property int leftPanelWidth: 220
     property int rightPanelWidth: 260
     /// Which tool is selected: `pointer` (no tool), `resize` or `crop`. The
@@ -414,6 +419,8 @@ Item {
     /// Raised by Save as…: Main owns the chooser, and the chosen path becomes an
     /// `editor_save_as` command. `view.saveAsPath` carries the suggestion.
     signal requestSaveAs()
+    /// Raised by Export's Browse button: Main owns the file chooser.
+    signal requestExportPath()
     signal command(var command)
 
     readonly property var editor: state.editor || null
@@ -421,6 +428,14 @@ Item {
     /// labels and still owns undo/redo. The pointer inspector draws the list.
     readonly property var history: editor ? (editor.history || []) : []
     readonly property bool hasDocument: !!(editor && editor.width > 0)
+    /// True while the canvas draws the first, reduced decode of an image whose
+    /// full frame is still decoding: the picture and its size are already the
+    /// document's, the pixels an edit needs are not there yet.
+    readonly property bool opening: !!(editor && editor.opening)
+    /// Whether the tools may act. Opening counts as a document for drawing and
+    /// for the footer, but not for editing: Core has no pixels to work on, so a
+    /// click would only earn a `no_editor_document` toast.
+    readonly property bool documentReady: hasDocument && !opening
     readonly property bool rendering: !!(editor && editor.rendering)
     readonly property bool modified: !!(editor && editor.modified)
     /// True while the pixels are already on disk at the save path.
@@ -437,6 +452,54 @@ Item {
         var dot = current.lastIndexOf(".")
         var base = dot > current.lastIndexOf("/") ? current.slice(0, dot) : current
         return base + (editor.format || ".png")
+    }
+
+    /// Where Export would write. Empty until the dialog opens, then the same
+    /// suggestion `Save as` uses: a delivery copy starts beside the document.
+    property string exportPath: ""
+    /// Quality for the lossy encoders. JPEG is the only lossy one here; a
+    /// lossless target (PNG, WebP, …) ignores it rather than pretending.
+    property int exportQuality: 90
+    /// Keep the source's EXIF/XMP/ICC segments. Only JPEG→JPEG can carry them.
+    property bool exportMetadata: true
+    readonly property bool exportTargetIsJpeg:
+        /\.jpe?g$/i.test(view.exportPath)
+    readonly property bool exportTargetIsLossy: view.exportTargetIsJpeg
+    readonly property bool exportPathValid:
+        /\.(png|jpe?g|jpe|jfif|webp|tiff|tif|gif|bmp|tga|qoi)$/i.test(view.exportPath)
+    readonly property bool exportKeepsMetadata:
+        view.exportMetadata && view.exportTargetIsJpeg
+            && /\.jpe?g$/i.test(view.editor ? view.editor.path : "")
+
+    /// Open the Export dialog on a suggested name: the document's file with
+    /// `-export` before the extension, so the copy cannot land on the source.
+    function openExportDialog() {
+        if (!view.hasDocument) return
+        var base = view.saveAsPath || (view.editor ? view.editor.path : "")
+        var dot = base.lastIndexOf(".")
+        view.exportPath = dot > base.lastIndexOf("/")
+                ? base.substring(0, dot) + "-export" + base.substring(dot)
+                : base + "-export"
+        view.exportQuality = 90
+        view.exportMetadata = true
+        exportDialog.open()
+    }
+
+    /// The chooser's answer. Kept apart from `openExportDialog` so a Browse and
+    /// a typed path are the same field.
+    function applyExportPath(path) {
+        if (path) view.exportPath = path
+    }
+
+    function confirmExport() {
+        if (!view.exportPathValid) return
+        view.command({
+            type: "editor_export",
+            path: view.exportPath,
+            quality: view.exportQuality,
+            metadata: view.exportKeepsMetadata
+        })
+        exportDialog.close()
     }
 
     /// True while the pointer rests on the canvas. The pan handler arms itself
@@ -631,22 +694,22 @@ Item {
 
         MenuItem {
             text: view.theme.menuEntries[24]
-            enabled: view.hasDocument
+            enabled: view.documentReady
             onTriggered: view.command({ type: "editor_rotate", degrees: -90 })
         }
         MenuItem {
             text: view.theme.menuEntries[25]
-            enabled: view.hasDocument
+            enabled: view.documentReady
             onTriggered: view.command({ type: "editor_rotate", degrees: 90 })
         }
         MenuItem {
             text: view.theme.menuEntries[26]
-            enabled: view.hasDocument
+            enabled: view.documentReady
             onTriggered: view.command({ type: "editor_flip", axis: "horizontal" })
         }
         MenuItem {
             text: view.theme.menuEntries[27]
-            enabled: view.hasDocument
+            enabled: view.documentReady
             onTriggered: view.command({ type: "editor_flip", axis: "vertical" })
         }
         MenuSeparator {}
@@ -657,7 +720,7 @@ Item {
         }
         MenuItem {
             text: view.theme.menuEntries[29]
-            enabled: view.hasDocument
+            enabled: view.documentReady
             onTriggered: view.command({ type: "editor_close" })
         }
     }
@@ -682,7 +745,7 @@ Item {
                 theme: view.theme
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument
+                enabled: view.documentReady
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Zoom out")
                 onClicked: view.zoomOut()
@@ -701,7 +764,7 @@ Item {
                 theme: view.theme
                 icon.name: "zoom-in-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument
+                enabled: view.documentReady
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Zoom in")
                 onClicked: view.zoomIn()
@@ -711,7 +774,7 @@ Item {
                 theme: view.theme
                 icon.name: "zoom-fit-best-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument
+                enabled: view.documentReady
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Fit to window")
                 onClicked: view.fit()
@@ -721,7 +784,7 @@ Item {
                 theme: view.theme
                 icon.name: "zoom-original-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument
+                enabled: view.documentReady
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Actual size (100%)")
                 onClicked: view.actualSize()
@@ -732,7 +795,7 @@ Item {
                 theme: view.theme
                 icon.name: "document-save-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument && !view.saved && !view.saving
+                enabled: view.documentReady && !view.saved && !view.saving
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Save (Ctrl+S)")
                 onClicked: view.command({ type: "editor_save" })
@@ -742,10 +805,20 @@ Item {
                 theme: view.theme
                 icon.name: "document-save-as-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument && !view.saving
+                enabled: view.documentReady && !view.saving
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Save as… (Ctrl+Shift+S)")
                 onClicked: view.requestSaveAs()
+            }
+            ToolbarButton {
+                objectName: "editorToolbarExport"
+                theme: view.theme
+                icon.name: "document-send-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: view.documentReady && !view.saving
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Export a copy…")
+                onClicked: view.openExportDialog()
             }
             ToolbarSeparator { theme: view.theme }
             ToolbarButton {
@@ -794,7 +867,7 @@ Item {
                 theme: view.theme
                 icon.name: "window-close-symbolic"
                 display: AbstractButton.IconOnly
-                enabled: view.hasDocument
+                enabled: view.documentReady
                 ToolTip.visible: hovered
                 ToolTip.text: view.theme.menuEntries[29]
                 onClicked: view.command({ type: "editor_close" })
@@ -845,7 +918,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Resize")
                     highlighted: view.tool === "resize"
-                    enabled: view.hasDocument
+                    enabled: view.documentReady
                     onClicked: view.tool = view.tool === "resize" ? "pointer" : "resize"
                 }
                 Button {
@@ -853,7 +926,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Crop")
                     highlighted: view.tool === "crop"
-                    enabled: view.hasDocument
+                    enabled: view.documentReady
                     onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
                 }
 
@@ -866,28 +939,28 @@ Item {
                     objectName: "editsRotateLeft"
                     Layout.fillWidth: true
                     text: qsTr("Rotate left")
-                    enabled: view.hasDocument
+                    enabled: view.documentReady
                     onClicked: view.command({ type: "editor_rotate", degrees: -90 })
                 }
                 Button {
                     objectName: "editsRotateRight"
                     Layout.fillWidth: true
                     text: qsTr("Rotate right")
-                    enabled: view.hasDocument
+                    enabled: view.documentReady
                     onClicked: view.command({ type: "editor_rotate", degrees: 90 })
                 }
                 Button {
                     objectName: "editsFlipHorizontal"
                     Layout.fillWidth: true
                     text: qsTr("Flip horizontal")
-                    enabled: view.hasDocument
+                    enabled: view.documentReady
                     onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
                 }
                 Button {
                     objectName: "editsFlipVertical"
                     Layout.fillWidth: true
                     text: qsTr("Flip vertical")
-                    enabled: view.hasDocument
+                    enabled: view.documentReady
                     onClicked: view.command({ type: "editor_flip", axis: "vertical" })
                 }
 
@@ -1008,7 +1081,7 @@ Item {
                 id: canvasArea
                 anchors.fill: canvas
                 acceptedButtons: Qt.RightButton
-                enabled: view.hasDocument
+                enabled: view.documentReady
                 onClicked: function(mouse) {
                     contextMenu.popup(canvasArea, mouse.x, mouse.y)
                 }
@@ -1231,7 +1304,7 @@ Item {
                             model: view.history
                             spacing: 2
                             delegate: Rectangle {
-                                required property string modelData
+                                required property var modelData
                                 required property int index
                                 width: ListView.view.width
                                 height: 26
@@ -1241,11 +1314,12 @@ Item {
                                 Label {
                                     anchors.fill: parent
                                     anchors.leftMargin: 6
+                                    objectName: "historyLine" + index
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
                                     color: view.theme.text
                                     font.pixelSize: 12
-                                    text: (index + 1) + ". " + modelData
+                                    text: (index + 1) + ". " + uiLines.text(modelData, view.state.language)
                                 }
                             }
                         }
@@ -1341,7 +1415,7 @@ Item {
                                     padding: 0
                                     font.pixelSize: 9
                                     text: "\u25b2"
-                                    enabled: view.hasDocument
+                                    enabled: view.documentReady
                                     focusPolicy: Qt.NoFocus
                                     autoRepeat: true
                                     autoRepeatDelay: 350
@@ -1358,7 +1432,7 @@ Item {
                                     padding: 0
                                     font.pixelSize: 9
                                     text: "\u25bc"
-                                    enabled: view.hasDocument
+                                    enabled: view.documentReady
                                     focusPolicy: Qt.NoFocus
                                     autoRepeat: true
                                     autoRepeatDelay: 350
@@ -1396,7 +1470,7 @@ Item {
                                     padding: 0
                                     font.pixelSize: 9
                                     text: "\u25b2"
-                                    enabled: view.hasDocument
+                                    enabled: view.documentReady
                                     focusPolicy: Qt.NoFocus
                                     autoRepeat: true
                                     autoRepeatDelay: 350
@@ -1413,7 +1487,7 @@ Item {
                                     padding: 0
                                     font.pixelSize: 9
                                     text: "\u25bc"
-                                    enabled: view.hasDocument
+                                    enabled: view.documentReady
                                     focusPolicy: Qt.NoFocus
                                     autoRepeat: true
                                     autoRepeatDelay: 350
@@ -1492,7 +1566,7 @@ Item {
                             visible: view.tool === "resize"
                             text: qsTr("Pad to fit")
                             checked: view.resizePadFit
-                            enabled: view.hasDocument
+                            enabled: view.documentReady
                             ToolTip.visible: hovered
                             ToolTip.text: qsTr("Keep the whole image in shape and fill the leftover with the fill color")
                             onToggled: {
@@ -1542,7 +1616,7 @@ Item {
                             objectName: "livePreviewButton"
                             Layout.fillWidth: true
                             visible: view.tool === "resize"
-                            enabled: view.hasDocument
+                            enabled: view.documentReady
                             text: qsTr("Live preview")
                             checkable: true
                             checked: view.resizeLivePreview
@@ -1643,7 +1717,7 @@ Item {
                                         // needs the button padding removed.
                                         padding: 0
                                         highlighted: view.cropAnchor === modelData.key
-                                        enabled: view.hasDocument
+                                        enabled: view.documentReady
                                         onClicked: view.setCropAnchor(modelData.key)
                                         Accessible.name: modelData.label
                                         ToolTip.visible: hovered
@@ -1658,7 +1732,7 @@ Item {
                             objectName: "cropLivePreviewButton"
                             Layout.fillWidth: true
                             visible: view.tool === "crop"
-                            enabled: view.hasDocument
+                            enabled: view.documentReady
                             text: qsTr("Live preview")
                             checkable: true
                             checked: view.cropLivePreview
@@ -1680,7 +1754,7 @@ Item {
                                 text: qsTr("Apply")
                                 Layout.fillWidth: true
                                 visible: view.tool === "resize"
-                                enabled: view.hasDocument
+                                enabled: view.documentReady
                                          && widthField.acceptableInput
                                          && heightField.acceptableInput
                                          && parseInt(widthField.text) > 0
@@ -1724,7 +1798,7 @@ Item {
                             Button {
                                 objectName: "resetToolFields"
                                 text: qsTr("Reset")
-                                enabled: view.hasDocument
+                                enabled: view.documentReady
                                 onClicked: {
                                     widthField.text = ""
                                     heightField.text = ""
@@ -1760,6 +1834,117 @@ Item {
         onAccepted: {
             view.resizeFillColor = selectedColor
             draftDebounce.restart()
+        }
+    }
+
+    /// Export is a delivery copy: it never moves the document's save target.
+    /// The options are the ones ADR 0004 deferred — a JPEG quality and the
+    /// source's metadata — and the dialog says which target honours them.
+    Dialog {
+        id: exportDialog
+        objectName: "exportDialog"
+        title: qsTr("Export image")
+        modal: true
+        closePolicy: Popup.CloseOnEscape
+        anchors.centerIn: Overlay.overlay
+        width: 460
+        padding: 12
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label {
+                text: qsTr("File")
+                color: view.theme.textMuted
+                font.pixelSize: 12
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                TextField {
+                    id: exportPathField
+                    objectName: "exportPathField"
+                    Layout.fillWidth: true
+                    text: view.exportPath
+                    placeholderText: qsTr("Choose where the copy goes")
+                    onTextEdited: view.exportPath = text
+                }
+
+                Button {
+                    objectName: "exportBrowse"
+                    text: qsTr("Browse…")
+                    onClicked: view.requestExportPath()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Label {
+                    text: qsTr("Quality")
+                    color: view.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                Slider {
+                    id: exportQualitySlider
+                    objectName: "exportQuality"
+                    Layout.fillWidth: true
+                    from: 10
+                    to: 100
+                    stepSize: 1
+                    value: view.exportQuality
+                    enabled: view.exportTargetIsLossy
+                    onMoved: view.exportQuality = Math.round(value)
+                }
+
+                Label {
+                    objectName: "exportQualityValue"
+                    text: String(Math.round(exportQualitySlider.value))
+                    color: view.theme.text
+                    font.pixelSize: 12
+                    Layout.preferredWidth: 32
+                }
+            }
+
+            CheckBox {
+                id: exportMetadataBox
+                objectName: "exportMetadata"
+                text: qsTr("Keep the source metadata (JPEG only)")
+                checked: view.exportMetadata
+                enabled: view.exportTargetIsJpeg
+                onToggled: view.exportMetadata = checked
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: view.exportTargetIsLossy
+                      ? qsTr("Quality applies to JPEG. Other formats are written losslessly.")
+                      : qsTr("This format is written losslessly; the quality slider does not apply.")
+                color: view.theme.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: qsTr("Cancel")
+                    onClicked: exportDialog.close()
+                }
+                Button {
+                    objectName: "exportConfirm"
+                    text: qsTr("Export")
+                    highlighted: true
+                    enabled: view.exportPathValid
+                    onClicked: view.confirmExport()
+                }
+            }
         }
     }
 }

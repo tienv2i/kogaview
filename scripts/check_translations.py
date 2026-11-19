@@ -10,6 +10,9 @@ derived from the other at build time:
   some strings itself (the file-dialog name filters) before any translator is
   installed, and `QCoreApplication::translate` would answer with the source text
   there.
+* `crates/desktop/qml/UiLines.qml` is the only place a Core line becomes a
+  sentence. Core publishes `UiText { code, args }`, so a code with no `case` in
+  that file would show the user a raw identifier — this script fails it.
 
 The table is a *subset*: it carries only the strings C++ needs, and the rest
 live in the `.ts` alone. What is not allowed is the two disagreeing, which is
@@ -230,6 +233,42 @@ def table() -> list[tuple[str, str]]:
     ]
 
 
+CORE_DIR = ROOT / "crates" / "app-core" / "src"
+UI_LINES = QML_DIR / "UiLines.qml"
+
+# `UiText::new("code")` and `UiText::with("code", …)`, including the form that
+# wraps onto the next line (rustfmt does when the argument list is long).
+CORE_CODE = re.compile(r'UiText::(?:new|with)\(\s*"(?P<code>[a-z_]+)"')
+# The line table's cases. A case is expected to draw a `qsTr`.
+QML_CASE = re.compile(r'case\s+"(?P<code>[^"]*)":\s*(?:return\s+(?P<body>[^;]*);)?')
+
+
+def core_codes() -> tuple[set[str], set[str]]:
+    """The codes Core can publish, and the codes `UiLines.qml` draws.
+
+    Both are read from the sources rather than from a list here: a code added to
+    Core and forgotten in the QML would reach the status bar as an identifier,
+    and a case whose code Core no longer publishes is dead weight that no
+    reviewer notices.
+    """
+    published: set[str] = set()
+    for path in sorted(CORE_DIR.glob("*.rs")):
+        text = path.read_text(encoding="utf-8")
+        # Test modules build lines of their own (`selected`, `cancelled`); they
+        # are not part of what Core can publish to the window. The test module
+        # is the last item in the file, so its `#[cfg(test)]` is at column 0 —
+        # the two indented ones inside `Core` gate test-only helpers.
+        test_module = text.find("\n#[cfg(test)]\n")
+        if test_module != -1:
+            text = text[:test_module]
+        for match in CORE_CODE.finditer(text):
+            published.add(match.group("code"))
+    drawn: set[str] = set()
+    for match in QML_CASE.finditer(UI_LINES.read_text(encoding="utf-8")):
+        drawn.add(match.group("code"))
+    return published, drawn
+
+
 def main(argv: list[str]) -> int:
     list_only = "--list" in argv
     if not TS_PATH.is_file():
@@ -267,6 +306,20 @@ def main(argv: list[str]) -> int:
                 f'qsTranslate("{context}", "{source}") in {file}: '
                 f"context {context!r} has no source {source!r}"
             )
+
+    # Every line Core publishes has to have a sentence. The empty code is the
+    # "hide the status bar" line and is handled in the table like the rest.
+    published, drawn_codes = core_codes()
+    for code in sorted(published - drawn_codes):
+        problems.append(
+            f'Core publishes the line "{code}", which UiLines.qml does not draw '
+            "— add a case with a qsTr for it"
+        )
+    for code in sorted(drawn_codes - published - {""}):
+        problems.append(
+            f'UiLines.qml draws the line "{code}", which no Core UiText publishes '
+            "— remove the dead case"
+        )
 
     for source in sorted(unfinished):
         problems.append(f'unfinished translation in the .ts: "{source}"')

@@ -242,6 +242,18 @@ pub enum Command {
     EditorSaveAs {
         path: String,
     },
+    /// Write a copy for delivery, leaving the document exactly as it is: the
+    /// save target, the saved flag and the history do not move. `quality`
+    /// (1–100) applies to the lossy encoders (JPEG today); `metadata` keeps the
+    /// source's EXIF/XMP/ICC segments when both files are JPEG. Exporting onto
+    /// the document's own file is refused — that is what `editor_save` is for.
+    EditorExport {
+        path: String,
+        #[serde(default)]
+        quality: Option<u8>,
+        #[serde(default)]
+        metadata: bool,
+    },
     /// Scale the working document to exactly `width` × `height`. Without a
     /// `fill`, the target aspect is covered by a centred crop before scaling,
     /// so pixels are never stretched. With a `fill`, the whole source is scaled
@@ -331,6 +343,7 @@ impl Command {
             Self::EditorOpen { .. } => "editor_open",
             Self::EditorSave => "editor_save",
             Self::EditorSaveAs { .. } => "editor_save_as",
+            Self::EditorExport { .. } => "editor_export",
             Self::EditorResize { .. } => "editor_resize",
             Self::EditorResizePreview { .. } => "editor_resize_preview",
             Self::EditorCrop { .. } => "editor_crop",
@@ -455,6 +468,14 @@ mod tests {
             (Command::EditorUndo, "editor_undo"),
             (Command::EditorRedo, "editor_redo"),
             (Command::EditorReset, "editor_reset"),
+            (
+                Command::EditorExport {
+                    path: "/a.jpg".into(),
+                    quality: Some(80),
+                    metadata: true,
+                },
+                "editor_export",
+            ),
             (Command::EditorClose, "editor_close"),
         ];
         for (command, expected_name) in commands {
@@ -474,6 +495,26 @@ mod tests {
             serde_json::from_str(r#"{"id":"e","command":{"type":"editor_rotate","degrees":-90}}"#)
                 .unwrap();
         assert_eq!(env.command.name(), "editor_rotate");
+
+        // An older client that knows only the path still exports: quality
+        // falls back to the encoder's default and metadata is off, which is the
+        // safe answer (nothing is copied that the caller did not ask for).
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"x","command":{"type":"editor_export","path":"/a.jpg"}}"#,
+        )
+        .unwrap();
+        match env.command {
+            Command::EditorExport {
+                path,
+                quality,
+                metadata,
+            } => {
+                assert_eq!(path, "/a.jpg");
+                assert_eq!(quality, None);
+                assert!(!metadata);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
 
         // Older resize commands carry no fill; the field defaults to no
         // padding. An `anchor` from the short-lived anchored design is simply

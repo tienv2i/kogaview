@@ -11,13 +11,14 @@ use std::path::{Path, PathBuf};
 use kogaview_protocol::{Command, ProtocolError};
 
 use crate::paths;
+use crate::state::UiText;
 
 /// Record of one command execution.
 pub struct JournalEntry<'a> {
     pub command_id: &'a str,
     pub command: &'a Command,
     pub revision: u64,
-    pub result: &'a Result<Option<String>, ProtocolError>,
+    pub result: &'a Result<Option<UiText>, ProtocolError>,
 }
 
 pub struct Journal {
@@ -45,8 +46,11 @@ impl Journal {
             return;
         };
 
+        // The journal is diagnostics: each line keeps the English rendering of
+        // the code Core published, never the translated sentence, so one file
+        // reads the same whatever language the interface was in.
         let (ok, message, error) = match entry.result {
-            Ok(message) => (true, message.clone(), None),
+            Ok(line) => (true, line.as_ref().map(UiText::english), None),
             Err(error) => (false, None, Some(error)),
         };
 
@@ -132,7 +136,7 @@ mod tests {
         let command = Command::Select {
             paths: vec!["/tmp/a.jpg".into()],
         };
-        let result: Result<Option<String>, ProtocolError> = Ok(Some("selected".into()));
+        let result: Result<Option<UiText>, ProtocolError> = Ok(Some(UiText::new("selected")));
         journal.record(JournalEntry {
             command_id: "test-1",
             command: &command,
@@ -146,6 +150,9 @@ mod tests {
         assert_eq!(value["command"], "select");
         assert_eq!(value["revision"], 3);
         assert_eq!(value["ok"], true);
+        // The journal keeps the English rendering of the code, not a translated
+        // sentence: the same file must read the same in every language.
+        assert_eq!(value["message"], "selected");
 
         std::fs::remove_dir_all(dir).unwrap();
     }

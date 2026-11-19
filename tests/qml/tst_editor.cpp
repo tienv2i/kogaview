@@ -50,6 +50,7 @@ private slots:
   void theFreshResizeFieldsStayEmpty();
   void thePointerShowsTheDocumentAndHistory();
   void emptyStateOffersToOpenAnImage();
+  void theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes();
   void theViewFollowsThePublishedDocument();
   void rotateAndFlipEmitTypedCommands();
   void undoRedoResetAndCloseEmitCommands();
@@ -73,6 +74,7 @@ private slots:
   void saveAndSaveAsEmitTheirCommands();
   void toolbarTooltipsNameTheirShortcuts();
   void saveAsSuggestsTheCurrentLocation();
+  void exportIsACopyWithItsOwnQualityAndMetadata();
   void canvasSupportsViewerStyleZoomAndPan();
   void aLargePicturePansFreelyInBothAxes();
   void thePanHandlerTakesTouchpadsAndMiddleClicks();
@@ -306,6 +308,7 @@ QVariantMap TestEditor::documentState() const
   editor.insert(QStringLiteral("saved"), true);
   editor.insert(QStringLiteral("format"), QStringLiteral(".png"));
   editor.insert(QStringLiteral("saving"), false);
+  editor.insert(QStringLiteral("opening"), false);
   return editor;
 }
 
@@ -346,9 +349,18 @@ void TestEditor::thePointerShowsTheDocumentAndHistory()
   QVERIFY(!expectItem("applyCrop")->isVisible());
 
   QVariantMap editor = documentState();
+  // Core publishes each history row as a code plus its numbers, never as an
+  // English sentence: the wording is the interface language's business. A view
+  // that printed the object would show "[object Object]" here.
   editor.insert(QStringLiteral("history"),
-                QVariantList{QStringLiteral("Rotate right 90°"),
-                             QStringLiteral("Crop 10 × 8 at 4,2")});
+                QVariantList{QVariantMap{{QStringLiteral("code"), QStringLiteral("rotate_right")},
+                                         {QStringLiteral("args"), QVariantList{}}},
+                             QVariantMap{{QStringLiteral("code"), QStringLiteral("crop")},
+                                         {QStringLiteral("args"),
+                                          QVariantList{QStringLiteral("10"),
+                                                       QStringLiteral("8"),
+                                                       QStringLiteral("4"),
+                                                       QStringLiteral("2")}}}});
   editor.insert(QStringLiteral("modified"), true);
   setState(editor);
 
@@ -359,6 +371,16 @@ void TestEditor::thePointerShowsTheDocumentAndHistory()
   QVERIFY(expectItem("saveTarget")->isVisible());
   QVERIFY(expectItem("pointerThumbnail")->isVisible());
   QCOMPARE(expectItem("historyList")->property("count").toInt(), 2);
+  QCOMPARE(expectItem("historyLine0")->property("text").toString(),
+           QStringLiteral("1. ")
+               + QCoreApplication::translate("UiLines", "Rotate right 90°"));
+  QCOMPARE(expectItem("historyLine1")->property("text").toString(),
+           QStringLiteral("2. ")
+               + QCoreApplication::translate("UiLines", "Crop %1 × %2 at %3,%4")
+                     .arg(QStringLiteral("10"))
+                     .arg(QStringLiteral("8"))
+                     .arg(QStringLiteral("4"))
+                     .arg(QStringLiteral("2")));
   QCOMPARE(m_commands->count(), 0);
 }
 
@@ -377,6 +399,49 @@ void TestEditor::emptyStateOffersToOpenAnImage()
   clickItem(open);
   QCOMPARE(m_requestOpen->count(), 1);
   QCOMPARE(m_commands->count(), 0);
+}
+
+void TestEditor::theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes()
+{
+  // A large JPEG is decoded twice: first at a reduced DCT scale, so the window
+  // can draw the picture in about a third of the wait, then at full resolution
+  // for the pixels an edit needs. While the second decode runs the published
+  // state is the document's size with `opening: true`.
+  QVariantMap opening = documentState();
+  opening.insert(QStringLiteral("opening"), true);
+  opening.insert(QStringLiteral("rendering"), true);
+  opening.insert(QStringLiteral("previewPath"), m_previewTwo);
+  setState(opening);
+
+  QVERIFY(m_editor->property("hasDocument").toBool());
+  QVERIFY(m_editor->property("opening").toBool());
+  QVERIFY(!m_editor->property("documentReady").toBool());
+
+  // The picture is already on the canvas, at the document's own size, so
+  // nothing jumps when the full frame replaces the soft decode.
+  QQuickItem* canvas = expectItem("canvas");
+  QVERIFY(canvas->property("visible").toBool());
+  QVERIFY2(canvas->property("source").toString().endsWith(QStringLiteral("preview-2.png")),
+           qPrintable(canvas->property("source").toString()));
+  QCOMPARE(m_editor->property("documentWidth").toReal(), 4000.0);
+  QCOMPARE(m_editor->property("documentHeight").toReal(), 3000.0);
+
+  // The tools wait: Core has no pixels yet, so a click could only be refused.
+  QVERIFY(!expectItem("editsRotateLeft")->property("enabled").toBool());
+  QVERIFY(!expectItem("toolResize")->property("enabled").toBool());
+  QCOMPARE(m_commands->count(), 0);
+
+  // The full frame lands.
+  QVariantMap ready = documentState();
+  ready.insert(QStringLiteral("previewPath"), m_previewTwo);
+  setState(ready);
+  QVERIFY(!m_editor->property("opening").toBool());
+  QVERIFY(m_editor->property("documentReady").toBool());
+  QVERIFY(expectItem("editsRotateLeft")->property("enabled").toBool());
+  QVERIFY(expectItem("toolResize")->property("enabled").toBool());
+  QVERIFY2(expectItem("canvas")->property("source").toString().endsWith(
+               QStringLiteral("preview-2.png")),
+           "the canvas lost the picture when the document landed");
 }
 
 void TestEditor::theViewFollowsThePublishedDocument()
@@ -1141,12 +1206,30 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
                                                 .arg(QString::fromLatin1(tool))));
   }
   // Undo, Redo and Reset moved to the toolbar; they are not palette buttons.
+  //
+  // Membership is checked through the item tree, not through coordinates: the
+  // fixture parents the toolbar over the workspace (the real shell stacks it
+  // above), so a wider toolbar eventually crosses the inspector's left edge in
+  // `x` while still being a toolbar button. Ancestry is what the case is about,
+  // and it does not move when a header grows a button.
+  auto descendantOf = [](QQuickItem* item, QQuickItem* ancestor) {
+    for (QQuickItem* walk = item; walk != nullptr; walk = walk->parentItem()) {
+      if (walk == ancestor) return true;
+    }
+    return false;
+  };
+  QQuickItem* toolbarRoot = qobject_cast<QQuickItem*>(m_toolbar);
+  QVERIFY(toolbarRoot != nullptr);
   for (const char* action : {"undoButton", "redoButton", "resetButton"}) {
     QQuickItem* item = expectItem(action);
-    QVERIFY2(!inside(left, item), qPrintable(QStringLiteral("%1 is still in the palette")
-                                                 .arg(QString::fromLatin1(action))));
-    QVERIFY2(!inside(right, item), qPrintable(QStringLiteral("%1 is still in the inspector")
-                                                  .arg(QString::fromLatin1(action))));
+    QVERIFY2(descendantOf(item, toolbarRoot),
+             qPrintable(QStringLiteral("%1 is not on the toolbar")
+                            .arg(QString::fromLatin1(action))));
+    QVERIFY2(!descendantOf(item, left), qPrintable(QStringLiteral("%1 is still in the palette")
+                                                       .arg(QString::fromLatin1(action))));
+    QVERIFY2(!descendantOf(item, right),
+             qPrintable(QStringLiteral("%1 is still in the inspector")
+                            .arg(QString::fromLatin1(action))));
   }
 
   // Pointer: document details, thumbnail and the session history.
@@ -1297,6 +1380,60 @@ void TestEditor::saveAndSaveAsEmitTheirCommands()
 /// Tooltips name the key that reaches the same command, and only that key: the
 /// Save pair carries its Ctrl shortcuts, while Undo, Redo and Reset have none
 /// and just name the action.
+void TestEditor::exportIsACopyWithItsOwnQualityAndMetadata()
+{
+  // ADR 0004 deferred Export's options; the dialog has to carry them and the
+  // command has to say which target honours which. A copy is a delivery file,
+  // so it must never suggest the document's own path.
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("path"), QStringLiteral("/pics/holiday.jpg"));
+  editor.insert(QStringLiteral("name"), QStringLiteral("holiday.jpg"));
+  editor.insert(QStringLiteral("savePath"), QStringLiteral("/pics/holiday.jpg"));
+  editor.insert(QStringLiteral("format"), QStringLiteral(".jpg"));
+  setState(editor);
+
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "openExportDialog"));
+  QObject* dialog = findObject(QStringLiteral("exportDialog"));
+  QVERIFY(dialog != nullptr);
+  // `open()` completes on the next frame, so the popped-up state is waited for.
+  QTRY_VERIFY(dialog->property("opened").toBool());
+  QCOMPARE(expectItem("exportPathField")->property("text").toString(),
+           QStringLiteral("/pics/holiday-export.jpg"));
+
+  // A JPEG target is the one that can take both options.
+  QVERIFY(expectItem("exportQuality")->property("enabled").toBool());
+  QVERIFY(expectItem("exportMetadata")->property("enabled").toBool());
+
+  m_editor->setProperty("exportQuality", 71);
+  m_editor->setProperty("exportMetadata", true);
+  clickItem(expectItem("exportConfirm"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->takeFirst().at(0).toMap();
+  QCOMPARE(command.value(QStringLiteral("type")).toString(), QStringLiteral("editor_export"));
+  QCOMPARE(command.value(QStringLiteral("path")).toString(),
+           QStringLiteral("/pics/holiday-export.jpg"));
+  QCOMPARE(command.value(QStringLiteral("quality")).toInt(), 71);
+  QCOMPARE(command.value(QStringLiteral("metadata")).toBool(), true);
+  QVERIFY(!dialog->property("opened").toBool());
+
+  // A lossless target says the slider does not apply and cannot claim to keep
+  // metadata, even with the box ticked: only JPEG→JPEG carries the segments.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "openExportDialog"));
+  QTRY_VERIFY(dialog->property("opened").toBool());
+  m_editor->setProperty("exportPath", QStringLiteral("/pics/holiday.png"));
+  QVERIFY(!expectItem("exportQuality")->property("enabled").toBool());
+  QVERIFY(!expectItem("exportMetadata")->property("enabled").toBool());
+  QCOMPARE(m_editor->property("exportKeepsMetadata").toBool(), false);
+  QVERIFY(expectItem("exportConfirm")->property("enabled").toBool());
+
+  clickItem(expectItem("exportConfirm"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap lossless = m_commands->takeFirst().at(0).toMap();
+  QCOMPARE(lossless.value(QStringLiteral("path")).toString(),
+           QStringLiteral("/pics/holiday.png"));
+  QCOMPARE(lossless.value(QStringLiteral("metadata")).toBool(), false);
+}
+
 void TestEditor::toolbarTooltipsNameTheirShortcuts()
 {
   const QList<QPair<QString, QString>> expected = {

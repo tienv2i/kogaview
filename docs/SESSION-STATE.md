@@ -1,4 +1,4 @@
-# Session handoff — state at 2026-11-18
+# Session handoff — state at 2026-11-19
 
 Four sessions' worth of work on the same day: the launch surface speaks
 Vietnamese and the dock icon draws, the mouse wheel moves at the rate the device
@@ -20,18 +20,31 @@ preview. The two size tools now also carry +/- steppers on Width and Height, a
 samples; this follow-up makes the steppers auto-repeat and starts them from the
 document size, fixes the Crop preset list that filled the fields on open, and
 turns the old square pad into `Pad to fit` — the whole picture fits the target
-and only the leftover is filled, square or not.
+and only the leftover is filled, square or not. The next session did the three
+things the handoff had listed as the natural next steps: Core's status and
+history text became `{ code, args }` lines the window translates (row 77), the
+Editor gained a real Export with a JPEG quality and metadata (row 78), and a
+large JPEG's first preview is now decoded at a reduced DCT scale so the picture
+appears while the full frame is still decoding (row 79).
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The pad/stepper follow-up (row 76) is the newest commit on top
-  of `bc9cd54` (the size steppers and current-ratio lock); the tree is clean
-  after it. This session's earlier commits are on top of `d149152` and are
-  listed in `git log`; the newest are the keyboard map, the tooltip hints, the
-  burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
-  follow-up, and the two size tools.
+- Branch `main`. This session's three changes (rows 77, 78, 79) are one commit,
+  `feat(editor): typed lines, export and a fast first preview`, on top
+  of the build fix `1b4e940` and the pad/stepper follow-up `9d4dab4`. They were
+  kept together because the export test and the Editor QML fixture share the
+  same rewrite of the state snapshot; each change is described by its own
+  report row. Nothing is pushed (see below). Earlier commits in `git log`: the
+  keyboard map, the tooltip hints, the burger-menu fix, the modal-pointer fix,
+  the Editor layout and its pointer follow-up, and the two size tools.
+- `cpp/main.cpp` gained a third permanent editor request in row 78,
+  `KOGAVIEW_DEV_UI_REQUEST=editor-export` (`_ARG` = destination, `_ARG2` =
+  quality 10–100, `_ARG3` = `confirm`): it `click()`s the real toolbar Export
+  button, writes the dialog's own properties, logs the popped-up state and
+  presses the dialog's Export. It is documented in the harness reference like
+  the two below.
 - `cpp/main.cpp` gained one permanent debug hook per size tool:
   `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset,
   or a custom pair; `_ARG2` = an optional ratio key such as `current`; `_ARG3` =
@@ -123,16 +136,20 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 74 | Crop still typed four numbers by hand: no linked sides, no presets, nowhere to say where inside the document the rectangle belongs, and no way to see the cut before applying it | shared `sizeRatios`/`sizePresets`, a fitting `cropPresets` list, a 3 × 3 `cropAnchors` pad that places X/Y, and `editor_crop_preview` reusing the draft with `kind: "crop"`. `cargo` 64 + 4, `editor` 31, `translations` 166 strings; real window `docs/evidence/M1-editor-crop-live.png` (512 × 384 at `bottom_right`, draft on canvas, status still 1254 × 1254); mutations: preset filter removed, draft kind ignored, anchor column fixed, Core kind swapped |
 | 75 | Width/Height were type-only, a custom W:H pair could not be locked, and 12 ratios / 47 samples made the panel longer than it was useful | `stepField` plus four arrow buttons, a per-tool `Keep current ratio` snapshot, six common ratios (21:9, 5:4, 16:10, 2:3 removed) and 18 presets (three per ratio); `editor-resize` also takes a custom pair and an `_ARG2` ratio key. `cargo` 64 + 4, `editor` 33, `translations` 171 strings; real window `docs/evidence/M1-editor-resize-current-ratio.png` (1000 × 700 with `Keep current ratio`, draft on canvas, status still 1254 × 1254); mutations: snapshot call removed (`captured.width` 0), stepper link removed, 21:9 restored |
 | 76 | The steppers felt stuck or bounded, the shared Width/Height fields showed 2048 × 2048 on a fresh Resize panel, and `Pad to square` forced a square frame instead of the requested fit-inside-and-fill | `stepField` starts from an empty/invalid field's placeholder and clamps both sides to 1–20000, the four arrow buttons auto-repeat and are 24 × 16, both preset dropdowns apply only from `onActivated` (Crop's document-filtered model was re-applying its first row when a document arrived), and `pad_to_square` became `fit_with_padding` in Core: scale the whole source into the target and fill the leftover, letterbox or pillarbox. `cargo` 65 + 4, `editor` 34, `translations` 172 strings; real window `docs/evidence/M1-editor-resize-pad-fit.png` (1003 × 698 target from a 1595 × 2048 portrait, red bars, `Pad to fit`, status still 1595 × 2048); mutations: ratio link removed from `stepField`, the Crop dropdown reverted to `onCurrentIndexChanged`, `fit_with_padding` stretched to the target |
+| 77 | The last English sentences in a Vietnamese window came from Core: `Ready`, `Editing pic.jpg`, `Resize 512 × 512 · square #ff0000` | `UiText { code, args }` in `state.rs` with `UiState.status` and `EditorState.history` as lines, every Core handler returning `Result<Option<UiText>, _>`, the new `crates/desktop/qml/UiLines.qml` as the only code→`qsTr` table, the journal and the reply's `message` keeping the English rendering while the reply also carries `"ui": {code, args}`, `scripts/check_translations.py` now failing a Core code with no `case` and a `case` no Core publishes. `cargo` 66 + 4, `editor` 34, `translations` 244; mutations: a deleted `case "ready"` fails the gate, `UiLines.text()` returning the code fails `thePointerShowsTheDocumentAndHistory` |
+| 78 | Export did not exist and ADR 0004 had deferred its options | `Command::EditorExport { path, quality, metadata }`, Core `editor_export`/`apply_export_result`/`export_pixels` with the JPEG metadata splice and `invalid_destination` for the document's own path, a 13th toolbar button with the `exportDialog` (path, quality, metadata, saying which format honours which), `Main.qml` fallback chooser, `ToolbarMetrics.editorButtons: 13`. `cargo` 66 + 4 (the export test now compares sizes between two identical-metadata exports, so the metadata flag cannot mask a broken quality setting), `editor` 35, `translations` 244; real window `docs/evidence/M1-editor-export-dialog.png`, `editor_export ok:true rev 9`, 245 252 B copy at quality 60 vs a 639 157 B source; mutations: quality ignored → size test fails, metadata splice dropped → metadata test fails |
+| 79 | Opening a 27 MP JPEG in the Editor took 11 s of empty canvas: Core decoded the full frame, then resized it for the preview, before anything could be drawn | `crates/app-core/Cargo.toml` (`jpeg-decoder`, no default features, pure Rust), `crates/app-core/src/editor.rs` (`scaled_jpeg_preview` reads 1/8, 1/4 or 1/2 of a JPEG through the DCT and answers the header size; `preview_dimensions`; `render_preview` now box-samples via `preview_pixels`/`imageops::thumbnail`; `spawn_open` publishes `EditorTask::FirstPreview` before decoding the document), `crates/app-core/src/state.rs` (`EditorState.opening`), `crates/app-core/src/core.rs` (`publish_opening_preview`, the `FirstPreview` arm, a failed open now drops the fast preview it had shown), `crates/desktop/qml/EditorView.qml` (`opening`/`documentReady`: the canvas and the footer draw the provisional state, the tools stay disabled), `tests/qml/tst_editor.cpp` (`theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes`), Core tests (`the_scaled_jpeg_preview_matches_the_full_decode`, `a_small_jpeg_is_not_decoded_twice`, `opening_a_large_jpeg_publishes_the_preview_before_the_document`), `cargo test`, `just test` | **Measured** on a 4500 × 6000 JPEG (1.4 MB, `ffmpeg -q:v 3`): before, one decode of 11 063 ms and then a preview render of 6 264 ms; after, the reduced decode plus its PNG lands at 3 034 ms (the picture is on screen from 3.1 s) and the full document installs at 7 863 ms instead of 11 063 ms. The 2× on the document half is `imageops::thumbnail` replacing `imageops::resize(…, Triangle)`: on a 27 MP frame the general resampler was the second-largest cost after the decode. **Real window** (Vietnamese, isolated `XDG_*`): the grab at 8 s shows the picture, `4500 × 6000`, the soft decode on the canvas, `Đang mở big.jpg…` in the status bar and Resize/Crop/Rotate greyed; the grab after the document landed shows `Đang chỉnh sửa big.jpg · 4500 × 6000` with every tool live and a `editor_resize_preview` draft on the canvas (journal rev 5). **Mutations** (each restored, then re-run): `scaled_jpeg_preview` returning `None` always → `opening_a_large_jpeg_publishes_the_preview_before_the_document` fails on the first message; `documentReady` no longer subtracting `opening` → the QML test fails `!m_editor->property("documentReady")`. **Not verified:** no hand opened a file; the run was driven by dev commands. A CMYK JPEG and a progressive JPEG take the fallback path, which is exercised only by `a_small_jpeg_is_not_decoded_twice` (a plain JPEG), not by a CMYK sample. `jpeg-decoder`'s `scale()` picks the smallest power of two that still covers the request, so on a frame just above 4096 px the reduced decode is 1/2 and the saving is smaller than these numbers; that case was not timed. |
 
 ## Test gate
 
-`PATH=/tmp/opencode/lrel/bin:$PATH just test` — exit 0:
+`PATH=/usr/lib/qt6/bin:$PATH just test` — exit 0 (`lrelease` is the system Qt 6
+one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 172 strings in kogaview_vi.ts, 110 of them compiled into C++, 168 drawn by the QML, 4 looked up by context
-packaging: 19 MIME types, 3 categories, icon and metainfo named …
-cargo: 65 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 34 · language 5 · toolbar 11
+translations: 244 strings in kogaview_vi.ts, 110 of them compiled into C++, 240 drawn by the QML, 4 looked up by context
+packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
+cargo: 69 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 36 · language 5 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -554,12 +571,14 @@ install`). The keyboard, tooltip and menu evidence comes from
 
 ## Next natural step
 
-1. **Editor history labels and status text as data** — Core builds
-   `Resize 512 × 512 · square #ff0000` and `Ready` with `format!`; publishing
-   `{ code, args }` and translating at the presentation edge removes the last
-   English strings in a Vietnamese window (which now includes the Resize
-   history line and its anchor names).
-2. **Export** the working document with real options (JPEG quality, metadata) —
-   ADR 0004 left them out.
-3. **Editor open speed** (row 60): downscaled JPEG decode for the preview, tiled
-   decode for the document.
+1. **Tiled decode for the Editor document** (row 60's second half). The first
+   preview now arrives about 2× sooner on a 27 MP JPEG (row 79), but the full
+   frame still decodes in one piece before any edit is possible; region-of-
+   interest decoding would let a crop read only the pixels it keeps.
+2. **Export presets** — resize-on-export and a colour profile. `editor_export`
+   already carries `{ path, quality, metadata }`, so a preset is one more field
+   and one more Core step, not a new command.
+3. **Error text as data too.** `result.error.message` and `state`'s failure
+   lines are still English strings built in Core (`invalid_edit`, `io_error`,
+   the `spawn_draft` messages). They are rarer than the status lines but they are
+   the same problem, and the same `UiText` shape fixes them.
