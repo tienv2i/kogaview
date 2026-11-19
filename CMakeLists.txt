@@ -20,6 +20,20 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 DBus 
 # knows about a bundled PySide6 (`scripts/find_lrelease.py`); the build runs
 # untranslated when it is missing, it does not fail.
 set(KOGAVIEW_LRELEASE "" CACHE FILEPATH "Path to Qt's lrelease (empty: search for it)")
+# `scripts/dev.py` exports the tool it found; use it as the seed value the
+# first time this build directory is configured.
+if(NOT KOGAVIEW_LRELEASE AND DEFINED ENV{KOGAVIEW_LRELEASE}
+   AND EXISTS "$ENV{KOGAVIEW_LRELEASE}")
+  set(KOGAVIEW_LRELEASE "$ENV{KOGAVIEW_LRELEASE}" CACHE FILEPATH
+      "Path to Qt's lrelease" FORCE)
+endif()
+# A cached path can outlive the file: this machine once had the cache pointing
+# into a `/tmp` copy that was cleaned, and every build then failed with "No rule
+# to make target '…/lrelease'". A dead path is not a decision, so search again.
+if(KOGAVIEW_LRELEASE AND NOT EXISTS "${KOGAVIEW_LRELEASE}")
+  message(STATUS "KogaView: cached lrelease is gone (${KOGAVIEW_LRELEASE}); searching again")
+  set(KOGAVIEW_LRELEASE "" CACHE FILEPATH "Path to Qt's lrelease (empty: search for it)" FORCE)
+endif()
 if(NOT KOGAVIEW_LRELEASE)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
