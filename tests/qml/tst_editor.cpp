@@ -47,7 +47,7 @@ class TestEditor : public QObject
 private slots:
   void initTestCase();
   void init();
-  void theFreshResizeFieldsStayEmpty();
+  void theResizeDialogStartsFromTheDocumentSize();
   void thePointerShowsTheDocumentAndHistory();
   void emptyStateOffersToOpenAnImage();
   void theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes();
@@ -95,6 +95,8 @@ private:
   void dragScene(const QPointF& from, const QPointF& to, int steps = 6);
   void typeInto(QQuickItem* field, const QString& text);
   void selectTool(const char* name);
+  QObject* resizeDialogObject() const;
+  void openResizeDialog();
   QVariantList commands() const { return m_commands->takeFirst(); }
   QVariantMap documentState() const;
   void setState(const QVariantMap& editor);
@@ -177,10 +179,20 @@ void TestEditor::initTestCase()
 void TestEditor::init()
 {
   // Cases start with empty tool fields. Which tool is selected is view state;
-  // a case that needs Resize or Crop selects it, and the pointer default is
-  // asserted by the first case before anything changes it.
+  // a case that needs Crop selects it, and the pointer default is asserted by
+  // the first case before anything changes it.
   m_editor->setProperty("tool", QStringLiteral("pointer"));
-  for (const char* name : {"widthField", "heightField"}) {
+  // The Resize form is modal: a case that failed mid-form would otherwise leave
+  // it blocking the next one's clicks. The form refills itself from the
+  // document on every open, so closing it is enough.
+  if (QObject* dialog = findObject(QStringLiteral("resizeDialog"))) {
+    if (dialog->property("opened").toBool()) {
+      QMetaObject::invokeMethod(dialog, "close");
+      QTest::qWait(20);
+    }
+    dialog->setProperty("fillColor", QColor(QStringLiteral("#ffffff")));
+  }
+  for (const char* name : {"cropWidth", "cropHeight"}) {
     if (QQuickItem* field = visualItem(QString::fromLatin1(name))) {
       field->setProperty("text", QString());
     }
@@ -190,16 +202,9 @@ void TestEditor::init()
       field->setProperty("text", QStringLiteral("0"));
     }
   }
-  // Tool options are view state, and a case that changed them must not decide
-  // what the next one sees. The two toggles also own a `checked` the control
+  // Crop's options are view state, and a case that changed them must not
+  // decide what the next one sees. The toggles also own a `checked` the control
   // writes itself, so reset both sides.
-  m_editor->setProperty("resizeRatio", QStringLiteral("original"));
-  m_editor->setProperty("resizeLivePreview", false);
-  m_editor->setProperty("resizePadFit", false);
-  m_editor->setProperty("resizeFillColor", QColor(QStringLiteral("#ffffff")));
-  m_editor->setProperty("resizeCurrentRatio",
-                        QVariantMap{{QStringLiteral("width"), 0},
-                                    {QStringLiteral("height"), 0}});
   m_editor->setProperty("cropRatio", QStringLiteral("original"));
   m_editor->setProperty("cropAnchor", QStringLiteral("center"));
   m_editor->setProperty("cropLivePreview", false);
@@ -209,8 +214,7 @@ void TestEditor::init()
   m_editor->setProperty("transformLivePreview", false);
   m_editor->setProperty("transformCorners", QVariantList());
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
-  for (const char* name : {"livePreviewButton", "cropLivePreviewButton",
-                           "transformLivePreviewButton", "padToFit"}) {
+  for (const char* name : {"cropLivePreviewButton", "transformLivePreviewButton"}) {
     if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
       toggle->setProperty("checked", false);
     }
@@ -319,6 +323,29 @@ void TestEditor::selectTool(const char* name)
   QCOMPARE(m_editor->property("tool").toString(), wanted);
 }
 
+QObject* TestEditor::resizeDialogObject() const
+{
+  QObject* dialog = findObject(QStringLiteral("resizeDialog"));
+  if (dialog == nullptr) {
+    qFatal("expected the Resize dialog was not found");
+  }
+  return dialog;
+}
+
+/// Resize is a dialog now, not a tool on the canvas: its palette button opens
+/// the form, and the editor stays on the pointer while the form is up. Every
+/// resize case starts here, so the folder path is exercised by the suite.
+void TestEditor::openResizeDialog()
+{
+  clickItem(expectItem("toolResize"));
+  QObject* dialog = resizeDialogObject();
+  QTRY_VERIFY2(dialog->property("opened").toBool(), "the Resize dialog did not open");
+  // Opening a form is not choosing a tool: the canvas stays on the pointer and
+  // the palette button stays lit so the form has a visible source.
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
+  QVERIFY(expectItem("toolResize")->property("highlighted").toBool());
+}
+
 QVariantMap TestEditor::documentState() const
 {
   QVariantMap editor;
@@ -355,30 +382,65 @@ void TestEditor::setState(const QVariantMap& editor)
   QTest::qWait(40);
 }
 
-void TestEditor::theFreshResizeFieldsStayEmpty()
+void TestEditor::theResizeDialogStartsFromTheDocumentSize()
 {
-  setState(documentState());
-  selectTool("resize");
-  // Crop's preset list is filtered by the document, so it is rebuilt when the
-  // state arrives; with `onCurrentIndexChanged` its first fitting row applied
-  // itself and wrote 2048 × 2048 into the shared Width/Height fields, even
-  // though Resize is the visible tool. Waiting past the debounce makes that
-  // old race visible here.
-  QTest::qWait(200);
-  QCOMPARE(expectItem("widthField")->property("text").toString(), QString());
-  QCOMPARE(expectItem("heightField")->property("text").toString(), QString());
-  QCOMPARE(expectItem("sizePreset")->property("currentIndex").toInt(), -1);
-  QCOMPARE(expectItem("sizePreset")->property("displayText").toString(),
-           QStringLiteral("Custom"));
+  setState(documentState());  // 4000 × 3000
+  openResizeDialog();
+
+  // The form describes what is on screen before anything is typed: the
+  // document's own pair, so the steppers start from a real number and the
+  // preview matches the picture behind the dialog.
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  QQuickItem* preset = expectItem("resizeSizePreset");
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  QCOMPARE(preset->property("currentIndex").toInt(), -1);
+  QCOMPARE(preset->property("displayText").toString(), QStringLiteral("Custom"));
+
+  // That pair is Core's no-op, so Apply says so before it is pressed.
+  QVERIFY(!expectItem("resizeApply")->property("enabled").toBool());
+
+  // The two switches sit on the dialog's own dark surface. Their labels come
+  // from the theme, not from the platform palette: a Popup built inside the
+  // workspace's Loader resolves the platform's light palette, and the first
+  // screenshot of this form showed both labels dark-on-dark.
+  const QColor themeText = readQml(m_editor, "theme.text").value<QColor>();
+  for (const char* switchName : {"resizePadToFit", "resizeLivePreview"}) {
+    QQuickItem* box = expectItem(switchName);
+    QCOMPARE(readQml(box, "contentItem.color").value<QColor>(), themeText);
+    QVERIFY2(box->property("contentItem").value<QObject*>() != nullptr,
+             qPrintable(QStringLiteral("%1 has no label item").arg(QString::fromLatin1(switchName))));
+  }
+
+  // The whole form fits the dialog at the test host's size. `isVisible` does
+  // not notice clipping by the Flickable, so the first screenshot of this
+  // dialog showed the Live preview switch under the footer; this is the
+  // measurement that catches it.
+  QQuickItem* content = expectItem("resizeContent");
+  QQuickItem* column = expectItem("resizeColumn");
+  QVERIFY2(column->implicitHeight() + 40 <= content->height(),
+           qPrintable(QStringLiteral("the form is %1 px tall in a %2 px viewport")
+                          .arg(column->implicitHeight() + 40)
+                          .arg(content->height())));
+
+  // Reset is the same fresh state, and it sends nothing.
+  width->setProperty("text", QStringLiteral("800"));
+  height->setProperty("text", QStringLiteral("600"));
+  QTest::qWait(20);
+  QVERIFY(expectItem("resizeApply")->property("enabled").toBool());
+  clickItem(expectItem("resizeReset"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
   QCOMPARE(m_commands->count(), 0);
-  selectTool("pointer");
 }
 
 void TestEditor::thePointerShowsTheDocumentAndHistory()
 {
-  // A fresh Editor opens on the pointer: no tool, no Apply button.
+  // A fresh Editor opens on the pointer: no tool, no Apply button, and the
+  // Resize form stays closed until its palette button asks for it.
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
-  QVERIFY(!expectItem("applyResize")->isVisible());
+  QVERIFY(!resizeDialogObject()->property("opened").toBool());
   QVERIFY(!expectItem("applyCrop")->isVisible());
 
   QVariantMap editor = documentState();
@@ -563,11 +625,11 @@ void TestEditor::undoRedoResetAndCloseEmitCommands()
 void TestEditor::resizeApplyEmitsTheTypedSize()
 {
   setState(documentState());
-  selectTool("resize");
+  openResizeDialog();
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
-  QQuickItem* apply = expectItem("applyResize");
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  QQuickItem* apply = expectItem("resizeApply");
   width->setProperty("text", QStringLiteral("800"));
   height->setProperty("text", QStringLiteral("600"));
   QTest::qWait(20);
@@ -582,6 +644,8 @@ void TestEditor::resizeApplyEmitsTheTypedSize()
   // Resize has no anchor: where the result sits is a Crop decision.
   QVERIFY(!command.contains(QStringLiteral("anchor")));
   QVERIFY(command.value("fill").isNull());
+  // Apply ends the question: the form is gone once the size has been asked.
+  QTRY_VERIFY(!resizeDialogObject()->property("opened").toBool());
 }
 
 /// The dropdown offers concrete sizes for every ratio, whose sides are exact
@@ -590,7 +654,7 @@ void TestEditor::resizeApplyEmitsTheTypedSize()
 void TestEditor::theResizePresetsAreMultiplesOf64()
 {
   setState(documentState());
-  selectTool("resize");
+  openResizeDialog();
 
   const QVariantList ratios = m_editor->property("sizeRatios").toList();
   // A short list: the common shapes plus Free/Original/Keep current. The rare crops
@@ -643,24 +707,25 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
   QVERIFY2(smallSquareIndex >= 0, "1:1 · 512 × 512 is missing");
   QVERIFY2(hasLargeSquare, "1:1 · 2048 × 2048 is missing");
 
-  QQuickItem* dropdown = expectItem("sizePreset");
+  QQuickItem* dropdown = expectItem("resizeSizePreset");
   QVERIFY(dropdown->isVisible());
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
   // Nothing is armed on open: the dropdown starts on `Custom` and the fields
-  // stay empty. `onActivated` (not `onCurrentIndexChanged`) is what makes an
-  // index change the user's action, so a preset only lands when picked.
+  // show the document's own size. `onActivated` (not
+  // `onCurrentIndexChanged`) is what makes an index change the user's action,
+  // so a preset only lands when picked.
   QCOMPARE(dropdown->property("currentIndex").toInt(), -1);
   QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
-  QCOMPARE(width->property("text").toString(), QString());
-  QCOMPARE(height->property("text").toString(), QString());
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseResizePreset",
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "choosePreset",
                                     Q_ARG(QVariant, squareIndex)));
   QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
   QTRY_COMPARE(height->property("text").toString(), QStringLiteral("1024"));
   QCOMPARE(dropdown->property("displayText").toString(),
            QStringLiteral("1:1 · 1024 × 1024"));
-  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("1:1"));
+  QCOMPARE(resizeDialogObject()->property("ratio").toString(), QStringLiteral("1:1"));
 }
 
 /// Resize lines the two sides up through the chosen ratio: typing one side
@@ -669,11 +734,11 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
 void TestEditor::typingOneSideKeepsTheChosenRatio()
 {
   setState(documentState());  // 4000 × 3000
-  selectTool("resize");
-  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("original"));
+  openResizeDialog();
+  QCOMPARE(resizeDialogObject()->property("ratio").toString(), QStringLiteral("original"));
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
 
   // The document's own 4:3 shape by default.
   typeInto(width, QStringLiteral("800"));
@@ -684,37 +749,39 @@ void TestEditor::typingOneSideKeepsTheChosenRatio()
   QCOMPARE(height->property("text").toString(), QStringLiteral("1200"));
 
   // A square ratio keeps both sides equal.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("1:1")))));
-  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("1:1"));
+  QCOMPARE(resizeDialogObject()->property("ratio").toString(), QStringLiteral("1:1"));
   typeInto(width, QStringLiteral("512"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("512"));
 
   // A 16:9 ratio is exact on both sides.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("16:9")))));
   typeInto(width, QStringLiteral("1024"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
 
   // Free stops linking: the other side stays where it was.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
   typeInto(width, QStringLiteral("300"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("300"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
 }
 
-/// "Keep current ratio" is the lock the user described: it freezes the W:H pair on
-/// screen and keeps later edits at that shape instead of one of the fixed
-/// ratios. Each tool keeps its own snapshot.
+/// "Keep current ratio" freezes the W:H pair on screen and keeps later edits at
+/// that shape. It belongs to the form that used it: the Resize dialog's lock
+/// does not reach Crop, and a fresh visit asks the question again from the
+/// document's size rather than resuming the last answer.
 void TestEditor::theCurrentRatioLocksTheTypedPair()
 {
   setState(documentState());  // 4000 × 3000
-  selectTool("resize");
+  openResizeDialog();
+  QObject* dialog = resizeDialogObject();
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  QVERIFY(QMetaObject::invokeMethod(dialog, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
   typeInto(width, QStringLiteral("1000"));
   typeInto(height, QStringLiteral("700"));
@@ -722,10 +789,10 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
   QCOMPARE(height->property("text").toString(), QStringLiteral("700"));
 
   // Picking it snapshots what the two fields hold, not the document's 4:3.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+  QVERIFY(QMetaObject::invokeMethod(dialog, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("current")))));
-  QCOMPARE(m_editor->property("resizeRatio").toString(), QStringLiteral("current"));
-  const QVariantMap captured = m_editor->property("resizeCurrentRatio").toMap();
+  QCOMPARE(dialog->property("ratio").toString(), QStringLiteral("current"));
+  const QVariantMap captured = dialog->property("currentRatio").toMap();
   QCOMPARE(captured.value("width").toInt(), 1000);
   QCOMPARE(captured.value("height").toInt(), 700);
 
@@ -735,20 +802,25 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
   QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
 
   // Crop has its own snapshot: a 3:2 crop must not change the 10:7 resize.
+  clickItem(expectItem("resizeCancel"));
+  QTRY_VERIFY(!dialog->property("opened").toBool());
   selectTool("crop");
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
-  typeInto(width, QStringLiteral("300"));
-  typeInto(height, QStringLiteral("200"));
+  typeInto(expectItem("cropWidth"), QStringLiteral("300"));
+  typeInto(expectItem("cropHeight"), QStringLiteral("200"));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("current")))));
-  typeInto(width, QStringLiteral("600"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("400"));
+  typeInto(expectItem("cropWidth"), QStringLiteral("600"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("400"));
 
-  // Back on Resize the 10:7 pair is still the lock: 1500 wide gives 1050.
-  selectTool("resize");
-  typeInto(width, QStringLiteral("1500"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("1050"));
+  // A second visit is a new question: opening the form fills it from the
+  // document again, and the previous lock is not silently resumed.
+  selectTool("pointer");
+  openResizeDialog();
+  QCOMPARE(expectItem("resizeWidth")->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(expectItem("resizeHeight")->property("text").toString(), QStringLiteral("3000"));
+  QCOMPARE(dialog->property("ratio").toString(), QStringLiteral("original"));
   QCOMPARE(m_commands->count(), 0);
 }
 
@@ -758,39 +830,40 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
 void TestEditor::theSizeSteppersNudgeBothSides()
 {
   setState(documentState());  // 4000 × 3000
-  selectTool("resize");
+  openResizeDialog();
+  QObject* dialog = resizeDialogObject();
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
-  for (const char* name : {"widthStepUp", "widthStepDown",
-                           "heightStepUp", "heightStepDown"}) {
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  for (const char* name : {"resizeWidthStepUp", "resizeWidthStepDown",
+                           "resizeHeightStepUp", "resizeHeightStepDown"}) {
     QVERIFY2(expectItem(name)->isVisible(), name);
   }
 
-  // The empty field shows 4000 as its placeholder; + starts there, not at 1.
-  clickItem(expectItem("widthStepUp"));
+  // An empty field shows 4000 as its placeholder; + starts there, not at 1.
+  width->setProperty("text", QString());
+  clickItem(expectItem("resizeWidthStepUp"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3001"));
-  clickItem(expectItem("widthStepDown"));
+  clickItem(expectItem("resizeWidthStepDown"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
 
-  clickItem(expectItem("heightStepUp"));
+  clickItem(expectItem("resizeHeightStepUp"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3001"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
-  clickItem(expectItem("heightStepDown"));
+  clickItem(expectItem("resizeHeightStepDown"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
 
-  // Three presses in a row keep moving both linked sides; the initial race
-  // that filled 2048 × 2048 showed up as a jump here.
+  // Three presses in a row keep moving both linked sides.
   for (int press = 1; press <= 3; ++press) {
-    clickItem(expectItem("widthStepUp"));
+    clickItem(expectItem("resizeWidthStepUp"));
     QCOMPARE(width->property("text").toString(), QString::number(4000 + press));
   }
   QCOMPARE(height->property("text").toString(), QStringLiteral("3002"));
   for (int press = 1; press <= 3; ++press) {
-    clickItem(expectItem("widthStepDown"));
+    clickItem(expectItem("resizeWidthStepDown"));
   }
   QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
@@ -799,21 +872,21 @@ void TestEditor::theSizeSteppersNudgeBothSides()
   // invalid and disabling Apply.
   width->setProperty("text", QStringLiteral("20000"));
   height->setProperty("text", QStringLiteral("20000"));
-  clickItem(expectItem("widthStepUp"));
+  clickItem(expectItem("resizeWidthStepUp"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("20000"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("15000"));
   width->setProperty("text", QStringLiteral("1"));
   height->setProperty("text", QStringLiteral("1"));
-  clickItem(expectItem("widthStepDown"));
+  clickItem(expectItem("resizeWidthStepDown"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("1"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("1"));
 
   // Free is the unlinked choice: nudging one side leaves the other.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+  QVERIFY(QMetaObject::invokeMethod(dialog, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
   width->setProperty("text", QStringLiteral("4000"));
   height->setProperty("text", QStringLiteral("3000"));
-  clickItem(expectItem("widthStepUp"));
+  clickItem(expectItem("resizeWidthStepUp"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
   QCOMPARE(m_commands->count(), 0);
@@ -825,24 +898,37 @@ void TestEditor::theSizeSteppersNudgeBothSides()
 void TestEditor::resizeCarriesThePadFill()
 {
   setState(documentState());
-  selectTool("resize");
+  openResizeDialog();
+  QObject* dialog = resizeDialogObject();
 
-  // An anchor is a Crop idea: Resize must not have the 3 × 3 pad, nor a Half
-  // shortcut.
+  // An anchor is a Crop idea: the Resize form must not have the 3 × 3 pad, nor
+  // a Half shortcut.
   QVERIFY(findObject(QStringLiteral("anchor_center")) == nullptr);
   QVERIFY(findObject(QStringLiteral("anchor_top_left")) == nullptr);
   QVERIFY(findObject(QStringLiteral("halfSize")) == nullptr);
 
-  QQuickItem* pad = expectItem("padToFit");
+  QQuickItem* pad = expectItem("resizePadToFit");
   clickItem(pad);
-  QTRY_VERIFY(m_editor->property("resizePadFit").toBool());
-  QVERIFY(expectItem("fillColorButton")->isVisible());
+  QTRY_VERIFY(dialog->property("padFit").toBool());
+  QVERIFY(expectItem("resizeFillColorButton")->isVisible());
 
-  m_editor->setProperty("resizeFillColor", QColor(255, 0, 0));
-  expectItem("widthField")->setProperty("text", QStringLiteral("1024"));
-  expectItem("heightField")->setProperty("text", QStringLiteral("576"));
+  // Pad to fit adds the colour row and its explanation, which is the tallest
+  // the form gets. A short window scrolls it (this dialog caps its height at
+  // the window), so the viewport has to be tall enough for everything at the
+  // size this suite runs at — `isVisible` would not notice the Flickable's
+  // clipping, and an early screenshot showed exactly that.
+  QQuickItem* content = expectItem("resizeContent");
+  QQuickItem* column = expectItem("resizeColumn");
+  QVERIFY2(column->implicitHeight() + 40 <= content->height(),
+           qPrintable(QStringLiteral("the padded form is %1 px tall in a %2 px viewport")
+                          .arg(column->implicitHeight() + 40)
+                          .arg(content->height())));
+
+  dialog->setProperty("fillColor", QColor(255, 0, 0));
+  expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
+  expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
   QTest::qWait(20);
-  clickItem(expectItem("applyResize"));
+  clickItem(expectItem("resizeApply"));
 
   QCOMPARE(m_commands->count(), 1);
   const QVariantMap command = m_commands->at(0).at(0).toMap();
@@ -855,11 +941,29 @@ void TestEditor::resizeCarriesThePadFill()
   QCOMPARE(fill.at(2).toInt(), 0);
 }
 
-/// Live preview draws Core's draft at the target size and changes nothing in
-/// the document: no history, no size, no save target. Turning it off hides the
-/// draft again, and the fields are what ask Core for a new render.
+/// Live preview draws Core's draft at the target size inside the form and
+/// changes nothing in the document: no history, no size, no save target.
+/// Turning it off hides the draft again, and the fields are what ask Core for
+/// a new render. The canvas behind the modal is not the surface that shows the
+/// answer, so it never moves.
 void TestEditor::theLivePreviewShowsTheDraftWithoutApplyingIt()
 {
+  setState(documentState());
+  openResizeDialog();
+  QObject* dialog = resizeDialogObject();
+
+  QQuickItem* preview = expectItem("resizePreview");
+  QQuickItem* toggle = expectItem("resizeLivePreview");
+  QQuickItem* canvas = expectItem("canvas");
+  QVERIFY(toggle->isVisible());
+  QVERIFY(!dialog->property("livePreview").toBool());
+  // With the toggle off the form shows the document's own picture, whatever
+  // draft Core still holds — including none at all.
+  QVERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QCOMPARE(expectItem("resizeCaption")->property("text").toString(),
+           QStringLiteral("The document at 4000 × 3000."));
+
+  // A draft that lands while the form is open is this visit's answer.
   QVariantMap draft;
   draft.insert(QStringLiteral("path"), m_previewTwo);
   draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
@@ -868,41 +972,32 @@ void TestEditor::theLivePreviewShowsTheDraftWithoutApplyingIt()
   QVariantMap editor = documentState();
   editor.insert(QStringLiteral("previewDraft"), draft);
   setState(editor);
-  selectTool("resize");
-
-  QQuickItem* canvas = expectItem("canvas");
-  QQuickItem* toggle = expectItem("livePreviewButton");
-  QVERIFY(toggle->isVisible());
-  QVERIFY(!m_editor->property("resizeLivePreview").toBool());
-  // With the toggle off the canvas draws the document preview, whatever draft
-  // Core still holds.
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
 
   clickItem(toggle);
-  QVERIFY(m_editor->property("resizeLivePreview").toBool());
+  QVERIFY(dialog->property("livePreview").toBool());
   // The armed state is visible, not only internal: `checked` alone barely
   // changes this style's button face.
   QVERIFY(toggle->property("checked").toBool());
-  QVERIFY(toggle->property("highlighted").toBool());
-  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
-  QCOMPARE(canvas->property("width").toDouble(), 1024.0);
-  QCOMPARE(canvas->property("height").toDouble(), 1024.0);
-  // The document did not move: the draft is a preview, not an edit.
+  QTRY_VERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
+  QCOMPARE(expectItem("resizeCaption")->property("text").toString(),
+           QStringLiteral("Preview at 1024 × 1024 — Apply writes it, Cancel keeps the document."));
+  // The document did not move and the canvas did not take the draft: the form
+  // is where the result is being compared.
   QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
   QCOMPARE(m_editor->property("modified").toBool(), false);
+  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
   QCOMPARE(m_commands->count(), 0);
 
   clickItem(toggle);
-  QVERIFY(!m_editor->property("resizeLivePreview").toBool());
-  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QVERIFY(!dialog->property("livePreview").toBool());
+  QVERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
   QCOMPARE(m_commands->count(), 0);
 
   // Arming it with a size asks Core for the draft, under the preview name so a
   // journal never mistakes it for an applied resize.
-  expectItem("widthField")->setProperty("text", QStringLiteral("800"));
-  expectItem("heightField")->setProperty("text", QStringLiteral("800"));
+  expectItem("resizeWidth")->setProperty("text", QStringLiteral("800"));
+  expectItem("resizeHeight")->setProperty("text", QStringLiteral("800"));
   clickItem(toggle);
   QTRY_COMPARE(m_commands->count(), 1);
   const QVariantMap command = m_commands->at(0).at(0).toMap();
@@ -948,8 +1043,8 @@ void TestEditor::cropApplyEmitsTheTypedRectangle()
 
   QQuickItem* cropX = expectItem("cropX");
   QQuickItem* cropY = expectItem("cropY");
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
   QQuickItem* apply = expectItem("applyCrop");
   QTRY_VERIFY(apply->isVisible());
 
@@ -1005,8 +1100,8 @@ void TestEditor::theCropPresetsFitInsideTheDocument()
   QCOMPARE(dropdown->property("displayText").toString(), QStringLiteral("Custom"));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropPreset",
                                     Q_ARG(QVariant, squareIndex)));
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
   QTRY_COMPARE(width->property("text").toString(), QStringLiteral("1024"));
   QTRY_COMPARE(height->property("text").toString(), QStringLiteral("1024"));
   QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("1:1"));
@@ -1026,8 +1121,8 @@ void TestEditor::theCropRatioLinksTheSides()
   selectTool("crop");
   QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("original"));
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
   QQuickItem* cropX = expectItem("cropX");
   QQuickItem* cropY = expectItem("cropY");
 
@@ -1073,8 +1168,8 @@ void TestEditor::theCropAnchorPlacesTheRectangle()
   QVERIFY(findObject(QStringLiteral("cropAnchor_top_left")) != nullptr);
   QVERIFY(findObject(QStringLiteral("cropAnchor_bottom_right")) != nullptr);
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
   QQuickItem* cropX = expectItem("cropX");
   QQuickItem* cropY = expectItem("cropY");
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
@@ -1166,16 +1261,35 @@ void TestEditor::theLiveCropShowsOnlyItsOwnDraft()
   QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
   QCOMPARE(canvas->property("width").toDouble(), 4000.0);
 
-  // And under Resize with its own toggle armed, a draft that says `crop` is
-  // still the other tool's result and stays hidden.
+  // The Resize form draws only its own kind. It opens on the document's
+  // picture, a crop draft published underneath it stays off the form, and a
+  // resize draft is what it shows.
+  setState(documentState());
+  openResizeDialog();
+  QObject* dialog = resizeDialogObject();
+  QQuickItem* formPreview = expectItem("resizePreview");
+  QVERIFY(formPreview->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  // Live preview is the user's answer to "show me the result": a draft that
+  // arrives while it is off is not drawn. Arming it here with the document's
+  // own size asks for nothing (the pair is a no-op).
+  clickItem(expectItem("resizeLivePreview"));
+  QVERIFY(dialog->property("livePreview").toBool());
+  QCOMPARE(m_commands->count(), 0);
+
   draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
   editor.insert(QStringLiteral("previewDraft"), draft);
   setState(editor);
-  selectTool("resize");
-  clickItem(expectItem("livePreviewButton"));
-  QVERIFY(m_editor->property("resizeLivePreview").toBool());
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+  QTest::qWait(50);
+  QVERIFY2(formPreview->property("source").toString().endsWith(QStringLiteral("preview-1.png")),
+           "the Resize form drew another tool's draft");
+
+  draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  QTRY_VERIFY(formPreview->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
+  QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
+  clickItem(expectItem("resizeCancel"));
+  QTRY_VERIFY(!dialog->property("opened").toBool());
 
   // The command that asks Core for a crop draft carries the whole rectangle.
   m_commands->clear();
@@ -1183,8 +1297,8 @@ void TestEditor::theLiveCropShowsOnlyItsOwnDraft()
   m_editor->setProperty("cropLivePreview", false);
   expectItem("cropX")->setProperty("text", QStringLiteral("20"));
   expectItem("cropY")->setProperty("text", QStringLiteral("30"));
-  expectItem("widthField")->setProperty("text", QStringLiteral("200"));
-  expectItem("heightField")->setProperty("text", QStringLiteral("150"));
+  expectItem("cropWidth")->setProperty("text", QStringLiteral("200"));
+  expectItem("cropHeight")->setProperty("text", QStringLiteral("150"));
   clickItem(expectItem("cropLivePreviewButton"));
   QTRY_COMPARE(m_commands->count(), 1);
   const QVariantMap command = m_commands->at(0).at(0).toMap();
@@ -1225,8 +1339,8 @@ void TestEditor::theCropFrameIsDrawnAndDragged()
   dragScene(origin + QPointF(10, 10), origin + QPointF(90, 70));
   QTRY_COMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("10"));
   QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("10"));
-  QCOMPARE(expectItem("widthField")->property("text").toString(), QStringLiteral("80"));
-  QCOMPARE(expectItem("heightField")->property("text").toString(), QStringLiteral("60"));
+  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("80"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("60"));
   QQuickItem* frame = expectItem("cropFrame");
   QTRY_VERIFY(frame->isVisible());
   QCOMPARE(frame->mapToScene(QPointF(0, 0)).x(), origin.x() + 10.0);
@@ -1240,8 +1354,8 @@ void TestEditor::theCropFrameIsDrawnAndDragged()
   dragScene(frameCentre, frameCentre + QPointF(20, 15));
   QTRY_COMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("30"));
   QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("25"));
-  QCOMPARE(expectItem("widthField")->property("text").toString(), QStringLiteral("80"));
-  QCOMPARE(expectItem("heightField")->property("text").toString(), QStringLiteral("60"));
+  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("80"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("60"));
 
   // A corner handle moves the two sides it owns; the opposite corner stays put.
   QQuickItem* bottomRight = expectItem("cropHandle_bottom_right");
@@ -1249,8 +1363,8 @@ void TestEditor::theCropFrameIsDrawnAndDragged()
   const QPointF handleCentre = bottomRight->mapToScene(
     QPointF(bottomRight->width() / 2, bottomRight->height() / 2));
   dragScene(handleCentre, handleCentre - QPointF(20, 10));
-  QTRY_COMPARE(expectItem("widthField")->property("text").toString(), QStringLiteral("60"));
-  QCOMPARE(expectItem("heightField")->property("text").toString(), QStringLiteral("50"));
+  QTRY_COMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("60"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("50"));
   QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("30"));
   QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("25"));
 
@@ -1287,8 +1401,8 @@ void TestEditor::theCropFrameHidesWhileItsPreviewIsOn()
   selectTool("crop");
   expectItem("cropX")->setProperty("text", QStringLiteral("10"));
   expectItem("cropY")->setProperty("text", QStringLiteral("10"));
-  expectItem("widthField")->setProperty("text", QStringLiteral("80"));
-  expectItem("heightField")->setProperty("text", QStringLiteral("60"));
+  expectItem("cropWidth")->setProperty("text", QStringLiteral("80"));
+  expectItem("cropHeight")->setProperty("text", QStringLiteral("60"));
   QTest::qWait(20);
 
   // With the preview off, the draft is not drawn and the frame is.
@@ -1455,11 +1569,11 @@ void TestEditor::theLiveTransformShowsOnlyItsOwnDraft()
 void TestEditor::anInvalidOrEmptySizeKeepsApplyDisabled()
 {
   setState(documentState());
-  selectTool("resize");
+  openResizeDialog();
 
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
-  QQuickItem* apply = expectItem("applyResize");
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  QQuickItem* apply = expectItem("resizeApply");
   width->setProperty("text", QString());
   height->setProperty("text", QStringLiteral("300"));
   QTest::qWait(20);
@@ -1533,11 +1647,11 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
                                                .arg(QString::fromLatin1(option))));
   }
 
-  // A tool: only its options, inside the same inspector.
-  selectTool("resize");
-  for (const char* option : {"toolOptionsHeading", "widthField", "heightField",
-                             "applyResize", "resetToolFields", "sizePreset", "resizeRatio",
-                             "livePreviewButton", "padToFit"}) {
+  // A canvas tool: only its options, inside the same inspector.
+  selectTool("crop");
+  for (const char* option : {"toolOptionsHeading", "cropWidth", "cropHeight",
+                             "applyCrop", "resetToolFields", "cropPreset", "cropRatio",
+                             "cropLivePreviewButton", "cropAnchorPad"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
                                                  .arg(QString::fromLatin1(option))));
@@ -1546,6 +1660,23 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   }
   QVERIFY(!expectItem("pointerThumbnail")->isVisible());
 
+  // Resize is not a column of the inspector any more: its controls live in its
+  // own modal form, and the editor stays on the pointer underneath.
+  selectTool("pointer");
+  openResizeDialog();
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
+  for (const char* option : {"resizeWidth", "resizeHeight", "resizeApply", "resizeReset",
+                             "resizeSizePreset", "resizeRatio", "resizeLivePreview",
+                             "resizePadToFit"}) {
+    QQuickItem* item = expectItem(option);
+    QVERIFY2(item->isVisible(), qPrintable(QStringLiteral("%1 is not visible")
+                                               .arg(QString::fromLatin1(option))));
+    QVERIFY2(!descendantOf(item, right), qPrintable(QStringLiteral("%1 is in the inspector")
+                                                        .arg(QString::fromLatin1(option))));
+  }
+  QVERIFY(expectItem("imageName")->isVisible());
+  clickItem(expectItem("resizeCancel"));
+
   // Saving lives on the toolbar, with no second copy in the inspector.
   QVERIFY(expectItem("editorToolbarSave")->isVisible());
   QVERIFY(expectItem("editorToolbarSaveAs")->isVisible());
@@ -1553,16 +1684,17 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   QVERIFY(findObject("editorSaveAsButton") == nullptr);
 }
 
-/// The pointer is the no-op default. Choosing Resize or Crop swaps the
-/// inspector's fields and Apply button; clicking the selected tool again
-/// returns to the pointer. No command leaves the view until Apply is pressed.
+/// The pointer is the no-op default. Crop swaps the inspector for its own
+/// fields; Resize opens a modal form and leaves the pointer in place. No
+/// command leaves the view until Apply is pressed.
 void TestEditor::thePaletteSelectsTheToolsOptions()
 {
   setState(documentState());
-  QQuickItem* resizeApply = expectItem("applyResize");
   QQuickItem* cropApply = expectItem("applyCrop");
+  QQuickItem* resizeApply = expectItem("resizeApply");
   QQuickItem* imageName = expectItem("imageName");
   QQuickItem* heading = expectItem("toolOptionsHeading");
+  QObject* dialog = resizeDialogObject();
 
   selectTool("pointer");
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
@@ -1570,10 +1702,11 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(imageName->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
-  QVERIFY(!expectItem("sizePreset")->isVisible());
-  QVERIFY(!expectItem("padToFit")->isVisible());
+  QVERIFY(!expectItem("resizeSizePreset")->isVisible());
+  QVERIFY(!expectItem("resizePadToFit")->isVisible());
   QVERIFY(!expectItem("cropX")->isVisible());
   QVERIFY(!expectItem("cropY")->isVisible());
+  QVERIFY(!dialog->property("opened").toBool());
 
   clickItem(expectItem("toolCrop"));
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("crop"));
@@ -1582,8 +1715,8 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(!imageName->isVisible());
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("cropY")->isVisible());
-  QVERIFY(!expectItem("sizePreset")->isVisible());
-  QVERIFY(!expectItem("padToFit")->isVisible());
+  QVERIFY(!expectItem("resizeSizePreset")->isVisible());
+  QVERIFY(!expectItem("resizePadToFit")->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QCOMPARE(m_commands->count(), 0);
 
@@ -1593,25 +1726,34 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QTRY_VERIFY(imageName->isVisible());
   QVERIFY(!cropApply->isVisible());
 
+  // Resize is a question, not a mode: opening it keeps the pointer and leaves
+  // the document details in the inspector. Closing it puts the palette's light
+  // out again without sending anything.
   clickItem(expectItem("toolResize"));
-  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("resize"));
-  QCOMPARE(heading->property("text").toString(), QStringLiteral("Resize"));
-  QTRY_VERIFY(resizeApply->isVisible());
+  QTRY_VERIFY(dialog->property("opened").toBool());
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
+  QCOMPARE(heading->property("text").toString(), QStringLiteral("Pointer"));
+  QVERIFY(imageName->isVisible());
+  QVERIFY(resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
   QCOMPARE(m_commands->count(), 0);
+  clickItem(expectItem("resizeCancel"));
+  QTRY_VERIFY(!dialog->property("opened").toBool());
+  QVERIFY(!expectItem("toolResize")->property("highlighted").toBool());
 }
 
-/// Reset clears the fields without sending a command, so a half-entered size
-/// never reaches Core.
+/// Reset clears the crop fields without sending a command, so a half-entered
+/// rectangle never reaches Core. Resize's own Reset is the same question and is
+/// covered by the fresh-dialog case.
 void TestEditor::resetClearsTheToolFields()
 {
   setState(documentState());
-  selectTool("resize");
-  QQuickItem* width = expectItem("widthField");
-  QQuickItem* height = expectItem("heightField");
+  selectTool("crop");
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
   QQuickItem* cropX = expectItem("cropX");
   QQuickItem* cropY = expectItem("cropY");
-  QQuickItem* preset = expectItem("sizePreset");
+  QQuickItem* preset = expectItem("cropPreset");
   width->setProperty("text", QStringLiteral("800"));
   height->setProperty("text", QStringLiteral("600"));
   cropX->setProperty("text", QStringLiteral("4"));

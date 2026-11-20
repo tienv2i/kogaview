@@ -379,11 +379,31 @@ ApplicationWindow {
         root.sendSequence(commands);
         if (leave === "quit") Qt.callLater(function() { root.runLeave("quit"); });
     }
-    /// The dialog's Discard answer: drop the edits and go.
+    /// The dialog's Discard answer: drop the edits and go. Dropping them is a
+    /// command of its own (`editor_reset`), not just a disappearance of the
+    /// question: the document stays open, and without the reset Core would
+    /// still consider it edited and would refuse to replace it with the
+    /// picture the Viewer shows next. Quitting skips the reset — nothing
+    /// survives the window.
     function leaveAfterDiscard() {
         var leave = root.pendingLeave;
+        root.pendingLeave = null;
         unsavedDialog.close();
-        root.runLeave(leave);
+        if (leave === "quit") {
+            root.runLeave("quit");
+            return;
+        }
+        var following = leave && leave.workspace
+                ? { type: "set_workspace", workspace: leave.workspace }
+                : (leave && leave.close ? { type: "editor_close" } : null);
+        // Leaving the Editor for another workspace keeps the document open, so
+        // the edits have to be reverted for real. Closing the document drops it
+        // anyway.
+        if (leave && leave.workspace) {
+            root.sendSequence([{ type: "editor_reset" }, following]);
+        } else if (following) {
+            root.send(following);
+        }
     }
 
     function runLeave(action) {
@@ -1045,6 +1065,9 @@ ApplicationWindow {
         closePolicy: Popup.CloseOnEscape
         anchors.centerIn: Overlay.overlay
         width: 420
+        // Cancel and Escape both mean "stay here": no command, and no stale
+        // answer left for the next question.
+        onClosed: root.pendingLeave = null
 
         contentItem: ColumnLayout {
             spacing: 10
@@ -1068,7 +1091,7 @@ ApplicationWindow {
                 Button {
                     objectName: "unsavedCancel"
                     text: qsTr("Cancel")
-                    onClicked: root.pendingLeave = null
+                    onClicked: unsavedDialog.close()
                 }
                 Button {
                     objectName: "unsavedSave"

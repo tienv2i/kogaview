@@ -20,6 +20,7 @@ fn main() {
         "qml/Viewer.qml",
         "qml/EditorView.qml",
         "qml/SettingsDialog.qml",
+        "qml/ResizeDialog.qml",
     ]))
     .qt_module("Core")
     .qt_module("Gui")

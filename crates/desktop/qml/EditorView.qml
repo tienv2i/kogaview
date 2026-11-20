@@ -36,37 +36,25 @@ Item {
     }
     property int leftPanelWidth: 220
     property int rightPanelWidth: 260
-    /// Which tool is selected: `pointer` (no tool), `resize`, `crop` or
+    /// Which tool is armed on the canvas: `pointer` (no tool), `crop` or
     /// `transform`. The pointer is the default and the no-op tool, so opening
-    /// the Editor never leaves an Apply button armed.
+    /// the Editor never leaves an Apply button armed. Resize is not a canvas
+    /// tool: it is a dialog (`ResizeDialog.qml`), because choosing a size is a
+    /// question with a beginning and an end rather than a mode to stay in.
     property string tool: "pointer"
-    /// Resize links Width and Height through this ratio, so the two fields can
+    /// Crop links Width and Height through this ratio, so the two fields can
     /// never describe a different shape than the one the user picked. `free` is
     /// the only unlinked choice; `original` follows the document's own aspect
     /// and `current` the pair the user had on screen when it was picked.
-    property string resizeRatio: "original"
-    /// Crop links Width and Height the same way. `original` keeps the document's
-    /// shape, which is the safest default for a crop.
     property string cropRatio: "original"
-    /// The pair captured when "Keep current ratio" was picked, one per tool so a
-    /// crop choice does not change the next resize. Zero means "not captured
-    /// yet": the document's aspect is the fallback.
-    property var resizeCurrentRatio: ({ width: 0, height: 0 })
+    /// The pair captured when "Keep current ratio" was picked. Zero means "not
+    /// captured yet": the document's aspect is the fallback. Resize keeps its
+    /// own snapshot inside its dialog, so a crop choice cannot reach it.
     property var cropCurrentRatio: ({ width: 0, height: 0 })
     /// Where the crop rectangle sits when its size changes: the anchor names the
     /// document corner, edge or centre the rectangle keeps. Typing X/Y by hand
     /// leaves it alone — the anchor is a placement shortcut, not a lock.
     property string cropAnchor: "center"
-    /// Resize either covers the target by cropping (the default) or fits the
-    /// whole image inside it and pads the leftover with this colour. The pad
-    /// follows the target: a letterbox for a wider frame, a pillarbox for a
-    /// taller one, and a square only when the target is square. Centred:
-    /// Resize has no anchor.
-    property bool resizePadFit: false
-    property color resizeFillColor: "#ffffff"
-    /// Live preview: each valid Width/Height change asks Core for a rendered
-    /// draft at the target size, which the canvas shows without applying it.
-    property bool resizeLivePreview: false
     /// The same draft idea for Crop: the canvas shows the rectangle Core would
     /// cut, while the document, its history and its save target stay put.
     property bool cropLivePreview: false
@@ -242,15 +230,16 @@ Item {
                 Math.round(color.b * 255)]
     }
 
-    /// The factor for a ratio key, or null when the sides are not linked.
+    /// The factor for a crop ratio key, or null when the sides are not linked.
+    /// Resize's dialog carries the same idea in its own file: each surface owns
+    /// the snapshot of the pair it froze, so a 1:1 crop cannot reshape a resize.
     function ratioFactor(key) {
         for (var index = 0; index < view.sizeRatios.length; ++index) {
             var entry = view.sizeRatios[index]
             if (entry.key !== key) continue
             if (entry.key === "free") return null
             if (entry.key === "current") {
-                var captured = view.tool === "crop" ? view.cropCurrentRatio
-                                                     : view.resizeCurrentRatio
+                var captured = view.cropCurrentRatio
                 if (captured && captured.width > 0 && captured.height > 0) return captured
                 if (!view.hasDocument) return null
                 return { width: view.documentWidth, height: view.documentHeight }
@@ -273,23 +262,7 @@ Item {
         return -1
     }
 
-    readonly property int resizeRatioIndex: view.ratioIndexFor(view.resizeRatio)
     readonly property int cropRatioIndex: view.ratioIndexFor(view.cropRatio)
-
-    /// The ratio key the selected tool is using.
-    readonly property string activeRatio: view.tool === "crop" ? view.cropRatio : view.resizeRatio
-
-    /// Index of the resize preset that matches both fields, or -1 for custom.
-    function matchingPreset() {
-        if (!widthField.acceptableInput || !heightField.acceptableInput) return -1
-        var w = parseInt(widthField.text)
-        var h = parseInt(heightField.text)
-        for (var index = 0; index < view.sizePresets.length; ++index) {
-            var preset = view.sizePresets[index]
-            if (preset.width === w && preset.height === h) return index
-        }
-        return -1
-    }
 
     /// Crop presets are the concrete sizes that fit inside the document. A
     /// preset the document cannot hold is not offered, so picking one always
@@ -308,9 +281,9 @@ Item {
 
     /// Index of the crop preset that matches both fields, or -1 for custom.
     function matchingCropPreset() {
-        if (!widthField.acceptableInput || !heightField.acceptableInput) return -1
-        var w = parseInt(widthField.text)
-        var h = parseInt(heightField.text)
+        if (!cropWidthField.acceptableInput || !cropHeightField.acceptableInput) return -1
+        var w = parseInt(cropWidthField.text)
+        var h = parseInt(cropHeightField.text)
         for (var index = 0; index < view.cropPresets.length; ++index) {
             var preset = view.cropPresets[index]
             if (preset.width === w && preset.height === h) return index
@@ -323,9 +296,10 @@ Item {
     /// be overwritten. A rectangle smaller than the document keeps the named
     /// corner, edge or centre of the document.
     function applyCropAnchor() {
-        if (!view.hasDocument || !widthField.acceptableInput || !heightField.acceptableInput) return
-        var width = parseInt(widthField.text)
-        var height = parseInt(heightField.text)
+        if (!view.hasDocument || !cropWidthField.acceptableInput
+                || !cropHeightField.acceptableInput) return
+        var width = parseInt(cropWidthField.text)
+        var height = parseInt(cropHeightField.text)
         if (!(width > 0) || !(height > 0)) return
         var anchor = view.cropAnchors[0]
         for (var index = 0; index < view.cropAnchors.length; ++index) {
@@ -350,46 +324,38 @@ Item {
     /// A crop is re-placed through its anchor even when the ratio is free: the
     /// anchor is about where the rectangle sits, not about linking the sides.
     function linkHeightFromWidth() {
-        if (!widthField.acceptableInput) return
-        var width = parseInt(widthField.text)
+        if (!cropWidthField.acceptableInput) return
+        var width = parseInt(cropWidthField.text)
         if (!(width > 0)) return
-        var factor = view.ratioFactor(view.activeRatio)
+        var factor = view.ratioFactor(view.cropRatio)
         if (factor) {
-            heightField.text = String(Math.max(1, Math.min(20000,
+            cropHeightField.text = String(Math.max(1, Math.min(20000,
                     Math.round(width * factor.height / factor.width))))
         }
-        if (view.tool === "crop") {
-            view.applyCropAnchor()
-            cropPreset.currentIndex = view.matchingCropPreset()
-        } else {
-            sizePreset.currentIndex = view.matchingPreset()
-        }
+        view.applyCropAnchor()
+        cropPreset.currentIndex = view.matchingCropPreset()
     }
 
     function linkWidthFromHeight() {
-        if (!heightField.acceptableInput) return
-        var height = parseInt(heightField.text)
+        if (!cropHeightField.acceptableInput) return
+        var height = parseInt(cropHeightField.text)
         if (!(height > 0)) return
-        var factor = view.ratioFactor(view.activeRatio)
+        var factor = view.ratioFactor(view.cropRatio)
         if (factor) {
-            widthField.text = String(Math.max(1, Math.min(20000,
+            cropWidthField.text = String(Math.max(1, Math.min(20000,
                     Math.round(height * factor.width / factor.height))))
         }
-        if (view.tool === "crop") {
-            view.applyCropAnchor()
-            cropPreset.currentIndex = view.matchingCropPreset()
-        } else {
-            sizePreset.currentIndex = view.matchingPreset()
-        }
+        view.applyCropAnchor()
+        cropPreset.currentIndex = view.matchingCropPreset()
     }
 
     /// Keep the fields on the selected ratio when the ratio itself is picked:
     /// a 16:9 choice with 1024 × 1024 typed must not leave a square pair on a
     /// 16:9 label. The first typed side wins, width first.
     function relinkFields() {
-        if (widthField.acceptableInput && parseInt(widthField.text) > 0) {
+        if (cropWidthField.acceptableInput && parseInt(cropWidthField.text) > 0) {
             view.linkHeightFromWidth()
-        } else if (heightField.acceptableInput && parseInt(heightField.text) > 0) {
+        } else if (cropHeightField.acceptableInput && parseInt(cropHeightField.text) > 0) {
             view.linkWidthFromHeight()
         }
     }
@@ -398,42 +364,32 @@ Item {
     /// hold a usable number; otherwise the document's own aspect is the honest
     /// fallback, because that is what the empty placeholders show.
     function captureCurrentRatio() {
-        var width = widthField.acceptableInput ? parseInt(widthField.text) : 0
-        var height = heightField.acceptableInput ? parseInt(heightField.text) : 0
+        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
+        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
         if (!(width > 0) || !(height > 0)) {
             if (!view.hasDocument) return
             width = view.documentWidth
             height = view.documentHeight
         }
-        var captured = { width: width, height: height }
-        if (view.tool === "crop") {
-            view.cropCurrentRatio = captured
-        } else {
-            view.resizeCurrentRatio = captured
-        }
+        view.cropCurrentRatio = { width: width, height: height }
     }
 
-    /// Select a ratio for the active tool and mirror it in the right dropdown.
-    /// The dropdown index is written imperatively because ComboBox owns
-    /// `currentIndex` itself. Picking "Keep current ratio" snapshots the pair before
-    /// relinking, so the fields the user is looking at become the locked shape.
+    /// Select Crop's ratio and mirror it in its dropdown. The dropdown index is
+    /// written imperatively because ComboBox owns `currentIndex` itself. Picking
+    /// "Keep current ratio" snapshots the pair before relinking, so the fields
+    /// the user is looking at become the locked shape.
     function setRatio(key) {
         if (key === "current") view.captureCurrentRatio()
-        if (view.tool === "crop") {
-            view.cropRatio = key
-            cropRatioBox.currentIndex = view.cropRatioIndex
-        } else {
-            view.resizeRatio = key
-            resizeRatioBox.currentIndex = view.resizeRatioIndex
-        }
+        view.cropRatio = key
+        cropRatioBox.currentIndex = view.cropRatioIndex
     }
 
-    /// One click of a field's +/- stepper. An empty or invalid field starts
+    /// One click of a crop field's +/- stepper. An empty or invalid field starts
     /// from the size its placeholder shows, so the first nudge moves the
     /// document's own dimension rather than jumping to 1. The other side
     /// follows the selected ratio exactly as typing it would, clamped to the
     /// same 1–20000 range the fields accept.
-    function stepField(field, delta, isWidth) {
+    function stepCropField(field, delta, isWidth) {
         var current = field.acceptableInput ? parseInt(field.text) : 0
         if (!(current > 0)) {
             current = Math.round(isWidth ? view.documentWidth : view.documentHeight)
@@ -448,47 +404,29 @@ Item {
         draftDebounce.restart()
     }
 
-    /// Apply one of the concrete sizes from Resize's dropdown. `onActivated`
-    /// calls this for a real pick; a programmatic `currentIndex` change (the
-    /// field/link code mirrors a matching size) must not re-apply it. The Crop
-    /// list is filtered by the document, so with `onCurrentIndexChanged` its
-    /// first fitting preset applied itself when a document arrived — into the
-    /// shared Width/Height fields, even while Resize was the visible tool.
-    function chooseResizePreset(index) {
-        if (index < 0 || index >= view.sizePresets.length) return
-        var preset = view.sizePresets[index]
-        widthField.text = String(preset.width)
-        heightField.text = String(preset.height)
-        view.setRatio(preset.ratio)
-        sizePreset.currentIndex = index
-        draftDebounce.restart()
-    }
-
-    /// The same for Crop: the preset changes the size *and* re-places the
-    /// rectangle through the selected anchor.
+    /// Apply one of the concrete sizes from Crop's dropdown. `onActivated` calls
+    /// this for a real pick; a programmatic `currentIndex` change (the field/link
+    /// code mirrors a matching size) must not re-apply it. The list is filtered
+    /// by the document, so with `onCurrentIndexChanged` its first fitting preset
+    /// applied itself when a document arrived and overwrote the fields.
     function chooseCropPreset(index) {
         if (index < 0 || index >= view.cropPresets.length) return
         var preset = view.cropPresets[index]
-        widthField.text = String(preset.width)
-        heightField.text = String(preset.height)
+        cropWidthField.text = String(preset.width)
+        cropHeightField.text = String(preset.height)
         view.setRatio(preset.ratio)
         cropPreset.currentIndex = index
         view.applyCropAnchor()
         draftDebounce.restart()
     }
 
-    function resizeFieldsValid() {
-        return !!view.hasDocument && widthField.acceptableInput && heightField.acceptableInput
-                && parseInt(widthField.text) > 0 && parseInt(heightField.text) > 0
-    }
-
-    /// A crop is only sendable when its rectangle really fits the document, so
-    /// Apply and the draft both answer the same question Core will ask.
     function cropFieldsValid() {
-        if (!resizeFieldsValid()) return false
+        if (!view.hasDocument || !cropWidthField.acceptableInput
+                || !cropHeightField.acceptableInput) return false
         if (!cropX.acceptableInput || !cropY.acceptableInput) return false
-        var width = parseInt(widthField.text)
-        var height = parseInt(heightField.text)
+        var width = parseInt(cropWidthField.text)
+        var height = parseInt(cropHeightField.text)
+        if (!(width > 0) || !(height > 0)) return false
         var x = parseInt(cropX.text)
         var y = parseInt(cropY.text)
         return x >= 0 && y >= 0
@@ -503,8 +441,8 @@ Item {
         return {
             x: cropX.acceptableInput ? parseInt(cropX.text) : 0,
             y: cropY.acceptableInput ? parseInt(cropY.text) : 0,
-            width: widthField.acceptableInput ? parseInt(widthField.text) : 0,
-            height: heightField.acceptableInput ? parseInt(heightField.text) : 0
+            width: cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0,
+            height: cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
         }
     }
     /// The quad is drawn on the source picture. A transform draft is the
@@ -546,13 +484,13 @@ Item {
     /// rectangle (typed, a preset, an anchor) is never overwritten.
     function seedCropFrame() {
         if (!view.documentReady) return
-        if (widthField.acceptableInput && parseInt(widthField.text) > 0) return
+        if (cropWidthField.acceptableInput && parseInt(cropWidthField.text) > 0) return
         var width = Math.max(1, Math.round(view.documentWidth * 0.8))
         var height = Math.max(1, Math.round(view.documentHeight * 0.8))
         cropX.text = String(Math.round((view.documentWidth - width) / 2))
         cropY.text = String(Math.round((view.documentHeight - height) / 2))
-        widthField.text = String(width)
-        heightField.text = String(height)
+        cropWidthField.text = String(width)
+        cropHeightField.text = String(height)
     }
 
     /// Write the four fields from a rectangle in document pixels, rounded and
@@ -566,10 +504,9 @@ Item {
         y = Math.max(0, Math.min(maxHeight - height, Math.round(y)))
         cropX.text = String(x)
         cropY.text = String(y)
-        widthField.text = String(width)
-        heightField.text = String(height)
-        // Mirror the pair in the preset dropdowns without re-applying it.
-        sizePreset.currentIndex = view.matchingPreset()
+        cropWidthField.text = String(width)
+        cropHeightField.text = String(height)
+        // Mirror the pair in the preset dropdown without re-applying it.
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
     }
@@ -606,24 +543,18 @@ Item {
     /// Ask Core to render the selected tool's draft without applying it. The
     /// debounce keeps a typed width from spawning a render per key: the previous
     /// draft stays on screen until the newest one lands. The draft carries its
-    /// tool, so a switch cannot paint the other tool's result.
+    /// tool, so a switch cannot paint the other tool's result. Resize's draft is
+    /// asked for by its dialog, which is the surface that owns those fields.
     function requestDraft() {
         draftDebounce.stop()
         if (!view.hasDocument) return
-        if (view.tool === "resize" && view.resizeLivePreview && view.resizeFieldsValid()) {
-            view.command({
-                type: "editor_resize_preview",
-                width: parseInt(widthField.text),
-                height: parseInt(heightField.text),
-                fill: view.resizePadFit ? view.colorRgb(view.resizeFillColor) : null
-            })
-        } else if (view.tool === "crop" && view.cropLivePreview && view.cropFieldsValid()) {
+        if (view.tool === "crop" && view.cropLivePreview && view.cropFieldsValid()) {
             view.command({
                 type: "editor_crop_preview",
                 x: parseInt(cropX.text),
                 y: parseInt(cropY.text),
-                width: parseInt(widthField.text),
-                height: parseInt(heightField.text)
+                width: parseInt(cropWidthField.text),
+                height: parseInt(cropHeightField.text)
             })
         } else if (view.tool === "transform" && view.transformLivePreview
                    && view.transformUsable() && view.transformChanged()) {
@@ -782,20 +713,51 @@ Item {
     /// presentation gating on purpose: Core keeps the draft until an edit lands
     /// or the document changes, and leaving the tool must hide it again without
     /// another command. The draft's own `kind` is checked as well, so a switch
-    /// from Crop to Resize cannot paint the crop result for a frame.
+    /// from Crop to Transform cannot paint the crop result for a frame. Resize
+    /// is not here: its draft belongs to its dialog and is drawn there.
     readonly property var previewDraft: {
         if (!editor || !editor.previewDraft) return null
         var draft = editor.previewDraft
-        if (tool === "resize" && resizeLivePreview && draft.kind === "resize") return draft
         if (tool === "crop" && cropLivePreview && draft.kind === "crop") return draft
         if (tool === "transform" && transformLivePreview
                 && draft.kind === "transform") return draft
         return null
     }
+    /// Core's newest resize draft, whether or not the dialog is open. The dialog
+    /// decides when it is worth drawing; the canvas never draws it, because a
+    /// modal form in front of the picture is where the user is looking.
+    readonly property var resizeDraft: {
+        if (!editor || !editor.previewDraft) return null
+        var draft = editor.previewDraft
+        return draft.kind === "resize" ? draft : null
+    }
+    /// True while the Resize dialog is up. It is the Editor's own modal, not one
+    /// the shell owns, so the canvas handlers read it directly: Qt delivers
+    /// pointer-handler events to items under a popup overlay, and a wheel or a
+    /// drag behind a modal form would move a picture the user cannot see.
+    readonly property bool resizeDialogOpen: resizeDialog.visible
+
+    /// Open Resize's dialog. Resize is a question about the document, not a
+    /// canvas mode, so any armed tool is put down first: a crop frame left
+    /// underneath a modal form would be dragged by the same pointer events the
+    /// dialog is meant to own.
+    function openResizeDialog() {
+        if (!view.documentReady) return
+        view.tool = "pointer"
+        resizeDialog.open()
+    }
     /// What the canvas draws: the draft's target size while an edit is being
     /// previewed, the document's own size otherwise.
     readonly property real displayedWidth: previewDraft ? previewDraft.width : documentWidth
     readonly property real displayedHeight: previewDraft ? previewDraft.height : documentHeight
+
+    /// The picture the Resize dialog shows before any draft lands: the
+    /// document's own preview, which Core publishes with the document.
+    readonly property string previewSource: {
+        if (previewDraft) return "file://" + previewDraft.path
+        if (editor && editor.previewPath) return "file://" + editor.previewPath
+        return ""
+    }
 
     // The document is drawn by a scaled `Image`, so a point in document pixels
     // sits `x * zoom` from the picture's visual corner. `Image.scale` grows
@@ -1187,13 +1149,16 @@ Item {
                     highlighted: view.tool === "pointer"
                     onClicked: view.tool = "pointer"
                 }
+                // Resize is not a mode: it opens a dialog, and the dialog's own
+                // buttons are the way out. The button stays lit while the form
+                // is up so the palette says where the question came from.
                 Button {
                     objectName: "toolResize"
                     Layout.fillWidth: true
-                    text: qsTr("Resize")
-                    highlighted: view.tool === "resize"
+                    text: qsTr("Resize…")
+                    highlighted: view.resizeDialogOpen
                     enabled: view.documentReady
-                    onClicked: view.tool = view.tool === "resize" ? "pointer" : "resize"
+                    onClicked: view.openResizeDialog()
                 }
                 Button {
                     objectName: "toolCrop"
@@ -1305,6 +1270,11 @@ Item {
             WheelHandler {
                 objectName: "editorWheelHandler"
                 acceptedDevices: PointerDevice.AllDevices
+                // A modal form owns the pointer while it is up: pointer-handler
+                // delivery still reaches handlers under a popup overlay, and a
+                // wheel behind the form would zoom a picture the user is not
+                // looking at.
+                enabled: !view.resizeDialogOpen
                 onWheel: function(event) {
                     if (!view.hasDocument) return;
                     var factor = 1;
@@ -1330,8 +1300,9 @@ Item {
                 // Arm on the picture only: a drag that begins on a sidebar or
                 // a scroll view must keep scrolling. While Crop or Transform
                 // is armed the left button belongs to the overlay's own
-                // handles and the frame; the middle button still pans.
-                enabled: view.panHover
+                // handles and the frame; the middle button still pans. The
+                // Resize dialog is modal, so no button pans behind it.
+                enabled: view.panHover && !view.resizeDialogOpen
                 acceptedDevices: PointerDevice.AllDevices
                 acceptedButtons: (view.tool === "crop" || view.tool === "transform")
                                  ? Qt.MiddleButton
@@ -1360,6 +1331,7 @@ Item {
             // A middle-click drag pans as well, the way every viewer does it.
             TapHandler {
                 acceptedButtons: Qt.LeftButton
+                enabled: !view.resizeDialogOpen
                 onDoubleTapped: view.toggleZoom()
             }
 
@@ -1861,10 +1833,11 @@ Item {
                         }
                     }
 
-                    // ------------------------------- resize/crop: tool options
-                    // The two tools share Width/Height; only the selected one
-                    // shows its own fields and Apply button. Reset clears the
-                    // fields without sending anything.
+                    // ------------------------------- crop/transform: tool options
+                    // Crop's rectangle has a size and a place; Resize asked the
+                    // same two-number question but as a dialog, because a size
+                    // is a decision, not a mode. Reset clears the fields without
+                    // sending anything.
                     ColumnLayout {
                         Layout.fillWidth: true
                         visible: view.tool !== "pointer"
@@ -1872,6 +1845,7 @@ Item {
 
                         GridLayout {
                             Layout.fillWidth: true
+                            visible: view.tool === "crop"
                             columns: 3
                             columnSpacing: 6
                             rowSpacing: 4
@@ -1915,8 +1889,8 @@ Item {
                                 color: view.theme.textMuted
                             }
                             TextField {
-                                id: widthField
-                                objectName: "widthField"
+                                id: cropWidthField
+                                objectName: "cropWidth"
                                 Layout.fillWidth: true
                                 font.pixelSize: 12
                                 placeholderText: view.hasDocument ? String(view.editor.width) : "0"
@@ -1937,7 +1911,7 @@ Item {
                                 spacing: 0
 
                                 Button {
-                                    objectName: "widthStepUp"
+                                    objectName: "cropWidthStepUp"
                                     implicitWidth: 24
                                     implicitHeight: 16
                                     padding: 0
@@ -1951,10 +1925,10 @@ Item {
                                     Accessible.name: qsTr("Increase width")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Increase width")
-                                    onClicked: view.stepField(widthField, 1, true)
+                                    onClicked: view.stepCropField(cropWidthField, 1, true)
                                 }
                                 Button {
-                                    objectName: "widthStepDown"
+                                    objectName: "cropWidthStepDown"
                                     implicitWidth: 24
                                     implicitHeight: 16
                                     padding: 0
@@ -1968,7 +1942,7 @@ Item {
                                     Accessible.name: qsTr("Decrease width")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Decrease width")
-                                    onClicked: view.stepField(widthField, -1, true)
+                                    onClicked: view.stepCropField(cropWidthField, -1, true)
                                 }
                             }
                             Label {
@@ -1976,8 +1950,8 @@ Item {
                                 color: view.theme.textMuted
                             }
                             TextField {
-                                id: heightField
-                                objectName: "heightField"
+                                id: cropHeightField
+                                objectName: "cropHeight"
                                 Layout.fillWidth: true
                                 font.pixelSize: 12
                                 placeholderText: view.hasDocument ? String(view.editor.height) : "0"
@@ -1992,7 +1966,7 @@ Item {
                                 spacing: 0
 
                                 Button {
-                                    objectName: "heightStepUp"
+                                    objectName: "cropHeightStepUp"
                                     implicitWidth: 24
                                     implicitHeight: 16
                                     padding: 0
@@ -2006,10 +1980,10 @@ Item {
                                     Accessible.name: qsTr("Increase height")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Increase height")
-                                    onClicked: view.stepField(heightField, 1, false)
+                                    onClicked: view.stepCropField(cropHeightField, 1, false)
                                 }
                                 Button {
-                                    objectName: "heightStepDown"
+                                    objectName: "cropHeightStepDown"
                                     implicitWidth: 24
                                     implicitHeight: 16
                                     padding: 0
@@ -2023,140 +1997,8 @@ Item {
                                     Accessible.name: qsTr("Decrease height")
                                     ToolTip.visible: hovered
                                     ToolTip.text: qsTr("Decrease height")
-                                    onClicked: view.stepField(heightField, -1, false)
+                                    onClicked: view.stepCropField(cropHeightField, -1, false)
                                 }
-                            }
-                        }
-
-                        // Resize: the ratio that links Width/Height, a list of
-                        // concrete sizes, and the optional pad-to-fit fill. No
-                        // anchor: where the result sits is a Crop decision.
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            spacing: 8
-
-                            Label {
-                                text: qsTr("Ratio")
-                                color: view.theme.textMuted
-                            }
-                            ComboBox {
-                                id: resizeRatioBox
-                                objectName: "resizeRatio"
-                                Layout.fillWidth: true
-                                model: view.sizeRatios
-                                textRole: "label"
-                                // Set imperatively: ComboBox owns currentIndex,
-                                // so a binding here would break on the first
-                                // pick. `setRatio` keeps the two in step.
-                                currentIndex: view.resizeRatioIndex
-                                Component.onCompleted: currentIndex = view.resizeRatioIndex
-                                onActivated: {
-                                    view.setRatio(view.sizeRatios[currentIndex].key)
-                                    view.relinkFields()
-                                    draftDebounce.restart()
-                                }
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            spacing: 2
-
-                            Label {
-                                text: qsTr("Size preset")
-                                color: view.theme.textMuted
-                            }
-                            ComboBox {
-                                id: sizePreset
-                                objectName: "sizePreset"
-                                Layout.fillWidth: true
-                                // Nothing is applied until the user activates
-                                // the list: `onCurrentIndexChanged` fires for a
-                                // programmatic index write too, and the Crop
-                                // list is rebuilt from the document (its first
-                                // row then wrote 2048 × 2048 into the shared
-                                // fields on open). The link code still mirrors
-                                // a matching size by writing `currentIndex`,
-                                // and that must not re-apply it.
-                                currentIndex: -1
-                                model: view.sizePresets
-                                textRole: "label"
-                                displayText: currentIndex < 0 ? qsTr("Custom") : currentText
-                                onActivated: view.chooseResizePreset(currentIndex)
-                            }
-                        }
-
-                        CheckBox {
-                            objectName: "padToFit"
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            text: qsTr("Pad to fit")
-                            checked: view.resizePadFit
-                            enabled: view.documentReady
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Keep the whole image in shape and fill the leftover with the fill color")
-                            onToggled: {
-                                view.resizePadFit = checked
-                                draftDebounce.restart()
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize" && view.resizePadFit
-                            spacing: 6
-
-                            Rectangle {
-                                objectName: "fillColorSwatch"
-                                Layout.preferredWidth: 24
-                                Layout.preferredHeight: 24
-                                radius: 4
-                                color: view.resizeFillColor
-                                border.width: 1
-                                border.color: view.theme.border
-                            }
-                            Button {
-                                objectName: "fillColorButton"
-                                text: qsTr("Fill color")
-                                onClicked: fillColorDialog.open()
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: view.resizeFillColor.toString()
-                                color: view.theme.textMuted
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize" && view.resizePadFit
-                            text: qsTr("Scales the whole image to fit and fills the leftover with this color.")
-                            color: view.theme.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Button {
-                            objectName: "livePreviewButton"
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            enabled: view.documentReady
-                            text: qsTr("Live preview")
-                            checkable: true
-                            checked: view.resizeLivePreview
-                            // Checked is the state; highlighted is the visible
-                            // one. A plain checked Button is too quiet on this
-                            // style, and "is the preview live?" must be obvious.
-                            highlighted: checked
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Show the resized image before applying it")
-                            onToggled: {
-                                view.resizeLivePreview = checked
-                                draftDebounce.restart()
                             }
                         }
 
@@ -2349,30 +2191,6 @@ Item {
                             spacing: 6
 
                             Button {
-                                objectName: "applyResize"
-                                text: qsTr("Apply")
-                                Layout.fillWidth: true
-                                visible: view.tool === "resize"
-                                enabled: view.documentReady
-                                         && widthField.acceptableInput
-                                         && heightField.acceptableInput
-                                         && parseInt(widthField.text) > 0
-                                         && parseInt(heightField.text) > 0
-                                onClicked: {
-                                    view.command({
-                                        type: "editor_resize",
-                                        width: parseInt(widthField.text),
-                                        height: parseInt(heightField.text),
-                                        fill: view.resizePadFit
-                                              ? view.colorRgb(view.resizeFillColor)
-                                              : null
-                                    })
-                                    widthField.text = ""
-                                    heightField.text = ""
-                                    sizePreset.currentIndex = -1
-                                }
-                            }
-                            Button {
                                 objectName: "applyCrop"
                                 text: qsTr("Apply crop")
                                 Layout.fillWidth: true
@@ -2383,14 +2201,13 @@ Item {
                                         type: "editor_crop",
                                         x: parseInt(cropX.text),
                                         y: parseInt(cropY.text),
-                                        width: parseInt(widthField.text),
-                                        height: parseInt(heightField.text)
+                                        width: parseInt(cropWidthField.text),
+                                        height: parseInt(cropHeightField.text)
                                     })
-                                    widthField.text = ""
-                                    heightField.text = ""
+                                    cropWidthField.text = ""
+                                    cropHeightField.text = ""
                                     cropX.text = "0"
                                     cropY.text = "0"
-                                    sizePreset.currentIndex = -1
                                     cropPreset.currentIndex = -1
                                 }
                             }
@@ -2414,11 +2231,10 @@ Item {
                                 text: qsTr("Reset")
                                 enabled: view.documentReady
                                 onClicked: {
-                                    widthField.text = ""
-                                    heightField.text = ""
+                                    cropWidthField.text = ""
+                                    cropHeightField.text = ""
                                     cropX.text = "0"
                                     cropY.text = "0"
-                                    sizePreset.currentIndex = -1
                                     cropPreset.currentIndex = -1
                                     view.resetTransformCorners()
                                 }
@@ -2441,14 +2257,36 @@ Item {
         }
     }
 
-    ColorDialog {
-        id: fillColorDialog
-        objectName: "fillColorDialog"
-        title: qsTr("Fill color")
-        selectedColor: view.resizeFillColor
-        onAccepted: {
-            view.resizeFillColor = selectedColor
-            draftDebounce.restart()
+    /// Resize is a dialog, not a tool: choosing a size is a question with a
+    /// beginning and an end, so the form owns its own fields and its own
+    /// preview while the document under it stays untouched. The palette button
+    /// opens it; nothing on the canvas changes mode.
+    ResizeDialog {
+        id: resizeDialog
+        objectName: "resizeDialog"
+        theme: view.theme
+        documentWidth: view.documentWidth
+        documentHeight: view.documentHeight
+        documentReady: view.documentReady
+        ratios: view.sizeRatios
+        presets: view.sizePresets
+        documentPreview: view.previewSource
+        draft: view.resizeDraft
+        onDraftRequested: function(width, height, fill) {
+            view.command({
+                type: "editor_resize_preview",
+                width: width,
+                height: height,
+                fill: fill
+            })
+        }
+        onResizeRequested: function(width, height, fill) {
+            view.command({
+                type: "editor_resize",
+                width: width,
+                height: height,
+                fill: fill
+            })
         }
     }
 

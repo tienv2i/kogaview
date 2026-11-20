@@ -38,7 +38,11 @@ editing surface (row 82): Crop's rectangle is now a frame you drag out on the
 picture, move from the inside and resize from eight handles, and a fourth tool,
 Transform, carries four source corners plus four edge handles so a keystoned
 photo can be straightened; both tools keep their typed fields as the same
-rectangle or quad and share the existing preview/Apply path in Core.
+rectangle or quad and share the existing preview/Apply path in Core. The latest
+session (row 83) turned Resize into a dialog of its own — the Settings pattern,
+with the form's live draft inside it — and made Discard reset the document before
+the workspace changes; without that reset Core still saw unsaved edits and the
+Editor reopened the old image after the user had already discarded them.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -58,6 +62,11 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   its handles, the four new QML cases, the new `editor-transform` harness
   request and the four screenshots. ADR 0011 records why the transform is a
   quad, why the output keeps the document's size and why it undoes by snapshot.
+  The resize-dialog session (row 83) is one commit on top: the new
+  `ResizeDialog.qml`, the Core/`Main.qml` half of the Discard fix, the crop
+  field renames, the tests, the `_ARG5=apply` hook and the three screenshots.
+  ADR 0012 records why a size is a dialog and ADR 0013 why Discard sends a reset
+  first.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -75,10 +84,11 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset,
   or a custom pair; `_ARG2` = an optional ratio key such as `current`; `_ARG3` =
   a fill colour that arms `Pad to fit`; `_ARG4` = stepper taps such as
-  `w+3,h-2`) clicks the real Resize tool button, applies the size through the
-  same helper the dropdown's selection calls (or writes the two fields for a
-  custom pair), arms the pad, clicks the stepper buttons and Live preview, and
-  `editor-crop` (`_ARG` =
+  `w+3,h-2`; `_ARG5=apply` presses the dialog's Apply) clicks the palette's
+  Resize button, which since row 83 opens the Resize **dialog**, waits for it
+  to open, fills it through the dialog's own helpers (or writes the two fields
+  for a custom pair), arms the pad, clicks the dialog's stepper buttons and
+  Live preview, and optionally presses Apply; `editor-crop` (`_ARG` =
   `WIDTHxHEIGHT`, `_ARG2` = an anchor key, default `center`) does the same for
   Crop including an anchor button — found by walking the item tree, because a
   `Repeater` delegate is not a QObject child. Both exist so the panel can be
@@ -87,7 +97,9 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   requests clicked the tool button unconditionally, and selecting a tool is a
   toggle, so a second `editor-resize` while Resize was already selected put the
   tool down and the request then wrote its fields into a Pointer panel. They now
-  click only while `highlighted` is false. The language
+  click only while `highlighted` is false — row 83 keeps that for Crop, and
+  Resize needs no guard at all because its button opens a dialog instead of
+  toggling a mode. The language
   follow-up changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now
   treats `isExposed()` as a hint (a covered window on this session reports
   itself unexposed while `grabWindow()` still renders), waiting up to 8 s and
@@ -183,6 +195,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 80 | A rejected command was still English in a Vietnamese window: `Main.qml` drew `result.error.message`, a sentence Core had built | `crates/app-protocol/src/lib.rs` (`UiText` beside `ProtocolError`, which gained `ui: Option<UiText>` and `line`/`with_line`; `None` where the detail is the platform's), `crates/app-core/src/state.rs` (re-export), `core.rs` (every refusal Core words itself publishes a line; `invalid_edit` keeps a journal sentence for crop/resize), `editor.rs` (validators and `apply`/`would_change` answer `UiText`), `ops.rs` (`safe_for_deletion`), `Main.qml` (toast draws `error.ui` first), `UiLines.qml` (32 cases), `i18n/kogaview_ts.pro` (`UiLines.qml`/`ToolbarMetrics.qml` were missing — the next `lupdate` would have marked their strings `vanished`), `scripts/check_translations.py` (a QML file that draws a string must be in the `.pro`), `i18n/kogaview_vi.ts` (32 strings), `tests/qml/tst_language.cpp` (2 cases), Core tests | `just test` 276 strings / 110 C++ / 272 drawn; cargo 70 + 4; language 7; real window: Vietnamese toast `Xuất đè lên tài liệu đang mở sẽ thay thế nó; hãy dùng Lưu` after the export dialog was pointed at the document itself (`docs/evidence/M1-rejection-vi.png`), journal `ok:false` `invalid_destination` + `ui.code export_onto_document`; 5 mutations, each caught |
 | 81 | Export always wrote the document at its own size: delivering a 27 MP picture at a web or phone size meant editing the document first, which is destructive and easy to forget | `crates/app-protocol/src/lib.rs` (`EditorExport.max_edge`), `crates/app-core/src/editor.rs` (`export_dimensions`, the long-edge rule; `export_pixels` takes the limit; `jpeg_metadata_segments` keeps each marker so a resized copy drops APP1 but keeps APP2/APP13), `core.rs` (`editor_export` passes it, `0`/absent = the document's size), `EditorView.qml` (`exportLongEdge`, `exportEdges`, `chooseExportSize`, an `Output size` row, an EXIF note), `cpp/main.cpp` (`_ARG4` + tool logging), `tests/qml/tst_editor.cpp`, Core tests, ADR 0004 | `just test` 280 strings / 110 C++ / 276 drawn; cargo 72 + 4; editor 37; real window: the Vietnamese `Kích thước xuất` combo reading `800 px cạnh dài`, and `phone.jpg` written at 600 × 800 from a 1200 × 1600 document that stayed 1200 × 1600 (`docs/evidence/M1-export-size-vi.png`, `-written.png`), journal rev 5, tool still `pointer`; 4 mutations, each caught |
 | 82 | Crop had no frame on the canvas to place its rectangle, and a photo shot at an angle could not be straightened at all | `crates/app-protocol/src/lib.rs` (`EditorTransform`/`EditorTransformPreview`), `crates/app-core/src/editor.rs` (the `Transform` operation, `validate_transform`, `square_to_quad`/`invert3`/`warp_quad`, snapshot undo), `core.rs` (`PreviewKind::Transform`, `editor_transform_preview`), `crates/desktop/qml/EditorView.qml` (a fourth tool, the crop frame with eight handles, the transform quad with four corners plus four edge handles, the pan dropping the left button while either is armed, `cropFrameShown`/`transformFrameShown`), `UiLines.qml` + `kogaview_vi.ts` (four lines and the history sentence), `cpp/main.cpp` (`editor-transform`), `tests/qml/tst_editor.cpp` (4 cases + the pan assertions), 6 Core tests | `just test` 293 strings / 110 C++ / 289 drawn; cargo 78 + 4; editor 41; real window: quad grabbed (`docs/evidence/M1-editor-transform-quad-vi.png`), live draft + the `Tắt Xem trước trực tiếp…` hint (`-live-vi.png`, journal `editor_transform_preview` rev 4), applied at `1200 × 1600` with Apply disabled again (`-applied-vi.png`, `editor_transform` rev 4), crop frame 512 × 384 at `bottom_right` (`M1-editor-crop-frame-vi.png`); 8 mutations, each caught |
+| 83 | Discard did not discard: after an unsaved edit, a Discard answer and another picture in the Viewer, the Editor reopened the old image. Resize was also an Inspector column even though a size is a question, not a mode | `crates/app-core/src/core.rs` (`SetWorkspace` keeps `previous` and passes `previous == Workspace::Viewer` to `link_viewer_into_editor`, which follows the Viewer's picture from the Viewer, keeps an open document from elsewhere and refuses an unsaved one; the test walks discard → viewer open → editor), `crates/desktop/qml/Main.qml` (`leaveAfterDiscard` sends `editor_reset` + the leave through `sendSequence`; quit exempt), `crates/desktop/qml/ResizeDialog.qml` (new modal form: its own fields/ratio/presets/pad/live preview, a draft preview inside the form with the stale-draft guard, theme-coloured switch labels), `crates/desktop/qml/EditorView.qml` (palette `Resize…` opens the dialog and keeps `tool` on `pointer`, the canvas no longer draws a resize draft, the crop fields renamed `cropWidth`/`cropHeight`), `crates/app-core/src/editor.rs` (`invert3` removed), `crates/desktop/build.rs`, `i18n/kogaview_ts.pro`, `i18n/kogaview_vi.ts` (25 new strings), `tests/qml/tst_editor.cpp`, `tests/qml/tst_settings.cpp` (the discard source guard), `cpp/main.cpp` (`_ARG5=apply`), ADR 0012, ADR 0013 | `just test` 299 strings / 110 C++ / 295 drawn; cargo 78 + 4; settings 15, editor 41; real window: the dialog with a live 1024 × 1024 draft and legible switches (`docs/evidence/M1-editor-resize-dialog-vi.png`), applied (journal `editor_resize` rev 7, `M1-editor-resize-applied-vi.png`), and the Discard sequence ending on `two.png` (`M1-discard-follows-viewer-vi.png`, journal `editor_reset` rev 9 → `set_workspace` rev 10 → `viewer_open` rev 12 → `set_workspace` rev 13); 5 mutations, each caught |
 
 ## Test gate
 
@@ -190,17 +203,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 293 strings in kogaview_vi.ts, 110 of them compiled into C++, 289 drawn by the QML, 4 looked up by context
+translations: 299 strings in kogaview_vi.ts, 110 of them compiled into C++, 295 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 78 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 41 · language 7 · toolbar 11
+viewer 37 · browser 45 · cache 15 · state 7 · settings 15 · editor 41 · language 7 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80 and 81 add no new warning
+`field_reassign_with_default`, `needless_return`); rows 80, 81 and 83 add no new warning
 (the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
@@ -459,6 +472,43 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   remain the ways to choose another size. Outside the quad the sampler clamps to
   the border pixel, so the leftover smears rather than turning transparent.
 
+## Design decisions, resize-dialog session (rows 83, ADR 0012 and 0013)
+
+- **A size is a question, not a mode.** `ResizeDialog.qml` owns the form, its
+  fields, its ratio and preset lists, its pad and its Live preview toggle, and
+  resets them from the document every time it opens. The palette's `Resize…`
+  opens it and keeps `view.tool` on `pointer`; the button stays highlighted
+  while the dialog is up, so the palette still says where the question came
+  from. Crop and Transform stay inspector tools because their answers are drawn
+  on the picture.
+- **The dialog shows the draft; the canvas does not.** A resize draft is painted
+  inside the form's own preview and only while its toggle is on; the canvas never
+  draws one, so closing or cancelling needs no repaint. `ignoredDraft` keeps a
+  draft published before this visit from appearing as this visit's answer, and
+  the `kind` check keeps a stray crop draft out.
+- **One document, two tool columns.** Removing Resize from the Inspector meant
+  the shared Width/Height fields had no second user, so they and the steppers
+  became `cropWidthField`/`cropHeightField` and `stepCropField` with
+  `cropWidthStepUp`-style names. The dialog has its own pair; nothing is shared
+  between a closed form and an armed tool.
+- **The dialog sizes itself.** `height` is the header (52) plus the footer (60)
+  plus the content column plus its 40 px margins, capped at the window; a fixed
+  height left a blank page under the footer in English and clipped a wrapped
+  Vietnamese sentence. `ScrollBar.AsNeeded` is how a short window says the form
+  continues below.
+- **The switches are drawn in the theme's colour.** A Popup created inside the
+  workspace Loader resolves the platform's light palette, and this Qt build
+  ignores a QML `palette` write on a `CheckBox`, so both labels were
+  dark-on-dark. They now use a `Text` content item with `theme.text` (and
+  `textMuted` when disabled) and keep the style's indicator. The form's fields
+  and buttons still use the platform's own light boxes, as they did before.
+- **Discard is two commands in order.** The shell sends `editor_reset` and then
+  the leave through `sendSequence`; Core refuses to replace an unsaved document,
+  so a reset that arrived later would be too late for the workspace switch it
+  belongs to. Quit skips the reset. A switch *from the Viewer* follows the
+  Viewer even when a saved document is open; a switch from anywhere else keeps
+  the open document, which is ADR 0013's whole rule.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -597,6 +647,20 @@ hard-coded to 1 → `downMovesByOneGridRow` fails (it compared the cell to the r
 with the cell below); dropping `!event.isAutoRepeat` from the Delete branch →
 that view's Delete test fails on the synthetic repeat event (viewer and browser
 re-run separately). All restored, then `just test` green.
+
+Resize dialog and Discard: passing `false` for `from_viewer` →
+`switching_to_the_editor_carries_the_viewer_image` fails with
+`left: …/one.png, right: …/two.png`, which is the reported bug; dropping
+`editor_reset` from `leaveAfterDiscard` →
+`theDiscardAnswerResetsTheDocumentBeforeLeaving` fails with "Discard leaves the
+document modified"; making `openResizeDialog` also set `tool = "resize"` → 13
+editor cases fail (the dialog's fields are only visible with the form, and a
+resize tool would draw its own panel); removing the `livePreview` gate from
+`shownDraft` → `theLivePreviewShowsTheDraftWithoutApplyingIt` fails with the
+preview's `source` not ending in `preview-1.png` (a draft drawn while the toggle
+is off); pinning one switch label to the light-theme literal `#1c1f24` →
+`theResizeDialogStartsFromTheDocumentSize` fails on the colour comparison. Each
+restored, then the suite green.
 
 ## Design decisions, export-size session (ADR 0004)
 
@@ -740,6 +804,21 @@ re-run separately). All restored, then `just test` green.
   the grab the frame's two horizontal borders are 195 px apart and it is 261 px
   wide at 0.51 zoom (= 384 and 512 document pixels); the accent-colour bounding
   box also picks up the eight handles, so the box itself measures 269 × 203.
+- **No hand pressed Discard or the dialog's buttons.** The real-window run
+  answered the guard through `KOGAVIEW_DEV_UI_REQUEST=leave-guard`/`_ARG2=discard`
+  and pressed Apply through `_ARG5=apply`; both call the same QML handlers and
+  both commands reached the journal, but no pointer was on the window. The
+  discard sequence itself is proven by the journal order, and by Core's test
+  walking the same commands.
+- **The short-window scroll bar was not photographed.** The dialog was captured
+  at 1472 × 943, where its natural height fits; the `ScrollBar.AsNeeded` case
+  (a window shorter than the form with `Pad to fit` armed) rests on the QML
+  fit assertion in `tst_editor` at the 1100 × 700 test host, not on a grab.
+- **The palette fix is two switches, not a sweep.** A Popup built inside the
+  workspace `Loader` resolves the platform palette, and this Qt build ignores a
+  QML `palette` write on a `CheckBox`; only `ResizeDialog`'s two labels were
+  changed to a `Text` content item with the theme colour. The Editor's export
+  dialog and any other popup keep whatever the style gives them.
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
 
@@ -760,7 +839,7 @@ the instance reported `profile="prod"`. The owner's own configuration and the
 `image/jpeg` default handler were not touched.
 
 The prefix binary was **not** reinstalled for the keyboard commit or any
-follow-up since; it predates rows 66 and 77–82 until the next `just install-dev`
+follow-up since; it predates rows 66 and 77–83 until the next `just install-dev`
 (or `just install`). The keyboard, tooltip, menu, export and canvas evidence all
 comes from `build/dev/bin/kogaview`.
 

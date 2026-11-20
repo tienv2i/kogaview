@@ -604,14 +604,18 @@ impl Core {
                 Ok(None)
             }
             Command::SetWorkspace { workspace } => {
+                let previous = self.state.workspace;
                 self.state.workspace = workspace;
                 match workspace {
                     Workspace::Viewer => self.ensure_viewer_selection(),
                     // The Viewer and the Editor are one photograph seen two
                     // ways: arriving at an empty Editor carries the image the
-                    // Viewer shows. A document the user already opened wins,
-                    // so returning from the Browser does not reload it.
-                    Workspace::Editor => self.link_viewer_into_editor(),
+                    // Viewer shows, and arriving from the Viewer carries the
+                    // image it shows *now*. A switch from any other workspace
+                    // keeps the document the user already has.
+                    Workspace::Editor => {
+                        self.link_viewer_into_editor(previous == Workspace::Viewer)
+                    }
                     Workspace::Browser => {}
                 }
                 // Leaving the Editor while a document is still open keeps the
@@ -1577,15 +1581,17 @@ impl Core {
         true
     }
 
-    /// Carrying the Viewer's photograph into an empty Editor. Only when there
-    /// is nothing open: an in-progress document is never replaced by a
-    /// workspace switch.
-    fn link_viewer_into_editor(&mut self) {
-        // A document open in the Editor wins over the Viewer: a switch must not
-        // throw away in-progress work, saved or not.
-        if self.editor.is_some() {
-            return;
-        }
+    /// Carrying the Viewer's photograph into the Editor. A switch from the
+    /// Viewer is explicit about which picture is on screen, so the Editor
+    /// follows it even when a different document is still open — opening
+    /// another image in the Viewer and coming back must not resurrect the old
+    /// one. A switch from anywhere else carries an image only into an empty
+    /// Editor, because the document already open is the one the user chose.
+    ///
+    /// Unsaved edits are never replaced by a switch: the window's
+    /// unsaved-changes guard owns that decision, and its Discard answer resets
+    /// the document (making it saved) before the workspace changes.
+    fn link_viewer_into_editor(&mut self, from_viewer: bool) {
         let path = match self.state.viewer_path.clone() {
             Some(path) => path,
             // A freshly opened folder has no viewer path until the Viewer was
@@ -1595,6 +1601,20 @@ impl Core {
                 _ => return,
             },
         };
+        if let Some(editor) = &self.state.editor {
+            let same = ops::normalize_path(Path::new(&editor.path))
+                == ops::normalize_path(Path::new(&path));
+            if same || !from_viewer {
+                return;
+            }
+        }
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|document| !document.save_target().1)
+        {
+            return;
+        }
         if !editor::has_decoder(Path::new(&path)) {
             self.state.status = UiText::with("no_decoder", [path]);
             return;
@@ -1603,6 +1623,7 @@ impl Core {
         tracing::debug!(
             target: "kogaview::editor",
             %path,
+            from_viewer,
             ok = opened.is_ok(),
             "linked the viewer image into the editor"
         );
@@ -3394,6 +3415,8 @@ mod tests {
         write_png(&base.join("two.png"), 12, 12);
         let mut core = Core::for_test(&base.join("runtime"));
         let folder = base.to_string_lossy().into_owned();
+        let one = base.join("one.png").to_string_lossy().into_owned();
+        let two = base.join("two.png").to_string_lossy().into_owned();
         dispatch_json(
             &mut core,
             "open-1",
@@ -3405,8 +3428,7 @@ mod tests {
             "viewer-1",
             r#"{"type":"set_workspace","workspace":"viewer"}"#,
         );
-        assert!(core.state.viewer_path.is_some(), "the viewer needs a path");
-        let shown = core.state.viewer_path.clone().unwrap();
+        assert_eq!(core.state.viewer_path.as_deref(), Some(one.as_str()));
 
         // The workspace switcher alone: no `editor_open` anywhere in the user's action.
         let response = dispatch_json(
@@ -3420,7 +3442,7 @@ mod tests {
             .editor
             .as_ref()
             .expect("the editor must open the viewed image");
-        assert_eq!(editor.path, shown);
+        assert_eq!(editor.path, one);
         assert!(settle_editor(&mut core));
         assert_eq!(
             core.state.status.code, "editing",
@@ -3429,8 +3451,8 @@ mod tests {
         );
         assert_eq!(core.state.status.args[0], "one.png");
 
-        // A second switch back does not reload, and a document already open
-        // wins over the Viewer's current image.
+        // A second switch back keeps the document, and so does a switch that
+        // came from the Browser rather than the Viewer.
         let kept = core.state.editor.as_ref().unwrap().path.clone();
         dispatch_json(
             &mut core,
@@ -3448,6 +3470,78 @@ mod tests {
             r#"{"type":"set_workspace","workspace":"editor"}"#,
         );
         assert_eq!(core.state.editor.as_ref().unwrap().path, kept);
+
+        // Opening another picture in the Viewer and coming back shows that
+        // picture, not the document that happened to be open before. This is
+        // the reported bug: the Editor kept resurrecting the old image.
+        dispatch_json(
+            &mut core,
+            "viewer-2",
+            r#"{"type":"set_workspace","workspace":"viewer"}"#,
+        );
+        dispatch_json(
+            &mut core,
+            "viewer-open",
+            &format!(r#"{{"type":"viewer_open","path":{two:?}}}"#),
+        );
+        assert_eq!(core.state.viewer_path.as_deref(), Some(two.as_str()));
+        dispatch_json(
+            &mut core,
+            "editor-3",
+            r#"{"type":"set_workspace","workspace":"editor"}"#,
+        );
+        assert_eq!(
+            core.state.editor.as_ref().unwrap().path,
+            two,
+            "the editor kept the old document instead of the viewed picture"
+        );
+        assert!(settle_editor(&mut core));
+        assert_eq!(core.state.status.args[0], "two.png");
+
+        // Unsaved work is not thrown away by a switch: the window's save /
+        // discard question owns that decision.
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+        assert!(core.state.editor.as_ref().unwrap().modified);
+        dispatch_json(
+            &mut core,
+            "viewer-3",
+            r#"{"type":"set_workspace","workspace":"viewer"}"#,
+        );
+        dispatch_json(
+            &mut core,
+            "viewer-open-2",
+            &format!(r#"{{"type":"viewer_open","path":{one:?}}}"#),
+        );
+        dispatch_json(
+            &mut core,
+            "editor-4",
+            r#"{"type":"set_workspace","workspace":"editor"}"#,
+        );
+        assert_eq!(
+            core.state.editor.as_ref().unwrap().path,
+            two,
+            "a switch replaced a document with unsaved edits"
+        );
+
+        // Discard (the window sends `editor_reset` before leaving) makes the
+        // document saved again, so the next switch follows the Viewer.
+        dispatch_json(&mut core, "reset-1", r#"{"type":"editor_reset"}"#);
+        assert!(!core.state.editor.as_ref().unwrap().modified);
+        dispatch_json(
+            &mut core,
+            "viewer-4",
+            r#"{"type":"set_workspace","workspace":"viewer"}"#,
+        );
+        dispatch_json(
+            &mut core,
+            "editor-5",
+            r#"{"type":"set_workspace","workspace":"editor"}"#,
+        );
+        assert_eq!(core.state.editor.as_ref().unwrap().path, one);
         remove_tree(&base);
     }
 

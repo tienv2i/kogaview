@@ -324,9 +324,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //   KOGAVIEW_DEV_UI_REQUEST=settings          -> `openSettings()` on the shell,
   //     the same function the "Settings…" menu entry calls, for a screenshot of
   //     the dialog
-  //   KOGAVIEW_DEV_UI_REQUEST=editor-resize     -> click the Resize tool, fill
-  //     its fields from a preset (or a typed pair), optionally arm the pad and
-  //     the steppers, then click Live preview
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-resize     -> open the Resize dialog from
+  //     the palette button, fill its fields from a preset (or a typed pair),
+  //     optionally arm the pad and the steppers, then click Live preview
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
   //     one of the nine anchor buttons (`_ARG3=plain` leaves Live preview off,
   //     which is when the canvas frame is drawn)
@@ -472,7 +472,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         qInfo().noquote() << "KogaView dev ui request leave-guard"
                           << (emitted ? "handled" : "not found");
       } else if (uiRequest == QLatin1String("editor-resize")) {
-        // The Resize panel without a pointer: the tool button and the live
+        // The Resize dialog without a pointer: the palette button and the live
         // preview toggle are `click()`ed (the same handler a press runs), and
         // the size dropdown is written the way its own selection writes it.
         // `_ARG` is WIDTHxHEIGHT of a preset (default 1024x1024), or a custom
@@ -497,13 +497,28 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qWarning() << "KogaView dev ui request: Resize tool button missing";
           return;
         }
-        // Selecting a tool is a toggle: a second click on the selected tool
-        // puts it down again. This request means "the Resize panel", so it
-        // clicks only while Resize is not already the selected tool.
-        if (!tool->property("highlighted").toBool()) {
-          QMetaObject::invokeMethod(tool, "click");
+        // Resize is a modal form: the palette button opens it and `opened`
+        // lands on the next frame, so the hook waits for the state a hand
+        // would see before writing the form. Clicking again would only close
+        // it again, which is why this is not a toggle any more.
+        QMetaObject::invokeMethod(tool, "click");
+        QObject* dialog = editor->findChild<QObject*>(QStringLiteral("resizeDialog"));
+        if (dialog == nullptr) {
+          dialog = rootObject->findChild<QObject*>(QStringLiteral("resizeDialog"));
         }
-        const QVariantList presets = editor->property("sizePresets").toList();
+        if (dialog == nullptr) {
+          qWarning() << "KogaView dev ui request: Resize dialog missing";
+          return;
+        }
+        for (int wait = 0; wait < 100 && !dialog->property("opened").toBool(); ++wait) {
+          QCoreApplication::processEvents();
+          QTest::qWait(10);
+        }
+        if (!dialog->property("opened").toBool()) {
+          qWarning() << "KogaView dev ui request: Resize dialog did not open";
+          return;
+        }
+        const QVariantList presets = dialog->property("presets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
           const QVariantMap entry = presets.at(i).toMap();
@@ -517,47 +532,47 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           // The combo applies a preset from `onActivated`, which a programmatic
           // `currentIndex` write does not emit; call the same helper the user's
           // selection calls.
-          QMetaObject::invokeMethod(editor, "chooseResizePreset",
+          QMetaObject::invokeMethod(dialog, "choosePreset",
                                     Q_ARG(QVariant, QVariant(index)));
         } else {
           // A custom pair: write the fields the way typing does, so a ratio
           // such as `current` can snapshot it.
-          auto setField = [editor](const char* name, int value) {
-            QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
+          auto setField = [dialog](const char* name, int value) {
+            QObject* field = dialog->findChild<QObject*>(QString::fromLatin1(name));
             if (field != nullptr) {
               field->setProperty("text", QString::number(value));
             }
           };
-          setField("widthField", wantedWidth);
-          setField("heightField", wantedHeight);
+          setField("resizeWidth", wantedWidth);
+          setField("resizeHeight", wantedHeight);
           qInfo() << "KogaView dev ui request: custom size" << size << "(no preset)";
         }
         if (!ratioKey.isEmpty()) {
-          QMetaObject::invokeMethod(editor, "setRatio",
+          QMetaObject::invokeMethod(dialog, "setRatio",
                                     Q_ARG(QVariant, QVariant(ratioKey)));
-          QMetaObject::invokeMethod(editor, "relinkFields");
+          QMetaObject::invokeMethod(dialog, "relinkFields");
         }
         if (!fillArg.isEmpty()) {
-          QObject* pad = editor->findChild<QObject*>(QStringLiteral("padToFit"));
+          QObject* pad = dialog->findChild<QObject*>(QStringLiteral("resizePadToFit"));
           if (pad != nullptr && !pad->property("checked").toBool()) {
             QMetaObject::invokeMethod(pad, "click");
           }
           const QString color = fillArg.startsWith(QLatin1Char('#'))
                                   ? fillArg
                                   : QLatin1Char('#') + fillArg;
-          editor->setProperty("resizeFillColor", QColor(color));
+          dialog->setProperty("fillColor", QColor(color));
           qInfo() << "KogaView dev ui request: pad fill" << color << "armed"
-                  << editor->property("resizePadFit");
+                  << dialog->property("padFit");
         }
         if (!stepArg.isEmpty()) {
-          auto clickSteps = [editor](const QString& tap) {
+          auto clickSteps = [dialog](const QString& tap) {
             if (tap.size() < 3) return;
             const bool width = tap.at(0) == QLatin1Char('w');
             const bool up = tap.at(1) == QLatin1Char('+');
             const int count = tap.mid(2).toInt();
-            const char* name = width ? (up ? "widthStepUp" : "widthStepDown")
-                                     : (up ? "heightStepUp" : "heightStepDown");
-            QObject* button = editor->findChild<QObject*>(QString::fromLatin1(name));
+            const char* name = width ? (up ? "resizeWidthStepUp" : "resizeWidthStepDown")
+                                     : (up ? "resizeHeightStepUp" : "resizeHeightStepDown");
+            QObject* button = dialog->findChild<QObject*>(QString::fromLatin1(name));
             if (button == nullptr) return;
             for (int i = 0; i < count; ++i) {
               QMetaObject::invokeMethod(button, "click");
@@ -566,22 +581,33 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           for (const QString& tap : stepArg.split(QLatin1Char(','))) {
             clickSteps(tap.trimmed());
           }
-          auto fieldText = [editor](const char* name) {
-            QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
+          auto fieldText = [dialog](const char* name) {
+            QObject* field = dialog->findChild<QObject*>(QString::fromLatin1(name));
             return field != nullptr ? field->property("text") : QVariant();
           };
           qInfo() << "KogaView dev ui request: stepped" << stepArg << "to"
-                  << fieldText("widthField") << "×" << fieldText("heightField");
+                  << fieldText("resizeWidth") << "×" << fieldText("resizeHeight");
         }
-        QObject* live = editor->findChild<QObject*>(QStringLiteral("livePreviewButton"));
+        QObject* live = dialog->findChild<QObject*>(QStringLiteral("resizeLivePreview"));
         if (live != nullptr) {
           QMetaObject::invokeMethod(live, "click");
         }
         qInfo().noquote() << "KogaView dev ui request editor-resize" << size
                           << "preset" << index << "ratio"
-                          << editor->property("resizeRatio") << "tool"
+                          << dialog->property("ratio") << "tool"
                           << editor->property("tool") << "live"
-                          << editor->property("resizeLivePreview");
+                          << dialog->property("livePreview");
+        // `_ARG5=apply` presses the dialog's own Apply after the form is filled,
+        // so the real `editor_resize` reaches Core and the document changes.
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5") == QLatin1String("apply")) {
+          QObject* apply = dialog->findChild<QObject*>(QStringLiteral("resizeApply"));
+          const bool armed = apply != nullptr && apply->property("enabled").toBool();
+          if (armed) {
+            QMetaObject::invokeMethod(apply, "click");
+          }
+          qInfo() << "KogaView dev ui request editor-resize apply" << (armed ? "pressed" : "disabled")
+                  << "dialog open" << dialog->property("opened");
+        }
         emitted = live != nullptr;
       } else if (uiRequest == QLatin1String("editor-crop")) {
         // The Crop panel without a pointer: the tool button, an anchor button
@@ -665,7 +691,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << editor->property("cropLivePreview") << "frame"
                           << editor->property("cropFrameShown") << "rect"
                           << fieldText("cropX") << fieldText("cropY")
-                          << fieldText("widthField") << fieldText("heightField");
+                          << fieldText("cropWidth") << fieldText("cropHeight");
         emitted = live != nullptr && index >= 0 && anchorButton != nullptr;
       } else if (uiRequest == QLatin1String("editor-transform")) {
         // The Transform quad without a pointer: the tool button is clicked,

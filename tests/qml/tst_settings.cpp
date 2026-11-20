@@ -58,6 +58,7 @@ private slots:
   void cancelUndoesThePreview();
   void theCloseButtonStillClicksThroughTheDragHandler();
   void theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen();
+  void theDiscardAnswerResetsTheDocumentBeforeLeaving();
 
 private:
   /// The dialog is a `Popup`: its header, content and buttons are QObjects of
@@ -453,6 +454,38 @@ void TestSettings::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen()
              qPrintable(QStringLiteral("%1 does not suspend the workspace")
                           .arg(QLatin1String(dialog))));
   }
+}
+
+/// The Discard answer to the unsaved-changes question has to drop the edits for
+/// real, and it has to do it *before* the workspace changes. Core compares the
+/// open document with the Viewer's picture and refuses to replace a modified
+/// one, so without this `editor_reset` the Editor reopened the old image after
+/// the user had already said Discard (the reported bug). The other half — what
+/// Core does with the two commands — is
+/// `core::tests::switching_to_the_editor_carries_the_viewer_image`.
+void TestSettings::theDiscardAnswerResetsTheDocumentBeforeLeaving()
+{
+  QFile main(qmlDir() + QStringLiteral("/Main.qml"));
+  QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+  const QString source = QString::fromUtf8(main.readAll());
+
+  const int start = source.indexOf(QStringLiteral("function leaveAfterDiscard()"));
+  QVERIFY2(start >= 0, "Main.qml has no leaveAfterDiscard");
+  const int end = source.indexOf(QStringLiteral("\n    }"), start);
+  QVERIFY2(end > start, "leaveAfterDiscard never closes");
+  const QString body = source.mid(start, end - start);
+
+  const int reset = body.indexOf(QStringLiteral("editor_reset"));
+  QVERIFY2(reset >= 0, "Discard leaves the document modified");
+  // Order inside one `sendSequence` call, which is what the gateway preserves:
+  // the reset is the first command, the workspace change the second.
+  QVERIFY2(body.contains(QStringLiteral(
+               "sendSequence([{ type: \"editor_reset\" }, following])")),
+           "Discard did not send the reset before the workspace change");
+  // Quitting is the exception: the document does not survive the window, and
+  // reverting it first would write a preview for a process that is leaving.
+  const int quit = body.indexOf(QStringLiteral("runLeave(\"quit\")"));
+  QVERIFY2(quit >= 0 && quit < reset, "the quit path resets the document first");
 }
 
 QTEST_MAIN(TestSettings)

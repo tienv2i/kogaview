@@ -979,32 +979,6 @@ fn square_to_quad(corners: &[[f64; 2]; 4]) -> [[f64; 3]; 3] {
     ]
 }
 
-/// The inverse of a 3 × 3 matrix, or `None` when it has none.
-fn invert3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
-    let [[a, b, c], [d, e, f], [g, h, i]] = matrix;
-    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-    if determinant.abs() < 1e-12 {
-        return None;
-    }
-    let scale = 1.0 / determinant;
-    Some([
-        [
-            (e * i - f * h) * scale,
-            (c * h - b * i) * scale,
-            (b * f - c * e) * scale,
-        ],
-        [
-            (f * g - d * i) * scale,
-            (a * i - c * g) * scale,
-            (c * d - a * f) * scale,
-        ],
-        [
-            (d * h - e * g) * scale,
-            (b * g - a * h) * scale,
-            (a * e - b * d) * scale,
-        ],
-    ])
-}
 /// Warp `image` so the quad becomes the whole frame, keeping the frame's size.
 ///
 /// Each destination pixel centre is a point in the unit square; the homography
