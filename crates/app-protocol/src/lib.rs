@@ -366,17 +366,123 @@ pub enum Query {
     State,
 }
 
+/// A line meant for the interface, with its wording kept out of Core.
+///
+/// Core knows *what* happened — a folder loaded, a resize was applied, a
+/// destination was rejected — and the interface knows *how to say it* in the
+/// current language. Publishing a `code` plus positional `args` instead of a
+/// formatted English sentence is what lets the QML translate at the edge, where
+/// the active translator lives. The codes are part of the published contract:
+/// `crates/desktop/qml/UiLines.qml` is the one place that maps them to
+/// sentences, and an unknown code falls back to joining its arguments so a
+/// newer Core cannot blank the status bar.
+///
+/// It lives in the protocol crate rather than Core because a command *result*
+/// carries one too — both the success line and the error line travel over the
+/// same wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiText {
+    pub code: String,
+    pub args: Vec<String>,
+}
+
+impl UiText {
+    /// A line with no arguments.
+    pub fn new(code: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            args: Vec::new(),
+        }
+    }
+
+    /// A line whose sentence is completed by the given positional arguments.
+    pub fn with(code: &str, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            code: code.to_owned(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// The empty line, used to hide the status bar's message.
+    pub fn empty() -> Self {
+        Self::new("")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.code.is_empty()
+    }
+
+    /// The English rendering used by the command journal, the structured log
+    /// and any front end that has no translator: the code with its underscores
+    /// opened up, followed by the arguments.
+    ///
+    /// It is deliberately mechanical rather than a second table of sentences:
+    /// the interface's wording lives in the QML (one `qsTr` per code), and a
+    /// paraphrase here would be a translation nobody maintains. A reader of
+    /// `journal/commands.jsonl` has the command name next to it, so
+    /// `editor_export` + `exporting pic-export.jpg` reads unambiguously.
+    pub fn english(&self) -> String {
+        if self.code.is_empty() {
+            return String::new();
+        }
+        let mut text = self.code.replace('_', " ");
+        for argument in &self.args {
+            text.push(' ');
+            text.push_str(argument);
+        }
+        text
+    }
+}
+
+/// A rejected command.
+///
+/// `code` and `message` are contract: the code is the stable machine name a
+/// client branches on, the message is the English sentence the journal and the
+/// structured log record. `ui` is the same rejection as a translatable line, so
+/// the window can say it in its own language instead of printing English in a
+/// Vietnamese interface. It is `None` where the detail *is* the platform's text
+/// (an OS error, a filesystem path) — there is nothing to translate there, and
+/// inventing a sentence would hide the real cause.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProtocolError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiText>,
 }
 
 impl ProtocolError {
+    /// A rejection whose detail is not translatable: an OS error, an invalid
+    /// envelope, a path the filesystem named.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
+            ui: None,
+        }
+    }
+
+    /// A rejection the interface words itself, with an explicit English
+    /// message for the journal (the sentence a reader of the log wants, which
+    /// is not always the mechanical rendering of the line).
+    pub fn with_line(code: impl Into<String>, message: impl Into<String>, line: UiText) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            ui: Some(line),
+        }
+    }
+
+    /// A rejection the interface words itself, where those words are also the
+    /// journal's: the message is the line's English rendering.
+    pub fn line(code: impl Into<String>, line: UiText) -> Self {
+        let code = code.into();
+        let message = line.english();
+        Self {
+            code,
+            message,
+            ui: Some(line),
         }
     }
 }

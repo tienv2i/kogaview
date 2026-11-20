@@ -6,69 +6,10 @@
 use kogaview_protocol::{Language, Theme, Workspace};
 use serde::Serialize;
 
-/// A line meant for the interface, with its wording kept out of Core.
-///
-/// Core knows *what* happened — a folder loaded, a resize was applied — and the
-/// interface knows *how to say it* in the current language. Publishing a `code`
-/// plus positional `args` instead of a formatted English sentence is what lets
-/// the QML translate at the edge, where the active translator lives. The codes
-/// are part of the published contract: `crates/desktop/qml/UiLines.qml` is the
-/// one place that maps them to sentences, and an unknown code falls back to
-/// joining its arguments so a newer Core cannot blank the status bar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UiText {
-    pub code: String,
-    pub args: Vec<String>,
-}
-
-impl UiText {
-    /// A line with no arguments.
-    pub fn new(code: &str) -> Self {
-        Self {
-            code: code.to_owned(),
-            args: Vec::new(),
-        }
-    }
-
-    /// A line whose sentence is completed by the given positional arguments.
-    pub fn with(code: &str, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            code: code.to_owned(),
-            args: args.into_iter().map(Into::into).collect(),
-        }
-    }
-
-    /// The empty line, used to hide the status bar's message.
-    pub fn empty() -> Self {
-        Self::new("")
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.code.is_empty()
-    }
-
-    /// The English rendering used by the command journal, the structured log
-    /// and any front end that has no translator: the code with its underscores
-    /// opened up, followed by the arguments.
-    ///
-    /// It is deliberately mechanical rather than a second table of sentences:
-    /// the interface's wording lives in the QML (one `qsTr` per code), and a
-    /// paraphrase here would be a translation nobody maintains. A reader of
-    /// `journal/commands.jsonl` has the command name next to it, so
-    /// `editor_export` + `exporting pic-export.jpg` reads unambiguously.
-    pub fn english(&self) -> String {
-        if self.code.is_empty() {
-            return String::new();
-        }
-        let mut text = self.code.replace('_', " ");
-        for argument in &self.args {
-            text.push(' ');
-            text.push_str(argument);
-        }
-        text
-    }
-}
+// The line shape is part of the protocol: both a successful command result and
+// a rejected one carry one, so it lives next to `ProtocolError` and Core only
+// re-exports it.
+pub use kogaview_protocol::UiText;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -491,7 +491,12 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qWarning() << "KogaView dev ui request: Resize tool button missing";
           return;
         }
-        QMetaObject::invokeMethod(tool, "click");
+        // Selecting a tool is a toggle: a second click on the selected tool
+        // puts it down again. This request means "the Resize panel", so it
+        // clicks only while Resize is not already the selected tool.
+        if (!tool->property("highlighted").toBool()) {
+          QMetaObject::invokeMethod(tool, "click");
+        }
         const QVariantList presets = editor->property("sizePresets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
@@ -594,7 +599,10 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qWarning() << "KogaView dev ui request: Crop tool button missing";
           return;
         }
-        QMetaObject::invokeMethod(tool, "click");
+        // Same toggle as Resize: only click while Crop is not already selected.
+        if (!tool->property("highlighted").toBool()) {
+          QMetaObject::invokeMethod(tool, "click");
+        }
         const QVariantList presets = editor->property("cropPresets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {

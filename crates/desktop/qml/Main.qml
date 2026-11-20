@@ -224,7 +224,16 @@ ApplicationWindow {
         }
         if (result) {
             if (!result.ok && result.error) {
-                root.showToast(result.error.message);
+                // A rejection can be worded by the interface too: Core sends
+                // `error.ui` as a `{code, args}` line for everything whose
+                // cause is its own, and only leaves it out when the detail is
+                // the platform's (an OS error, a bad envelope). `message` is
+                // still there as the English fallback.
+                if (result.error.ui && result.error.ui.code) {
+                    root.showToast(uiLines.text(result.error.ui, root.state.language));
+                } else {
+                    root.showToast(result.error.message);
+                }
             } else if (command.type !== "select") {
                 // The typed line first: Core publishes `{code, args}` so the
                 // toast speaks the interface language. `message` is the English

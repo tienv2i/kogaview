@@ -1,4 +1,4 @@
-# Session handoff — state at 2026-11-19
+# Session handoff — state at 2026-11-20
 
 Four sessions' worth of work on the same day: the launch surface speaks
 Vietnamese and the dock icon draws, the mouse wheel moves at the rate the device
@@ -25,20 +25,27 @@ things the handoff had listed as the natural next steps: Core's status and
 history text became `{ code, args }` lines the window translates (row 77), the
 Editor gained a real Export with a JPEG quality and metadata (row 78), and a
 large JPEG's first preview is now decoded at a reduced DCT scale so the picture
-appears while the full frame is still decoding (row 79).
+appears while the full frame is still decoding (row 79). The session after that
+made the last English sentences in a Vietnamese window — the toast for a
+*rejected* command — translatable too (row 80), and while doing it found that
+`UiLines.qml` was not named in the `lupdate` project, so the next `lupdate`
+would have marked its thirty sentences `vanished` and `lrelease` would have
+dropped them silently.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. This session's three changes (rows 77, 78, 79) are one commit,
-  `feat(editor): typed lines, export and a fast first preview`, on top
-  of the build fix `1b4e940` and the pad/stepper follow-up `9d4dab4`. They were
-  kept together because the export test and the Editor QML fixture share the
-  same rewrite of the state snapshot; each change is described by its own
-  report row. Nothing is pushed (see below). Earlier commits in `git log`: the
-  keyboard map, the tooltip hints, the burger-menu fix, the modal-pointer fix,
-  the Editor layout and its pointer follow-up, and the two size tools.
+- Branch `main`. The previous session's three changes (rows 77, 78, 79) are one
+  commit, `ca9a6d6 feat(editor): typed lines, export and a fast first preview`,
+  on top of the build fix `1b4e940` and the pad/stepper follow-up `9d4dab4`.
+  This session adds one commit, `feat(core): word a rejected command in the
+  interface language`, for row 80: the `ProtocolError.ui` shape, the QML that
+  draws it, the new QML/Core tests, the `.pro` fix and its translation-gate
+  check, and the 32 Vietnamese sentences. Nothing is pushed (see below).
+  Earlier commits in `git log`: the keyboard map, the tooltip hints, the
+  burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
+  follow-up, and the two size tools.
 - `cpp/main.cpp` gained a third permanent editor request in row 78,
   `KOGAVIEW_DEV_UI_REQUEST=editor-export` (`_ARG` = destination, `_ARG2` =
   quality 10–100, `_ARG3` = `confirm`): it `click()`s the real toolbar Export
@@ -57,7 +64,11 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   Crop including an anchor button — found by walking the item tree, because a
   `Repeater` delegate is not a QObject child. Both exist so the panel can be
   photographed on a session where XTEST pointer warps do not move the pointer.
-  The language
+  Row 80 also fixed a harness bug found while checking a second run: both size
+  requests clicked the tool button unconditionally, and selecting a tool is a
+  toggle, so a second `editor-resize` while Resize was already selected put the
+  tool down and the request then wrote its fields into a Pointer panel. They now
+  click only while `highlighted` is false. The language
   follow-up changes exactly one thing in it — `KOGAVIEW_DEV_SCREENSHOT` now
   treats `isExposed()` as a hint (a covered window on this session reports
   itself unexposed while `grabWindow()` still renders), waiting up to 8 s and
@@ -139,6 +150,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 77 | The last English sentences in a Vietnamese window came from Core: `Ready`, `Editing pic.jpg`, `Resize 512 × 512 · square #ff0000` | `UiText { code, args }` in `state.rs` with `UiState.status` and `EditorState.history` as lines, every Core handler returning `Result<Option<UiText>, _>`, the new `crates/desktop/qml/UiLines.qml` as the only code→`qsTr` table, the journal and the reply's `message` keeping the English rendering while the reply also carries `"ui": {code, args}`, `scripts/check_translations.py` now failing a Core code with no `case` and a `case` no Core publishes. `cargo` 66 + 4, `editor` 34, `translations` 244; mutations: a deleted `case "ready"` fails the gate, `UiLines.text()` returning the code fails `thePointerShowsTheDocumentAndHistory` |
 | 78 | Export did not exist and ADR 0004 had deferred its options | `Command::EditorExport { path, quality, metadata }`, Core `editor_export`/`apply_export_result`/`export_pixels` with the JPEG metadata splice and `invalid_destination` for the document's own path, a 13th toolbar button with the `exportDialog` (path, quality, metadata, saying which format honours which), `Main.qml` fallback chooser, `ToolbarMetrics.editorButtons: 13`. `cargo` 66 + 4 (the export test now compares sizes between two identical-metadata exports, so the metadata flag cannot mask a broken quality setting), `editor` 35, `translations` 244; real window `docs/evidence/M1-editor-export-dialog.png`, `editor_export ok:true rev 9`, 245 252 B copy at quality 60 vs a 639 157 B source; mutations: quality ignored → size test fails, metadata splice dropped → metadata test fails |
 | 79 | Opening a 27 MP JPEG in the Editor took 11 s of empty canvas: Core decoded the full frame, then resized it for the preview, before anything could be drawn | `crates/app-core/Cargo.toml` (`jpeg-decoder`, no default features, pure Rust), `crates/app-core/src/editor.rs` (`scaled_jpeg_preview` reads 1/8, 1/4 or 1/2 of a JPEG through the DCT and answers the header size; `preview_dimensions`; `render_preview` now box-samples via `preview_pixels`/`imageops::thumbnail`; `spawn_open` publishes `EditorTask::FirstPreview` before decoding the document), `crates/app-core/src/state.rs` (`EditorState.opening`), `crates/app-core/src/core.rs` (`publish_opening_preview`, the `FirstPreview` arm, a failed open now drops the fast preview it had shown), `crates/desktop/qml/EditorView.qml` (`opening`/`documentReady`: the canvas and the footer draw the provisional state, the tools stay disabled), `tests/qml/tst_editor.cpp` (`theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes`), Core tests (`the_scaled_jpeg_preview_matches_the_full_decode`, `a_small_jpeg_is_not_decoded_twice`, `opening_a_large_jpeg_publishes_the_preview_before_the_document`), `cargo test`, `just test` | **Measured** on a 4500 × 6000 JPEG (1.4 MB, `ffmpeg -q:v 3`): before, one decode of 11 063 ms and then a preview render of 6 264 ms; after, the reduced decode plus its PNG lands at 3 034 ms (the picture is on screen from 3.1 s) and the full document installs at 7 863 ms instead of 11 063 ms. The 2× on the document half is `imageops::thumbnail` replacing `imageops::resize(…, Triangle)`: on a 27 MP frame the general resampler was the second-largest cost after the decode. **Real window** (Vietnamese, isolated `XDG_*`): the grab at 8 s shows the picture, `4500 × 6000`, the soft decode on the canvas, `Đang mở big.jpg…` in the status bar and Resize/Crop/Rotate greyed; the grab after the document landed shows `Đang chỉnh sửa big.jpg · 4500 × 6000` with every tool live and a `editor_resize_preview` draft on the canvas (journal rev 5). **Mutations** (each restored, then re-run): `scaled_jpeg_preview` returning `None` always → `opening_a_large_jpeg_publishes_the_preview_before_the_document` fails on the first message; `documentReady` no longer subtracting `opening` → the QML test fails `!m_editor->property("documentReady")`. **Not verified:** no hand opened a file; the run was driven by dev commands. A CMYK JPEG and a progressive JPEG take the fallback path, which is exercised only by `a_small_jpeg_is_not_decoded_twice` (a plain JPEG), not by a CMYK sample. `jpeg-decoder`'s `scale()` picks the smallest power of two that still covers the request, so on a frame just above 4096 px the reduced decode is 1/2 and the saving is smaller than these numbers; that case was not timed. |
+| 80 | A rejected command was still English in a Vietnamese window: `Main.qml` drew `result.error.message`, a sentence Core had built | `crates/app-protocol/src/lib.rs` (`UiText` beside `ProtocolError`, which gained `ui: Option<UiText>` and `line`/`with_line`; `None` where the detail is the platform's), `crates/app-core/src/state.rs` (re-export), `core.rs` (every refusal Core words itself publishes a line; `invalid_edit` keeps a journal sentence for crop/resize), `editor.rs` (validators and `apply`/`would_change` answer `UiText`), `ops.rs` (`safe_for_deletion`), `Main.qml` (toast draws `error.ui` first), `UiLines.qml` (32 cases), `i18n/kogaview_ts.pro` (`UiLines.qml`/`ToolbarMetrics.qml` were missing — the next `lupdate` would have marked their strings `vanished`), `scripts/check_translations.py` (a QML file that draws a string must be in the `.pro`), `i18n/kogaview_vi.ts` (32 strings), `tests/qml/tst_language.cpp` (2 cases), Core tests | `just test` 276 strings / 110 C++ / 272 drawn; cargo 70 + 4; language 7; real window: Vietnamese toast `Xuất đè lên tài liệu đang mở sẽ thay thế nó; hãy dùng Lưu` after the export dialog was pointed at the document itself (`docs/evidence/M1-rejection-vi.png`), journal `ok:false` `invalid_destination` + `ui.code export_onto_document`; 5 mutations, each caught |
 
 ## Test gate
 
@@ -146,18 +158,18 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 244 strings in kogaview_vi.ts, 110 of them compiled into C++, 240 drawn by the QML, 4 looked up by context
+translations: 276 strings in kogaview_vi.ts, 110 of them compiled into C++, 272 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 69 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 36 · language 5 · toolbar 11
+cargo: 70 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 36 · language 7 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); the Resize rework adds no new warning
-(the protocol's `Anchor` and the anchored Core helpers are gone).
+`field_reassign_with_default`, `needless_return`); row 80 adds no new warning (the
+protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
 
@@ -455,6 +467,20 @@ its document-filtered model rebuilds when the state arrives; removing the link
 calls from `stepField` → `theSizeSteppersNudgeBothSides` fails on the first
 linked height. Each restored, then the suite green.
 
+Rejection lines: the cancel refusal put back to `ProtocolError::new` (no `ui`) →
+`a_rejection_carries_a_line_the_interface_can_translate` fails with
+`left: Null, right: "cancel_nothing_running"`; `Main.qml` drawing
+`result.error.message` again → `theToastDrawsTheLineCoreSent` fails ("the
+rejection is not drawn from Core's line"); `invalid_edit` always using
+`line.english()` instead of the hand-worded sentences → the crop case fails with
+`crop does not fit 10 10 20 20 25 25`; `UiLines.qml` dropped from the `.pro` →
+the translation gate names it; the `not_a_folder` case deleted from
+`UiLines.qml` → the gate fails ("Core publishes the line … which UiLines.qml
+does not draw") **and** `aRejectedCommandIsDrawnInTheInterfaceLanguage` fails;
+the Vietnamese `%1 không phải là thư mục` reverted to English in the `.ts`,
+rebuilt → the same QML case fails on the actual text, which is what proves the
+suite reads the compiled catalogue, not the source.
+
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;
 the Ctrl+A guard changed to `Key_B` → `ctrlASelectsEveryEntry` fails; `gridColumns()`
@@ -508,8 +534,10 @@ re-run separately). All restored, then `just test` green.
 - **The anchored cover loses pixels on purpose.** A non-square source scaled to
   a different aspect is cropped, not letterboxed; only `fill` pads. Whether the
   user wants "cover" or "fit with transparency" as a second mode is unasked.
-- **Resize has no live preview on the canvas.** The size is applied on Apply, as
-  before; the panel and the post-edit preview are the only feedback.
+- **A resize is applied on Apply, but it no longer previews blind.** The live
+  draft (`editor_resize_preview`, rows 73 and 76) draws the new size on the
+  canvas before it is committed; the document, its history and its save target
+  do not move until Apply.
 - The dock and app grid were never photographed. Proven at the icon-theme and
   desktop-entry layer. If a launcher already cached the miss, the empty square
   can persist until the session restarts.
@@ -518,8 +546,14 @@ re-run separately). All restored, then `just test` green.
   was not. Fullscreen/maximise was not exercised.
 - **The system wheel scroll rate was not measured.** A pixel-only device gets the
   named `notchPixels: 20`.
-- **Core's status text is still English** (`Ready`, `Editing photo-1.jpg`) — the
-  last English strings in a Vietnamese window (ADR 0006).
+- **Row 80's window showed one rejection, not all of them.** The 32 new
+  Vietnamese sentences were reviewed in the catalogue, but only the export-onto-
+  the-document toast was drawn on a real window (`M1-rejection-vi.png`); the
+  cancellation, delete and invalid-edit sentences are covered by the QML case and
+  the translation gate, not by a photograph. A rejection whose `ui` is absent
+  (an OS `io_error`, an `invalid_path`) was exercised only as
+  `invalid_envelope` in a unit test; the window never printed one. `cargo
+  clippy -D warnings` still fails on the two pre-existing `derivable_impls`.
 - `scripts/check_translations.py` now scans the QML for `qsTr()` **and**
   `qsTranslate("Ctx", "src")` after stripping comments, so a new untranslated
   string fails the gate — the small-image hint got through before this, and the
@@ -578,7 +612,9 @@ install`). The keyboard, tooltip and menu evidence comes from
 2. **Export presets** — resize-on-export and a colour profile. `editor_export`
    already carries `{ path, quality, metadata }`, so a preset is one more field
    and one more Core step, not a new command.
-3. **Error text as data too.** `result.error.message` and `state`'s failure
-   lines are still English strings built in Core (`invalid_edit`, `io_error`,
-   the `spawn_draft` messages). They are rarer than the status lines but they are
-   the same problem, and the same `UiText` shape fixes them.
+3. **The platform's own text is still the platform's.** Row 80 made every
+   rejection Core *words itself* a line; an `io_error` or an `invalid_path`
+   still carries the OS/library sentence (`ProtocolError::new`, no `ui`), and
+   `spawn_draft`'s render failure keeps its message. Translating that means
+   classifying the errno rather than passing `io::Error`'s string through —
+   a decision about what the user should be told, not a mechanical sweep.

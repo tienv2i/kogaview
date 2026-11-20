@@ -15,10 +15,12 @@
 // `docs/evidence/`), or that every label in the app was wrapped in `qsTr` —
 // `scripts/check_translations.py` guards the catalogue, not the sources.
 
+#include <QFile>
 #include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QScopedPointer>
+#include <QUrl>
 #include <QTest>
 
 #include "language.h"
@@ -35,6 +37,27 @@ Item {
   property string folderLabel: qsTranslate("BrowserView", "Quick access")
 }
 )";
+
+/// A scene that holds the real `crates/desktop/qml/UiLines.qml` and calls it the
+/// way the views do: `lines.text(line, interfaceLanguage)`. `interfaceLanguage`
+/// is the property `InterfaceLanguage::apply` writes, so a language switch
+/// reaches the call without a binding to re-evaluate.
+QByteArray linesScene()
+{
+  return QStringLiteral(
+             "import QtQuick 2.0\n"
+             "import \"%1\" as KogaView\n"
+             "Item {\n"
+             "  objectName: \"host\"\n"
+             "  property string interfaceLanguage: \"\"\n"
+             "  property var lines: KogaView.UiLines {}\n"
+             "  function line(code, args) {\n"
+             "    return lines.text({ code: code, args: args }, interfaceLanguage)\n"
+             "  }\n"
+             "}\n")
+      .arg(QUrl::fromLocalFile(QStringLiteral(KOGAVIEW_QML_SOURCE_DIR)).toString())
+      .toUtf8();
+}
 
 QObject* loadScene(QQmlEngine& engine)
 {
@@ -89,6 +112,78 @@ private slots:
     InterfaceLanguage language(&engine, root.data(), QStringLiteral("vi"));
     QCOMPARE(language.locale(), QStringLiteral("vi"));
     QCOMPARE(root->property("label").toString(), QStringLiteral("Mở"));
+  }
+
+  /// Core publishes a rejection as `{ code, args }` (`ProtocolError.ui`). The
+  /// window draws it through `UiLines`, so the sentence has to follow the
+  /// interface language — an English rejection in a Vietnamese window is the
+  /// bug this covers — and a code the table does not know must not print a raw
+  /// identifier.
+  void aRejectedCommandIsDrawnInTheInterfaceLanguage()
+  {
+    QQmlEngine engine;
+    QQmlComponent component(&engine);
+    component.setData(linesScene(), QUrl(QStringLiteral("qrc:/tst_language_lines.qml")));
+    QScopedPointer<QObject> root(component.create());
+    QVERIFY2(root != nullptr, qPrintable(component.errorString()));
+
+    const auto line = [&root](const QString& code, const QStringList& args) {
+      QVariant text;
+      const bool called = QMetaObject::invokeMethod(
+          root.data(), "line", Q_RETURN_ARG(QVariant, text), Q_ARG(QVariant, code),
+          Q_ARG(QVariant, args));
+      return called ? text.toString() : QStringLiteral("<not called>");
+    };
+
+    // The English sentence before any translator is installed.
+    QCOMPARE(line(QStringLiteral("not_a_folder"), {QStringLiteral("/tmp/pic")}),
+             QStringLiteral("/tmp/pic is not a folder"));
+    // A crop Core rejected: the code and every number it carries.
+    QCOMPARE(line(QStringLiteral("crop_does_not_fit"),
+                  {QStringLiteral("512"), QStringLiteral("384"), QStringLiteral("0"),
+                   QStringLiteral("0"), QStringLiteral("1200"), QStringLiteral("1600")}),
+             QStringLiteral("A 512 × 384 crop at 0,0 does not fit the 1200 × 1600 image"));
+
+    InterfaceLanguage language(&engine, root.data(), QString());
+    language.apply(QStringLiteral("vi"));
+    QCOMPARE(line(QStringLiteral("not_a_folder"), {QStringLiteral("/tmp/pic")}),
+             QStringLiteral("/tmp/pic không phải là thư mục"));
+    QCOMPARE(line(QStringLiteral("crop_does_not_fit"),
+                  {QStringLiteral("512"), QStringLiteral("384"), QStringLiteral("0"),
+                   QStringLiteral("0"), QStringLiteral("1200"), QStringLiteral("1600")}),
+             QStringLiteral("Bản cắt 512 × 384 tại 0,0 không vừa với ảnh 1200 × 1600"));
+
+    // A code this interface does not know yet still says something: its
+    // arguments, not the raw identifier.
+    QCOMPARE(line(QStringLiteral("not_a_case_yet"), {QStringLiteral("a"), QStringLiteral("b")}),
+             QStringLiteral("a b"));
+
+    // Leave the process in the desktop's own language; the translators are only
+    // removed by another `apply`.
+    language.apply(QString());
+  }
+
+  /// `Main.qml` needs the real bridge, so the toast half is asserted in its
+  /// source: a rejection is drawn from `error.ui` (the translatable line) and
+  /// falls back to the English `message` only when Core sent no line.
+  void theToastDrawsTheLineCoreSent()
+  {
+    QFile main(QStringLiteral(KOGAVIEW_QML_SOURCE_DIR "/Main.qml"));
+    QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+    const QString source = QString::fromUtf8(main.readAll());
+
+    const int start = source.indexOf(QStringLiteral("if (!result.ok && result.error)"));
+    QVERIFY2(start >= 0, "Main.qml no longer handles a rejected command");
+    const int end = source.indexOf(QStringLiteral("} else if (command.type"), start);
+    QVERIFY(end > start);
+    const QString block = source.mid(start, end - start);
+
+    const int line = block.indexOf(QStringLiteral("result.error.ui"));
+    const int message = block.indexOf(QStringLiteral("result.error.message"));
+    QVERIFY2(line >= 0, "the rejection is not drawn from Core's line");
+    QVERIFY2(message > line,
+             "the English message is drawn before the translated line, so a "
+             "Vietnamese window would show Core's English");
   }
 
   void aLocaleWithoutACatalogueKeepsTheSourceText()

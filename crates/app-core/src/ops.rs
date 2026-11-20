@@ -6,7 +6,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::state::Entry;
+use crate::state::{Entry, UiText};
 
 pub fn is_image_path(path: &Path) -> bool {
     path.extension()
@@ -314,16 +314,22 @@ pub fn trash_paths(paths: &[PathBuf]) -> Result<(), String> {
 }
 
 /// Refuse paths that must never be deleted through the UI.
-pub fn safe_for_deletion(path: &Path) -> Result<(), String> {
+/// Reasons a delete is refused, as interface lines.
+///
+/// The codes read as sentences once their underscores are opened, which is the
+/// fallback `UiText::english()` produces for the journal, so a reader of
+/// `journal/commands.jsonl` gets `home_folder_cannot_be_deleted` and the window
+/// gets its own translation of the same fact.
+pub fn safe_for_deletion(path: &Path) -> Result<(), UiText> {
     if !path.is_absolute() {
-        return Err("refusing to delete a relative path".to_owned());
+        return Err(UiText::new("relative_path_cannot_be_deleted"));
     }
     let mut components = path.components();
     if components.next().is_none() || components.next().is_none() {
-        return Err("refusing to delete a filesystem root".to_owned());
+        return Err(UiText::new("filesystem_root_cannot_be_deleted"));
     }
     if path == crate::paths::home_dir() {
-        return Err("refusing to delete the home directory".to_owned());
+        return Err(UiText::new("home_folder_cannot_be_deleted"));
     }
     Ok(())
 }

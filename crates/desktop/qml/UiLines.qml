@@ -94,6 +94,49 @@ QtObject {
         case "export_incomplete": return qsTr("The export did not finish");
         case "config_save_failed": return qsTr("Cannot save configuration: %1").arg(args[0]);
 
+        // --- rejected commands -------------------------------------------
+        // A rejection is a line too: the cause is Core's, so the sentence is
+        // the interface's. `message` stays as the English fallback for a
+        // rejection whose detail is the platform's own (an OS error, an
+        // envelope that did not parse).
+        case "cancel_nothing_running": return qsTr("There is nothing running to cancel");
+        case "open_needs_a_path": return qsTr("Choose a file or a folder to open first");
+        case "path_missing": return qsTr("%1 does not exist").arg(args[0]);
+        case "path_has_no_folder": return qsTr("That path has no parent folder");
+        case "not_a_folder": return qsTr("%1 is not a folder").arg(args[0]);
+        case "not_a_file": return qsTr("%1 is not a file").arg(args[0]);
+        case "not_an_image": return qsTr("%1 is not an image").arg(args[0]);
+        case "not_in_this_folder": return qsTr("That image is not part of the current folder");
+        case "no_images_here": return qsTr("There are no images in the current folder");
+        case "no_source_files": return qsTr("There are no files to copy or move");
+        case "no_existing_paths": return qsTr("None of those paths exist any more");
+        case "operation_in_progress": return qsTr("Another operation is still running");
+        case "write_in_flight": return qsTr("A write is already in progress");
+        case "destination_is_a_folder": return qsTr("%1 is a folder, not a file").arg(args[0]);
+        case "copy_into_itself": return qsTr("Cannot copy or move %1 into itself").arg(args[0]);
+        case "unsupported_save_format": return qsTr("Cannot save as %1; use one of %2").arg(args[0]).arg(args[1]);
+        case "unsupported_export_format": return qsTr("Cannot export as %1; use one of %2").arg(args[0]).arg(args[1]);
+        case "source_changed_on_disk":
+            return qsTr("%1 changed on disk since it was opened; use Save As instead").arg(args[0]);
+        case "export_onto_document": return qsTr("Exporting onto the open document would replace it; use Save");
+        case "quick_access_needs_a_folder": return qsTr("Only folders can be added to quick access");
+        case "relative_path_cannot_be_deleted": return qsTr("A relative path cannot be deleted");
+        case "filesystem_root_cannot_be_deleted": return qsTr("The filesystem root cannot be deleted");
+        case "home_folder_cannot_be_deleted": return qsTr("The home folder cannot be deleted");
+        case "not_in_quick_access": return qsTr("That folder is not in quick access");
+        case "needs_a_document": return qsTr("Open an image in the editor before editing it");
+        case "editor_still_opening": return qsTr("The editor is still opening the image; save once it is shown");
+        case "document_still_decoding": return qsTr("The document is still being decoded");
+
+        // --- rejected edits ----------------------------------------------
+        case "invalid_rotation": return qsTr("Cannot rotate by %1°; use a quarter, half or three-quarter turn").arg(args[0]);
+        case "crop_size_empty": return qsTr("A crop needs a width and a height");
+        case "crop_does_not_fit":
+            return qsTr("A %1 × %2 crop at %3,%4 does not fit the %5 × %6 image")
+                .arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]).arg(args[4]).arg(args[5]);
+        case "resize_size_empty": return qsTr("A resize needs a width and a height");
+        case "resize_too_large": return qsTr("Resizing to %1 × %2 is larger than the %3 pixel limit").arg(args[0]).arg(args[1]).arg(args[2]);
+
         // --- editor history (also the text of an applied edit) -----------
         case "rotate_right": return qsTr("Rotate right 90°");
         case "rotate_left": return qsTr("Rotate left 90°");

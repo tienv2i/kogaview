@@ -746,9 +746,10 @@ impl Core {
                     self.state.status = UiText::new("cancelling");
                     Ok(Some(UiText::new("cancelling")))
                 } else {
-                    Err(ProtocolError::new(
+                    Err(ProtocolError::with_line(
                         "not_running",
                         "there is no long-running operation to cancel",
+                        UiText::new("cancel_nothing_running"),
                     ))
                 }
             }
@@ -756,14 +757,14 @@ impl Core {
     }
 
     fn open_file(&mut self, paths: Vec<String>) -> Result<Option<UiText>, ProtocolError> {
-        let first = paths.first().ok_or_else(|| {
-            ProtocolError::new("invalid_path", "open_file requires at least one path")
-        })?;
+        let first = paths
+            .first()
+            .ok_or_else(|| ProtocolError::line("invalid_path", UiText::new("open_needs_a_path")))?;
         let first = ops::normalize_path(&PathBuf::from(first));
         if !first.exists() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_found",
-                format!("{} does not exist", first.display()),
+                UiText::with("path_missing", [first.display().to_string()]),
             ));
         }
 
@@ -773,7 +774,7 @@ impl Core {
 
         let parent = first
             .parent()
-            .ok_or_else(|| ProtocolError::new("invalid_path", "file has no parent folder"))?
+            .ok_or_else(|| ProtocolError::line("invalid_path", UiText::new("path_has_no_folder")))?
             .to_path_buf();
 
         let scanned_paths = paths
@@ -812,9 +813,9 @@ impl Core {
         // navigating into the link does not teleport to its target.
         let path = ops::normalize_path(&path);
         if !path.is_dir() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_a_directory",
-                format!("{} is not a directory", path.display()),
+                UiText::with("not_a_folder", [path.display().to_string()]),
             ));
         }
 
@@ -1057,9 +1058,7 @@ impl Core {
             .viewer_images
             .iter()
             .position(|image| image == path)
-            .ok_or_else(|| {
-                ProtocolError::new("not_found", "that image is not part of the current folder")
-            })?;
+            .ok_or_else(|| ProtocolError::line("not_found", UiText::new("not_in_this_folder")))?;
         self.state.viewer_index = Some(index);
         self.state.viewer_path = Some(path.to_owned());
         self.state.workspace = Workspace::Viewer;
@@ -1069,9 +1068,9 @@ impl Core {
 
     fn step_viewer(&mut self, delta: isize) -> Result<Option<UiText>, ProtocolError> {
         if self.state.viewer_images.is_empty() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "no_images",
-                "there are no images in the current folder",
+                UiText::new("no_images_here"),
             ));
         }
         let length = self.state.viewer_images.len() as isize;
@@ -1093,15 +1092,15 @@ impl Core {
     fn open_editor(&mut self, path: &str) -> Result<Option<UiText>, ProtocolError> {
         let source = ops::normalize_path(Path::new(path));
         if !source.is_file() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_found",
-                format!("{} is not a file", source.display()),
+                UiText::with("not_a_file", [source.display().to_string()]),
             ));
         }
         if !ops::is_image_path(&source) {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_an_image",
-                format!("{} is not an image", source.display()),
+                UiText::with("not_an_image", [source.display().to_string()]),
             ));
         }
         let path_label = source.to_string_lossy().into_owned();
@@ -1161,9 +1160,7 @@ impl Core {
         let Some(document) = &mut self.editor else {
             return Err(no_editor_document());
         };
-        let changed = document
-            .apply(operation.clone())
-            .map_err(|message| ProtocolError::new("invalid_edit", message))?;
+        let changed = document.apply(operation.clone()).map_err(invalid_edit)?;
         if !changed {
             return Ok(Some(UiText::new("edit_noop")));
         }
@@ -1195,9 +1192,7 @@ impl Core {
             | EditOperation::Crop { width, height, .. } => (*width, *height),
             _ => (0, 0),
         };
-        let changes = document
-            .would_change(&operation)
-            .map_err(|message| ProtocolError::new("invalid_edit", message))?;
+        let changes = document.would_change(&operation).map_err(invalid_edit)?;
         if !changes {
             self.clear_editor_draft();
             self.publish_editor();
@@ -1332,9 +1327,9 @@ impl Core {
                 .as_ref()
                 .is_none_or(|editor| editor.width == 0)
         {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "busy",
-                "the editor is still opening the image; save once it is shown",
+                UiText::new("editor_still_opening"),
             ));
         }
         let destination = match path {
@@ -1342,31 +1337,39 @@ impl Core {
             None => document.save_target().0.to_path_buf(),
         };
         if destination.is_dir() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "invalid_path",
-                format!("{} is a folder, not a file", destination.display()),
+                UiText::with(
+                    "destination_is_a_folder",
+                    [destination.display().to_string()],
+                ),
             ));
         }
         if editor::SaveFormat::from_path(&destination).is_none() {
-            return Err(ProtocolError::new(
+            let line = UiText::with(
+                "unsupported_save_format",
+                [
+                    destination.display().to_string(),
+                    editor::SaveFormat::CHOICES.to_owned(),
+                ],
+            );
+            return Err(ProtocolError::with_line(
                 "unsupported_format",
                 format!(
                     "cannot save as {}; use one of {}",
                     destination.display(),
                     editor::SaveFormat::CHOICES
                 ),
+                line,
             ));
         }
         // Only the source can have moved under us; another destination is the
         // user's own choice to replace.
         let source = document.source_path().to_path_buf();
         if destination == source && document.source_changed() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "source_changed",
-                format!(
-                    "{} changed on disk since it was opened; use Save As instead",
-                    source.display()
-                ),
+                UiText::with("source_changed_on_disk", [source.display().to_string()]),
             ));
         }
         let pixels = document.pixels();
@@ -1418,29 +1421,38 @@ impl Core {
             return Err(no_editor_document());
         };
         if document.dimensions().0 == 0 {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "busy",
-                "the document is still being decoded",
+                UiText::new("document_still_decoding"),
             ));
         }
         if self.editor_saving {
-            return Err(ProtocolError::new("busy", "a write is already in flight"));
+            return Err(ProtocolError::line("busy", UiText::new("write_in_flight")));
         }
         let destination = ops::normalize_path(&PathBuf::from(path));
         if destination == document.source_path() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::with_line(
                 "invalid_destination",
                 "exporting onto the open document would replace it; use Save",
+                UiText::new("export_onto_document"),
             ));
         }
         if editor::SaveFormat::from_path(&destination).is_none() {
-            return Err(ProtocolError::new(
+            let line = UiText::with(
+                "unsupported_export_format",
+                [
+                    destination.display().to_string(),
+                    editor::SaveFormat::CHOICES.to_owned(),
+                ],
+            );
+            return Err(ProtocolError::with_line(
                 "invalid_destination",
                 format!(
                     "cannot export as {}; use one of {}",
                     destination.display(),
                     editor::SaveFormat::CHOICES
                 ),
+                line,
             ));
         }
         let label = destination
@@ -1739,9 +1751,12 @@ impl Core {
     fn editor_preview_dir(&self) -> Result<PathBuf, ProtocolError> {
         let dir = self.paths.cache_dir.join("editor");
         std::fs::create_dir_all(&dir).map_err(|error| {
-            ProtocolError::new(
+            // The OS text is the diagnostic; the interface says the same thing
+            // about the preview folder it already has a line for.
+            ProtocolError::with_line(
                 "io_error",
                 format!("could not create {}: {error}", dir.display()),
+                UiText::new("preview_folder_failed"),
             )
         })?;
         Ok(dir)
@@ -1947,16 +1962,16 @@ impl Core {
         move_paths: bool,
     ) -> Result<Option<UiText>, ProtocolError> {
         if self.state.busy {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "busy",
-                "another background operation is still running",
+                UiText::new("operation_in_progress"),
             ));
         }
         let destination = ops::normalize_path(&destination);
         if !destination.is_dir() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_a_directory",
-                format!("{} is not a directory", destination.display()),
+                UiText::with("not_a_folder", [destination.display().to_string()]),
             ));
         }
 
@@ -1966,7 +1981,10 @@ impl Core {
             .filter(|path| path.exists())
             .collect::<Vec<_>>();
         if sources.is_empty() {
-            return Err(ProtocolError::new("not_found", "no source files exist"));
+            return Err(ProtocolError::line(
+                "not_found",
+                UiText::new("no_source_files"),
+            ));
         }
         for source in &sources {
             // `canonicalize` only here: folding a symlink lets a folder be
@@ -1974,9 +1992,9 @@ impl Core {
             let resolved = source.canonicalize().unwrap_or_else(|_| source.clone());
             if resolved.is_dir() && (destination.starts_with(&resolved) || resolved == destination)
             {
-                return Err(ProtocolError::new(
+                return Err(ProtocolError::line(
                     "invalid_destination",
-                    format!("cannot copy or move {} into itself", resolved.display()),
+                    UiText::with("copy_into_itself", [resolved.display().to_string()]),
                 ));
             }
         }
@@ -2131,9 +2149,9 @@ impl Core {
 
     fn validated_deletion_paths(&self, paths: Vec<String>) -> Result<Vec<PathBuf>, ProtocolError> {
         if self.state.busy {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "busy",
-                "another background operation is still running",
+                UiText::new("operation_in_progress"),
             ));
         }
         let mut result = Vec::new();
@@ -2143,13 +2161,13 @@ impl Core {
                 continue;
             }
             ops::safe_for_deletion(&path)
-                .map_err(|error| ProtocolError::new("invalid_path", error))?;
+                .map_err(|line| ProtocolError::line("invalid_path", line))?;
             result.push(path);
         }
         if result.is_empty() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_found",
-                "no existing paths selected",
+                UiText::new("no_existing_paths"),
             ));
         }
         Ok(result)
@@ -2173,9 +2191,9 @@ impl Core {
     fn add_favorite(&mut self, path: PathBuf) -> Result<Option<UiText>, ProtocolError> {
         let path = ops::normalize_path(&path);
         if !path.is_dir() {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_a_directory",
-                "only folders can be added to quick access",
+                UiText::new("quick_access_needs_a_folder"),
             ));
         }
         let label = path.to_string_lossy().into_owned();
@@ -2194,9 +2212,9 @@ impl Core {
         let before = self.config.quick_access.len();
         self.config.quick_access.retain(|favorite| favorite != path);
         if self.config.quick_access.len() == before {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_found",
-                "that folder is not in quick access",
+                UiText::new("not_in_quick_access"),
             ));
         }
         self.state.favorites = self.config.quick_access.clone();
@@ -2215,9 +2233,9 @@ impl Core {
             .iter()
             .position(|favorite| favorite == path)
         else {
-            return Err(ProtocolError::new(
+            return Err(ProtocolError::line(
                 "not_found",
-                "that folder is not in quick access",
+                UiText::new("not_in_quick_access"),
             ));
         };
         let target = match direction {
@@ -2301,11 +2319,30 @@ fn is_within(root: &Path, path: &Path) -> bool {
 }
 
 /// The error every editor command returns when no document is loaded.
+/// A rejected edit: the validator names the cause as a line, and the journal
+/// gets a sentence rather than a code and its arguments in a row.
+///
+/// The two codes whose arguments would read as numbers with no meaning keep the
+/// sentence they had before the rejection became a line; every other validator
+/// message already reads as one once its underscores are opened (`crop size
+/// empty`, `invalid rotation 360`). The interface is not affected: it draws the
+/// `line`, never this message.
+fn invalid_edit(line: UiText) -> ProtocolError {
+    let numbers: Vec<&str> = line.args.iter().map(String::as_str).collect();
+    let message = match (line.code.as_str(), numbers.as_slice()) {
+        ("crop_does_not_fit", [width, height, x, y, doc_w, doc_h]) => {
+            format!("crop {width} × {height} at {x},{y} does not fit the {doc_w} × {doc_h} image")
+        }
+        ("resize_too_large", [width, height, limit]) => {
+            format!("resize to {width} × {height} is larger than the {limit} pixel limit")
+        }
+        _ => line.english(),
+    };
+    ProtocolError::with_line("invalid_edit", message, line)
+}
+
 fn no_editor_document() -> ProtocolError {
-    ProtocolError::new(
-        "no_document",
-        "open an image in the editor before editing it",
-    )
+    ProtocolError::line("no_document", UiText::new("needs_a_document"))
 }
 
 /// The explorer root to use once the user is looking at `folder`.
@@ -3481,6 +3518,64 @@ mod tests {
         remove_tree(&base);
     }
 
+    /// A rejection the interface can word itself travels as `{ code, args }`
+    /// next to the English message: the window says it in its own language, the
+    /// journal keeps a sentence, and a rejection whose detail is the platform's
+    /// (an envelope that did not parse) carries no line at all.
+    #[test]
+    fn a_rejection_carries_a_line_the_interface_can_translate() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+
+        let reply = dispatch_json(&mut core, "cancel-1", r#"{"type":"cancel_operation"}"#);
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(reply["error"]["code"], "not_running", "{reply}");
+        assert_eq!(
+            reply["error"]["ui"]["code"], "cancel_nothing_running",
+            "{reply}"
+        );
+        assert_eq!(reply["error"]["ui"]["args"], json!([]), "{reply}");
+        // The journal's sentence is not the line's mechanical rendering.
+        assert_eq!(
+            reply["error"]["message"], "there is no long-running operation to cancel",
+            "{reply}"
+        );
+
+        // A rejection that identifies something the filesystem named keeps the
+        // path as an argument: the interface owns the sentence, the path is
+        // data and must arrive unchanged.
+        let missing = base.join("gone.jpg");
+        let reply = dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"open_file","paths":["{}"]}}"#,
+                missing.display()
+            ),
+        );
+        assert_eq!(reply["error"]["ui"]["code"], "path_missing", "{reply}");
+        assert_eq!(
+            reply["error"]["ui"]["args"][0],
+            missing.display().to_string(),
+            "{reply}"
+        );
+
+        // The journal kept the English sentence, so a reader of the log is not
+        // asked to decode a code.
+        let journal =
+            std::fs::read_to_string(runtime.join("state/journal/commands.jsonl")).unwrap();
+        assert!(journal.contains("no long-running operation"), "{journal}");
+
+        // An envelope that never parsed is answered before the gateway: there
+        // is no command to word, so the rejection has no line.
+        let reply: serde_json::Value = serde_json::from_str(&core.dispatch("{")).unwrap();
+        assert_eq!(reply["error"]["code"], "invalid_envelope", "{reply}");
+        assert!(reply["error"].get("ui").is_none(), "{reply}");
+
+        remove_tree(&base);
+    }
+
     #[test]
     fn opening_a_missing_or_non_image_file_is_rejected() {
         let base = temp_dir();
@@ -3577,6 +3672,13 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["ok"], false);
         assert_eq!(parsed["error"]["code"], "invalid_edit");
+        // The rejection says why twice: the line the window translates, and the
+        // sentence the journal keeps. The numbers must be in both.
+        assert_eq!(parsed["error"]["ui"]["code"], "crop_does_not_fit");
+        assert_eq!(
+            parsed["error"]["message"],
+            "crop 10 × 10 at 20,20 does not fit the 25 × 25 image"
+        );
         assert_eq!(core.state.editor.as_ref().unwrap().history.len(), 3);
 
         // The live preview is a draft: it publishes its own path and target

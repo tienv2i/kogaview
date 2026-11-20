@@ -595,9 +595,9 @@ impl EditorDocument {
     ///
     /// Returns `Ok(true)` when pixels changed, `Ok(false)` for a request that
     /// would change nothing (crop to the full frame, resize to the same size),
-    /// and `Err` with a user-facing message when the request is invalid. A
-    /// changed document clears the redo branch, as in any editor.
-    pub fn apply(&mut self, operation: EditOperation) -> Result<bool, String> {
+    /// and `Err` with an interface line when the request is invalid. A changed
+    /// document clears the redo branch, as in any editor.
+    pub fn apply(&mut self, operation: EditOperation) -> Result<bool, UiText> {
         if self.is_noop(&operation)? {
             return Ok(false);
         }
@@ -612,7 +612,7 @@ impl EditorDocument {
     /// Would `operation` change anything? Validates the request the same way
     /// `apply` does, without touching the pixels: the live resize preview asks
     /// before it spends a worker render.
-    pub fn would_change(&self, operation: &EditOperation) -> Result<bool, String> {
+    pub fn would_change(&self, operation: &EditOperation) -> Result<bool, UiText> {
         self.is_noop(operation).map(|noop| !noop)
     }
 
@@ -671,14 +671,14 @@ impl EditorDocument {
         true
     }
 
-    fn is_noop(&self, operation: &EditOperation) -> Result<bool, String> {
+    fn is_noop(&self, operation: &EditOperation) -> Result<bool, UiText> {
         let (width, height) = self.dimensions();
         match operation {
             EditOperation::Rotate { degrees } => {
-                if degrees.rem_euclid(360) == 0 {
-                    Err("rotation must be 90, 180 or 270 degrees".to_owned())
-                } else {
+                if degrees.rem_euclid(360) % 90 == 0 && degrees.rem_euclid(360) != 0 {
                     Ok(false)
+                } else {
+                    Err(UiText::with("invalid_rotation", [degrees.to_string()]))
                 }
             }
             EditOperation::Flip { .. } => Ok(false),
@@ -749,29 +749,42 @@ fn validate_crop(
     height: u32,
     doc_w: u32,
     doc_h: u32,
-) -> Result<(), String> {
+) -> Result<(), UiText> {
     if width == 0 || height == 0 {
-        return Err("crop width and height must be greater than zero".to_owned());
+        return Err(UiText::new("crop_size_empty"));
     }
     if x >= doc_w
         || y >= doc_h
         || x.saturating_add(width) > doc_w
         || y.saturating_add(height) > doc_h
     {
-        return Err(format!(
-            "crop {width} × {height} at {x},{y} does not fit the {doc_w} × {doc_h} image"
+        return Err(UiText::with(
+            "crop_does_not_fit",
+            [
+                width.to_string(),
+                height.to_string(),
+                x.to_string(),
+                y.to_string(),
+                doc_w.to_string(),
+                doc_h.to_string(),
+            ],
         ));
     }
     Ok(())
 }
 
-fn validate_resize(width: u32, height: u32) -> Result<(), String> {
+fn validate_resize(width: u32, height: u32) -> Result<(), UiText> {
     if width == 0 || height == 0 {
-        return Err("resize width and height must be greater than zero".to_owned());
+        return Err(UiText::new("resize_size_empty"));
     }
     if u64::from(width) * u64::from(height) > MAX_DOCUMENT_PIXELS {
-        return Err(format!(
-            "resize to {width} × {height} is larger than the {MAX_DOCUMENT_PIXELS} pixel limit"
+        return Err(UiText::with(
+            "resize_too_large",
+            [
+                width.to_string(),
+                height.to_string(),
+                MAX_DOCUMENT_PIXELS.to_string(),
+            ],
         ));
     }
     Ok(())
@@ -853,16 +866,14 @@ fn cover_rect(
 }
 
 /// Render one operation into a new buffer, leaving `image` untouched.
-fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<RgbaImage, String> {
+fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<RgbaImage, UiText> {
     let (width, height) = image.dimensions();
     match operation {
         EditOperation::Rotate { degrees } => match degrees.rem_euclid(360) {
             90 => Ok(imageops::rotate90(image)),
             180 => Ok(imageops::rotate180(image)),
             270 => Ok(imageops::rotate270(image)),
-            other => Err(format!(
-                "rotation must be 90, 180 or 270 degrees, got {other}"
-            )),
+            other => Err(UiText::with("invalid_rotation", [other.to_string()])),
         },
         EditOperation::Flip { axis } => Ok(match axis {
             FlipAxis::Horizontal => imageops::flip_horizontal(image),
@@ -1174,19 +1185,26 @@ pub fn spawn_draft(
         _ => ("", 0, 0),
     };
     std::thread::spawn(move || {
-        let task = match render_operation(&pixels, &operation)
-            .and_then(|result| render_preview(&result, &preview))
-        {
-            Ok(()) => EditorTask::Draft {
-                generation,
-                kind: kind.to_owned(),
-                preview,
-                width,
-                height,
+        // A rejected render is a log line, not a sentence on screen: Core
+        // validated the request with `would_change` before spawning this, so a
+        // failure here is the renderer disagreeing with its own validator.
+        let task = match render_operation(&pixels, &operation) {
+            Ok(result) => match render_preview(&result, &preview) {
+                Ok(()) => EditorTask::Draft {
+                    generation,
+                    kind: kind.to_owned(),
+                    preview,
+                    width,
+                    height,
+                },
+                Err(message) => EditorTask::DraftFailed {
+                    generation,
+                    message,
+                },
             },
-            Err(message) => EditorTask::DraftFailed {
+            Err(line) => EditorTask::DraftFailed {
                 generation,
-                message,
+                message: line.english(),
             },
         };
         let _ = sender.send(task);
@@ -1463,7 +1481,10 @@ mod tests {
                 height: 10,
             })
             .unwrap_err();
-        assert!(error.contains("does not fit"), "{error}");
+        // The rejected request is a line, not a sentence: the code names the
+        // cause and the arguments carry the rectangle and the document.
+        assert_eq!(error.code, "crop_does_not_fit");
+        assert_eq!(error.args, ["10", "10", "60", "0", "64", "32"]);
         assert!(!document.can_undo(), "a rejected crop must not be recorded");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1498,7 +1519,8 @@ mod tests {
         let error = document
             .apply(EditOperation::Rotate { degrees: 360 })
             .unwrap_err();
-        assert!(error.contains("90, 180 or 270"), "{error}");
+        assert_eq!(error.code, "invalid_rotation");
+        assert_eq!(error.args, ["360"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

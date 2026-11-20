@@ -63,6 +63,8 @@ QML_QSTRANSLATE = re.compile(
 )
 QML_ESCAPE = {"\\": "\\", '"': '"', "'": "'", "n": "\n", "t": "\t", "r": "\r"}
 QML_DIR = ROOT / "crates" / "desktop" / "qml"
+# The `lupdate` project. It is the list of files the catalogue is built from.
+TS_PRO = ROOT / "i18n" / "kogaview_ts.pro"
 
 UNESCAPE = {"\\": "\\", '"': '"', "n": "\n", "t": "\t"}
 
@@ -216,6 +218,28 @@ def qml_strings() -> tuple[dict[str, list[str]], list[tuple[str, str, str]]]:
     return found, translated
 
 
+def pro_sources() -> set[str]:
+    """The QML files the `lupdate` project names, by basename.
+
+    `lupdate` only reads the files this list names, and the failure is silent in
+    both directions: a file that draws a translated string but is missing here
+    is never extracted, and the *next* `lupdate` marks the entries that file
+    already had `vanished` — which `lrelease` drops without a word. That is how
+    `UiLines.qml` came to hold the only copy of thirty status sentences while
+    the catalogue still believed they had no source.
+    """
+    text = TS_PRO.read_text(encoding="utf-8")
+    # Comments out, then the backslash continuations of `SOURCES = …` joined.
+    text = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    text = text.replace("\\\n", " ")
+    match = re.search(r"^SOURCES\s*=\s*(?P<body>.*)$", text, re.M)
+    if match is None:
+        return set()
+    return {entry.rsplit("/", 1)[-1] for entry in match.group("body").split()}
+
+
 def table() -> list[tuple[str, str]]:
     """Every row of the C++ table, in file order.
 
@@ -306,6 +330,23 @@ def main(argv: list[str]) -> int:
                 f'qsTranslate("{context}", "{source}") in {file}: '
                 f"context {context!r} has no source {source!r}"
             )
+
+    # Every file that draws a string has to be in the `lupdate` project, or the
+    # catalogue will never be built from it.
+    listed = pro_sources()
+    drawing = {name for names in drawn.values() for name in names}
+    drawing |= {file for _, _, file in translated}
+    for name in sorted(drawing - listed):
+        problems.append(
+            f"{name} draws a translated string but i18n/kogaview_ts.pro does "
+            "not list it — add it to SOURCES, or `lupdate` will never extract "
+            "the string and will drop the ones it already has"
+        )
+    for name in sorted(listed - {path.name for path in QML_DIR.glob("*.qml")}):
+        problems.append(
+            f"i18n/kogaview_ts.pro lists {name}, which is not a file in "
+            "crates/desktop/qml"
+        )
 
     # Every line Core publishes has to have a sentence. The empty code is the
     # "hide the status bar" line and is handled in the table like the rest.
