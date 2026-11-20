@@ -41,7 +41,7 @@ const MAX_HISTORY_STEPS: usize = 12;
 const MAX_SNAPSHOT_BYTES: u64 = 160 * 1024 * 1024;
 
 /// One edit, described so it can be serialized into a session file later.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EditOperation {
     /// Clockwise rotation; negative values rotate counter-clockwise.
@@ -64,6 +64,14 @@ pub enum EditOperation {
         /// fill the leftover with this RGB colour. Without it the target aspect
         /// is filled by a centred crop instead.
         fill: Option<[u8; 3]>,
+    },
+    /// A perspective correction: `corners` are the four points of the
+    /// quadrilateral, in document pixels and clockwise from the top-left
+    /// (TL, TR, BR, BL) that become the whole output frame. The output keeps
+    /// the document's width and height, so straightening a keystone keeps the
+    /// frame the picture already had and only reshapes what is inside it.
+    Transform {
+        corners: [[f64; 2]; 4],
     },
 }
 
@@ -113,6 +121,7 @@ impl EditOperation {
                 ),
                 None => UiText::with("resize", [width.to_string(), height.to_string()]),
             },
+            Self::Transform { .. } => UiText::new("transform"),
         }
     }
 }
@@ -751,6 +760,10 @@ impl EditorDocument {
                 // added.
                 Ok(*w == width && *h == height)
             }
+            EditOperation::Transform { corners } => {
+                validate_transform(corners, width, height)?;
+                Ok(is_identity_quad(corners, width, height))
+            }
         }
     }
 
@@ -761,6 +774,9 @@ impl EditorDocument {
             }),
             EditOperation::Flip { axis } => Undo::Invert(EditOperation::Flip { axis: *axis }),
             EditOperation::Crop { .. } | EditOperation::Resize { .. } => Undo::Snapshot(before),
+            // A warp cannot be recreated from its parameters: the pixels that
+            // left the quad are not in the result. Snapshot, like crop.
+            EditOperation::Transform { .. } => Undo::Snapshot(before),
         };
         self.undo.push(Step { operation, undo });
         self.redo.clear();
@@ -837,6 +853,221 @@ fn validate_resize(width: u32, height: u32) -> Result<(), UiText> {
         ));
     }
     Ok(())
+}
+
+/// The tolerance an identity quad is recognised with, in document pixels. A
+/// hand on a zoomed-out canvas cannot place a corner closer than a fraction of
+/// a pixel, and a warp that moves a corner by less than that is not an edit.
+const IDENTITY_EPSILON: f64 = 1e-6;
+
+/// True when the quad is exactly the document's own frame.
+fn is_identity_quad(corners: &[[f64; 2]; 4], width: u32, height: u32) -> bool {
+    let frame = [
+        [0.0, 0.0],
+        [f64::from(width), 0.0],
+        [f64::from(width), f64::from(height)],
+        [0.0, f64::from(height)],
+    ];
+    corners.iter().zip(frame.iter()).all(|(corner, expected)| {
+        (corner[0] - expected[0]).abs() <= IDENTITY_EPSILON
+            && (corner[1] - expected[1]).abs() <= IDENTITY_EPSILON
+    })
+}
+
+/// Reject a quad the warp cannot resolve.
+///
+/// Three things go wrong on a canvas: a corner is dragged outside the picture
+/// (there are no pixels to read there), two corners land on the same point or
+/// three become collinear (the homography has no inverse, so one half of the
+/// output would read nothing), or a corner is dragged past a neighbour so the
+/// quad folds over itself (the projective map would still be a matrix, but the
+/// picture inside it is mirrored twice and the user never asked for that).
+///
+/// Every corner must be inside the frame, every turn must go the same way, and
+/// the area must not collapse. Corners are listed clockwise from the top-left
+/// by contract, so a negative winding is as wrong as a folded one — it is the
+/// same gesture seen from the other side.
+fn validate_transform(
+    corners: &[[f64; 2]; 4],
+    doc_width: u32,
+    doc_height: u32,
+) -> Result<(), UiText> {
+    let max_x = f64::from(doc_width);
+    let max_y = f64::from(doc_height);
+    if let Some([x, y]) = corners.iter().find(|[x, y]| {
+        !x.is_finite() || !y.is_finite() || *x < 0.0 || *y < 0.0 || *x > max_x || *y > max_y
+    }) {
+        return Err(UiText::with(
+            "transform_outside",
+            [
+                format!("{x:.0}"),
+                format!("{y:.0}"),
+                doc_width.to_string(),
+                doc_height.to_string(),
+            ],
+        ));
+    }
+
+    let mut winding = 0.0f64;
+    for index in 0..4 {
+        let a = corners[index];
+        let b = corners[(index + 1) % 4];
+        let c = corners[(index + 2) % 4];
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if cross.abs() < 1e-6 {
+            return Err(UiText::new("transform_degenerate"));
+        }
+        if winding == 0.0 {
+            winding = cross.signum();
+        } else if cross.signum() != winding {
+            return Err(UiText::new("transform_degenerate"));
+        }
+    }
+    // Clockwise is the contract, and it is not a preference: the reversed quad
+    // maps the frame onto itself mirrored. Turning a picture over is `Flip`'s
+    // job, with its own history line, not something a corner drag does by
+    // accident.
+    if winding < 0.0 {
+        return Err(UiText::new("transform_degenerate"));
+    }
+
+    if quad_area(corners) < 1.0 {
+        return Err(UiText::new("transform_degenerate"));
+    }
+    Ok(())
+}
+
+/// The shoelace area of a quad, in square pixels; always positive.
+fn quad_area(corners: &[[f64; 2]; 4]) -> f64 {
+    let mut twice = 0.0f64;
+    for index in 0..4 {
+        let a = corners[index];
+        let b = corners[(index + 1) % 4];
+        twice += a[0] * b[1] - b[0] * a[1];
+    }
+    twice.abs() / 2.0
+}
+
+/// The homography that maps the unit square onto `corners`.
+///
+/// The unit square's (0, 0), (1, 0), (1, 1), (0, 1) land on the quad's TL, TR,
+/// BR, BL. The classic square-to-quad decomposition is used rather than an
+/// 8 × 8 solve: it is the same answer with the degenerate case (a parallelogram)
+/// written out instead of divided by zero.
+fn square_to_quad(corners: &[[f64; 2]; 4]) -> [[f64; 3]; 3] {
+    let [p0, p1, p2, p3] = *corners;
+    let sx = p0[0] - p1[0] + p2[0] - p3[0];
+    let sy = p0[1] - p1[1] + p2[1] - p3[1];
+    if sx.abs() < 1e-12 && sy.abs() < 1e-12 {
+        return [
+            [p1[0] - p0[0], p3[0] - p0[0], p0[0]],
+            [p1[1] - p0[1], p3[1] - p0[1], p0[1]],
+            [0.0, 0.0, 1.0],
+        ];
+    }
+    let dx1 = p1[0] - p2[0];
+    let dx2 = p3[0] - p2[0];
+    let dy1 = p1[1] - p2[1];
+    let dy2 = p3[1] - p2[1];
+    let denominator = dx1 * dy2 - dx2 * dy1;
+    let g = (sx * dy2 - dx2 * sy) / denominator;
+    let h = (dx1 * sy - sx * dy1) / denominator;
+    [
+        [p1[0] - p0[0] + g * p1[0], p3[0] - p0[0] + h * p3[0], p0[0]],
+        [p1[1] - p0[1] + g * p1[1], p3[1] - p0[1] + h * p3[1], p0[1]],
+        [g, h, 1.0],
+    ]
+}
+
+/// The inverse of a 3 × 3 matrix, or `None` when it has none.
+fn invert3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let [[a, b, c], [d, e, f], [g, h, i]] = matrix;
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if determinant.abs() < 1e-12 {
+        return None;
+    }
+    let scale = 1.0 / determinant;
+    Some([
+        [
+            (e * i - f * h) * scale,
+            (c * h - b * i) * scale,
+            (b * f - c * e) * scale,
+        ],
+        [
+            (f * g - d * i) * scale,
+            (a * i - c * g) * scale,
+            (c * d - a * f) * scale,
+        ],
+        [
+            (d * h - e * g) * scale,
+            (b * g - a * h) * scale,
+            (a * e - b * d) * scale,
+        ],
+    ])
+}
+/// Warp `image` so the quad becomes the whole frame, keeping the frame's size.
+///
+/// Each destination pixel centre is a point in the unit square; the homography
+/// takes it to the quad's own point in the source, which is sampled bilinearly.
+/// The quad is inside the frame by validation, so every sample lands inside the
+/// picture; the clamp is there for float rounding at the very edge, not as a
+/// crop.
+fn warp_quad(image: &RgbaImage, corners: &[[f64; 2]; 4]) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let [[a, b, c], [d, e, f], [g, h, _]] = square_to_quad(corners);
+    let mut output = RgbaImage::new(width, height);
+    let width_f = f64::from(width);
+    let height_f = f64::from(height);
+    for y in 0..height {
+        // The unit square's v for this row is constant: hoist it out of the
+        // inner loop, which is most of the cost on a large document.
+        let v = (f64::from(y) + 0.5) / height_f;
+        for x in 0..width {
+            let u = (f64::from(x) + 0.5) / width_f;
+            let w = g * u + h * v + 1.0;
+            if w.abs() < 1e-12 {
+                continue;
+            }
+            let source_x = (a * u + b * v + c) / w;
+            let source_y = (d * u + e * v + f) / w;
+            // The homography answers in *frame* coordinates — where the
+            // document's outer edge is 0 and `width`, not the centre of its
+            // first pixel. Shift to pixel centres so an identity quad samples
+            // pixel (x, y) for destination pixel (x, y) instead of halfway
+            // between two.
+            output.put_pixel(x, y, sample_bilinear(image, source_x - 0.5, source_y - 0.5));
+        }
+    }
+    output
+}
+
+/// Bilinear sample with the sample point clamped to the image's own bounds.
+fn sample_bilinear(image: &RgbaImage, x: f64, y: f64) -> image::Rgba<u8> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return image::Rgba([0, 0, 0, 255]);
+    }
+    let x = x.clamp(0.0, f64::from(width - 1));
+    let y = y.clamp(0.0, f64::from(height - 1));
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(width - 1);
+    let y1 = (y0 + 1).min(height - 1);
+    let fx = x - f64::from(x0);
+    let fy = y - f64::from(y0);
+    let top_left = image.get_pixel(x0, y0);
+    let top_right = image.get_pixel(x1, y0);
+    let bottom_left = image.get_pixel(x0, y1);
+    let bottom_right = image.get_pixel(x1, y1);
+    let mut out = [0u8; 4];
+    for channel in 0..4 {
+        let top = f64::from(top_left[channel]) * (1.0 - fx) + f64::from(top_right[channel]) * fx;
+        let bottom =
+            f64::from(bottom_left[channel]) * (1.0 - fx) + f64::from(bottom_right[channel]) * fx;
+        let value = top * (1.0 - fy) + bottom * fy;
+        out[channel] = value.round().clamp(0.0, 255.0) as u8;
+    }
+    image::Rgba(out)
 }
 
 /// Scale the whole source down (or up) to the largest box of the source's own
@@ -952,6 +1183,10 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
             let rect = cover_rect(width, height, *w, *h);
             let cropped = imageops::crop_imm(image, rect.0, rect.1, rect.2, rect.3).to_image();
             Ok(imageops::resize(&cropped, *w, *h, FilterType::Lanczos3))
+        }
+        EditOperation::Transform { corners } => {
+            validate_transform(corners, width, height)?;
+            Ok(warp_quad(image, corners))
         }
     }
 }
@@ -1231,6 +1466,12 @@ pub fn spawn_draft(
     let (kind, width, height) = match &operation {
         EditOperation::Resize { width, height, .. } => ("resize", *width, *height),
         EditOperation::Crop { width, height, .. } => ("crop", *width, *height),
+        // A transform keeps the frame it started with, so the draft is the
+        // document's own size — read from the pixels the worker was handed.
+        EditOperation::Transform { .. } => {
+            let (width, height) = pixels.dimensions();
+            ("transform", width, height)
+        }
         _ => ("", 0, 0),
     };
     std::thread::spawn(move || {
@@ -1570,6 +1811,168 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, "invalid_rotation");
         assert_eq!(error.args, ["360"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_identity_quad_is_never_recorded() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let (width, height) = document.dimensions();
+        let identity = EditOperation::Transform {
+            corners: [
+                [0.0, 0.0],
+                [f64::from(width), 0.0],
+                [f64::from(width), f64::from(height)],
+                [0.0, f64::from(height)],
+            ],
+        };
+        assert!(!document.apply(identity.clone()).unwrap());
+        assert!(!document.would_change(&identity).unwrap());
+        assert!(!document.can_undo());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_identity_quad_reproduces_every_pixel() {
+        let dir = temp_dir();
+        let document = open(&dir);
+        let image = document.pixels();
+        let (width, height) = image.dimensions();
+        let warped = warp_quad(
+            &image,
+            &[
+                [0.0, 0.0],
+                [f64::from(width), 0.0],
+                [f64::from(width), f64::from(height)],
+                [0.0, f64::from(height)],
+            ],
+        );
+        assert_eq!(
+            warped.as_raw(),
+            image.as_raw(),
+            "an identity quad is a copy, not a half-pixel shift"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_keystone_maps_the_quad_onto_the_frame() {
+        // R encodes the column and G the row, so a sample can be read back as
+        // the source point it came from: the warp is judged on coordinates, not
+        // on whether it "looks straightened".
+        let image = RgbaImage::from_fn(64, 64, |x, y| {
+            image::Rgba([x as u8 * 4, y as u8 * 4, 0, 255])
+        });
+        // The inner rectangle (16, 16) – (48, 48) becomes the whole frame.
+        let warped = warp_quad(
+            &image,
+            &[[16.0, 16.0], [48.0, 16.0], [48.0, 48.0], [16.0, 48.0]],
+        );
+        assert_eq!(warped.dimensions(), image.dimensions(), "the frame is kept");
+        let left = warped.get_pixel(0, 32);
+        let right = warped.get_pixel(63, 32);
+        let top = warped.get_pixel(32, 0);
+        let bottom = warped.get_pixel(32, 63);
+        // A linear ramp survives bilinear sampling exactly, so these are the
+        // quad's own edges: x 16 → R 64, x 47.5 → R ~190; likewise for y.
+        assert!(
+            (left[0] as i32 - 64).abs() <= 4,
+            "the left edge sampled x≈{}",
+            left[0] / 4
+        );
+        assert!(
+            (right[0] as i32 - 190).abs() <= 4,
+            "the right edge sampled x≈{}",
+            right[0] / 4
+        );
+        assert!(
+            (top[1] as i32 - 64).abs() <= 4,
+            "the top edge sampled y≈{}",
+            top[1] / 4
+        );
+        assert!(
+            (bottom[1] as i32 - 190).abs() <= 4,
+            "the bottom edge sampled y≈{}",
+            bottom[1] / 4
+        );
+    }
+
+    #[test]
+    fn a_transform_of_one_corner_keeps_the_far_side_and_undoes_by_snapshot() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let original = document.pixels();
+        // Pull the top-left corner inwards: the bottom-right of the output must
+        // still be the bottom-right of the picture, which is what makes this a
+        // corner pin rather than a resize.
+        assert!(document
+            .apply(EditOperation::Transform {
+                corners: [[12.0, 6.0], [64.0, 0.0], [64.0, 32.0], [0.0, 32.0],],
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (64, 32));
+        let warped = document.pixels();
+        assert_ne!(warped.as_raw(), original.as_raw());
+        assert_eq!(
+            document.history(),
+            vec![UiText::new("transform")],
+            "the history names the operation, the sentence lives in UiLines"
+        );
+        // The bottom-right destination pixel comes from the quad's own
+        // bottom-right, which did not move.
+        let corner = warped.get_pixel(63, 31);
+        let expected = original.get_pixel(63, 31);
+        for channel in 0..3 {
+            assert!(
+                (corner[channel] as i32 - expected[channel] as i32).abs() <= 6,
+                "the untouched corner changed: {corner:?} vs {expected:?}"
+            );
+        }
+        assert!(document.undo());
+        assert_eq!(document.pixels().as_raw(), original.as_raw());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folded_or_outside_quad_is_rejected_with_a_line() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let outside = document
+            .apply(EditOperation::Transform {
+                corners: [[-1.0, 0.0], [64.0, 0.0], [64.0, 32.0], [0.0, 32.0]],
+            })
+            .unwrap_err();
+        assert_eq!(outside.code, "transform_outside");
+        assert_eq!(outside.args, ["-1", "0", "64", "32"]);
+
+        // TR and BL swapped: the edges cross, so there is no picture inside the
+        // quad to keep.
+        let folded = document
+            .apply(EditOperation::Transform {
+                corners: [[0.0, 0.0], [64.0, 0.0], [0.0, 32.0], [64.0, 32.0]],
+            })
+            .unwrap_err();
+        assert_eq!(folded.code, "transform_degenerate");
+
+        // The same quad wound the other way is a mirror of the frame. Turning a
+        // picture over is Flip's job, so Transform refuses it rather than
+        // applying an edit the user cannot name.
+        let reversed = document
+            .apply(EditOperation::Transform {
+                corners: [[0.0, 0.0], [0.0, 32.0], [64.0, 32.0], [64.0, 0.0]],
+            })
+            .unwrap_err();
+        assert_eq!(reversed.code, "transform_degenerate");
+
+        // Two corners on the same point.
+        let pinched = document
+            .apply(EditOperation::Transform {
+                corners: [[8.0, 8.0], [8.0, 8.0], [64.0, 32.0], [0.0, 32.0]],
+            })
+            .unwrap_err();
+        assert_eq!(pinched.code, "transform_degenerate");
+        assert!(!document.can_undo(), "a rejected warp must not be recorded");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -7,7 +7,7 @@ Cross-platform native desktop photo viewer, library manager and simple non-destr
 - Browse folders and image library; thumbnails, grid, image viewer, zoom/pan, fit, fullscreen, slideshow.
 - Search, filter, sort, tags, favorites, collections; read EXIF, orientation and ICC profiles.
 - Index metadata in SQLite; watch filesystem changes; handle missing/moved/renamed files; use stable image IDs.
-- Edit: rotate, flip, crop, resize, exposure, brightness, contrast, saturation; live preview, before/after, undo/redo, batch export.
+- Edit: rotate, flip, crop, resize, straighten (perspective corner-pin), exposure, brightness, contrast, saturation; live preview, before/after, undo/redo, batch export.
 - Non-destructive edit recipes and explicit export; source originals preserved by default.
 - CLI, local IPC and MCP support for commands, queries, task status, event subscriptions and permitted screenshots.
 - Localization; system fonts, palette, icon theme, DPI/scale, native dialogs and accessibility on GNOME/KDE/Windows where available.

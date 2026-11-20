@@ -33,7 +33,12 @@ would have marked its thirty sentences `vanished` and `lrelease` would have
 dropped them silently. A fifth change (row 81) lets Export write a delivery copy
 at a chosen long edge — `Original size`, 3840, 2560, 1920, 1280 or 800 px —
 scaling the whole frame and never enlarging it, and keeps the ICC profile but
-not the EXIF of a resized copy.
+not the EXIF of a resized copy. The latest session made the canvas itself an
+editing surface (row 82): Crop's rectangle is now a frame you drag out on the
+picture, move from the inside and resize from eight handles, and a fourth tool,
+Transform, carries four source corners plus four edge handles so a keystoned
+photo can be straightened; both tools keep their typed fields as the same
+rectangle or quad and share the existing preview/Apply path in Core.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -48,7 +53,12 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   check, and the 32 Vietnamese sentences), then `feat(editor): export at a
   chosen long edge` for row 81 (`max_edge` on `editor_export`, the long-edge
   rule and the APP1 rule in Core, the dialog's `Output size` row, two Core
-  tests and one QML case, ADR 0004). Nothing is pushed (see below).
+  tests and one QML case, ADR 0004). The canvas-drag session (row 82) is one
+  commit on top: the Transform tool in protocol/Core/QML, the crop frame and
+  its handles, the four new QML cases, the new `editor-transform` harness
+  request and the four screenshots. ADR 0011 records why the transform is a
+  quad, why the output keeps the document's size and why it undoes by snapshot.
+  Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
   follow-up, and the two size tools.
@@ -94,7 +104,12 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `KOGAVIEW_DEV_UI_REQUEST=settings-drag` (modal-pointer session; dragged the
   real Settings header with `QTest` and logged the dialog and Viewer offsets).
   Every temporary hook is gone again; the only surviving debug additions are the
-  permanent `editor-resize` and `editor-crop` requests above.
+  permanent `editor-resize`, `editor-crop` and `editor-transform` requests
+  above. `editor-transform` (row 82) clicks the Transform tool, moves one corner
+  (`_ARG` = `X,Y` in document pixels, `_ARG2` = `0`–`3` or `e0`–`e3`) through the
+  same helpers the handles call, and takes `_ARG3=live` and `_ARG4=apply`; it
+  found nothing broken, but it is the only way a quad reached the real window
+  this session.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -114,10 +129,16 @@ Nothing here is a plan; it is what was measured, what was not, and why.
 Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 `Papirus-Dark`, system PySide6 in `/usr/lib/python3.14/site-packages`.
 
-- Build needs `PATH=/tmp/opencode/lrel/bin:$PATH` (`lrelease` from a PySide6
-  copy found by `scripts/find_lrelease.py`).
+- Build needs `PATH=/usr/lib/qt6/bin:$PATH` (`lrelease` is the system Qt 6 one
+  now; the `/tmp/opencode/lrel` copy is gone).
 - `KOGAVIEW_DEV_SCREENSHOT` works on the real Wayland window (a window grab needs
   no compositor permission); `QT_QPA_PLATFORM=offscreen` loads no icon theme.
+- **`qInfo`/`qWarning` from the harness are silent when stderr is a file.** Qt 6
+  sends its default message output wherever it thinks a console is, so a
+  `timeout … build/dev/bin/kogaview > run.log 2>&1` run prints only the Rust
+  tracing lines and every `KogaView dev …` line disappears — which reads exactly
+  like a hook that never fired. `QT_ASSUME_STDERR_HAS_CONSOLE=1` on the command
+  restores them (row 82 lost a run to this before noticing).
 - `org.gnome.Shell` `Eval` answers `ok False`: the app grid cannot be read or
   photographed from here.
 - **No `wmctrl`, and XTEST input does not reach the app window.** A window
@@ -161,6 +182,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 79 | Opening a 27 MP JPEG in the Editor took 11 s of empty canvas: Core decoded the full frame, then resized it for the preview, before anything could be drawn | `crates/app-core/Cargo.toml` (`jpeg-decoder`, no default features, pure Rust), `crates/app-core/src/editor.rs` (`scaled_jpeg_preview` reads 1/8, 1/4 or 1/2 of a JPEG through the DCT and answers the header size; `preview_dimensions`; `render_preview` now box-samples via `preview_pixels`/`imageops::thumbnail`; `spawn_open` publishes `EditorTask::FirstPreview` before decoding the document), `crates/app-core/src/state.rs` (`EditorState.opening`), `crates/app-core/src/core.rs` (`publish_opening_preview`, the `FirstPreview` arm, a failed open now drops the fast preview it had shown), `crates/desktop/qml/EditorView.qml` (`opening`/`documentReady`: the canvas and the footer draw the provisional state, the tools stay disabled), `tests/qml/tst_editor.cpp` (`theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes`), Core tests (`the_scaled_jpeg_preview_matches_the_full_decode`, `a_small_jpeg_is_not_decoded_twice`, `opening_a_large_jpeg_publishes_the_preview_before_the_document`), `cargo test`, `just test` | **Measured** on a 4500 × 6000 JPEG (1.4 MB, `ffmpeg -q:v 3`): before, one decode of 11 063 ms and then a preview render of 6 264 ms; after, the reduced decode plus its PNG lands at 3 034 ms (the picture is on screen from 3.1 s) and the full document installs at 7 863 ms instead of 11 063 ms. The 2× on the document half is `imageops::thumbnail` replacing `imageops::resize(…, Triangle)`: on a 27 MP frame the general resampler was the second-largest cost after the decode. **Real window** (Vietnamese, isolated `XDG_*`): the grab at 8 s shows the picture, `4500 × 6000`, the soft decode on the canvas, `Đang mở big.jpg…` in the status bar and Resize/Crop/Rotate greyed; the grab after the document landed shows `Đang chỉnh sửa big.jpg · 4500 × 6000` with every tool live and a `editor_resize_preview` draft on the canvas (journal rev 5). **Mutations** (each restored, then re-run): `scaled_jpeg_preview` returning `None` always → `opening_a_large_jpeg_publishes_the_preview_before_the_document` fails on the first message; `documentReady` no longer subtracting `opening` → the QML test fails `!m_editor->property("documentReady")`. **Not verified:** no hand opened a file; the run was driven by dev commands. A CMYK JPEG and a progressive JPEG take the fallback path, which is exercised only by `a_small_jpeg_is_not_decoded_twice` (a plain JPEG), not by a CMYK sample. `jpeg-decoder`'s `scale()` picks the smallest power of two that still covers the request, so on a frame just above 4096 px the reduced decode is 1/2 and the saving is smaller than these numbers; that case was not timed. |
 | 80 | A rejected command was still English in a Vietnamese window: `Main.qml` drew `result.error.message`, a sentence Core had built | `crates/app-protocol/src/lib.rs` (`UiText` beside `ProtocolError`, which gained `ui: Option<UiText>` and `line`/`with_line`; `None` where the detail is the platform's), `crates/app-core/src/state.rs` (re-export), `core.rs` (every refusal Core words itself publishes a line; `invalid_edit` keeps a journal sentence for crop/resize), `editor.rs` (validators and `apply`/`would_change` answer `UiText`), `ops.rs` (`safe_for_deletion`), `Main.qml` (toast draws `error.ui` first), `UiLines.qml` (32 cases), `i18n/kogaview_ts.pro` (`UiLines.qml`/`ToolbarMetrics.qml` were missing — the next `lupdate` would have marked their strings `vanished`), `scripts/check_translations.py` (a QML file that draws a string must be in the `.pro`), `i18n/kogaview_vi.ts` (32 strings), `tests/qml/tst_language.cpp` (2 cases), Core tests | `just test` 276 strings / 110 C++ / 272 drawn; cargo 70 + 4; language 7; real window: Vietnamese toast `Xuất đè lên tài liệu đang mở sẽ thay thế nó; hãy dùng Lưu` after the export dialog was pointed at the document itself (`docs/evidence/M1-rejection-vi.png`), journal `ok:false` `invalid_destination` + `ui.code export_onto_document`; 5 mutations, each caught |
 | 81 | Export always wrote the document at its own size: delivering a 27 MP picture at a web or phone size meant editing the document first, which is destructive and easy to forget | `crates/app-protocol/src/lib.rs` (`EditorExport.max_edge`), `crates/app-core/src/editor.rs` (`export_dimensions`, the long-edge rule; `export_pixels` takes the limit; `jpeg_metadata_segments` keeps each marker so a resized copy drops APP1 but keeps APP2/APP13), `core.rs` (`editor_export` passes it, `0`/absent = the document's size), `EditorView.qml` (`exportLongEdge`, `exportEdges`, `chooseExportSize`, an `Output size` row, an EXIF note), `cpp/main.cpp` (`_ARG4` + tool logging), `tests/qml/tst_editor.cpp`, Core tests, ADR 0004 | `just test` 280 strings / 110 C++ / 276 drawn; cargo 72 + 4; editor 37; real window: the Vietnamese `Kích thước xuất` combo reading `800 px cạnh dài`, and `phone.jpg` written at 600 × 800 from a 1200 × 1600 document that stayed 1200 × 1600 (`docs/evidence/M1-export-size-vi.png`, `-written.png`), journal rev 5, tool still `pointer`; 4 mutations, each caught |
+| 82 | Crop had no frame on the canvas to place its rectangle, and a photo shot at an angle could not be straightened at all | `crates/app-protocol/src/lib.rs` (`EditorTransform`/`EditorTransformPreview`), `crates/app-core/src/editor.rs` (the `Transform` operation, `validate_transform`, `square_to_quad`/`invert3`/`warp_quad`, snapshot undo), `core.rs` (`PreviewKind::Transform`, `editor_transform_preview`), `crates/desktop/qml/EditorView.qml` (a fourth tool, the crop frame with eight handles, the transform quad with four corners plus four edge handles, the pan dropping the left button while either is armed, `cropFrameShown`/`transformFrameShown`), `UiLines.qml` + `kogaview_vi.ts` (four lines and the history sentence), `cpp/main.cpp` (`editor-transform`), `tests/qml/tst_editor.cpp` (4 cases + the pan assertions), 6 Core tests | `just test` 293 strings / 110 C++ / 289 drawn; cargo 78 + 4; editor 41; real window: quad grabbed (`docs/evidence/M1-editor-transform-quad-vi.png`), live draft + the `Tắt Xem trước trực tiếp…` hint (`-live-vi.png`, journal `editor_transform_preview` rev 4), applied at `1200 × 1600` with Apply disabled again (`-applied-vi.png`, `editor_transform` rev 4), crop frame 512 × 384 at `bottom_right` (`M1-editor-crop-frame-vi.png`); 8 mutations, each caught |
 
 ## Test gate
 
@@ -168,10 +190,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 280 strings in kogaview_vi.ts, 110 of them compiled into C++, 276 drawn by the QML, 4 looked up by context
+translations: 293 strings in kogaview_vi.ts, 110 of them compiled into C++, 289 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 72 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 37 · language 7 · toolbar 11
+cargo: 78 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 41 · language 7 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -386,6 +408,57 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   Every applied edit, undo/redo/reset, a new open and close still drop the
   draft file.
 
+## Design decisions, canvas-drag session (row 82, ADR 0011)
+
+- **The canvas is a second input, not a second source of truth.** A crop drag
+  writes `cropX`/`cropY`/`widthField`/`heightField` — the same four fields the
+  inspector owns — through `setCropRect`, so there is exactly one rectangle and
+  Apply, the preset dropdowns and the draft all read it. A transform drag writes
+  `transformCorners`, which is exactly what the protocol carries.
+- **A handle owns two sides and pins the opposite ones.** `dragCropHandle(column,
+  row, hostX, hostY)` moves only the left/right and top/bottom sides the handle
+  is on, clamps them to the document and keeps at least one pixel, so a rectangle
+  cannot invert. A press inside the frame moves it and keeps its size; a drag on
+  the empty canvas seeds a new one. The frame is declared after the create area,
+  so the frame wins a press that starts on it.
+- **The four edges are an affordance over four corners.** `moveTransformEdge`
+  computes the pointer's delta from the edge's midpoint and applies it to both of
+  its corners — clamped so neither leaves the frame — then publishes the same
+  four-point array. The wire format, the validator and the draft never learn
+  about edges.
+- **Clockwise, one winding, and not a mirror.** `validate_transform` refuses a
+  reversed quad as `transform_degenerate` because it is a mirror of the frame and
+  Flip owns mirroring, with its own history line. Outside corners answer
+  `transform_outside` with the corner and the frame in the line. The QML repeats
+  those two guards only so a quad Core would refuse is never drawn or armed.
+- **The homography goes from the destination square to the source quad.**
+  `square_to_quad` is the forward map (its inverse was the first bug: the result
+  came out pinched). `warp_quad` walks the document, finds the source point of
+  each pixel's unit-square coordinate, shifts by half a pixel to pixel centres and
+  samples bilinearly with the edges clamped, which is what lets
+  `the_identity_quad_reproduces_every_pixel` demand the original bytes back.
+- **A warp is undone by a snapshot.** The pixels outside the quad are not in the
+  result, so it cannot be inverted the way a rotate or a flip can; `trim_history`
+  already budgets snapshots.
+- **The overlay hides while its own draft is on the canvas.** Both `cropFrameShown`
+  and `transformFrameShown` require `previewDraft === null`, and `previewDraft`
+  already filters by tool and by the draft's `kind`. A draft is the result; a
+  frame drawn over it would describe source pixels that are no longer there, and
+  dragging it would write the result's coordinates into the source's fields. The
+  crop create area and overlay are disabled with the frame, and the inspector
+  says `Tắt Xem trước trực tiếp…` / `Turn Live preview off…` so the way back is
+  on screen.
+- **The left button belongs to the armed overlay.** With Crop or Transform
+  selected, `editorPan` accepts only `MiddleButton`. Pointer handlers are
+  offered the sequence even when the overlay's `MouseArea` takes the item event,
+  so without this a corner drag also panned the picture — the QML suite fails
+  three cases, including "the corner did not follow the pointer", which is the
+  defect itself.
+- **Transform keeps the document's size.** The quad is remapped onto the frame,
+  never cropped to the quad's aspect: the inspector says so, and Resize/Export
+  remain the ways to choose another size. Outside the quad the sampler clamps to
+  the border pixel, so the leftover smears rather than turning transparent.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -497,6 +570,24 @@ passing `true` for `keep_exif` → "the resized export kept EXIF that describes 
 old size"; removing `max_edge` from the QML command → `exportOffersADeliverySize`
 fails (`0` vs `1280`); not moving the combo box with the property →
 `chosenIndex` 0 vs 4, the bug the first window grab showed. Each restored, then
+the suite green.
+
+Crop frame and transform quad: dropping the half-pixel shift from `warp_quad`'s
+sampler → `the_identity_quad_reproduces_every_pixel` fails on the first row
+instead of returning the original bytes; the reversed winding accepted (guard
+moved to `< -1.0`) → `a_folded_or_outside_quad_is_rejected_with_a_line` fails on
+the mirrored quad; the lower bounds check loosened to `-2.0` → the same test
+fails on `transform_outside`; `dragCropHandle`'s right side no longer writing a
+width → `theCropFrameIsDrawnAndDragged` fails (`80` where `60` was expected);
+`transformChanged()` answering `true` unconditionally → `theTransformToolDragsCornersAndEdges`
+fails because Apply is armed at the identity; `moveTransformEdge` leaving its
+second corner alone → the same case fails ("the edge did not move its first
+corner"); `editor_transform_preview` asking for `PreviewKind::Resize` → the Core
+case fails with `resize preview 40 20` where `transform preview 40 20` was
+expected; `editorPan` accepting the left button again under Crop/Transform →
+`theCropFrameIsDrawnAndDragged`, `theTransformToolDragsCornersAndEdges` and
+`theLiveTransformShowsOnlyItsOwnDraft` all fail, the corner case with "the corner
+did not follow the pointer", because the pan takes the drag. Each restored, then
 the suite green.
 
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
@@ -631,6 +722,24 @@ re-run separately). All restored, then `just test` green.
   workspace's readouts.
 - `cargo clippy -D warnings` fails on two pre-existing `derivable_impls` in
   `crates/app-protocol/src/lib.rs`.
+- **No hand dragged a crop frame or a quad.** The real-window runs moved one
+  corner through `setTransformCorner`/`moveTransformEdge` — the functions the
+  handles call — and the drags themselves are `QTest` pointer sequences inside
+  the QML suite. A pointer sequence on this compositor was not delivered to the
+  window (see above), so a hand's frame-by-frame drag is still unexercised.
+- **The transform is one projective quad onto the document's own frame.** It
+  keeps the document size, never crops to the quad's aspect, has no rotation of
+  the quad, no lens/barrel model and no "keep transparency outside the quad"
+  mode; outside the quad the sampler clamps to the border pixel, so the leftover
+  smears. That is a decision, not a measured user preference.
+- **The warp's cost on a large document was not timed.** The 1 200 × 1 600 draft
+  had landed before the 18 s grab; nothing finer was measured, and a 27 MP warp
+  may be slow enough to want tiling (the same gap row 79's tiled-decode item
+  names).
+- **The crop frame's on-screen numbers are geometric, not pixel-perfect.** On
+  the grab the frame's two horizontal borders are 195 px apart and it is 261 px
+  wide at 0.51 zoom (= 384 and 512 document pixels); the accent-colour bounding
+  box also picks up the eight handles, so the box itself measures 269 × 203.
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
 
@@ -650,10 +759,10 @@ isolated `XDG_CONFIG_HOME` (`language: "vi"`, a 300×200 picture): it opened at
 the instance reported `profile="prod"`. The owner's own configuration and the
 `image/jpeg` default handler were not touched.
 
-The prefix binary was **not** reinstalled for the keyboard commit or the two
-follow-ups; it predates them until the next `just install-dev` (or `just
-install`). The keyboard, tooltip and menu evidence comes from
-`build/dev/bin/kogaview`.
+The prefix binary was **not** reinstalled for the keyboard commit or any
+follow-up since; it predates rows 66 and 77–82 until the next `just install-dev`
+(or `just install`). The keyboard, tooltip, menu, export and canvas evidence all
+comes from `build/dev/bin/kogaview`.
 
 ## Next natural step
 
@@ -672,3 +781,12 @@ install`). The keyboard, tooltip and menu evidence comes from
    `spawn_draft`'s render failure keeps its message. Translating that means
    classifying the errno rather than passing `io::Error`'s string through —
    a decision about what the user should be told, not a mechanical sweep.
+4. **The canvas now edits, so decide what "outside the quad" should look like.**
+   Row 82's warp clamps to the border pixel; transparent or a fill colour would
+   be a different result, and neither was asked for. Related: the crop frame
+   accepts a rectangle anywhere on the document but never offers to keep its
+   ratio while dragging (the ratio lock still only links the typed fields).
+5. **The warp is one pass over every pixel on a worker thread.** `spawn_draft`
+   already renders drafts on a `std::thread::spawn`, but a corner drag on a 27 MP
+   document with Live preview on re-renders the whole frame per settle. Profiling
+   it before adding tiling (item 1) is the cheaper move.

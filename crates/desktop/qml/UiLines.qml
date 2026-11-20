@@ -136,6 +136,13 @@ QtObject {
                 .arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]).arg(args[4]).arg(args[5]);
         case "resize_size_empty": return qsTr("A resize needs a width and a height");
         case "resize_too_large": return qsTr("Resizing to %1 × %2 is larger than the %3 pixel limit").arg(args[0]).arg(args[1]).arg(args[2]);
+        case "transform_outside":
+            return qsTr("The corner at %1,%2 is outside the %3 × %4 image")
+                .arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]);
+        case "transform_degenerate":
+            return qsTr("Those four corners do not make a usable shape; keep them in order and apart");
+        case "transform_noop": return qsTr("That transform would not change the image");
+        case "transform_preview": return qsTr("Previewing a transform at %1 × %2").arg(args[0]).arg(args[1]);
 
         // --- editor history (also the text of an applied edit) -----------
         case "rotate_right": return qsTr("Rotate right 90°");
@@ -147,6 +154,7 @@ QtObject {
         case "crop": return qsTr("Crop %1 × %2 at %3,%4").arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]);
         case "resize": return qsTr("Resize %1 × %2").arg(args[0]).arg(args[1]);
         case "resize_pad": return qsTr("Resize %1 × %2 · pad %3").arg(args[0]).arg(args[1]).arg(args[2]);
+        case "transform": return qsTr("Straighten the frame");
         }
         return args.length ? args.join(" ") : line.code;
     }

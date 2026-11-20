@@ -36,9 +36,9 @@ Item {
     }
     property int leftPanelWidth: 220
     property int rightPanelWidth: 260
-    /// Which tool is selected: `pointer` (no tool), `resize` or `crop`. The
-    /// pointer is the default and the no-op tool, so opening the Editor never
-    /// leaves an Apply button armed.
+    /// Which tool is selected: `pointer` (no tool), `resize`, `crop` or
+    /// `transform`. The pointer is the default and the no-op tool, so opening
+    /// the Editor never leaves an Apply button armed.
     property string tool: "pointer"
     /// Resize links Width and Height through this ratio, so the two fields can
     /// never describe a different shape than the one the user picked. `free` is
@@ -70,6 +70,114 @@ Item {
     /// The same draft idea for Crop: the canvas shows the rectangle Core would
     /// cut, while the document, its history and its save target stay put.
     property bool cropLivePreview: false
+    /// And for Transform: the canvas shows the straightened frame before Apply.
+    property bool transformLivePreview: false
+    /// The transform quad in document pixels, clockwise from the top left:
+    /// every corner must stay inside the picture, and the four of them are the
+    /// whole command. The frame's own corners are the identity, so opening a
+    /// document or putting the tool down leaves nothing armed. The four edge
+    /// handles are an affordance over this one array: dragging an edge moves
+    /// the two corners that form it.
+    property var transformCorners: []
+
+    /// The quad that changes nothing: the document's own frame.
+    function identityCorners() {
+        return [[0, 0],
+                [view.documentWidth, 0],
+                [view.documentWidth, view.documentHeight],
+                [0, view.documentHeight]]
+    }
+
+    function resetTransformCorners() {
+        view.transformCorners = view.identityCorners()
+    }
+
+    function cornerX(index) {
+        var corners = view.transformCorners
+        return corners && corners.length === 4 ? corners[index][0] : 0
+    }
+
+    function cornerY(index) {
+        var corners = view.transformCorners
+        return corners && corners.length === 4 ? corners[index][1] : 0
+    }
+
+    /// Move one corner to a point given in canvas-host coordinates, clamped to
+    /// the picture so the command can never name a corner with no pixels.
+    function setTransformCorner(index, hostX, hostY) {
+        var corners = view.transformCorners
+        if (!corners || corners.length !== 4) return
+        var x = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(hostX)))
+        var y = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(hostY)))
+        var next = []
+        for (var i = 0; i < 4; ++i) next.push([corners[i][0], corners[i][1]])
+        next[index] = [Math.round(x * 10) / 10, Math.round(y * 10) / 10]
+        view.transformCorners = next
+    }
+
+    /// Move the two corners of edge `index` (from corner `index` to corner
+    /// `index + 1`) by the same offset, so the edge follows the pointer and
+    /// stays parallel to itself. The offset is clamped for both corners at
+    /// once, otherwise one of them could leave the picture and fold the quad.
+    function moveTransformEdge(index, hostX, hostY) {
+        var corners = view.transformCorners
+        if (!corners || corners.length !== 4) return
+        var first = index % 4
+        var second = (index + 1) % 4
+        var midX = (corners[first][0] + corners[second][0]) / 2
+        var midY = (corners[first][1] + corners[second][1]) / 2
+        var dx = view.hostToDocX(hostX) - midX
+        var dy = view.hostToDocY(hostY) - midY
+        dx = Math.max(-Math.min(corners[first][0], corners[second][0]),
+                Math.min(dx, view.documentWidth - Math.max(corners[first][0], corners[second][0])))
+        dy = Math.max(-Math.min(corners[first][1], corners[second][1]),
+                Math.min(dy, view.documentHeight - Math.max(corners[first][1], corners[second][1])))
+        var next = []
+        for (var i = 0; i < 4; ++i) next.push([corners[i][0], corners[i][1]])
+        next[first] = [Math.round((corners[first][0] + dx) * 10) / 10,
+                       Math.round((corners[first][1] + dy) * 10) / 10]
+        next[second] = [Math.round((corners[second][0] + dx) * 10) / 10,
+                        Math.round((corners[second][1] + dy) * 10) / 10]
+        view.transformCorners = next
+    }
+
+    /// Whether the quad is worth sending. Core is the authority and answers a
+    /// rejected corner with a translated line; this repeats only the two
+    /// geometric guards — inside the picture, clockwise and not folded — so a
+    /// quad Core would refuse is never rendered or applied in the first place.
+    function transformUsable() {
+        var corners = view.transformCorners
+        if (!view.documentReady || !corners || corners.length !== 4) return false
+        var winding = 0
+        for (var index = 0; index < 4; ++index) {
+            var point = corners[index]
+            if (!(typeof point[0] === "number") || !(typeof point[1] === "number")) return false
+            if (point[0] < 0 || point[1] < 0
+                    || point[0] > view.documentWidth || point[1] > view.documentHeight) return false
+            var a = corners[index]
+            var b = corners[(index + 1) % 4]
+            var c = corners[(index + 2) % 4]
+            var cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+            if (Math.abs(cross) < 1e-6) return false
+            var turn = cross > 0 ? 1 : -1
+            if (winding === 0) winding = turn
+            else if (turn !== winding) return false
+        }
+        return winding > 0
+    }
+
+    /// True when at least one corner left the frame, so Apply is not armed for
+    /// a transform that would only answer `edit_noop`.
+    function transformChanged() {
+        var corners = view.transformCorners
+        if (!corners || corners.length !== 4) return false
+        var frame = view.identityCorners()
+        for (var index = 0; index < 4; ++index) {
+            if (Math.abs(corners[index][0] - frame[index][0]) > 1e-6
+                    || Math.abs(corners[index][1] - frame[index][1]) > 1e-6) return true
+        }
+        return false
+    }
 
     /// The ratios both size tools offer. `Free` leaves both fields alone,
     /// `Original` keeps the document's shape, `Keep current ratio` keeps whatever
@@ -388,6 +496,113 @@ Item {
                 && y + height <= view.documentHeight
     }
 
+    /// The rectangle the canvas frame draws, read from the same four fields the
+    /// command is built from — the frame is a second view of one truth, not a
+    /// second copy of the rectangle.
+    readonly property var cropRect: {
+        return {
+            x: cropX.acceptableInput ? parseInt(cropX.text) : 0,
+            y: cropY.acceptableInput ? parseInt(cropY.text) : 0,
+            width: widthField.acceptableInput ? parseInt(widthField.text) : 0,
+            height: heightField.acceptableInput ? parseInt(heightField.text) : 0
+        }
+    }
+    /// The quad is drawn on the source picture. A transform draft is the
+    /// straightened result and fills the canvas, so the corners would describe
+    /// pixels that are no longer on screen — the same reason the crop frame
+    /// hides while its draft is shown.
+    readonly property bool transformFrameShown:
+        view.tool === "transform" && view.documentReady
+        && view.previewDraft === null
+        && view.transformCorners && view.transformCorners.length === 4
+
+    readonly property bool cropFrameShown:
+        view.tool === "crop" && view.documentReady
+        // A crop draft replaces the canvas with the cut result, so the
+        // rectangle would describe pixels that are no longer on screen. The
+        // frame is the source's rectangle; the draft is the answer. One at a
+        // time, and the toggle is the way between them.
+        && view.previewDraft === null
+        && view.cropRect.width > 0 && view.cropRect.height > 0
+
+    /// The eight frame handles. `column`/`row` are the same 0/1/2 edge
+    /// coordinates the anchor pad uses: 0 is the left or top side, 2 the right
+    /// or bottom, 1 the middle of that axis, which moves nothing.
+    readonly property var cropHandles: [
+        { key: "top_left", column: 0, row: 0 },
+        { key: "top", column: 1, row: 0 },
+        { key: "top_right", column: 2, row: 0 },
+        { key: "left", column: 0, row: 1 },
+        { key: "right", column: 2, row: 1 },
+        { key: "bottom_left", column: 0, row: 2 },
+        { key: "bottom", column: 1, row: 2 },
+        { key: "bottom_right", column: 2, row: 2 }
+    ]
+
+    /// Place a default frame when Crop is picked with nothing typed: four
+    /// tenths of the document in from every side, which leaves room to see the
+    /// picture around it and to drag a new one outside. It writes the fields,
+    /// so the frame and the command are still the same numbers; an existing
+    /// rectangle (typed, a preset, an anchor) is never overwritten.
+    function seedCropFrame() {
+        if (!view.documentReady) return
+        if (widthField.acceptableInput && parseInt(widthField.text) > 0) return
+        var width = Math.max(1, Math.round(view.documentWidth * 0.8))
+        var height = Math.max(1, Math.round(view.documentHeight * 0.8))
+        cropX.text = String(Math.round((view.documentWidth - width) / 2))
+        cropY.text = String(Math.round((view.documentHeight - height) / 2))
+        widthField.text = String(width)
+        heightField.text = String(height)
+    }
+
+    /// Write the four fields from a rectangle in document pixels, rounded and
+    /// clamped so it always describes a legal, at-least-one-pixel crop.
+    function setCropRect(x, y, width, height) {
+        var maxWidth = view.documentWidth
+        var maxHeight = view.documentHeight
+        width = Math.max(1, Math.min(maxWidth, Math.round(width)))
+        height = Math.max(1, Math.min(maxHeight, Math.round(height)))
+        x = Math.max(0, Math.min(maxWidth - width, Math.round(x)))
+        y = Math.max(0, Math.min(maxHeight - height, Math.round(y)))
+        cropX.text = String(x)
+        cropY.text = String(y)
+        widthField.text = String(width)
+        heightField.text = String(height)
+        // Mirror the pair in the preset dropdowns without re-applying it.
+        sizePreset.currentIndex = view.matchingPreset()
+        cropPreset.currentIndex = view.matchingCropPreset()
+        draftDebounce.restart()
+    }
+
+    /// Drag one frame handle. The side the handle owns follows the pointer and
+    /// the opposite side stays put, so a corner drag never also moves the
+    /// rectangle.
+    function dragCropHandle(column, row, hostX, hostY) {
+        if (!view.cropFrameShown) return
+        var rect = view.cropRect
+        var x = rect.x
+        var y = rect.y
+        var width = rect.width
+        var height = rect.height
+        if (column === 0) {
+            var left = Math.max(0, Math.min(x + width - 1, view.hostToDocX(hostX)))
+            width = x + width - left
+            x = left
+        } else if (column === 2) {
+            var right = Math.max(x + 1, Math.min(view.documentWidth, view.hostToDocX(hostX)))
+            width = right - x
+        }
+        if (row === 0) {
+            var top = Math.max(0, Math.min(y + height - 1, view.hostToDocY(hostY)))
+            height = y + height - top
+            y = top
+        } else if (row === 2) {
+            var bottom = Math.max(y + 1, Math.min(view.documentHeight, view.hostToDocY(hostY)))
+            height = bottom - y
+        }
+        view.setCropRect(x, y, width, height)
+    }
+
     /// Ask Core to render the selected tool's draft without applying it. The
     /// debounce keeps a typed width from spawning a render per key: the previous
     /// draft stays on screen until the newest one lands. The draft carries its
@@ -409,6 +624,12 @@ Item {
                 y: parseInt(cropY.text),
                 width: parseInt(widthField.text),
                 height: parseInt(heightField.text)
+            })
+        } else if (view.tool === "transform" && view.transformLivePreview
+                   && view.transformUsable() && view.transformChanged()) {
+            view.command({
+                type: "editor_transform_preview",
+                corners: view.transformCorners
             })
         }
     }
@@ -567,12 +788,29 @@ Item {
         var draft = editor.previewDraft
         if (tool === "resize" && resizeLivePreview && draft.kind === "resize") return draft
         if (tool === "crop" && cropLivePreview && draft.kind === "crop") return draft
+        if (tool === "transform" && transformLivePreview
+                && draft.kind === "transform") return draft
         return null
     }
     /// What the canvas draws: the draft's target size while an edit is being
     /// previewed, the document's own size otherwise.
     readonly property real displayedWidth: previewDraft ? previewDraft.width : documentWidth
     readonly property real displayedHeight: previewDraft ? previewDraft.height : documentHeight
+
+    // The document is drawn by a scaled `Image`, so a point in document pixels
+    // sits `x * zoom` from the picture's visual corner. `Image.scale` grows
+    // around the item's centre, so the origin is the item's own x plus half the
+    // shrink/grow the scale caused. These three functions are the only place
+    // the conversion lives: the transform quad and the crop frame both use
+    // them, and neither can drift from the picture.
+    readonly property real canvasOriginX:
+        canvas.x + canvas.width / 2 * (1 - canvas.scale)
+    readonly property real canvasOriginY:
+        canvas.y + canvas.height / 2 * (1 - canvas.scale)
+    function docToHostX(value) { return view.canvasOriginX + value * view.zoom }
+    function docToHostY(value) { return view.canvasOriginY + value * view.zoom }
+    function hostToDocX(value) { return view.zoom > 0 ? (value - view.canvasOriginX) / view.zoom : 0 }
+    function hostToDocY(value) { return view.zoom > 0 ? (value - view.canvasOriginY) / view.zoom : 0 }
 
     function sizeLabel() {
         if (!hasDocument) return "—"
@@ -693,8 +931,17 @@ Item {
     onDisplayedWidthChanged: view.refitOrClamp()
     onDisplayedHeightChanged: view.refitOrClamp()
     // A tool switch keeps one live preview per tool: the newly selected tool's
-    // toggle decides whether Core is asked for a draft of its own.
-    onToolChanged: draftDebounce.restart()
+    // toggle decides whether Core is asked for a draft of its own. Arming
+    // Transform starts from the document's own frame, so opening the tool never
+    // carries a quad from a document that is no longer there.
+    onToolChanged: {
+        draftDebounce.restart()
+        if (view.tool === "transform") view.resetTransformCorners()
+    }
+    // The document changing size (another edit, a new file) invalidates a quad
+    // expressed in its pixels; the frame is the only safe starting point.
+    onDocumentWidthChanged: if (view.tool === "transform") view.resetTransformCorners()
+    onDocumentHeightChanged: if (view.tool === "transform") view.resetTransformCorners()
 
     /// The debounce behind the live preview: typing a width must not render the
     /// whole document on every key.
@@ -956,6 +1203,16 @@ Item {
                     enabled: view.documentReady
                     onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
                 }
+                Button {
+                    objectName: "toolTransform"
+                    Layout.fillWidth: true
+                    text: qsTr("Transform")
+                    highlighted: view.tool === "transform"
+                    enabled: view.documentReady
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Drag the corners onto the picture's edges to straighten it")
+                    onClicked: view.tool = view.tool === "transform" ? "pointer" : "transform"
+                }
 
                 MenuSeparator {}
 
@@ -1071,10 +1328,14 @@ Item {
                 objectName: "editorPanHandler"
                 target: null
                 // Arm on the picture only: a drag that begins on a sidebar or
-                // a scroll view must keep scrolling.
+                // a scroll view must keep scrolling. While Crop or Transform
+                // is armed the left button belongs to the overlay's own
+                // handles and the frame; the middle button still pans.
                 enabled: view.panHover
                 acceptedDevices: PointerDevice.AllDevices
-                acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                acceptedButtons: (view.tool === "crop" || view.tool === "transform")
+                                 ? Qt.MiddleButton
+                                 : (Qt.LeftButton | Qt.MiddleButton)
                 property real startX: 0
                 property real startY: 0
 
@@ -1111,6 +1372,244 @@ Item {
                 enabled: view.documentReady
                 onClicked: function(mouse) {
                     contextMenu.popup(canvasArea, mouse.x, mouse.y)
+                }
+            }
+
+            // ---------------------------------------------------- overlays
+            // Both frames are drawn in canvas-host coordinates from document
+            // pixels, so they follow the picture through zoom, pan and a
+            // window resize without a second coordinate model. They are
+            // presentation only: a drag writes the rectangle or the quad, and
+            // only Apply sends a command.
+            Item {
+                id: canvasOverlay
+                objectName: "canvasOverlay"
+                anchors.fill: parent
+                z: 2
+
+                // ---------------------------------------------- crop frame
+                Item {
+                    id: cropOverlay
+                    objectName: "cropOverlay"
+                    anchors.fill: parent
+                    // Same gate as the frame: while the crop draft is on the
+                    // canvas, dragging would read the result's coordinates as
+                    // if they were the source's, and a new rectangle would be
+                    // placed inside the preview instead of the picture.
+                    visible: view.tool === "crop" && view.documentReady
+                             && view.previewDraft === null
+                    enabled: visible
+
+                    // Drawing a new rectangle starts on the empty canvas. The
+                    // frame itself is declared after this area, so a press on
+                    // the frame moves it instead of starting a new one.
+                    MouseArea {
+                        id: cropCreateArea
+                        objectName: "cropCreateArea"
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        cursorShape: Qt.CrossCursor
+                        property real startHostX: 0
+                        property real startHostY: 0
+                        property bool dragging: false
+                        property bool moved: false
+
+                        onPressed: function(mouse) {
+                            startHostX = mouse.x
+                            startHostY = mouse.y
+                            dragging = true
+                            moved = false
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!dragging) return
+                            // A click is not a zero-size crop: four pixels of
+                            // travel is what makes the gesture a drag.
+                            if (!moved
+                                    && Math.abs(mouse.x - startHostX) < 4
+                                    && Math.abs(mouse.y - startHostY) < 4) return
+                            moved = true
+                            var x1 = view.hostToDocX(startHostX)
+                            var y1 = view.hostToDocY(startHostY)
+                            var x2 = view.hostToDocX(mouse.x)
+                            var y2 = view.hostToDocY(mouse.y)
+                            view.setCropRect(Math.min(x1, x2), Math.min(y1, y2),
+                                             Math.abs(x2 - x1), Math.abs(y2 - y1))
+                        }
+                        onReleased: dragging = false
+                    }
+
+                    Rectangle {
+                        id: cropFrame
+                        objectName: "cropFrame"
+                        visible: view.cropFrameShown
+                        x: view.docToHostX(view.cropRect.x)
+                        y: view.docToHostY(view.cropRect.y)
+                        width: Math.max(1, view.cropRect.width * view.zoom)
+                        height: Math.max(1, view.cropRect.height * view.zoom)
+                        color: "transparent"
+                        border.width: 1
+                        border.color: view.theme.accent
+
+                        // The frame's inside moves the whole rectangle; the
+                        // handles below own the sides and corners.
+                        MouseArea {
+                            id: cropMoveArea
+                            objectName: "cropMoveArea"
+                            anchors.fill: parent
+                            acceptedButtons: Qt.LeftButton
+                            cursorShape: Qt.SizeAllCursor
+                            property real startHostX: 0
+                            property real startHostY: 0
+                            property real startDocX: 0
+                            property real startDocY: 0
+
+                            onPressed: function(mouse) {
+                                var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                startHostX = point.x
+                                startHostY = point.y
+                                startDocX = view.cropRect.x
+                                startDocY = view.cropRect.y
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                view.setCropRect(startDocX + (point.x - startHostX) / view.zoom,
+                                                 startDocY + (point.y - startHostY) / view.zoom,
+                                                 view.cropRect.width, view.cropRect.height)
+                            }
+                        }
+
+                        // Eight handles: the four corners and the four edge
+                        // midpoints. A corner moves both of its sides; an edge
+                        // moves only the one side it owns.
+                        Repeater {
+                            model: view.cropHandles
+
+                            Rectangle {
+                                required property var modelData
+                                objectName: "cropHandle_" + modelData.key
+                                width: 10
+                                height: 10
+                                radius: 1
+                                color: view.theme.accent
+                                border.width: 1
+                                border.color: view.theme.surface
+                                x: cropFrame.width * modelData.column / 2 - width / 2
+                                y: cropFrame.height * modelData.row / 2 - height / 2
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: modelData.column === 1
+                                                 ? Qt.SizeVerCursor
+                                                 : (modelData.row === 1
+                                                    ? Qt.SizeHorCursor
+                                                    : Qt.SizeFDiagCursor)
+                                    onPositionChanged: function(mouse) {
+                                        if (!pressed) return
+                                        var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                        view.dragCropHandle(modelData.column, modelData.row,
+                                                            point.x, point.y)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ------------------------------------------- transform quad
+                // The four source corners, clockwise from the top left, plus
+                // four edge handles that move the two corners of that edge.
+                // The protocol carries the corners alone; the edges are a
+                // QML affordance over the same array.
+                Item {
+                    id: transformOverlay
+                    objectName: "transformOverlay"
+                    anchors.fill: parent
+                    visible: view.transformFrameShown
+                    enabled: visible
+
+                    // The quad's outline: one thin item per edge, from corner
+                    // i to corner i + 1.
+                    Repeater {
+                        model: 4
+
+                        Rectangle {
+                            required property int index
+                            x: view.docToHostX(view.cornerX(index))
+                            y: view.docToHostY(view.cornerY(index))
+                            width: Math.hypot(
+                                view.docToHostX(view.cornerX((index + 1) % 4)) - x,
+                                view.docToHostY(view.cornerY((index + 1) % 4)) - y)
+                            height: 1
+                            color: view.theme.accent
+                            transformOrigin: Item.Left
+                            rotation: Math.atan2(
+                                view.docToHostY(view.cornerY((index + 1) % 4)) - y,
+                                view.docToHostX(view.cornerX((index + 1) % 4)) - x)
+                                * 180 / Math.PI
+                        }
+                    }
+
+                    // Four corner handles.
+                    Repeater {
+                        model: 4
+
+                        Rectangle {
+                            required property int index
+                            objectName: "transformCorner_" + index
+                            width: 12
+                            height: 12
+                            radius: 2
+                            color: view.theme.accent
+                            border.width: 1
+                            border.color: view.theme.surface
+                            x: view.docToHostX(view.cornerX(index)) - width / 2
+                            y: view.docToHostY(view.cornerY(index)) - height / 2
+
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                cursorShape: Qt.CrossCursor
+                                onPositionChanged: function(mouse) {
+                                    if (!pressed) return
+                                    var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                    view.setTransformCorner(index, point.x, point.y)
+                                }
+                            }
+                        }
+                    }
+
+                    // Four edge handles, at each edge's midpoint.
+                    Repeater {
+                        model: 4
+
+                        Rectangle {
+                            required property int index
+                            objectName: "transformEdge_" + index
+                            width: 10
+                            height: 10
+                            radius: 5
+                            color: view.theme.surface
+                            border.width: 2
+                            border.color: view.theme.accent
+                            x: view.docToHostX((view.cornerX(index)
+                                                + view.cornerX((index + 1) % 4)) / 2) - width / 2
+                            y: view.docToHostY((view.cornerY(index)
+                                                + view.cornerY((index + 1) % 4)) / 2) - height / 2
+
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                cursorShape: Qt.SizeAllCursor
+                                onPositionChanged: function(mouse) {
+                                    if (!pressed) return
+                                    var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                    view.moveTransformEdge(index, point.x, point.y)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1199,7 +1698,9 @@ Item {
                         objectName: "toolOptionsHeading"
                         text: view.tool === "pointer"
                               ? qsTr("Pointer")
-                              : (view.tool === "crop" ? qsTr("Crop") : qsTr("Resize"))
+                              : (view.tool === "crop"
+                                 ? qsTr("Crop")
+                                 : (view.tool === "transform" ? qsTr("Transform") : qsTr("Resize")))
                         color: view.theme.text
                         font.bold: true
                     }
@@ -1772,6 +2273,77 @@ Item {
                             }
                         }
 
+                        // Transform: the quad is the command, so there is
+                        // nothing to type. The four corners and four edges on
+                        // the canvas are the only controls; the panel names
+                        // what they do and offers the two buttons that matter.
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "transform"
+                            spacing: 6
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("Drag a corner, or an edge, onto the picture's own corner to straighten it.")
+                                color: view.theme.textMuted
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                objectName: "transformSizeHint"
+                                text: qsTr("The result keeps the document's size.")
+                                color: view.theme.textMuted
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: view.tool === "transform"
+                                         && view.previewDraft !== null
+                                text: qsTr("Turn Live preview off to move the corners on the picture.")
+                                color: view.theme.textMuted
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                            }
+
+                            Button {
+                                objectName: "transformLivePreviewButton"
+                                Layout.fillWidth: true
+                                enabled: view.documentReady
+                                text: qsTr("Live preview")
+                                checkable: true
+                                checked: view.transformLivePreview
+                                highlighted: checked
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Show the straightened image before applying it")
+                                onToggled: {
+                                    view.transformLivePreview = checked
+                                    draftDebounce.restart()
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            text: qsTr("Drag on the picture to draw the crop frame, then drag the frame or a handle to adjust it.")
+                            color: view.theme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop" && view.previewDraft !== null
+                            text: qsTr("Turn Live preview off to adjust the frame on the picture.")
+                            color: view.theme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
@@ -1823,6 +2395,21 @@ Item {
                                 }
                             }
                             Button {
+                                objectName: "applyTransform"
+                                text: qsTr("Apply")
+                                Layout.fillWidth: true
+                                visible: view.tool === "transform"
+                                enabled: view.transformUsable() && view.transformChanged()
+                                onClicked: {
+                                    view.command({
+                                        type: "editor_transform",
+                                        corners: view.transformCorners
+                                    })
+                                    view.transformLivePreview = false
+                                    view.resetTransformCorners()
+                                }
+                            }
+                            Button {
                                 objectName: "resetToolFields"
                                 text: qsTr("Reset")
                                 enabled: view.documentReady
@@ -1833,6 +2420,7 @@ Item {
                                     cropY.text = "0"
                                     sizePreset.currentIndex = -1
                                     cropPreset.currentIndex = -1
+                                    view.resetTransformCorners()
                                 }
                             }
                         }

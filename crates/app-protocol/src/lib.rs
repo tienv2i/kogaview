@@ -299,6 +299,22 @@ pub enum Command {
         width: u32,
         height: u32,
     },
+    /// Straighten the frame: the four corners of the quadrilateral inside the
+    /// working document that should become the whole output. `corners` are in
+    /// document pixels, clockwise in the document's own winding — top-left,
+    /// top-right, bottom-right, bottom-left — and the output keeps the
+    /// document's width and height. An identity quad (the document's own frame)
+    /// changes nothing, so a client cannot record an empty step.
+    EditorTransform {
+        corners: [[f64; 2]; 4],
+    },
+    /// Render the transform in the canvas without reshaping the document: the
+    /// pixels, the history and the save target stay as they are until
+    /// `EditorTransform` is applied. The draft is published as
+    /// `editor.previewDraft` with `kind: "transform"`.
+    EditorTransformPreview {
+        corners: [[f64; 2]; 4],
+    },
     /// Rotate the working document clockwise; degrees must be 90, 180 or 270
     /// (negative values rotate counter-clockwise).
     EditorRotate {
@@ -353,6 +369,8 @@ impl Command {
             Self::EditorResizePreview { .. } => "editor_resize_preview",
             Self::EditorCrop { .. } => "editor_crop",
             Self::EditorCropPreview { .. } => "editor_crop_preview",
+            Self::EditorTransform { .. } => "editor_transform",
+            Self::EditorTransformPreview { .. } => "editor_transform_preview",
             Self::EditorRotate { .. } => "editor_rotate",
             Self::EditorFlip { .. } => "editor_flip",
             Self::EditorUndo => "editor_undo",
@@ -568,6 +586,18 @@ mod tests {
                     height: 400,
                 },
                 "editor_crop_preview",
+            ),
+            (
+                Command::EditorTransform {
+                    corners: [[4.0, 2.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]],
+                },
+                "editor_transform",
+            ),
+            (
+                Command::EditorTransformPreview {
+                    corners: [[4.0, 2.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]],
+                },
+                "editor_transform_preview",
             ),
             (Command::EditorRotate { degrees: 90 }, "editor_rotate"),
             (

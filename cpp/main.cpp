@@ -328,11 +328,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     its fields from a preset (or a typed pair), optionally arm the pad and
   //     the steppers, then click Live preview
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
-  //     one of the nine anchor buttons
+  //     one of the nine anchor buttons (`_ARG3=plain` leaves Live preview off,
+  //     which is when the canvas frame is drawn)
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-transform  -> click the Transform tool and
+  //     move one corner (`_ARG` = `X,Y` in document pixels, `_ARG2` = the corner
+  //     index or `e0`–`e3` for an edge), optionally arming Live preview and
+  //     pressing Apply
   //   KOGAVIEW_DEV_UI_REQUEST=editor-export     -> click the toolbar's Export
   //     button, write the dialog's path/quality/size, and optionally press
   //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
-  //   The three editor requests exist because this session's compositor does not
+  //   The four editor requests exist because this session's compositor does not
   //   deliver synthetic pointer moves to the window; each one calls the handler
   //   the real control calls, and none of them invents a command of its own.
   //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
@@ -642,7 +647,11 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qWarning() << "KogaView dev ui request: no crop anchor" << anchorKey;
         }
         QObject* live = editor->findChild<QObject*>(QStringLiteral("cropLivePreviewButton"));
-        if (live != nullptr) {
+        // `_ARG3=plain` leaves the preview off, which is the state the canvas
+        // frame (and its eight handles) is drawn in.
+        const bool armPreview =
+          qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") != QLatin1String("plain");
+        if (live != nullptr && armPreview) {
           QMetaObject::invokeMethod(live, "click");
         }
         auto fieldText = [editor](const char* name) {
@@ -653,10 +662,79 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << index << "anchor" << editor->property("cropAnchor")
                           << "ratio" << editor->property("cropRatio") << "tool"
                           << editor->property("tool") << "live"
-                          << editor->property("cropLivePreview") << "rect"
+                          << editor->property("cropLivePreview") << "frame"
+                          << editor->property("cropFrameShown") << "rect"
                           << fieldText("cropX") << fieldText("cropY")
                           << fieldText("widthField") << fieldText("heightField");
         emitted = live != nullptr && index >= 0 && anchorButton != nullptr;
+      } else if (uiRequest == QLatin1String("editor-transform")) {
+        // The Transform quad without a pointer: the tool button is clicked,
+        // and a corner or an edge is moved through the same helpers the canvas
+        // handles call. `_ARG` is `X,Y` in document pixels (default: a tenth of
+        // the picture in), `_ARG2` is the corner index 0–3 or `e0`–`e3` for an
+        // edge, `_ARG3` is `live` to arm Live preview, `_ARG4` is `apply` to
+        // press Apply after logging.
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        QObject* tool = editor->findChild<QObject*>(QStringLiteral("toolTransform"));
+        if (tool == nullptr) {
+          qWarning() << "KogaView dev ui request: Transform tool button missing";
+          return;
+        }
+        if (!tool->property("highlighted").toBool()) {
+          QMetaObject::invokeMethod(tool, "click");
+        }
+        const double zoom = editor->property("zoom").toDouble();
+        const double originX = editor->property("canvasOriginX").toDouble();
+        const double originY = editor->property("canvasOriginY").toDouble();
+        const QString pointArg = requestArg.isEmpty() ? QStringLiteral("120,80") : requestArg;
+        const QStringList point = pointArg.split(QLatin1Char(','));
+        const double docX = point.value(0).toDouble();
+        const double docY = point.value(1).toDouble();
+        const double hostX = originX + docX * zoom;
+        const double hostY = originY + docY * zoom;
+        const QString target = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const bool edge = target.startsWith(QLatin1Char('e'));
+        const int index = (edge ? target.mid(1) : target).isEmpty()
+                            ? 0
+                            : (edge ? target.mid(1) : target).toInt();
+        if (edge) {
+          QMetaObject::invokeMethod(editor, "moveTransformEdge",
+                                    Q_ARG(QVariant, QVariant(index)),
+                                    Q_ARG(QVariant, QVariant(hostX)),
+                                    Q_ARG(QVariant, QVariant(hostY)));
+        } else {
+          QMetaObject::invokeMethod(editor, "setTransformCorner",
+                                    Q_ARG(QVariant, QVariant(index)),
+                                    Q_ARG(QVariant, QVariant(hostX)),
+                                    Q_ARG(QVariant, QVariant(hostY)));
+        }
+        qInfo().noquote() << "KogaView dev ui request editor-transform"
+                          << pointArg << (edge ? "edge" : "corner") << index
+                          << "corners" << editor->property("transformCorners")
+                          << "tool" << editor->property("tool");
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") == QLatin1String("live")) {
+          QObject* live = editor->findChild<QObject*>(QStringLiteral("transformLivePreviewButton"));
+          if (live != nullptr) {
+            QMetaObject::invokeMethod(live, "click");
+            qInfo().noquote() << "KogaView dev ui request editor-transform live"
+                              << editor->property("transformLivePreview");
+          }
+        }
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4") == QLatin1String("apply")) {
+          QObject* apply = editor->findChild<QObject*>(QStringLiteral("applyTransform"));
+          if (apply != nullptr) {
+            qInfo().noquote() << "KogaView dev ui request editor-transform before apply"
+                              << "enabled" << apply->property("enabled");
+            QMetaObject::invokeMethod(apply, "click");
+            qInfo().noquote() << "KogaView dev ui request editor-transform after apply"
+                              << "tool" << editor->property("tool");
+          }
+        }
+        emitted = true;
       } else if (uiRequest == QLatin1String("editor-export")) {
         // The toolbar's Export button is `click()`ed, which is the same handler
         // a press runs, and the dialog's fields are written the way the dialog's

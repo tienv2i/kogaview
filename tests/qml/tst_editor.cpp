@@ -67,6 +67,10 @@ private slots:
   void theCropRatioLinksTheSides();
   void theCropAnchorPlacesTheRectangle();
   void theLiveCropShowsOnlyItsOwnDraft();
+  void theCropFrameIsDrawnAndDragged();
+  void theCropFrameHidesWhileItsPreviewIsOn();
+  void theTransformToolDragsCornersAndEdges();
+  void theLiveTransformShowsOnlyItsOwnDraft();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
   void thePaletteSelectsTheToolsOptions();
@@ -88,6 +92,7 @@ private:
   QObject* findObject(const QString& name) const;
   static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
+  void dragScene(const QPointF& from, const QPointF& to, int steps = 6);
   void typeInto(QQuickItem* field, const QString& text);
   void selectTool(const char* name);
   QVariantList commands() const { return m_commands->takeFirst(); }
@@ -174,6 +179,7 @@ void TestEditor::init()
   // Cases start with empty tool fields. Which tool is selected is view state;
   // a case that needs Resize or Crop selects it, and the pointer default is
   // asserted by the first case before anything changes it.
+  m_editor->setProperty("tool", QStringLiteral("pointer"));
   for (const char* name : {"widthField", "heightField"}) {
     if (QQuickItem* field = visualItem(QString::fromLatin1(name))) {
       field->setProperty("text", QString());
@@ -200,8 +206,11 @@ void TestEditor::init()
   m_editor->setProperty("cropCurrentRatio",
                         QVariantMap{{QStringLiteral("width"), 0},
                                     {QStringLiteral("height"), 0}});
+  m_editor->setProperty("transformLivePreview", false);
+  m_editor->setProperty("transformCorners", QVariantList());
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
-  for (const char* name : {"livePreviewButton", "cropLivePreviewButton", "padToFit"}) {
+  for (const char* name : {"livePreviewButton", "cropLivePreviewButton",
+                           "transformLivePreviewButton", "padToFit"}) {
     if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
       toggle->setProperty("checked", false);
     }
@@ -255,6 +264,29 @@ void TestEditor::clickItem(QQuickItem* item)
   const QPoint centre =
     item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
   QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre);
+  QTest::qWait(20);
+}
+
+/// A real left-button drag through the view: several small moves that keep the
+/// press's implicit grab, the way a hand moves rather than a teleporting
+/// cursor. Both overlays drive their own `MouseArea`, so this is the same path
+/// a pointer takes; a handler that is not armed fails the assertion, not the
+/// event injection.
+void TestEditor::dragScene(const QPointF& from, const QPointF& to, int steps)
+{
+  const QPoint start = from.toPoint();
+  QTest::mouseMove(m_view, start);
+  QTest::qWait(20);
+  QTest::mousePress(m_view, Qt::LeftButton, Qt::NoModifier, start);
+  QCoreApplication::processEvents();
+  for (int step = 1; step <= steps; ++step) {
+    const QPoint point =
+      (from + (to - from) * (static_cast<double>(step) / steps)).toPoint();
+    QTest::mouseMove(m_view, point);
+    QCoreApplication::processEvents();
+  }
+  QTest::mouseRelease(m_view, Qt::LeftButton, Qt::NoModifier, to.toPoint());
+  QCoreApplication::processEvents();
   QTest::qWait(20);
 }
 
@@ -1163,6 +1195,263 @@ void TestEditor::theLiveCropShowsOnlyItsOwnDraft()
   QCOMPARE(command.value("height").toInt(), 150);
 }
 
+/// The crop frame is a second view of the four fields, not a second copy of the
+/// rectangle: drawing one on the canvas writes the fields, dragging the frame
+/// moves X/Y, and dragging a handle moves one side. Nothing reaches Core until
+/// Apply, so the draft debounce is the only thing a drag triggers.
+void TestEditor::theCropFrameIsDrawnAndDragged()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("width"), 200);
+  editor.insert(QStringLiteral("height"), 150);
+  setState(editor);
+  selectTool("crop");
+  // Zoom 1 puts the 200 × 150 picture at a known place in the 1100 × 700 host,
+  // so handle positions are arithmetic rather than whatever fit chose.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
+  QTest::qWait(20);
+
+  QQuickItem* canvasHost = expectItem("editorCanvasHost");
+  QVERIFY(canvasHost != nullptr);
+  QQuickItem* canvas = expectItem("canvas");
+  const QPointF origin = canvas->mapToScene(QPointF(0, 0));
+
+  // An empty frame: the overlay is armed, the rectangle is not drawn.
+  QVERIFY(expectItem("cropOverlay")->isVisible());
+  QVERIFY(!expectItem("cropFrame")->isVisible());
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("0"));
+
+  // Drag a new rectangle: (10,10) to (90,70) in document pixels.
+  dragScene(origin + QPointF(10, 10), origin + QPointF(90, 70));
+  QTRY_COMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("10"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("10"));
+  QCOMPARE(expectItem("widthField")->property("text").toString(), QStringLiteral("80"));
+  QCOMPARE(expectItem("heightField")->property("text").toString(), QStringLiteral("60"));
+  QQuickItem* frame = expectItem("cropFrame");
+  QTRY_VERIFY(frame->isVisible());
+  QCOMPARE(frame->mapToScene(QPointF(0, 0)).x(), origin.x() + 10.0);
+  QCOMPARE(frame->mapToScene(QPointF(0, 0)).y(), origin.y() + 10.0);
+  QCOMPARE(frame->width(), 80.0);
+  QCOMPARE(frame->height(), 60.0);
+
+  // Dragging the frame's inside moves the rectangle and keeps its size.
+  const QPointF frameCentre = frame->mapToScene(QPointF(frame->width() / 2,
+                                                       frame->height() / 2));
+  dragScene(frameCentre, frameCentre + QPointF(20, 15));
+  QTRY_COMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("30"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("25"));
+  QCOMPARE(expectItem("widthField")->property("text").toString(), QStringLiteral("80"));
+  QCOMPARE(expectItem("heightField")->property("text").toString(), QStringLiteral("60"));
+
+  // A corner handle moves the two sides it owns; the opposite corner stays put.
+  QQuickItem* bottomRight = expectItem("cropHandle_bottom_right");
+  QVERIFY(bottomRight->isVisible());
+  const QPointF handleCentre = bottomRight->mapToScene(
+    QPointF(bottomRight->width() / 2, bottomRight->height() / 2));
+  dragScene(handleCentre, handleCentre - QPointF(20, 10));
+  QTRY_COMPARE(expectItem("widthField")->property("text").toString(), QStringLiteral("60"));
+  QCOMPARE(expectItem("heightField")->property("text").toString(), QStringLiteral("50"));
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("30"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("25"));
+
+  // No command left the view: the frame is a rectangle being adjusted.
+  QCOMPARE(m_commands->count(), 0);
+
+  // The rectangle Apply sends is exactly the one on screen.
+  clickItem(expectItem("applyCrop"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_crop"));
+  QCOMPARE(command.value("x").toInt(), 30);
+  QCOMPARE(command.value("y").toInt(), 25);
+  QCOMPARE(command.value("width").toInt(), 60);
+  QCOMPARE(command.value("height").toInt(), 50);
+}
+
+/// A crop draft is the cut result and fills the canvas at its own size, so the
+/// rectangle's handles would sit outside it (or, for a full-width crop, point
+/// at pixels that are not the source). The frame is drawn only while the
+/// source is on screen; turning the preview off brings it back.
+void TestEditor::theCropFrameHidesWhileItsPreviewIsOn()
+{
+  QVariantMap draft;
+  draft.insert(QStringLiteral("path"), m_previewTwo);
+  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
+  draft.insert(QStringLiteral("width"), 80);
+  draft.insert(QStringLiteral("height"), 60);
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("width"), 200);
+  editor.insert(QStringLiteral("height"), 150);
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  selectTool("crop");
+  expectItem("cropX")->setProperty("text", QStringLiteral("10"));
+  expectItem("cropY")->setProperty("text", QStringLiteral("10"));
+  expectItem("widthField")->setProperty("text", QStringLiteral("80"));
+  expectItem("heightField")->setProperty("text", QStringLiteral("60"));
+  QTest::qWait(20);
+
+  // With the preview off, the draft is not drawn and the frame is.
+  QVERIFY(m_editor->property("cropFrameShown").toBool());
+  QVERIFY(expectItem("cropFrame")->isVisible());
+  QVERIFY(expectItem("cropOverlay")->isEnabled());
+
+  clickItem(expectItem("cropLivePreviewButton"));
+  QVERIFY(m_editor->property("cropLivePreview").toBool());
+  QTRY_VERIFY(!m_editor->property("cropFrameShown").toBool());
+  QVERIFY(!expectItem("cropFrame")->isVisible());
+  QVERIFY(!expectItem("cropOverlay")->isEnabled());
+
+  clickItem(expectItem("cropLivePreviewButton"));
+  QVERIFY(!m_editor->property("cropLivePreview").toBool());
+  QTRY_VERIFY(m_editor->property("cropFrameShown").toBool());
+  QVERIFY(expectItem("cropFrame")->isVisible());
+}
+
+/// Transform carries four source corners and nothing else. The canvas shows
+/// them as four corner handles and four edge handles; a corner drag moves one
+/// point, an edge drag moves the two corners that form the edge.
+void TestEditor::theTransformToolDragsCornersAndEdges()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("width"), 200);
+  editor.insert(QStringLiteral("height"), 150);
+  setState(editor);
+  selectTool("transform");
+  QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
+           QStringLiteral("Transform"));
+  QVERIFY(expectItem("transformOverlay")->isVisible());
+  QVERIFY(expectItem("applyTransform")->isVisible());
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners.length")).toInt(), 4);
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
+  QTest::qWait(20);
+
+  // All four corners and all four edges are drawn, at the document's frame.
+  for (int index = 0; index < 4; ++index) {
+    QQuickItem* corner = visualItem(QStringLiteral("transformCorner_%1").arg(index));
+    QVERIFY2(corner != nullptr && corner->isVisible(), "a corner handle is missing");
+    QQuickItem* edge = visualItem(QStringLiteral("transformEdge_%1").arg(index));
+    QVERIFY2(edge != nullptr && edge->isVisible(), "an edge handle is missing");
+  }
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][0]")).toDouble(), 200.0);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][1]")).toDouble(), 150.0);
+  QVERIFY(!expectItem("applyTransform")->property("enabled").toBool());
+
+  // Corner 0: down and in, the way a keystone's top-left is dragged.
+  QQuickItem* corner0 = expectItem("transformCorner_0");
+  const QPointF cornerCentre =
+    corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
+  dragScene(cornerCentre, cornerCentre + QPointF(20, 10));
+  QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble() - 20.0)
+                 < 0.6,
+               "the corner did not follow the pointer");
+  QVERIFY(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][1]")).toDouble() - 10.0)
+          < 0.6);
+  // The other three corners are untouched: a corner drag is one point.
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[1][0]")).toDouble(), 200.0);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][1]")).toDouble(), 150.0);
+  QVERIFY(expectItem("applyTransform")->property("enabled").toBool());
+
+  // Edge 0 is the top edge: both of its corners move down together.
+  QQuickItem* edge0 = expectItem("transformEdge_0");
+  const QPointF edgeCentre =
+    edge0->mapToScene(QPointF(edge0->width() / 2.0, edge0->height() / 2.0));
+  dragScene(edgeCentre, edgeCentre + QPointF(0, 15));
+  QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][1]")).toDouble() - 25.0)
+                 < 0.6,
+               "the edge did not move its first corner");
+  QVERIFY(qAbs(readQml(m_editor, QStringLiteral("transformCorners[1][1]")).toDouble() - 15.0)
+          < 0.6);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[1][0]")).toDouble(), 200.0);
+
+  // Apply carries the quad and nothing else, then returns to the identity so a
+  // second press cannot record the same transform twice.
+  clickItem(expectItem("applyTransform"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_transform"));
+  const QVariantList corners = command.value("corners").toList();
+  QCOMPARE(corners.size(), 4);
+  const QVariantList first = corners.at(0).toList();
+  QCOMPARE(first.size(), 2);
+  QVERIFY(qAbs(first.at(0).toDouble() - 20.0) < 0.6);
+  QVERIFY(qAbs(first.at(1).toDouble() - 25.0) < 0.6);
+  QTRY_COMPARE(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble(), 0.0);
+  QVERIFY(!expectItem("applyTransform")->property("enabled").toBool());
+}
+
+/// Transform's draft is gated like the other two: its own kind, its own
+/// toggle, and the document does not move. The command that asks for it names
+/// the quad.
+void TestEditor::theLiveTransformShowsOnlyItsOwnDraft()
+{
+  QVariantMap draft;
+  draft.insert(QStringLiteral("path"), m_previewTwo);
+  draft.insert(QStringLiteral("kind"), QStringLiteral("transform"));
+  draft.insert(QStringLiteral("width"), 200);
+  draft.insert(QStringLiteral("height"), 150);
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("width"), 200);
+  editor.insert(QStringLiteral("height"), 150);
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  selectTool("transform");
+
+  QQuickItem* canvas = expectItem("canvas");
+  QQuickItem* toggle = expectItem("transformLivePreviewButton");
+  QVERIFY(toggle->isVisible());
+  QVERIFY(!m_editor->property("transformLivePreview").toBool());
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+
+  clickItem(toggle);
+  QVERIFY(m_editor->property("transformLivePreview").toBool());
+  QVERIFY(toggle->property("checked").toBool());
+  QVERIFY(toggle->property("highlighted").toBool());
+  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
+  // The quad describes source pixels; the draft fills the canvas with the
+  // result, so the frame steps aside while it is drawn.
+  QVERIFY(!m_editor->property("transformFrameShown").toBool());
+  QVERIFY(!expectItem("transformOverlay")->isVisible());
+  QCOMPARE(canvas->property("width").toDouble(), 200.0);
+  // The draft is a preview, not an edit.
+  QCOMPARE(m_editor->property("documentWidth").toDouble(), 200.0);
+  QCOMPARE(m_editor->property("modified").toBool(), false);
+
+  // A crop draft under Transform is the other tool's result and stays hidden.
+  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  // The other tool's draft is not drawn here, so the quad belongs on screen.
+  QVERIFY(m_editor->property("transformFrameShown").toBool());
+
+  // Moving a corner with the toggle on asks Core for a transform draft that
+  // carries that quad. The identity is never requested: there is nothing to
+  // preview.
+  m_commands->clear();
+  m_editor->setProperty("transformLivePreview", false);
+  toggle->setProperty("checked", false);
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
+  QTest::qWait(20);
+  QQuickItem* corner0 = expectItem("transformCorner_0");
+  const QPointF centre =
+    corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
+  dragScene(centre, centre + QPointF(30, 20));
+  QCOMPARE(m_commands->count(), 0);
+  QVERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble() - 30.0)
+             < 0.6,
+           "the corner drag did not move the quad");
+  clickItem(toggle);
+  QTRY_COMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_transform_preview"));
+  const QVariantList corners = command.value("corners").toList();
+  QCOMPARE(corners.size(), 4);
+  const QVariantList first = corners.at(0).toList();
+  QVERIFY(qAbs(first.at(0).toDouble() - 30.0) < 0.6);
+  QVERIFY(qAbs(first.at(1).toDouble() - 20.0) < 0.6);
+}
+
 void TestEditor::anInvalidOrEmptySizeKeepsApplyDisabled()
 {
   setState(documentState());
@@ -1680,6 +1969,18 @@ void TestEditor::thePanHandlerTakesTouchpadsAndMiddleClicks()
   const auto buttons = pan->property("acceptedButtons").value<Qt::MouseButtons>();
   QVERIFY2(buttons.testFlag(Qt::LeftButton) && buttons.testFlag(Qt::MiddleButton),
            "the pan handler does not take a middle-button drag");
+
+  // With Crop or Transform armed the left button belongs to the overlay: the
+  // frame and the quad are drawn with it, so a drag must not also move the
+  // picture. The middle button still pans in both.
+  for (const char* name : {"crop", "transform"}) {
+    selectTool(name);
+    QCOMPARE(m_editor->property("tool").toString(), QString::fromLatin1(name));
+    const auto armed = pan->property("acceptedButtons").value<Qt::MouseButtons>();
+    QVERIFY2(!armed.testFlag(Qt::LeftButton) && armed.testFlag(Qt::MiddleButton),
+             qPrintable(QStringLiteral("%1 still pans with the left button")
+                          .arg(QString::fromLatin1(name))));
+  }
 }
 
 /// A Wayland touchpad reports `pixelDelta` with a TouchPad pointing device, and

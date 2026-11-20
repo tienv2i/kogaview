@@ -50,7 +50,7 @@ struct EditorExportResult {
 
 /// Which size tool a live preview belongs to.
 ///
-/// The two tools share one draft pipeline and differ only in what the interface
+/// The tools share one draft pipeline and differ only in what the interface
 /// calls the result, so the codes live here as literals: the QML line table is
 /// checked against them by `scripts/check_translations.py`, and a `format!`ed
 /// code would slip past that gate.
@@ -58,6 +58,7 @@ struct EditorExportResult {
 enum PreviewKind {
     Resize,
     Crop,
+    Transform,
 }
 
 impl PreviewKind {
@@ -66,6 +67,7 @@ impl PreviewKind {
         match self {
             Self::Resize => UiText::new("resize_noop"),
             Self::Crop => UiText::new("crop_noop"),
+            Self::Transform => UiText::new("transform_noop"),
         }
     }
 
@@ -74,6 +76,9 @@ impl PreviewKind {
         match self {
             Self::Resize => UiText::with("resize_preview", [width.to_string(), height.to_string()]),
             Self::Crop => UiText::with("crop_preview", [width.to_string(), height.to_string()]),
+            Self::Transform => {
+                UiText::with("transform_preview", [width.to_string(), height.to_string()])
+            }
         }
     }
 }
@@ -725,6 +730,10 @@ impl Core {
                 width,
                 height,
             } => self.editor_crop_preview(x, y, width, height),
+            Command::EditorTransform { corners } => {
+                self.editor_apply(EditOperation::Transform { corners })
+            }
+            Command::EditorTransformPreview { corners } => self.editor_transform_preview(corners),
             Command::EditorRotate { degrees } => {
                 self.editor_apply(EditOperation::Rotate { degrees })
             }
@@ -1191,6 +1200,8 @@ impl Core {
         let (width, height) = match &operation {
             EditOperation::Resize { width, height, .. }
             | EditOperation::Crop { width, height, .. } => (*width, *height),
+            // The frame does not move, so the draft is the document's size.
+            EditOperation::Transform { .. } => document.dimensions(),
             _ => (0, 0),
         };
         let changes = document.would_change(&operation).map_err(invalid_edit)?;
@@ -1248,6 +1259,13 @@ impl Core {
             },
             PreviewKind::Crop,
         )
+    }
+
+    fn editor_transform_preview(
+        &mut self,
+        corners: [[f64; 2]; 4],
+    ) -> Result<Option<UiText>, ProtocolError> {
+        self.editor_preview(EditOperation::Transform { corners }, PreviewKind::Transform)
     }
 
     /// Drop the live-preview draft: remove its file and make any worker result
@@ -3914,6 +3932,102 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed["ok"], false, "{response}");
         assert_eq!(parsed["error"]["code"], "invalid_edit");
+        assert_eq!(core.state.revision, revision);
+        assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
+
+        core.dispatch(&editor_envelope("close-1", r#"{"type":"editor_close"}"#));
+        remove_tree(&base);
+    }
+
+    /// A transform preview is the same draft pipeline with a frame-sized result:
+    /// it renders the straightened picture under its own kind, leaves the
+    /// document alone until Apply, and answers an identity quad or an outside
+    /// corner without rendering anything.
+    #[test]
+    fn a_transform_preview_straightens_without_applying() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+        core.dispatch(&editor_envelope(
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        ));
+        assert!(settle_editor(&mut core));
+        let document_preview = core.state.editor.as_ref().unwrap().preview_path.clone();
+
+        let keystone =
+            r#"{"type":"editor_transform_preview","corners":[[4,2],[40,0],[40,20],[0,20]]}"#;
+        let response = core.dispatch(&editor_envelope("transform-preview-1", keystone));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], true, "{response}");
+        assert_eq!(
+            parsed["message"], "transform preview 40 20",
+            "the line names the frame the draft was rendered at"
+        );
+        assert_eq!(parsed["ui"]["code"], "transform_preview");
+        assert!(settle_draft(&mut core), "the transform draft never landed");
+        let draft = core
+            .state
+            .editor
+            .as_ref()
+            .unwrap()
+            .preview_draft
+            .clone()
+            .expect("the transform draft is published");
+        assert_eq!(draft.kind, "transform");
+        assert_eq!((draft.width, draft.height), (40, 20), "the frame is kept");
+        let draft_path = PathBuf::from(&draft.path);
+        assert!(draft_path.is_file());
+        let decoded = image::open(&draft_path).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (40, 20));
+        {
+            let editor = core.state.editor.as_ref().unwrap();
+            assert_eq!((editor.width, editor.height), (40, 20));
+            assert!(editor.history.is_empty());
+            assert_eq!(editor.preview_path, document_preview);
+        }
+
+        // Applying records one step and drops the draft file.
+        core.dispatch(&editor_envelope(
+            "transform-1",
+            r#"{"type":"editor_transform","corners":[[4,2],[40,0],[40,20],[0,20]]}"#,
+        ));
+        {
+            let editor = core.state.editor.as_ref().unwrap();
+            assert_eq!((editor.width, editor.height), (40, 20));
+            assert_eq!(editor.history, vec![UiText::new("transform")]);
+            assert!(editor.preview_draft.is_none());
+            assert!(editor.modified);
+        }
+        assert!(!draft_path.exists(), "the applied draft file is cleaned up");
+        assert!(settle_editor(&mut core));
+
+        // The whole frame is not a transform: no render, and the line says so.
+        let response = core.dispatch(&editor_envelope(
+            "transform-preview-2",
+            r#"{"type":"editor_transform_preview","corners":[[0,0],[40,0],[40,20],[0,20]]}"#,
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], true, "{response}");
+        assert_eq!(parsed["ui"]["code"], "transform_noop");
+        assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
+
+        // A corner outside the picture is rejected at the gateway, with the
+        // line the window translates and the revision untouched.
+        let revision = core.state.revision;
+        let response = core.dispatch(&editor_envelope(
+            "transform-preview-3",
+            r#"{"type":"editor_transform_preview","corners":[[-1,0],[40,0],[40,20],[0,20]]}"#,
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], false, "{response}");
+        assert_eq!(parsed["error"]["code"], "invalid_edit");
+        assert_eq!(parsed["error"]["ui"]["code"], "transform_outside");
         assert_eq!(core.state.revision, revision);
         assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
 
