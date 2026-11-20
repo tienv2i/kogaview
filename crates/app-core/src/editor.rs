@@ -358,12 +358,31 @@ pub fn save_pixels(source: &Path, pixels: &RgbaImage, path: &Path) -> Result<(),
 /// IPTC live in APP segments there, while PNG/TIFF metadata would need a
 /// different (chunk/IFD) rewrite this slice does not own. The write is atomic
 /// like a save, and no `.bak` is made because the target is not the source.
+/// The copy's size under a long-edge limit: the aspect is kept, the longer side
+/// becomes `max_edge`, and a picture already that small is left alone (an export
+/// never upscales). `None` means "encode the pixels as they are"; rounding can
+/// never put a side at zero, and the other side is always `<= max_edge` because
+/// the longer side maps exactly onto the limit.
+fn export_dimensions(source_width: u32, source_height: u32, max_edge: u32) -> Option<(u32, u32)> {
+    let longer = source_width.max(source_height);
+    if max_edge == 0 || max_edge >= longer {
+        return None;
+    }
+    let scale = |side: u32| {
+        let scaled =
+            (u64::from(side) * u64::from(max_edge) + u64::from(longer) / 2) / u64::from(longer);
+        scaled.clamp(1, u64::from(u32::MAX)) as u32
+    };
+    Some((scale(source_width), scale(source_height)))
+}
+
 pub fn export_pixels(
     source: &Path,
     pixels: &RgbaImage,
     path: &Path,
     quality: Option<u8>,
     metadata: bool,
+    max_edge: Option<u32>,
 ) -> Result<(), String> {
     let format = SaveFormat::from_path(path).ok_or_else(|| {
         format!(
@@ -372,13 +391,30 @@ pub fn export_pixels(
             SaveFormat::CHOICES
         )
     })?;
+    // A delivery size is a scale of the whole frame, never a crop: the export
+    // keeps everything the document holds. `export_dimensions` answers `None`
+    // when the limit would not shrink anything, so the pixels are encoded as
+    // they are rather than copied into a same-sized buffer.
+    let target = max_edge.and_then(|edge| export_dimensions(pixels.width(), pixels.height(), edge));
+    let scaled;
+    let (pixels, resized) = match target {
+        Some((width, height)) => {
+            scaled = imageops::resize(pixels, width, height, FilterType::Triangle);
+            (&scaled, true)
+        }
+        None => (pixels, false),
+    };
     let mut bytes = encode_with(pixels, format, quality)?;
     if metadata
         && format == SaveFormat::Jpeg
         && SaveFormat::from_path(source) == Some(SaveFormat::Jpeg)
     {
         match std::fs::read(source) {
-            Ok(original) => bytes = splice_jpeg_metadata(&original, bytes),
+            // A resized copy's EXIF still says the source's pixel dimensions and
+            // carries the source's thumbnail, so APP1 is dropped; the ICC
+            // profile (APP2) and IPTC (APP13) are kept, because colour must not
+            // change with the size.
+            Ok(original) => bytes = splice_jpeg_metadata_segments(&original, bytes, !resized),
             Err(error) => tracing::warn!(
                 target: "kogaview::editor",
                 path = %source.display(),
@@ -395,7 +431,7 @@ pub fn export_pixels(
 /// APP1 holds EXIF and XMP, APP2 the ICC profile, APP13 IPTC/Photoshop data;
 /// APP0 is skipped because it describes the JFIF encoding the new file already
 /// has. Anything unparsable ends the scan instead of being copied.
-fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<&[u8]> {
+fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<(u8, &[u8])> {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return Vec::new();
     }
@@ -426,7 +462,7 @@ fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<&[u8]> {
             break;
         }
         if matches!(marker, 0xE1 | 0xE2 | 0xED) {
-            segments.push(&bytes[position..segment_end]);
+            segments.push((marker, &bytes[position..segment_end]));
         }
         position = segment_end;
     }
@@ -439,14 +475,27 @@ fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<&[u8]> {
 /// its exact encoding. A file that is not a JPEG, or an encode that is not one,
 /// is returned unchanged: a broken export is worse than one without metadata.
 pub fn splice_jpeg_metadata(original: &[u8], encoded: Vec<u8>) -> Vec<u8> {
-    let segments = jpeg_metadata_segments(original);
+    splice_jpeg_metadata_segments(original, encoded, true)
+}
+
+/// Like [`splice_jpeg_metadata`], but a resized copy can drop APP1.
+///
+/// EXIF and XMP name the source's pixel dimensions and may embed the source's
+/// thumbnail, so carrying them onto a smaller export states a size the file no
+/// longer has. The ICC profile (APP2) and IPTC data (APP13) are still copied,
+/// because dropping them would change the colours and the credit.
+fn splice_jpeg_metadata_segments(original: &[u8], encoded: Vec<u8>, keep_exif: bool) -> Vec<u8> {
+    let segments: Vec<(u8, &[u8])> = jpeg_metadata_segments(original)
+        .into_iter()
+        .filter(|(marker, _)| keep_exif || *marker != 0xE1)
+        .collect();
     if segments.is_empty() || encoded.len() < 2 || encoded[0] != 0xFF || encoded[1] != 0xD8 {
         return encoded;
     }
-    let extra: usize = segments.iter().map(|segment| segment.len()).sum();
+    let extra: usize = segments.iter().map(|(_, segment)| segment.len()).sum();
     let mut out = Vec::with_capacity(encoded.len() + extra);
     out.extend_from_slice(&encoded[..2]);
-    for segment in segments {
+    for (_, segment) in segments {
         out.extend_from_slice(segment);
     }
     out.extend_from_slice(&encoded[2..]);
@@ -1546,6 +1595,23 @@ mod tests {
             vec![UiText::with("resize", ["32", "16"])]
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A long-edge limit scales the whole frame, keeps its shape and never
+    /// enlarges a picture that is already small enough. Rounding can make the
+    /// short side one pixel but never zero.
+    #[test]
+    fn export_dimensions_keep_the_aspect_and_never_upscale() {
+        assert_eq!(export_dimensions(160, 120, 64), Some((64, 48)));
+        assert_eq!(export_dimensions(120, 160, 64), Some((48, 64)));
+        // The same limit on a square keeps it square.
+        assert_eq!(export_dimensions(100, 100, 50), Some((50, 50)));
+        // A limit at or above the longer side is not a request to upscale.
+        assert_eq!(export_dimensions(160, 120, 160), None);
+        assert_eq!(export_dimensions(160, 120, 1000), None);
+        assert_eq!(export_dimensions(160, 120, 0), None);
+        // A very thin picture keeps at least one row.
+        assert_eq!(export_dimensions(4000, 3, 8), Some((8, 1)));
     }
 
     #[test]

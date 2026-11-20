@@ -65,13 +65,29 @@ about to replace is still the one it read?
 - A save that overwrites reports `Saved <name>` and a save that writes a copy
   reports the same, because from the user's point of view both produced a file.
 - **Export is a third command, with its own options.** `editor_export
-  { path, quality, metadata }` writes a delivery copy and never moves the save
-  target, the `saved` flag or the history; a destination equal to the
+  { path, quality, metadata, max_edge }` writes a delivery copy and never moves
+  the save target, the `saved` flag or the history; a destination equal to the
   document's own path is refused with `invalid_destination`, because that
   operation already exists and is `Save`. JPEG takes an explicit quality
   (`DEFAULT_JPEG_QUALITY = 92` when the caller sends none) and, JPEG→JPEG only,
   carries the source's APP1/APP2/APP13 segments verbatim rather than
   re-encoding them; a lossless target ignores both and the dialog says so.
-- **Still not covered here:** export presets (resize-on-export, colour
-  profiles), writing to a path the sandbox has not granted, and metadata
-  editing. Those stay explicit decisions.
+- **A delivery size is a long edge, not a crop.** `max_edge` scales the whole
+  frame down so its longer side is at most that many pixels, aspect kept, and a
+  picture already that small is written unchanged rather than enlarged
+  (`export_dimensions` answers `None`, so the pixels are encoded as they are).
+  The alternative — an exact `W × H` — would have to choose between cropping
+  (silently losing content in a *delivery* file) and padding (bars the user did
+  not ask for), and the Editor's Resize tool already owns that decision. The
+  limit is one number because the dialog offers a short list of presets
+  (`Original size`, 3840, 2560, 1920, 1280, 800): the long edge is the whole
+  promise, so the view does not predict the other side.
+- **A resized copy keeps the colour profile but drops EXIF.** APP1 (EXIF/XMP)
+  still names the source's pixel dimensions and may embed the source's
+  thumbnail, so carrying it onto a smaller file states a size the file no longer
+  has; APP2 (ICC) and APP13 (IPTC) are copied, because dropping the profile
+  would change the colours and dropping the credit would lose attribution. A
+  copy that is not resized still carries all three.
+- **Still not covered here:** colour-profile *conversion* (the profile is passed
+  through, never applied), writing to a path the sandbox has not granted, and
+  metadata editing. Those stay explicit decisions.

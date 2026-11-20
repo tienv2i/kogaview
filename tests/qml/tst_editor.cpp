@@ -75,6 +75,7 @@ private slots:
   void toolbarTooltipsNameTheirShortcuts();
   void saveAsSuggestsTheCurrentLocation();
   void exportIsACopyWithItsOwnQualityAndMetadata();
+  void exportOffersADeliverySize();
   void canvasSupportsViewerStyleZoomAndPan();
   void aLargePicturePansFreelyInBothAxes();
   void thePanHandlerTakesTouchpadsAndMiddleClicks();
@@ -1432,6 +1433,66 @@ void TestEditor::exportIsACopyWithItsOwnQualityAndMetadata()
   QCOMPARE(lossless.value(QStringLiteral("path")).toString(),
            QStringLiteral("/pics/holiday.png"));
   QCOMPARE(lossless.value(QStringLiteral("metadata")).toBool(), false);
+}
+
+/// Export can write a smaller copy without editing the document: the dialog
+/// offers a long edge, the default keeps the document's own size, and the
+/// command carries the choice as `max_edge`. The view only picks the number;
+/// Core owns the arithmetic and the "never upscale" rule.
+void TestEditor::exportOffersADeliverySize()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("path"), QStringLiteral("/pics/holiday.jpg"));
+  editor.insert(QStringLiteral("name"), QStringLiteral("holiday.jpg"));
+  editor.insert(QStringLiteral("savePath"), QStringLiteral("/pics/holiday.jpg"));
+  editor.insert(QStringLiteral("format"), QStringLiteral(".jpg"));
+  setState(editor);
+
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "openExportDialog"));
+  QObject* dialog = findObject(QStringLiteral("exportDialog"));
+  QVERIFY(dialog != nullptr);
+  QTRY_VERIFY(dialog->property("opened").toBool());
+
+  QQuickItem* size = expectItem("exportSize");
+  const QVariantList edges = m_editor->property("exportEdges").toList();
+  QCOMPARE(edges.size(), 6);
+
+  // Every open starts at the document's own size, even after a previous run
+  // picked a preset, so a second export cannot silently shrink.
+  const int startEdge = m_editor->property("exportLongEdge").toInt();
+  const int startIndex = size->property("currentIndex").toInt();
+
+  // Picking the 1280 px row (index 4) is what the command carries.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseExportSize",
+                                    Q_ARG(QVariant, QVariant(4))));
+  const int chosenEdge = m_editor->property("exportLongEdge").toInt();
+  // The row the user sees is the size that will be written: a property set from
+  // the harness (or any other caller) must move the combo box with it.
+  const int chosenIndex = size->property("currentIndex").toInt();
+  // Confirm before asserting, so a failure cannot leave the dialog open over the
+  // next case (every dialog is modal, and the shell suspends the workspace).
+  clickItem(expectItem("exportConfirm"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap chosen = m_commands->takeFirst().at(0).toMap();
+  QCOMPARE(chosen.value(QStringLiteral("max_edge")).toInt(), 1280);
+  QCOMPARE(chosenEdge, 1280);
+  QCOMPARE(chosenIndex, 4);
+
+  // Reopening the dialog forgets the choice: the fields describe this export,
+  // not the last one.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "openExportDialog"));
+  QTRY_VERIFY(dialog->property("opened").toBool());
+  const int reopenedEdge = m_editor->property("exportLongEdge").toInt();
+  const int reopenedIndex = size->property("currentIndex").toInt();
+  clickItem(expectItem("exportConfirm"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap original = m_commands->takeFirst().at(0).toMap();
+  QCOMPARE(original.value(QStringLiteral("max_edge")).toInt(), 0);
+  QCOMPARE(startEdge, 0);
+  QCOMPARE(startIndex, 0);
+  QCOMPARE(edges.at(0).toInt(), 0);
+  QCOMPARE(reopenedEdge, 0);
+  QCOMPARE(reopenedIndex, 0);
 }
 
 void TestEditor::toolbarTooltipsNameTheirShortcuts()

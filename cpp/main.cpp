@@ -330,7 +330,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
   //     one of the nine anchor buttons
   //   KOGAVIEW_DEV_UI_REQUEST=editor-export     -> click the toolbar's Export
-  //     button, write the dialog's path/quality, and optionally press Export
+  //     button, write the dialog's path/quality/size, and optionally press
+  //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
   //   The three editor requests exist because this session's compositor does not
   //   deliver synthetic pointer moves to the window; each one calls the handler
   //   the real control calls, and none of them invents a command of its own.
@@ -660,7 +661,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // The toolbar's Export button is `click()`ed, which is the same handler
         // a press runs, and the dialog's fields are written the way the dialog's
         // own controls write them. `_ARG` is the destination path, `_ARG2` the
-        // quality, `_ARG3` the literal `confirm` to press Export.
+        // quality, `_ARG3` the literal `confirm` to press Export, `_ARG4` the
+        // long edge the Size list offers (`0` keeps the document's size).
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         QObject* button = rootObject->findChild<QObject*>(QStringLiteral("editorToolbarExport"));
         if (editor == nullptr || button == nullptr) {
@@ -678,12 +680,27 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         if (!quality.isEmpty()) {
           editor->setProperty("exportQuality", quality.toInt());
         }
+        const QString edge = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
+        if (!edge.isEmpty()) {
+          // Go through the same function the combo box's `onActivated` calls, so
+          // the request picks a row the dialog really offers; a limit that is not
+          // in the list is reported rather than written as an unknown size.
+          const QVariantList sizes = editor->property("exportEdges").toList();
+          const int index = sizes.indexOf(edge.toInt());
+          const bool chosen = index >= 0 &&
+                              QMetaObject::invokeMethod(editor, "chooseExportSize",
+                                                        Q_ARG(QVariant, QVariant(index)));
+          qInfo().noquote() << "KogaView dev ui request editor-export size" << edge
+                            << "index" << index << (chosen ? "chosen" : "not offered");
+        }
         QCoreApplication::processEvents();
         QObject* dialog = rootObject->findChild<QObject*>(QStringLiteral("exportDialog"));
         qInfo().noquote() << "KogaView dev ui request editor-export"
                           << "open" << (dialog != nullptr && dialog->property("visible").toBool())
                           << "path" << editor->property("exportPath")
                           << "quality" << editor->property("exportQuality")
+                          << "longEdge" << editor->property("exportLongEdge")
+                          << "tool" << editor->property("tool")
                           << "metadata" << editor->property("exportMetadata")
                           << "lossy" << editor->property("exportTargetIsLossy")
                           << "valid" << editor->property("exportPathValid");
@@ -692,6 +709,12 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           if (accept != nullptr) {
             QMetaObject::invokeMethod(accept, "click");
             QCoreApplication::processEvents();
+            // The dialog is modal and the request clicked a control inside it;
+            // the tool the editor is left on belongs in the log, because a
+            // closed dialog must not change it.
+            qInfo().noquote() << "KogaView dev ui request editor-export after confirm"
+                              << "tool" << editor->property("tool")
+                              << "open" << (dialog != nullptr && dialog->property("visible").toBool());
           }
         }
         emitted = dialog != nullptr && dialog->property("visible").toBool();

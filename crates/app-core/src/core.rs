@@ -735,7 +735,8 @@ impl Core {
                 path,
                 quality,
                 metadata,
-            } => self.editor_export(&path, quality, metadata),
+                max_edge,
+            } => self.editor_export(&path, quality, metadata, max_edge),
             Command::EditorUndo => self.editor_step(true),
             Command::EditorRedo => self.editor_step(false),
             Command::EditorReset => self.editor_reset(),
@@ -1416,6 +1417,7 @@ impl Core {
         path: &str,
         quality: Option<u8>,
         metadata: bool,
+        max_edge: Option<u32>,
     ) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &self.editor else {
             return Err(no_editor_document());
@@ -1464,11 +1466,15 @@ impl Core {
         self.editor_save_generation += 1;
         let save = self.editor_save_generation;
         self.editor_saving = true;
+        // A zero or absent `max_edge` means "the document's own size": a
+        // request for no change, not a request for a 0-pixel copy.
+        let max_edge = max_edge.filter(|edge| *edge > 0);
         self.state.status = UiText::with("exporting", [label.clone()]);
         self.publish_editor();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = editor::export_pixels(&source, &pixels, &destination, quality, metadata);
+            let result =
+                editor::export_pixels(&source, &pixels, &destination, quality, metadata, max_edge);
             let _ = sender.send(EditorExportResult {
                 save,
                 destination,
@@ -3003,11 +3009,14 @@ mod tests {
             ])
         });
         let encoded = editor::encode_with(&image, editor::SaveFormat::Jpeg, Some(95)).unwrap();
-        let payload = b"Exif\0\0KogaViewExportTest";
-        let length = (payload.len() + 2) as u16;
+        let exif = b"Exif\0\0KogaViewExportTest";
+        let icc = b"ICC_PROFILE\0KogaViewIccTest";
         let mut bytes = encoded[..2].to_vec();
-        bytes.extend_from_slice(&[0xFF, 0xE1, (length >> 8) as u8, length as u8]);
-        bytes.extend_from_slice(payload);
+        for (marker, payload) in [(0xE1u8, exif.as_slice()), (0xE2, icc.as_slice())] {
+            let length = (payload.len() + 2) as u16;
+            bytes.extend_from_slice(&[0xFF, marker, (length >> 8) as u8, length as u8]);
+            bytes.extend_from_slice(payload);
+        }
         bytes.extend_from_slice(&encoded[2..]);
         std::fs::write(path, bytes).unwrap();
     }
@@ -3101,6 +3110,82 @@ mod tests {
         );
         assert_eq!(refused["ok"], false, "{refused}");
         assert_eq!(refused["error"]["code"], "invalid_destination");
+        remove_tree(&base);
+    }
+
+    /// A delivery size scales the copy, never the document: the export carries
+    /// the whole frame at a smaller long edge, the working document keeps its
+    /// pixels, and a limit larger than the picture is not a licence to upscale.
+    #[test]
+    fn export_scales_a_delivery_copy_and_leaves_the_document_alone() {
+        let base = temp_dir();
+        let photo = base.join("photo.jpg");
+        write_jpeg_with_exif(&photo, 160, 120);
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(r#"{{"type":"editor_open","path":"{}"}}"#, photo.display()),
+        );
+        assert!(settle_editor(&mut core), "the document never opened");
+        let before = core.state.editor.clone().unwrap();
+
+        let small = base.join("phone.jpg");
+        let response = dispatch_json(
+            &mut core,
+            "export-1",
+            &format!(
+                r#"{{"type":"editor_export","path":"{}","quality":90,"metadata":true,"max_edge":64}}"#,
+                small.display()
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(
+            settle_export(&mut core, &small),
+            "no file at {}",
+            small.display()
+        );
+
+        // 160 × 120 with a 64 px long edge is 64 × 48: the aspect is kept and
+        // the picture is not cropped to a square.
+        assert_eq!(ops::image_dimensions(&small), Some((64, 48)));
+        // The document did not move to the copy's size.
+        let after = core.state.editor.as_ref().unwrap();
+        assert_eq!((after.width, after.height), (before.width, before.height));
+        assert_eq!(after.save_path, before.save_path);
+        assert_eq!(after.saved, before.saved);
+        assert_eq!(after.history, before.history);
+
+        // A resized copy keeps the ICC profile but not the EXIF that still
+        // names the source's pixel dimensions.
+        let resized = std::fs::read(&small).unwrap();
+        assert!(
+            resized.windows(9).any(|window| window == b"KogaViewI"),
+            "the resized export dropped the colour profile"
+        );
+        assert!(
+            !resized.windows(9).any(|window| window == b"KogaViewE"),
+            "the resized export kept EXIF that describes the old size"
+        );
+
+        // A limit above the picture's own long edge writes it unchanged rather
+        // than upscaling it.
+        let big = base.join("big.jpg");
+        let response = dispatch_json(
+            &mut core,
+            "export-2",
+            &format!(
+                r#"{{"type":"editor_export","path":"{}","max_edge":4000}}"#,
+                big.display()
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(
+            settle_export(&mut core, &big),
+            "no file at {}",
+            big.display()
+        );
+        assert_eq!(ops::image_dimensions(&big), Some((160, 120)));
         remove_tree(&base);
     }
 

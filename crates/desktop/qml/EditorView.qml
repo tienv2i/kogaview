@@ -462,6 +462,29 @@ Item {
     property int exportQuality: 90
     /// Keep the source's EXIF/XMP/ICC segments. Only JPEG→JPEG can carry them.
     property bool exportMetadata: true
+    /// The delivery size: the copy's longer side in pixels, or 0 for the
+    /// document's own size. It scales the whole frame — Core never crops an
+    /// export — and a limit above the picture's own long edge writes it as it
+    /// is rather than upscaling it.
+    property int exportLongEdge: 0
+    readonly property var exportEdges: [0, 3840, 2560, 1920, 1280, 800]
+
+    /// The preset list's labels. The long edge is the whole promise, so the
+    /// dialog does not predict the other side: that is Core's arithmetic.
+    function exportEdgeLabel(edge) {
+        return edge > 0 ? qsTr("%1 px long edge").arg(edge) : qsTr("Original size")
+    }
+
+    /// Pick a delivery size by its index in `exportEdges`. The ComboBox's
+    /// `onActivated` calls this, and so does a test: the visible list and the
+    /// property behind it must not be able to disagree.
+    function chooseExportSize(index) {
+        if (index < 0 || index >= view.exportEdges.length) return
+        view.exportLongEdge = view.exportEdges[index]
+        // The row and the property are the same choice: a preset set from
+        // anywhere but the combo box must still show the row it selected.
+        if (exportSizeCombo.currentIndex !== index) exportSizeCombo.currentIndex = index
+    }
     readonly property bool exportTargetIsJpeg:
         /\.jpe?g$/i.test(view.exportPath)
     readonly property bool exportTargetIsLossy: view.exportTargetIsJpeg
@@ -482,6 +505,9 @@ Item {
                 : base + "-export"
         view.exportQuality = 90
         view.exportMetadata = true
+        // Every open starts at the document's own size: a delivery copy that
+        // silently shrank would be a surprise, and the choice is one click away.
+        view.chooseExportSize(0)
         exportDialog.open()
     }
 
@@ -497,7 +523,8 @@ Item {
             type: "editor_export",
             path: view.exportPath,
             quality: view.exportQuality,
-            metadata: view.exportKeepsMetadata
+            metadata: view.exportKeepsMetadata,
+            max_edge: view.exportLongEdge
         })
         exportDialog.close()
     }
@@ -1910,6 +1937,44 @@ Item {
                 }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Label {
+                    // Not the bare "Size": the browser's column header owns that
+                    // word, and the catalogue gives one translation per English
+                    // string. This row is about the copy's output.
+                    text: qsTr("Output size")
+                    color: view.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                ComboBox {
+                    id: exportSizeCombo
+                    objectName: "exportSize"
+                    Layout.fillWidth: true
+                    model: view.exportEdges.length
+                    // `currentIndex` is set in `openExportDialog`, never bound:
+                    // ComboBox owns the index once the user picks a row, and a
+                    // binding would be broken by that first pick.
+                    onActivated: view.chooseExportSize(index)
+                    delegate: ItemDelegate {
+                        required property int index
+                        width: exportSizeCombo.width
+                        text: view.exportEdgeLabel(view.exportEdges[index])
+                        highlighted: exportSizeCombo.highlightedIndex === index
+                    }
+                    contentItem: Label {
+                        leftPadding: 8
+                        text: view.exportEdgeLabel(view.exportEdges[exportSizeCombo.currentIndex])
+                        color: view.theme.text
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
             CheckBox {
                 id: exportMetadataBox
                 objectName: "exportMetadata"
@@ -1921,9 +1986,15 @@ Item {
 
             Label {
                 Layout.fillWidth: true
-                text: view.exportTargetIsLossy
-                      ? qsTr("Quality applies to JPEG. Other formats are written losslessly.")
-                      : qsTr("This format is written losslessly; the quality slider does not apply.")
+                text: {
+                    var hint = view.exportTargetIsLossy
+                        ? qsTr("Quality applies to JPEG. Other formats are written losslessly.")
+                        : qsTr("This format is written losslessly; the quality slider does not apply.")
+                    if (view.exportLongEdge > 0 && view.exportKeepsMetadata) {
+                        hint += "\n" + qsTr("A resized copy keeps the colour profile but drops EXIF, which would still name the old size.")
+                    }
+                    return hint
+                }
                 color: view.theme.textMuted
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap

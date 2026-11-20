@@ -30,7 +30,10 @@ made the last English sentences in a Vietnamese window — the toast for a
 *rejected* command — translatable too (row 80), and while doing it found that
 `UiLines.qml` was not named in the `lupdate` project, so the next `lupdate`
 would have marked its thirty sentences `vanished` and `lrelease` would have
-dropped them silently.
+dropped them silently. A fifth change (row 81) lets Export write a delivery copy
+at a chosen long edge — `Original size`, 3840, 2560, 1920, 1280 or 800 px —
+scaling the whole frame and never enlarging it, and keeps the ICC profile but
+not the EXIF of a resized copy.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -39,10 +42,13 @@ Nothing here is a plan; it is what was measured, what was not, and why.
 - Branch `main`. The previous session's three changes (rows 77, 78, 79) are one
   commit, `ca9a6d6 feat(editor): typed lines, export and a fast first preview`,
   on top of the build fix `1b4e940` and the pad/stepper follow-up `9d4dab4`.
-  This session adds one commit, `feat(core): word a rejected command in the
-  interface language`, for row 80: the `ProtocolError.ui` shape, the QML that
+  This session adds two commits: `feat(core): word a rejected command in the
+  interface language` for row 80 (the `ProtocolError.ui` shape, the QML that
   draws it, the new QML/Core tests, the `.pro` fix and its translation-gate
-  check, and the 32 Vietnamese sentences. Nothing is pushed (see below).
+  check, and the 32 Vietnamese sentences), then `feat(editor): export at a
+  chosen long edge` for row 81 (`max_edge` on `editor_export`, the long-edge
+  rule and the APP1 rule in Core, the dialog's `Output size` row, two Core
+  tests and one QML case, ADR 0004). Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
   follow-up, and the two size tools.
@@ -51,7 +57,10 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   quality 10–100, `_ARG3` = `confirm`): it `click()`s the real toolbar Export
   button, writes the dialog's own properties, logs the popped-up state and
   presses the dialog's Export. It is documented in the harness reference like
-  the two below.
+  the two below. Row 81 gave it `_ARG4` (a long-edge preset) and a log line that
+  names the tool before and after the confirm click, which is how a one-off grab
+  showing the Resize panel was reduced to "did not reproduce" rather than left
+  as a mystery.
 - `cpp/main.cpp` gained one permanent debug hook per size tool:
   `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (`_ARG` = `WIDTHxHEIGHT` of a preset,
   or a custom pair; `_ARG2` = an optional ratio key such as `current`; `_ARG3` =
@@ -151,6 +160,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 78 | Export did not exist and ADR 0004 had deferred its options | `Command::EditorExport { path, quality, metadata }`, Core `editor_export`/`apply_export_result`/`export_pixels` with the JPEG metadata splice and `invalid_destination` for the document's own path, a 13th toolbar button with the `exportDialog` (path, quality, metadata, saying which format honours which), `Main.qml` fallback chooser, `ToolbarMetrics.editorButtons: 13`. `cargo` 66 + 4 (the export test now compares sizes between two identical-metadata exports, so the metadata flag cannot mask a broken quality setting), `editor` 35, `translations` 244; real window `docs/evidence/M1-editor-export-dialog.png`, `editor_export ok:true rev 9`, 245 252 B copy at quality 60 vs a 639 157 B source; mutations: quality ignored → size test fails, metadata splice dropped → metadata test fails |
 | 79 | Opening a 27 MP JPEG in the Editor took 11 s of empty canvas: Core decoded the full frame, then resized it for the preview, before anything could be drawn | `crates/app-core/Cargo.toml` (`jpeg-decoder`, no default features, pure Rust), `crates/app-core/src/editor.rs` (`scaled_jpeg_preview` reads 1/8, 1/4 or 1/2 of a JPEG through the DCT and answers the header size; `preview_dimensions`; `render_preview` now box-samples via `preview_pixels`/`imageops::thumbnail`; `spawn_open` publishes `EditorTask::FirstPreview` before decoding the document), `crates/app-core/src/state.rs` (`EditorState.opening`), `crates/app-core/src/core.rs` (`publish_opening_preview`, the `FirstPreview` arm, a failed open now drops the fast preview it had shown), `crates/desktop/qml/EditorView.qml` (`opening`/`documentReady`: the canvas and the footer draw the provisional state, the tools stay disabled), `tests/qml/tst_editor.cpp` (`theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes`), Core tests (`the_scaled_jpeg_preview_matches_the_full_decode`, `a_small_jpeg_is_not_decoded_twice`, `opening_a_large_jpeg_publishes_the_preview_before_the_document`), `cargo test`, `just test` | **Measured** on a 4500 × 6000 JPEG (1.4 MB, `ffmpeg -q:v 3`): before, one decode of 11 063 ms and then a preview render of 6 264 ms; after, the reduced decode plus its PNG lands at 3 034 ms (the picture is on screen from 3.1 s) and the full document installs at 7 863 ms instead of 11 063 ms. The 2× on the document half is `imageops::thumbnail` replacing `imageops::resize(…, Triangle)`: on a 27 MP frame the general resampler was the second-largest cost after the decode. **Real window** (Vietnamese, isolated `XDG_*`): the grab at 8 s shows the picture, `4500 × 6000`, the soft decode on the canvas, `Đang mở big.jpg…` in the status bar and Resize/Crop/Rotate greyed; the grab after the document landed shows `Đang chỉnh sửa big.jpg · 4500 × 6000` with every tool live and a `editor_resize_preview` draft on the canvas (journal rev 5). **Mutations** (each restored, then re-run): `scaled_jpeg_preview` returning `None` always → `opening_a_large_jpeg_publishes_the_preview_before_the_document` fails on the first message; `documentReady` no longer subtracting `opening` → the QML test fails `!m_editor->property("documentReady")`. **Not verified:** no hand opened a file; the run was driven by dev commands. A CMYK JPEG and a progressive JPEG take the fallback path, which is exercised only by `a_small_jpeg_is_not_decoded_twice` (a plain JPEG), not by a CMYK sample. `jpeg-decoder`'s `scale()` picks the smallest power of two that still covers the request, so on a frame just above 4096 px the reduced decode is 1/2 and the saving is smaller than these numbers; that case was not timed. |
 | 80 | A rejected command was still English in a Vietnamese window: `Main.qml` drew `result.error.message`, a sentence Core had built | `crates/app-protocol/src/lib.rs` (`UiText` beside `ProtocolError`, which gained `ui: Option<UiText>` and `line`/`with_line`; `None` where the detail is the platform's), `crates/app-core/src/state.rs` (re-export), `core.rs` (every refusal Core words itself publishes a line; `invalid_edit` keeps a journal sentence for crop/resize), `editor.rs` (validators and `apply`/`would_change` answer `UiText`), `ops.rs` (`safe_for_deletion`), `Main.qml` (toast draws `error.ui` first), `UiLines.qml` (32 cases), `i18n/kogaview_ts.pro` (`UiLines.qml`/`ToolbarMetrics.qml` were missing — the next `lupdate` would have marked their strings `vanished`), `scripts/check_translations.py` (a QML file that draws a string must be in the `.pro`), `i18n/kogaview_vi.ts` (32 strings), `tests/qml/tst_language.cpp` (2 cases), Core tests | `just test` 276 strings / 110 C++ / 272 drawn; cargo 70 + 4; language 7; real window: Vietnamese toast `Xuất đè lên tài liệu đang mở sẽ thay thế nó; hãy dùng Lưu` after the export dialog was pointed at the document itself (`docs/evidence/M1-rejection-vi.png`), journal `ok:false` `invalid_destination` + `ui.code export_onto_document`; 5 mutations, each caught |
+| 81 | Export always wrote the document at its own size: delivering a 27 MP picture at a web or phone size meant editing the document first, which is destructive and easy to forget | `crates/app-protocol/src/lib.rs` (`EditorExport.max_edge`), `crates/app-core/src/editor.rs` (`export_dimensions`, the long-edge rule; `export_pixels` takes the limit; `jpeg_metadata_segments` keeps each marker so a resized copy drops APP1 but keeps APP2/APP13), `core.rs` (`editor_export` passes it, `0`/absent = the document's size), `EditorView.qml` (`exportLongEdge`, `exportEdges`, `chooseExportSize`, an `Output size` row, an EXIF note), `cpp/main.cpp` (`_ARG4` + tool logging), `tests/qml/tst_editor.cpp`, Core tests, ADR 0004 | `just test` 280 strings / 110 C++ / 276 drawn; cargo 72 + 4; editor 37; real window: the Vietnamese `Kích thước xuất` combo reading `800 px cạnh dài`, and `phone.jpg` written at 600 × 800 from a 1200 × 1600 document that stayed 1200 × 1600 (`docs/evidence/M1-export-size-vi.png`, `-written.png`), journal rev 5, tool still `pointer`; 4 mutations, each caught |
 
 ## Test gate
 
@@ -158,18 +168,18 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 276 strings in kogaview_vi.ts, 110 of them compiled into C++, 272 drawn by the QML, 4 looked up by context
+translations: 280 strings in kogaview_vi.ts, 110 of them compiled into C++, 276 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 70 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 36 · language 7 · toolbar 11
+cargo: 72 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 14 · editor 37 · language 7 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); row 80 adds no new warning (the
-protocol's `Anchor` and the anchored Core helpers are still gone).
+`field_reassign_with_default`, `needless_return`); rows 80 and 81 add no new warning
+(the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
 
@@ -481,6 +491,14 @@ the Vietnamese `%1 không phải là thư mục` reverted to English in the `.ts
 rebuilt → the same QML case fails on the actual text, which is what proves the
 suite reads the compiled catalogue, not the source.
 
+Export size: dropping the never-upscale guard from `export_dimensions` → the
+export test fails on the 4000 px limit (a 160 × 120 copy would be enlarged);
+passing `true` for `keep_exif` → "the resized export kept EXIF that describes the
+old size"; removing `max_edge` from the QML command → `exportOffersADeliverySize`
+fails (`0` vs `1280`); not moving the combo box with the property →
+`chosenIndex` 0 vs 4, the bug the first window grab showed. Each restored, then
+the suite green.
+
 Keyboard: Left/PageUp stepping `+1` instead of `−1` → `navigationKeysAskCoreForTheNeighbour`
 fails at index 3; Shift+Space made a plain "next" → the same test fails at index 5;
 the Ctrl+A guard changed to `Key_B` → `ctrlASelectsEveryEntry` fails; `gridColumns()`
@@ -488,6 +506,34 @@ hard-coded to 1 → `downMovesByOneGridRow` fails (it compared the cell to the r
 with the cell below); dropping `!event.isAutoRepeat` from the Delete branch →
 that view's Delete test fails on the synthetic repeat event (viewer and browser
 re-run separately). All restored, then `just test` green.
+
+## Design decisions, export-size session (ADR 0004)
+
+- **A delivery size is one number: the long edge.** `max_edge` scales the whole
+  frame and never crops or pads, so an export cannot quietly lose content the
+  way Resize's cover-crop can — and Resize already owns exact `W × H` with its
+  own fill. The dialog offers six presets (`Original size`, 3840, 2560, 1920,
+  1280, 800) and starts on the document's own size every time, because a copy
+  that shrank because the last export asked for a small one would be a surprise.
+- **Core decides the size; the view only picks a preset.** `export_dimensions`
+  is the rule (aspect kept, longer side = the limit, never upscaled, never a
+  zero side) and lives in `editor.rs`; the QML labels the rows and holds one
+  integer. The view therefore never predicts the other side and cannot disagree
+  with what is written.
+- **The combo box and the property are one choice.** `chooseExportSize` sets
+  both, and `onActivated` goes through it, so a preset applied from a test or
+  the dev harness moves the visible row too. The first window grab of this
+  feature showed the combo still reading `Original size` while Core was told
+  800 px — the function now owns both halves.
+- **A resized copy keeps ICC, drops EXIF.** EXIF still names the source's pixel
+  dimensions and may embed its thumbnail, so it is a lie in a smaller file; APP2
+  (ICC) and APP13 (IPTC) are copied because colour must not change with the
+  size and the credit is still true. A copy that is not resized carries all
+  three, as before.
+- **`0`/absent means "the document's size".** An older client that knows only
+  `path` still exports unchanged; `editor_export` filters `Some(0)` to `None`
+  before the worker sees it, so a request for "no limit" cannot be a request for
+  a zero-pixel copy.
 
 ## Design decisions, toolbar/labelling session (ADR 0010)
 
@@ -554,6 +600,12 @@ re-run separately). All restored, then `just test` green.
   (an OS `io_error`, an `invalid_path`) was exercised only as
   `invalid_envelope` in a unit test; the window never printed one. `cargo
   clippy -D warnings` still fails on the two pre-existing `derivable_impls`.
+- **The resized-export checks used a synthetic profile.** The "ICC is kept"
+  assertion rests on an APP2 segment written by the test helper, not on a real
+  camera profile, and no CMYK/progressive JPEG was exported. One early grab
+  showed the Resize panel after an export; four later runs of the same request
+  did not, and the harness now logs `tool` as `pointer` on both sides of the
+  confirm click. It is recorded as unexplained rather than fixed.
 - `scripts/check_translations.py` now scans the QML for `qsTr()` **and**
   `qsTranslate("Ctx", "src")` after stripping comments, so a new untranslated
   string fails the gate — the small-image hint got through before this, and the
@@ -609,9 +661,11 @@ install`). The keyboard, tooltip and menu evidence comes from
    preview now arrives about 2× sooner on a 27 MP JPEG (row 79), but the full
    frame still decodes in one piece before any edit is possible; region-of-
    interest decoding would let a crop read only the pixels it keeps.
-2. **Export presets** — resize-on-export and a colour profile. `editor_export`
-   already carries `{ path, quality, metadata }`, so a preset is one more field
-   and one more Core step, not a new command.
+2. **Colour-profile handling on export.** Row 81 passes the source's ICC
+   segment through unchanged and drops a resized copy's EXIF; converting to
+   sRGB (or embedding a target profile) is a decision that needs a colour
+   library and a Flatpak dependency review, and "pass through" is the honest
+   default until then.
 3. **The platform's own text is still the platform's.** Row 80 made every
    rejection Core *words itself* a line; an `io_error` or an `invalid_path`
    still carries the OS/library sentence (`ProtocolError::new`, no `ui`), and
