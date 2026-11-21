@@ -1369,7 +1369,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 5 : 12);
+    QCOMPARE(buttons, mini ? 5 : 13);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.
@@ -1377,13 +1377,82 @@ private slots:
       QObject* menu = object("viewerOverflowMenu");
       QVERIFY2(menu != nullptr, "the viewer has no overflow menu");
       QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
-      // Eight actions and two separators: zoom in/out, actual size, rotate
-      // left/right, flip horizontal/vertical and the filmstrip.
-      QCOMPARE(menu->property("count").toInt(), 10);
+      const int rows = menu->property("count").toInt();
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
+      // Zoom in/out, actual size, rotate left/right, flip horizontal/vertical,
+      // the filmstrip and the dock toggle, with two separators.
+      QCOMPARE(rows, 11);
     }
     m_viewer->setProperty("miniToolbar", false);
+  }
+
+  /// The Viewer's right column is one page: the file on screen has details, and
+  /// a tab over a single page would only add a click. The row is read from the
+  /// same `InfoPanel` the Browser uses, and the workspace switch hides the
+  /// splitter with it.
+  void theSidebarIsOneInformationPage()
+  {
+    QVariantMap entry;
+    entry.insert(QStringLiteral("path"), m_landscape);
+    entry.insert(QStringLiteral("name"), QStringLiteral("landscape-1200x800.png"));
+    entry.insert(QStringLiteral("kind"), QStringLiteral(".png"));
+    entry.insert(QStringLiteral("isImage"), true);
+    entry.insert(QStringLiteral("size"), qint64(234567));
+    entry.insert(QStringLiteral("modified"), qint64(1731000000));
+    m_viewer->setProperty("entries", QVariantList{entry});
+
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("rightPanelViewer"), true);
+    m_viewer->setProperty("state", state);
+    QCoreApplication::processEvents();
+
+    QQuickItem* panel = item("viewerRightPanel");
+    QVERIFY2(panel != nullptr, "the viewer has no right dock");
+    QTRY_VERIFY(panel->isVisible());
+    QVERIFY2(!panel->property("stripShown").toBool(),
+             "a one-page dock drew a tab strip");
+    QCOMPARE(panel->property("tabs").toList().size(), 1);
+
+    QQuickItem* name = item("infoName");
+    QVERIFY2(name != nullptr, "the viewer's dock has no information page");
+    QVERIFY(name->isVisible());
+    QCOMPARE(name->property("text").toString(),
+             QStringLiteral("landscape-1200x800.png"));
+    QCOMPARE(item("infoKind")->property("text").toString(),
+             QStringLiteral(".png"));
+    QVERIFY2(item("infoSize")->property("text").toString() != QStringLiteral("—"),
+             "the file size is not drawn");
+    QCOMPARE(item("infoDimensions")->property("text").toString(),
+             QStringLiteral("1200 × 800"));
+    QCOMPARE(item("infoPath")->property("text").toString(), m_landscape);
+
+    QQuickItem* splitter = item("viewerRightSplitter");
+    QVERIFY2(splitter != nullptr, "the viewer has no dock splitter");
+    QVERIFY(splitter->isVisible());
+
+    state.insert(QStringLiteral("rightPanelViewer"), false);
+    m_viewer->setProperty("state", state);
+    QTRY_VERIFY(!panel->isVisible());
+    QVERIFY2(!splitter->isVisible(), "the splitter outlived its panel");
+  }
+
+  /// "Show in folder" is the shell's job: the view only asks, and both the file
+  /// menu and the canvas menu name the same request. A file manager is the
+  /// desktop's, not the app's.
+  void theCanvasMenuAsksTheShellToRevealTheFile()
+  {
+    QSignalSpy reveal(m_viewer, SIGNAL(revealPath(QString)));
+    openCanvasMenu();
+    QQuickItem* entry = canvasEntry(QStringLiteral("Show in folder"));
+    QVERIFY2(entry != nullptr, "the canvas menu has no \"Show in folder\" entry");
+    QVERIFY(entry->isEnabled());
+    QVERIFY(QMetaObject::invokeMethod(entry, "click"));
+    QTRY_COMPARE(reveal.count(), 1);
+    QCOMPARE(reveal.at(0).at(0).toString(), m_viewer->property("currentPath").toString());
+    QMetaObject::invokeMethod(canvasMenu(), "close");
   }
 
   // ---------------------------------------------------------------- keyboard

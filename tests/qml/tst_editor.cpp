@@ -97,21 +97,22 @@ private slots:
   void theKritaKeysPickTheToolsAndAdjustTheBrush();
   void ctrlZUndoesAndCtrlShiftZRedoes();
   void spacePansInsteadOfPainting();
-  void thePointerThumbnailCarriesThePreviewIdentity();
+  void theOriginalThumbnailCarriesTheSavedFileIdentity();
+  void cropStartsWithNoFrameAndClickBuildsOne();
   void cropApplyEmitsTheTypedRectangle();
   void theCropPresetsFitInsideTheDocument();
   void aGrowingCropReachesOutsideThePicture();
   void theCropRatioLinksTheSides();
   void theCropAnchorPlacesTheRectangle();
-  void theLiveCropShowsOnlyItsOwnDraft();
+  void theCropLocksChooseWhichFieldIsAnInput();
+  void theCropFieldsCreateTheFrame();
   void theCropFrameIsDrawnAndDragged();
   void theCropRatioLocksTheFrameDrag();
-  void theCropOrientationSwapsTheRectangle();
+  void aLockedSidePinsTheFrameDrag();
   void theCropKeysNudgeResizeAndApply();
   void theAppliedCropLeavesAFreshFrame();
   void theCropFrameRefitsAfterADocumentChange();
   void theCropFrameDrawsItsGuidesAndShade();
-  void theCropFrameHidesWhileItsPreviewIsOn();
   void theTransformToolDragsCornersAndEdges();
   void theLiveTransformShowsOnlyItsOwnDraft();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
@@ -119,7 +120,16 @@ private slots:
   void theMiniToolbarFoldsTheSecondaryActions();
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
   void thePaletteSelectsTheToolsOptions();
-  void resetRestoresTheStartingCropFrame();
+  void theInspectorSplitsToolsFromThreeReferenceTabs();
+  void theToolOptionsHugTheActionRow();
+  void thePointerSaysItHasNoOptions();
+  void theReferenceZoneKeepsRoomWhenTheWindowIsShort();
+  void theResizeFormReturnsToThePointer();
+  void theOriginalTabShowsTheSavedFile();
+  void theToolRailIsAnIconColumn();
+  void theUnitsAreAnotherSpellingOfTheSamePixels();
+  void theResizeFormTakesPercentagesToo();
+  void resetRestoresTheCropOptionsAndKeepsTheFrame();
   void saveAndSaveAsEmitTheirCommands();
   void toolbarTooltipsNameTheirShortcuts();
   void saveAsSuggestsTheCurrentLocation();
@@ -137,13 +147,25 @@ private:
   QObject* findObject(const QString& name) const;
   static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
+  /// Scroll the tool-options column until `item` is inside its viewport. The
+  /// pinned Crop action row wraps to two rows in the default 260 px dock, so
+  /// the anchor pad sits just under the fold; a hand scrolls it into view.
+  void scrollOptionsIntoView(QQuickItem* item);
   /// Click a control that closes the Resize form and wait for its modal overlay
   /// to be gone. `opened` goes false one frame before the dim overlay does, and
   /// a click that lands in that frame belongs to the overlay.
   void closeResizeDialog(QQuickItem* control);
   void dragScene(const QPointF& from, const QPointF& to, int steps = 6);
   void typeInto(QQuickItem* field, const QString& text);
+  /// Choose a unit from the selector inside a `UnitField`, the way the
+  /// dropdown's own signal does, so the field's handler is the path under test.
+  void chooseUnit(const char* field, const QString& unit);
+  /// Type a ratio the way a hand does, including the `:` or `/` separator
+  /// (`typeInto` maps one QChar to one key, which cannot type a shifted colon).
+  void typeRatioInto(QQuickItem* field, const QString& text);
   void selectTool(const char* name);
+  /// Open one of the dock's reference tabs and wait for the page to follow.
+  void selectRightTab(const char* key);
   QObject* resizeDialogObject() const;
   void openResizeDialog();
   QVariantList commands() const { return m_commands->takeFirst(); }
@@ -275,19 +297,27 @@ void TestEditor::init()
   // writes itself, so reset both sides.
   m_editor->setProperty("cropRatio", QStringLiteral("free"));
   m_editor->setProperty("cropAnchor", QStringLiteral("center"));
-  m_editor->setProperty("cropLivePreview", false);
   m_editor->setProperty("cropMode", QStringLiteral("center"));
   m_editor->setProperty("cropFill", QStringLiteral("transparent"));
   m_editor->setProperty("cropFillColor", QColor(QStringLiteral("#808080")));
+  m_editor->setProperty("cropLockWidth", false);
+  m_editor->setProperty("cropLockHeight", false);
+  m_editor->setProperty("cropLockRatio", false);
+  // The rail's fold and the fields' units are view state; a case must not
+  // decide what the next one opens on.
+  m_editor->setProperty("toolColumns", 2);
+  for (const char* name : {"cropWidth", "cropHeight", "cropX", "cropY", "resizeWidth", "resizeHeight"}) {
+    if (QQuickItem* field = visualItem(QString::fromLatin1(name))) {
+      field->setProperty("unit", QStringLiteral("px"));
+    }
+  }
+  m_editor->setProperty("pendingCropResult", QVariant());
   if (QQuickItem* box = visualItem(QStringLiteral("cropMode"))) {
     box->setProperty("currentIndex", 0);
   }
   if (QQuickItem* box = visualItem(QStringLiteral("cropBackground"))) {
     box->setProperty("currentIndex", 0);
   }
-  m_editor->setProperty("cropCurrentRatio",
-                        QVariantMap{{QStringLiteral("width"), 0},
-                                    {QStringLiteral("height"), 0}});
   m_editor->setProperty("transformLivePreview", false);
   m_editor->setProperty("transformCorners", QVariantList());
   m_editor->setProperty("paintMode", QStringLiteral("brush"));
@@ -299,10 +329,24 @@ void TestEditor::init()
   m_editor->setProperty("paintStroking", false);
   m_editor->setProperty("panelsHidden", false);
   m_editor->setProperty("spacePanning", false);
+  // The right dock's split, open tab and fold are view state, like the rail's
+  // columns: a case must not decide what the next one opens on.
+  m_editor->setProperty("rightPanelWidth", 260);
+    m_editor->setProperty("toolZoneFolded", false);
+  m_editor->setProperty("rightTab", QStringLiteral("info"));
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
-  for (const char* name : {"cropLivePreviewButton", "transformLivePreviewButton"}) {
-    if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
-      toggle->setProperty("checked", false);
+  // Zoom, pan and fit are presentation state that survives a case. Two cases
+  // deliberately zoom in and pan, and a later case that derives a click from
+  // the canvas used to inherit where the picture had been left — it then
+  // landed outside the window (or on the picture, for a case that clicks the
+  // matte) and the click did the wrong thing. Every case starts fitted and
+  // centred, which is also what the window does when a document arrives; a
+  // case that wants 1:1 asks for it with `actualSize()`.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "fit"));
+  for (const char* name : {"cropLockWidth", "cropLockHeight", "cropLockRatio",
+                           "transformLivePreviewButton"}) {
+    if (QQuickItem* control = visualItem(QString::fromLatin1(name))) {
+      control->setProperty("checked", false);
     }
   }
 }
@@ -364,6 +408,28 @@ void TestEditor::clickItem(QQuickItem* item)
   QTest::qWait(20);
 }
 
+void TestEditor::scrollOptionsIntoView(QQuickItem* item)
+{
+  QVERIFY(item != nullptr);
+  QQuickItem* flickable = item->parentItem();
+  while (flickable != nullptr && !flickable->property("contentY").isValid())
+    flickable = flickable->parentItem();
+  QVERIFY(flickable != nullptr);
+  const qreal contentY = flickable->property("contentY").toReal();
+  const qreal top = item->mapToItem(flickable, QPointF(0, 0)).y() + contentY;
+  const qreal bottom = top + item->height();
+  const qreal height = flickable->height();
+  qreal target = contentY;
+  if (top - target < 4)
+    target = top - 4;
+  if (bottom - target > height - 4)
+    target = bottom - height + 4;
+  const qreal max = qMax<qreal>(
+    0, flickable->property("contentHeight").toReal() - flickable->height());
+  flickable->setProperty("contentY", qBound<qreal>(0, target, max));
+  QTest::qWait(30);
+}
+
 /// A real left-button drag through the view: several small moves that keep the
 /// press's implicit grab, the way a hand moves rather than a teleporting
 /// cursor. Both overlays drive their own `MouseArea`, so this is the same path
@@ -390,14 +456,55 @@ void TestEditor::dragScene(const QPointF& from, const QPointF& to, int steps)
 /// Type into a field the way a hand does: focus it, select what is there and
 /// key the new value in. Setting `text` from C++ is not the same path: it does
 /// not emit `textEdited`, so it would skip the ratio link the user gets.
+static QQuickItem* textInput(QQuickItem* field)
+{
+  if (!field) return nullptr;
+  QQuickItem* input = field->property("inputField").value<QQuickItem*>();
+  return input ? input : field;
+}
+
 void TestEditor::typeInto(QQuickItem* field, const QString& text)
 {
   QVERIFY(field != nullptr);
+  // A `UnitField` is a row: the selector is beside the text, and the text
+  // control is the one that takes the keyboard.
+  field = textInput(field);
   field->forceActiveFocus();
   QTest::qWait(10);
   QTest::keyClick(m_view, Qt::Key_A, Qt::ControlModifier);
   for (const QChar character : text) {
     QTest::keyClick(m_view, static_cast<Qt::Key>(character.unicode()));
+  }
+  QTest::qWait(20);
+}
+
+void TestEditor::chooseUnit(const char* field, const QString& unit)
+{
+  const QString name = QString::fromLatin1(field) + QStringLiteral("Unit");
+  QQuickItem* box = expectItem(name.toLatin1().constData());
+  const int index = unit == QStringLiteral("%") ? 1 : 0;
+  // The same signal a selection emits, so the field's own handler is the path
+  // under test rather than a property write that could bypass it.
+  QVERIFY2(QMetaObject::invokeMethod(box, "activated", Q_ARG(int, index)),
+           qPrintable(name + QStringLiteral(" has no activated()")));
+  QTest::qWait(10);
+}
+
+void TestEditor::typeRatioInto(QQuickItem* field, const QString& text)
+{
+  QVERIFY(field != nullptr);
+  field = textInput(field);
+  field->forceActiveFocus();
+  QTest::qWait(10);
+  QTest::keyClick(m_view, Qt::Key_A, Qt::ControlModifier);
+  for (const QChar character : text) {
+    Qt::Key key = static_cast<Qt::Key>(character.unicode());
+    if (character == QLatin1Char(':')) {
+      key = Qt::Key_Colon;
+    } else if (character == QLatin1Char('/')) {
+      key = Qt::Key_Slash;
+    }
+    QTest::keyClick(m_view, key);
   }
   QTest::qWait(20);
 }
@@ -414,6 +521,18 @@ void TestEditor::selectTool(const char* name)
   const QString button = QStringLiteral("tool") + wanted.left(1).toUpper() + wanted.mid(1);
   clickItem(expectItem(button.toLatin1().constData()));
   QCOMPARE(m_editor->property("tool").toString(), wanted);
+}
+
+/// The dock's reference tabs are presentation, like the rail's fold: clicking
+/// one writes `rightTab` and sends no command.
+void TestEditor::selectRightTab(const char* key)
+{
+  const QString wanted = QString::fromLatin1(key);
+  if (m_editor->property("rightTab").toString() == wanted) {
+    return;
+  }
+  clickItem(expectItem(QStringLiteral("editorTab_%1").arg(wanted).toLatin1().constData()));
+  QTRY_COMPARE(m_editor->property("rightTab").toString(), wanted);
 }
 
 QObject* TestEditor::resizeDialogObject() const
@@ -467,6 +586,10 @@ QVariantMap TestEditor::documentState() const
   editor.insert(QStringLiteral("savePath"), QStringLiteral("/pics/photo.png"));
   editor.insert(QStringLiteral("saved"), true);
   editor.insert(QStringLiteral("format"), QStringLiteral(".png"));
+  // The identity of the file the Original tab draws: a path repeats after a
+  // save and on the next run, these two numbers do not.
+  editor.insert(QStringLiteral("fileModified"), Q_INT64_C(1700000000002));
+  editor.insert(QStringLiteral("fileSize"), Q_INT64_C(123456));
   editor.insert(QStringLiteral("saving"), false);
   editor.insert(QStringLiteral("opening"), false);
   return editor;
@@ -478,6 +601,12 @@ void TestEditor::setState(const QVariantMap& editor)
   m_requestOpen->clear();
   QVariantMap state;
   state.insert(QStringLiteral("editor"), editor);
+  // The Editor's dock is a Core-owned panel like the Browser's. The flag is
+  // set here because a case that only publishes a document has no window
+  // configuration behind it; the toggle itself is Core's (see `tst_settings`
+  // and the Core tests).
+  state.insert(QStringLiteral("rightPanelEditor"), true);
+  state.insert(QStringLiteral("language"), QStringLiteral("en"));
   m_editor->setProperty("state", state);
   QTest::qWait(40);
 }
@@ -499,8 +628,8 @@ void TestEditor::theResizeDialogStartsFromTheDocumentSize()
 
   // The keyboard path: the form opens with the width focused and selected, so
   // Ctrl+Alt+I then typing replaces the number instead of appending to it.
-  QTRY_VERIFY(width->hasActiveFocus());
-  QTRY_COMPARE(width->property("selectedText").toString(), QStringLiteral("4000"));
+  QTRY_VERIFY(textInput(width)->hasActiveFocus());
+  QTRY_COMPARE(textInput(width)->property("selectedText").toString(), QStringLiteral("4000"));
 
   // That pair is Core's no-op, so Apply says so before it is pressed.
   QVERIFY(!expectItem("resizeApply")->property("enabled").toBool());
@@ -625,11 +754,18 @@ void TestEditor::thePointerShowsTheDocumentAndHistory()
   setState(editor);
 
   QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
-           QStringLiteral("Pointer"));
+           QStringLiteral("Pointer options"));
+  // The pointer's dock opens on Info: the document's name, size and save
+  // target. The history and the thumbnail are one tab each, not rows that a
+  // tool would push away.
+  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("info"));
   QVERIFY(expectItem("imageName")->isVisible());
   QVERIFY(expectItem("imageSize")->isVisible());
   QVERIFY(expectItem("saveTarget")->isVisible());
-  QVERIFY(expectItem("pointerThumbnail")->isVisible());
+  QVERIFY(!expectItem("originalThumbnail")->isVisible());
+  QVERIFY(!expectItem("historyList")->isVisible());
+
+  selectRightTab("history");
   QCOMPARE(expectItem("historyList")->property("count").toInt(), 2);
   QCOMPARE(expectItem("historyLine0")->property("text").toString(),
            QStringLiteral("1. ")
@@ -641,6 +777,10 @@ void TestEditor::thePointerShowsTheDocumentAndHistory()
                      .arg(QStringLiteral("8"))
                      .arg(QStringLiteral("4"))
                      .arg(QStringLiteral("2")));
+
+  selectRightTab("original");
+  QVERIFY(expectItem("originalThumbnail")->isVisible());
+  QVERIFY(!expectItem("originalCaption")->property("text").toString().isEmpty());
   QCOMPARE(m_commands->count(), 0);
 }
 
@@ -974,7 +1114,7 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
   typeInto(expectItem("cropWidth"), QStringLiteral("300"));
   typeInto(expectItem("cropHeight"), QStringLiteral("200"));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("current")))));
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("3:2")))));
   typeInto(expectItem("cropWidth"), QStringLiteral("600"));
   QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("400"));
 
@@ -1098,8 +1238,8 @@ void TestEditor::theResizeKeyboardReachesWidthHeightAndApply()
 
   QQuickItem* width = expectItem("resizeWidth");
   QQuickItem* height = expectItem("resizeHeight");
-  QTRY_VERIFY(width->hasActiveFocus());
-  QTRY_COMPARE(width->property("selectedText").toString(), QStringLiteral("4000"));
+  QTRY_VERIFY(textInput(width)->hasActiveFocus());
+  QTRY_COMPARE(textInput(width)->property("selectedText").toString(), QStringLiteral("4000"));
 
   // Typing replaces the selected document width.
   typeInto(width, QStringLiteral("800"));
@@ -1108,7 +1248,7 @@ void TestEditor::theResizeKeyboardReachesWidthHeightAndApply()
 
   // Tab lands on Height, and typing there keeps the chain's shape.
   QTest::keyClick(m_view, Qt::Key_Tab);
-  QTRY_VERIFY(height->hasActiveFocus());
+  QTRY_VERIFY(textInput(height)->hasActiveFocus());
   typeInto(height, QStringLiteral("900"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("900"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("1200"));
@@ -1166,30 +1306,90 @@ void TestEditor::theResizeDialogHasNoPreviewSurfaces()
   QTRY_VERIFY(!dialog->property("opened").toBool());
 }
 
-/// The sidebar thumbnail must give the shared cache the preview file's identity,
-/// not just its path. The preview names repeat every run (`preview-1.png`), so a
-/// key of (path, edge, 0, 0) answered a fresh document with the previous run's
-/// thumbnail: the canvas was right and the small preview was another picture.
-void TestEditor::thePointerThumbnailCarriesThePreviewIdentity()
+/// The Original tab's thumbnail is keyed on the saved file's path and identity,
+/// not on the working preview. A save rewrites the file, so its mtime and size
+/// are what tell a fresh picture from the one the cache answered last time;
+/// asking for the preview would show the unsaved pixels instead.
+void TestEditor::theOriginalThumbnailCarriesTheSavedFileIdentity()
 {
   StubThumbnailCache cache;
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(&cache)));
 
-  QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("previewModified"), Q_INT64_C(1700000000123));
-  editor.insert(QStringLiteral("previewSize"), Q_INT64_C(4096));
-  setState(editor);
+  setState(documentState());
   selectTool("pointer");
+  selectRightTab("original");
 
-  QTRY_VERIFY_WITH_TIMEOUT(!cache.callsFor(m_previewOne).isEmpty(), 2000);
-  const StubThumbnailCache::Call call = cache.lastCallFor(m_previewOne);
-  QCOMPARE(call.modified, Q_INT64_C(1700000000123));
-  QCOMPARE(call.size, Q_INT64_C(4096));
-  // The thumbnail is the preview, not the source: asking for the source would
-  // show the unedited original.
-  QVERIFY(cache.callsFor(QStringLiteral("/pics/photo.png")).isEmpty());
+  QTRY_VERIFY_WITH_TIMEOUT(
+    !cache.callsFor(QStringLiteral("/pics/photo.png")).isEmpty(), 2000);
+  const StubThumbnailCache::Call call =
+    cache.lastCallFor(QStringLiteral("/pics/photo.png"));
+  QCOMPARE(call.modified, Q_INT64_C(1700000000002));
+  QCOMPARE(call.size, Q_INT64_C(123456));
+  // A real size bucket, not the zero the panel asked for while it was handed
+  // the cache instead of the `ThumbnailBook` that maps a drawn size onto one.
+  QVERIFY2(call.edge >= 160,
+           qPrintable(QStringLiteral("the tile asked the cache for edge %1").arg(call.edge)));
+  // The working preview is not the file on disk.
+  QVERIFY(cache.callsFor(m_previewOne).isEmpty());
 
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
+}
+
+/// Crop does not guess: arming the tool leaves the picture unframed, and the
+/// frame is the user's answer — drawn on the canvas or typed in the panel. A
+/// click without travel asks for the whole picture, which is the one rectangle
+/// that is always legal; a click while a frame already exists changes nothing.
+void TestEditor::cropStartsWithNoFrameAndClickBuildsOne()
+{
+  setState(documentState());
+  selectTool("crop");
+
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+  QQuickItem* frame = expectItem("cropFrame");
+  QQuickItem* createArea = expectItem("cropCreateArea");
+  QQuickItem* apply = expectItem("applyCrop");
+
+  QCOMPARE(width->property("text").toString(), QString());
+  QCOMPARE(height->property("text").toString(), QString());
+  QVERIFY(!frame->isVisible());
+  QVERIFY(!apply->property("enabled").toBool());
+  QVERIFY2(createArea->property("enabled").toBool(),
+           "an unframed crop does not accept a new frame");
+  QCOMPARE(m_commands->count(), 0);
+
+  // A press and release at one point is a click, not a zero-size drag: it
+  // takes the whole picture. The canvas is the view's fitted picture, so the
+  // point is inside the window.
+  QQuickItem* canvas = expectItem("canvas");
+  const QPointF origin = canvas->mapToScene(QPointF(0, 0));
+  const QPoint click = (origin + QPointF(120, 90)).toPoint();
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, click);
+  QTest::qWait(30);
+
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+  QVERIFY(frame->isVisible());
+  // `MouseArea.enabled` is the property that decides whether it takes input;
+  // the inherited `QQuickItem::enabled` is a different flag on this type.
+  QVERIFY2(!createArea->property("enabled").toBool(),
+           "a framed crop is still offering to create");
+  // The whole picture is Core's `edit_noop`, so Apply stays down.
+  QVERIFY(!apply->property("enabled").toBool());
+
+  // A click inside the existing frame moves it by nothing; it does not replace
+  // it with another whole-picture frame.
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier,
+                    (origin + QPointF(50, 40)).toPoint());
+  QTest::qWait(30);
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(m_commands->count(), 0);
 }
 
 void TestEditor::cropApplyEmitsTheTypedRectangle()
@@ -1208,12 +1408,15 @@ void TestEditor::cropApplyEmitsTheTypedRectangle()
   QQuickItem* apply = expectItem("applyCrop");
   QTRY_VERIFY(apply->isVisible());
 
+  // The size first: changing a side re-places the rectangle through its anchor.
+  // X/Y are the user's own placement and are typed last.
+  typeInto(width, QStringLiteral("100"));
+  typeInto(height, QStringLiteral("50"));
   cropX->setProperty("text", QStringLiteral("4"));
   cropY->setProperty("text", QStringLiteral("6"));
-  width->setProperty("text", QStringLiteral("100"));
-  height->setProperty("text", QStringLiteral("50"));
   QTest::qWait(20);
   QVERIFY(apply->property("enabled").toBool());
+  QVERIFY(expectItem("cropFrame")->isVisible());
 
   clickItem(apply);
   QCOMPARE(m_commands->count(), 1);
@@ -1227,7 +1430,7 @@ void TestEditor::cropApplyEmitsTheTypedRectangle()
 
 /// A crop preset is a concrete size the document can really hold: offering one
 /// that is wider or taller than the picture would arm Apply with a rectangle
-/// Core has to reject.
+/// Core has to reject. Picking one also builds the frame when none exists.
 void TestEditor::theCropPresetsFitInsideTheDocument()
 {
   setState(documentState());  // 4000 × 3000
@@ -1270,6 +1473,7 @@ void TestEditor::theCropPresetsFitInsideTheDocument()
   // The default centre anchor places the rectangle, not the top-left corner.
   QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("1488"));
   QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("988"));
+  QVERIFY(expectItem("cropFrame")->isVisible());
   QCOMPARE(m_commands->count(), 0);
 }
 
@@ -1389,7 +1593,7 @@ void TestEditor::aGrowingCropReachesOutsideThePicture()
   QVERIFY(!expectItem("cropBackground")->isVisible());
 }
 
-/// Crop links Width and Height the same way Resize does, and each size change
+/// Crop links Width and Height through its ratio field, and each size change
 /// re-places the rectangle through the selected anchor.
 void TestEditor::theCropRatioLinksTheSides()
 {
@@ -1459,19 +1663,23 @@ void TestEditor::theCropAnchorPlacesTheRectangle()
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
   QCOMPARE(cropY->property("text").toString(), QStringLiteral("1100"));
 
+  scrollOptionsIntoView(expectItem("cropAnchor_top_left"));
   clickItem(expectItem("cropAnchor_top_left"));
   QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("top_left"));
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
   QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
 
+  scrollOptionsIntoView(expectItem("cropAnchor_bottom_right"));
   clickItem(expectItem("cropAnchor_bottom_right"));
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("3200"));
   QCOMPARE(cropY->property("text").toString(), QStringLiteral("2200"));
 
+  scrollOptionsIntoView(expectItem("cropAnchor_right"));
   clickItem(expectItem("cropAnchor_right"));
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("3200"));
   QCOMPARE(cropY->property("text").toString(), QStringLiteral("1100"));
 
+  scrollOptionsIntoView(expectItem("cropAnchor_top"));
   clickItem(expectItem("cropAnchor_top"));
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
   QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
@@ -1484,7 +1692,8 @@ void TestEditor::theCropAnchorPlacesTheRectangle()
   QCOMPARE(x->property("text").toString(), QStringLiteral("50"));
   QCOMPARE(y->property("text").toString(), QStringLiteral("60"));
 
-  // Picking a preset re-places the rectangle at the anchor too.
+  // Picking a preset re-places the rectangle at the anchor too, and builds one
+  // when the tool is still unframed.
   const QVariantList presets = m_editor->property("cropPresets").toList();
   int index = -1;
   for (int i = 0; i < presets.size(); ++i) {
@@ -1501,62 +1710,158 @@ void TestEditor::theCropAnchorPlacesTheRectangle()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The crop draft is shown only under Crop with its toggle on, and only when
-/// Core says it is a crop. A resize draft left in the state must not paint a
-/// crop result, and the command that asks for one names the rectangle.
-void TestEditor::theLiveCropShowsOnlyItsOwnDraft()
+/// The three locks decide which fields are inputs. Width+Height fix the shape
+/// (Ratio becomes a consequence and its field is disabled); Width+Ratio derive
+/// Height; Height+Ratio derive Width. A third lock is refused, and the refused
+/// button snaps back rather than showing a lock the view does not hold.
+void TestEditor::theCropLocksChooseWhichFieldIsAnInput()
 {
-  QVariantMap draft;
-  draft.insert(QStringLiteral("path"), m_previewTwo);
-  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
-  draft.insert(QStringLiteral("width"), 200);
-  draft.insert(QStringLiteral("height"), 150);
-  QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("previewDraft"), draft);
-
-  setState(editor);
+  setState(documentState());  // 4000 × 3000
   selectTool("crop");
-  QQuickItem* canvas = expectItem("canvas");
-  QQuickItem* toggle = expectItem("cropLivePreviewButton");
-  QVERIFY(toggle->isVisible());
-  QVERIFY(!m_editor->property("cropLivePreview").toBool());
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
 
-  clickItem(toggle);
-  QVERIFY(m_editor->property("cropLivePreview").toBool());
-  QVERIFY(toggle->property("checked").toBool());
-  QVERIFY(toggle->property("highlighted").toBool());
-  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
-  QCOMPARE(canvas->property("width").toDouble(), 200.0);
-  QCOMPARE(canvas->property("height").toDouble(), 150.0);
-  // The document did not move: the draft is a preview, not a cut.
-  QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
-  QCOMPARE(m_editor->property("modified").toBool(), false);
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
+  QQuickItem* ratio = expectItem("cropRatio");
+  QQuickItem* lockWidth = expectItem("cropLockWidth");
+  QQuickItem* lockHeight = expectItem("cropLockHeight");
+  QQuickItem* lockRatio = expectItem("cropLockRatio");
+  QVERIFY(width->isVisible());
+  QVERIFY(lockWidth->isVisible());
+  QVERIFY(lockHeight->isVisible());
+  QVERIFY(lockRatio->isVisible());
+  QVERIFY(width->property("enabled").toBool());
+  QVERIFY(height->property("enabled").toBool());
+  QVERIFY(ratio->property("enabled").toBool());
 
-  // A resize draft under Crop is the other tool's result: it stays hidden.
-  draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
+  // A frame to lock: 800 × 600 at four thirds, centred.
+  typeInto(width, QStringLiteral("800"));
+  typeInto(height, QStringLiteral("600"));
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("1600"));
 
-  // The command that asks Core for a crop draft carries the whole rectangle.
-  m_commands->clear();
+  // Width locked: Height is still an input and follows the typed value.
+  clickItem(lockWidth);
+  QVERIFY(m_editor->property("cropLockWidth").toBool());
+  QVERIFY(!width->property("enabled").toBool());
+  QVERIFY(height->property("enabled").toBool());
+  typeInto(height, QStringLiteral("300"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("300"));
+
+  // Width+Ratio: the shape is fixed, so Height is derived and disabled.
+  clickItem(lockRatio);
+  QVERIFY(m_editor->property("cropLockRatio").toBool());
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("8:3"));
+  QVERIFY(!height->property("enabled").toBool());
+  QVERIFY(!ratio->property("enabled").toBool());
+  // A side plus the ratio fixes the shape, so a handle has nothing to change.
+  QVERIFY2(!m_editor->property("cropResizable").toBool(),
+           "Width+Ratio still let a handle reshape the frame");
+
+  // Unlocking Width leaves the ratio as the lock; Height is editable again.
+  clickItem(lockWidth);
+  QVERIFY(!m_editor->property("cropLockWidth").toBool());
+  QVERIFY(height->property("enabled").toBool());
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("8:3"));
+  QVERIFY(m_editor->property("cropResizable").toBool());
+
+  // Height+Ratio derives Width instead.
+  clickItem(lockHeight);
+  QVERIFY(!width->property("enabled").toBool());
+  QVERIFY(!height->property("enabled").toBool());
+  QVERIFY2(!m_editor->property("cropResizable").toBool(),
+           "Height+Ratio still let a handle reshape the frame");
+
+  // All three is not a state: the third lock is refused and the button snaps
+  // back off.
+  clickItem(lockWidth);
+  QVERIFY(!m_editor->property("cropLockWidth").toBool());
+  QVERIFY(m_editor->property("cropLockHeight").toBool());
+  QVERIFY(m_editor->property("cropLockRatio").toBool());
+  QVERIFY(!lockWidth->property("checked").toBool());
+
+  // Height alone: Width is the input. The unlocked ratio still links the
+  // sides, but the locked Height wins, so Width changes and the ratio follows
+  // the new pair.
+  clickItem(lockRatio);
+  QVERIFY(!m_editor->property("cropLockRatio").toBool());
+  QVERIFY(m_editor->property("cropLockHeight").toBool());
+  QVERIFY(width->property("enabled").toBool());
+  typeInto(width, QStringLiteral("500"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("500"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("300"));
+
+  // Width+Height settle the ratio as a consequence, with the field disabled.
+  clickItem(lockWidth);
+  QVERIFY(m_editor->property("cropLockWidth").toBool());
+  QVERIFY(!m_editor->property("cropLockRatio").toBool());
+  QVERIFY(!ratio->property("enabled").toBool());
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("5:3"));
+
+  // And the ratio cannot be locked on top of two sides.
+  clickItem(lockRatio);
+  QVERIFY(!m_editor->property("cropLockRatio").toBool());
+  QVERIFY(!lockRatio->property("checked").toBool());
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The panel is a second way to build the frame when the canvas is not the
+/// handiest surface: a typed side, a preset or an anchor all place a rectangle
+/// without a drag.
+void TestEditor::theCropFieldsCreateTheFrame()
+{
+  setState(documentState());  // 4000 × 3000
   selectTool("crop");
-  m_editor->setProperty("cropLivePreview", false);
-  expectItem("cropX")->setProperty("text", QStringLiteral("20"));
-  expectItem("cropY")->setProperty("text", QStringLiteral("30"));
-  expectItem("cropWidth")->setProperty("text", QStringLiteral("200"));
-  expectItem("cropHeight")->setProperty("text", QStringLiteral("150"));
-  clickItem(expectItem("cropLivePreviewButton"));
-  QTRY_COMPARE(m_commands->count(), 1);
-  const QVariantMap command = m_commands->at(0).at(0).toMap();
-  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_crop_preview"));
-  QCOMPARE(command.value("x").toInt(), 20);
-  QCOMPARE(command.value("y").toInt(), 30);
-  QCOMPARE(command.value("width").toInt(), 200);
-  QCOMPARE(command.value("height").toInt(), 150);
+
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+  QQuickItem* frame = expectItem("cropFrame");
+  QQuickItem* apply = expectItem("applyCrop");
+
+  // One typed side is enough: the other follows the free shape's document
+  // aspect, and the anchor places the rectangle.
+  QVERIFY(!frame->isVisible());
+  typeInto(width, QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1200"));
+  QVERIFY(frame->isVisible());
+  QVERIFY(apply->property("enabled").toBool());
+
+  // Clear puts the frame down and empties the fields; the options stay.
+  clickItem(expectItem("clearCrop"));
+  QCOMPARE(width->property("text").toString(), QString());
+  QCOMPARE(height->property("text").toString(), QString());
+  QVERIFY(!frame->isVisible());
+  QVERIFY(!apply->property("enabled").toBool());
+
+  // The anchor alone is a creation path too: with nothing typed it asks for
+  // the whole picture, which is the one rectangle that cannot be applied.
+  scrollOptionsIntoView(expectItem("cropAnchor_top_left"));
+  clickItem(expectItem("cropAnchor_top_left"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+  QVERIFY(frame->isVisible());
+  QVERIFY(!apply->property("enabled").toBool());
+
+  // Clear again, then type a ratio: a shape alone does not invent a frame, but
+  // the next typed side uses it.
+  clickItem(expectItem("clearCrop"));
+  QVERIFY(!frame->isVisible());
+  typeRatioInto(expectItem("cropRatio"), QStringLiteral("3:2"));
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("3:2"));
+  QVERIFY(!frame->isVisible());
+  typeInto(width, QStringLiteral("600"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("400"));
+  // Clear kept the top-left anchor the case chose above, so the frame is
+  // placed there; the ratio is what decided its 3:2 height.
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
+  QVERIFY(frame->isVisible());
+  QCOMPARE(m_commands->count(), 0);
 }
 
 /// The crop frame is a second view of the four fields, not a second copy of the
@@ -1580,23 +1885,17 @@ void TestEditor::theCropFrameIsDrawnAndDragged()
   QQuickItem* canvas = expectItem("canvas");
   const QPointF origin = canvas->mapToScene(QPointF(0, 0));
 
-  // Arming Crop places the starting frame: four fifths of the picture,
-  // centred, so the tool has handles before anything is typed or dragged.
-  QVERIFY(expectItem("cropOverlay")->isVisible());
-  QQuickItem* frame = expectItem("cropFrame");
-  QVERIFY(frame->isVisible());
-  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("20"));
-  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("15"));
-  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("160"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("120"));
+  // Nothing is framed until the user draws one.
+  QVERIFY(!expectItem("cropFrame")->isVisible());
 
-  // Drag a new rectangle outside the seeded frame: (10,10) to (90,70) in
-  // document pixels. Crop starts free, so the shape is exactly the drag.
+  // Drag a rectangle: (10,10) to (90,70) in document pixels. Crop starts free,
+  // so the shape is exactly the drag.
   dragScene(origin + QPointF(10, 10), origin + QPointF(90, 70));
   QTRY_COMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("10"));
   QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("10"));
   QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("80"));
   QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("60"));
+  QQuickItem* frame = expectItem("cropFrame");
   QTRY_VERIFY(frame->isVisible());
   QCOMPARE(frame->mapToScene(QPointF(0, 0)).x(), origin.x() + 10.0);
   QCOMPARE(frame->mapToScene(QPointF(0, 0)).y(), origin.y() + 10.0);
@@ -1650,6 +1949,12 @@ void TestEditor::theCropRatioLocksTheFrameDrag()
   QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
   QTest::qWait(20);
 
+  // A 4:5 frame gets squared by the ratio; the anchor keeps it centred.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
+                                    Q_ARG(QVariant, QVariant(40)),
+                                    Q_ARG(QVariant, QVariant(40)),
+                                    Q_ARG(QVariant, QVariant(320)),
+                                    Q_ARG(QVariant, QVariant(320))));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("1:1")))));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "reshapeCropToRatio"));
@@ -1689,53 +1994,59 @@ void TestEditor::theCropRatioLocksTheFrameDrag()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// Swap orientation turns the rectangle through 90° around its centre — the
-/// crop tool's answer to a portrait cut out of a landscape picture. A named
-/// ratio moves to its counterpart; a free rectangle stays free.
-void TestEditor::theCropOrientationSwapsTheRectangle()
+/// A locked side is a lock on the canvas too: dragging a handle changes only
+/// the axis that is still free, so the value the user pinned cannot move. Two
+/// pinned sides fix the shape, and then the handles do nothing at all while the
+/// frame can still be moved.
+void TestEditor::aLockedSidePinsTheFrameDrag()
 {
   QVariantMap editor = documentState();
   editor.insert(QStringLiteral("width"), 400);
   editor.insert(QStringLiteral("height"), 300);
   setState(editor);
   selectTool("crop");
-
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
+  QTest::qWait(20);
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
                                     Q_ARG(QVariant, QVariant(100)),
                                     Q_ARG(QVariant, QVariant(100)),
                                     Q_ARG(QVariant, QVariant(200)),
-                                    Q_ARG(QVariant, QVariant(100))));
-  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("200"));
+                                    Q_ARG(QVariant, QVariant(150))));
 
-  clickItem(expectItem("swapCropOrientation"));
-  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("100"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("200"));
-  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("150"));
-  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("50"));
-  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("free"));
+  QQuickItem* canvas = expectItem("canvas");
+  const QPointF origin = canvas->mapToScene(QPointF(0, 0));
 
-  // A named ratio has a named counterpart: 4:3 becomes 3:4 and the fields keep
-  // that shape through the turn.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("4:3")))));
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "reshapeCropToRatio"));
-  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("100"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("75"));
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "swapCropOrientation"));
-  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("3:4"));
-  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("75"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("100"));
-  QVariant valid;
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "cropFieldsValid",
-                                    Q_RETURN_ARG(QVariant, valid)));
-  QVERIFY(valid.toBool());
+  // Height locked: the bottom-right corner drag widens the frame even though
+  // the pointer also moved down; Height stays at 150.
+  clickItem(expectItem("cropLockHeight"));
+  QVERIFY(!m_editor->property("cropHeightEditable").toBool());
+  dragScene(origin + QPointF(300, 250), origin + QPointF(340, 290));
+  QTRY_COMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("240"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("150"));
+  QCOMPARE(m_editor->property("cropFrameShown").toBool(), true);
+
+  // Width locked instead: the same corner changes only Height.
+  clickItem(expectItem("cropLockHeight"));
+  clickItem(expectItem("cropLockWidth"));
+  QVERIFY(!m_editor->property("cropWidthEditable").toBool());
+  dragScene(origin + QPointF(340, 250), origin + QPointF(390, 280));
+  QTRY_COMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("180"));
+  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("240"));
+
+  // Two sides pinned: handles are refused, the rectangle is not resized.
+  clickItem(expectItem("cropLockHeight"));
+  QVERIFY(!m_editor->property("cropResizable").toBool());
+  dragScene(origin + QPointF(340, 280), origin + QPointF(390, 330));
+  QTest::qWait(30);
+  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("240"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("180"));
   QCOMPARE(m_commands->count(), 0);
 }
 
 /// The crop tool owns the arrow keys while it is armed: they nudge the frame,
 /// Shift steps 10 px and Alt resizes around its centre. Enter applies the
-/// rectangle on screen and Escape puts the tool down; neither sends a command
-/// when there is nothing to apply.
+/// rectangle on screen and Escape puts the tool down; a tool without a frame
+/// sends nothing.
 void TestEditor::theCropKeysNudgeResizeAndApply()
 {
   QVariantMap editor = documentState();
@@ -1776,25 +2087,77 @@ void TestEditor::theCropKeysNudgeResizeAndApply()
   QCOMPARE(cropX->property("text").toString(), QStringLiteral("112"));
   QCOMPARE(m_commands->count(), 0);
 
-  // Enter applies exactly the rectangle that is on screen.
+  // Re-arming Crop starts unframed, so Enter has nothing to send yet.
   selectTool("crop");
+  QVERIFY(!expectItem("cropFrame")->isVisible());
   m_editor->forceActiveFocus();
   QQuickItem* apply = expectItem("applyCrop");
+  QVERIFY(!apply->property("enabled").toBool());
+  QTest::keyClick(m_view, Qt::Key_Return);
+  QCOMPARE(m_commands->count(), 0);
+
+  // A rectangle built in the panel is what Enter applies.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
+                                    Q_ARG(QVariant, QVariant(50)),
+                                    Q_ARG(QVariant, QVariant(60)),
+                                    Q_ARG(QVariant, QVariant(120)),
+                                    Q_ARG(QVariant, QVariant(90))));
   QTRY_VERIFY(apply->property("enabled").toBool());
   QTest::keyClick(m_view, Qt::Key_Return);
   QTRY_COMPARE(m_commands->count(), 1);
   const QVariantMap command = m_commands->at(0).at(0).toMap();
   QCOMPARE(command.value("type").toString(), QStringLiteral("editor_crop"));
-  QCOMPARE(command.value("x").toInt(), 112);
-  QCOMPARE(command.value("y").toInt(), 101);
-  QCOMPARE(command.value("width").toInt(), 199);
-  QCOMPARE(command.value("height").toInt(), 150);
+  QCOMPARE(command.value("x").toInt(), 50);
+  QCOMPARE(command.value("y").toInt(), 60);
+  QCOMPARE(command.value("width").toInt(), 120);
+  QCOMPARE(command.value("height").toInt(), 90);
+}
+
+/// Another edit can shrink the document under an armed Crop frame. A rectangle
+/// that no longer fits cannot be applied; it is pulled inside the new picture
+/// in one move, and a rectangle that still fits is never touched.
+void TestEditor::theCropFrameRefitsAfterADocumentChange()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("width"), 400);
+  editor.insert(QStringLiteral("height"), 300);
+  setState(editor);
+  selectTool("crop");
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
+                                    Q_ARG(QVariant, QVariant(50)),
+                                    Q_ARG(QVariant, QVariant(50)),
+                                    Q_ARG(QVariant, QVariant(300)),
+                                    Q_ARG(QVariant, QVariant(200))));
+
+  // Shrink to 200 × 150: the 300 × 200 rectangle is outside now, so it is
+  // clamped to the whole new picture at (0, 0).
+  QVariantMap smaller = editor;
+  smaller.insert(QStringLiteral("width"), 200);
+  smaller.insert(QStringLiteral("height"), 150);
+  setState(smaller);
+  QTRY_COMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("200"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("150"));
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("0"));
+  // The whole picture is Core's `edit_noop`, so Apply is not armed by the refit.
+  QVERIFY(!expectItem("applyCrop")->property("enabled").toBool());
+
+  // Grow to 800 × 600: the frame still fits, so it must not move.
+  QVariantMap bigger = editor;
+  bigger.insert(QStringLiteral("width"), 800);
+  bigger.insert(QStringLiteral("height"), 600);
+  setState(bigger);
+  QTest::qWait(40);
+  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("200"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("150"));
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(m_commands->count(), 0);
 }
 
 /// What a crop tool draws while the rectangle exists: rule-of-thirds guides
-/// inside the frame and the discarded picture dimmed outside it. The four shade
-/// pieces tile the picture minus the frame exactly, so the frame itself is the
-/// only undimmed part.
+/// inside the frame and the discarded picture dimmed outside it. With no frame
+/// nothing is chosen, so the whole picture is dimmed instead.
 void TestEditor::theCropFrameDrawsItsGuidesAndShade()
 {
   QVariantMap editor = documentState();
@@ -1805,10 +2168,21 @@ void TestEditor::theCropFrameDrawsItsGuidesAndShade()
   QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
   QTest::qWait(20);
 
+  QVERIFY(!expectItem("cropFrame")->isVisible());
+  // Nothing is chosen yet, so the whole picture is dimmed and the four edge
+  // strips have nothing to cover: they are zero-sized, not visible halves.
+  QVERIFY(expectItem("cropShadeEmpty")->isVisible());
+  QCOMPARE(expectItem("cropShadeTop")->height(), 0.0);
+  QCOMPARE(expectItem("cropShadeLeft")->width(), 0.0);
+
+  QQuickItem* canvas = expectItem("canvas");
+  const QPointF origin = canvas->mapToScene(QPointF(0, 0));
+  dragScene(origin + QPointF(10, 10), origin + QPointF(170, 130));
+
   QQuickItem* frame = expectItem("cropFrame");
   QTRY_VERIFY(frame->isVisible());
-  QCOMPARE(frame->width(), 320.0);
-  QCOMPARE(frame->height(), 240.0);
+  QCOMPARE(frame->width(), 160.0);
+  QCOMPARE(frame->height(), 120.0);
 
   const auto near = [](qreal actual, qreal expected) {
     return qAbs(actual - expected) < 0.01;
@@ -1819,27 +2193,23 @@ void TestEditor::theCropFrameDrawsItsGuidesAndShade()
   QVERIFY(near(expectItem("cropGridHorizontal2")->y(), frame->height() * 2.0 / 3.0));
 
   QVERIFY(expectItem("cropShade")->isVisible());
-  // At 100 % the seeded frame is 40 px in from each side and 30 px from the
-  // top and bottom, so each shade piece is exactly that leftover.
-  QCOMPARE(expectItem("cropShadeLeft")->width(), 40.0);
-  QCOMPARE(expectItem("cropShadeRight")->width(), 40.0);
-  QCOMPARE(expectItem("cropShadeTop")->height(), 30.0);
-  QCOMPARE(expectItem("cropShadeBottom")->height(), 30.0);
+  QVERIFY(!expectItem("cropShadeEmpty")->isVisible());
+  // At 100 % the frame starts 10 px in and ends 30 px short of the far edges,
+  // so each shade piece is exactly that leftover.
+  QCOMPARE(expectItem("cropShadeLeft")->width(), 10.0);
+  QCOMPARE(expectItem("cropShadeRight")->width(), 230.0);
+  QCOMPARE(expectItem("cropShadeTop")->height(), 10.0);
+  QCOMPARE(expectItem("cropShadeBottom")->height(), 170.0);
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// Applying a crop leaves the tool armed on the cropped document, so it must
-/// have a frame to drag. The gateway publishes the new document size before
-/// `command()` returns; the fields therefore have to be empty by then, or the
-/// size handlers think the user is typing and seed nothing. This case answers
-/// the command with a synchronous state change, which is what the real gateway
-/// does, and asserts the fresh 80 % frame on the new document.
+/// Applying a crop leaves the tool armed on the cropped document with a frame
+/// over the whole result: the next crop starts from what the user can see. The
+/// gateway publishes the new document before `command()` returns, and this case
+/// answers the command with a synchronous state change, exactly as the real
+/// gateway does.
 void TestEditor::theAppliedCropLeavesAFreshFrame()
 {
-  // The rectangle that is applied fills this 1200 × 640 document up to a
-  // 600 px height. The numbers matter: a seed fitted from the *new* width and
-  // the *old* height (640 × 512 at y 64) still fits the 800 × 600 result, so
-  // only a seed that waits for both sides gives the correct 640 × 480.
   QVariantMap editor = documentState();
   editor.insert(QStringLiteral("width"), 1200);
   editor.insert(QStringLiteral("height"), 640);
@@ -1850,9 +2220,14 @@ void TestEditor::theAppliedCropLeavesAFreshFrame()
                                     Q_ARG(QVariant, QVariant(20)),
                                     Q_ARG(QVariant, QVariant(800)),
                                     Q_ARG(QVariant, QVariant(600))));
+  // A lock describes the rectangle that is about to disappear.
+  clickItem(expectItem("cropLockWidth"));
+  QVERIFY(m_editor->property("cropLockWidth").toBool());
   m_commands->clear();
 
-  QVariantMap cropped;
+  // The answered state is the same document at the cut size, so its path does
+  // not change and the pending result is not discarded as a new file.
+  QVariantMap cropped = editor;
   cropped.insert(QStringLiteral("width"), 800);
   cropped.insert(QStringLiteral("height"), 600);
   CommandAnswerer answerer(m_editor, cropped);
@@ -1869,26 +2244,19 @@ void TestEditor::theAppliedCropLeavesAFreshFrame()
   QCOMPARE(command.value("width").toInt(), 800);
   QCOMPARE(command.value("height").toInt(), 600);
 
-  // The new document is 800 × 600; four fifths of it is the fresh frame, and
-  // the fields are real numbers again rather than placeholders. The seed runs
-  // one event-loop turn after the size change, so both sides are new.
   QCOMPARE(m_editor->property("documentWidth").toInt(), 800);
   QCOMPARE(m_editor->property("documentHeight").toInt(), 600);
-  QTRY_COMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("640"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("480"));
-  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("80"));
-  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("60"));
+  QTRY_COMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("800"));
+  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("600"));
+  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("0"));
   QVERIFY(expectItem("cropFrame")->isVisible());
-  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("free"));
+  QVERIFY2(!m_editor->property("cropLockWidth").toBool(),
+           "a lock survived the rectangle it described");
+  QVERIFY(!apply->property("enabled").toBool());
 
   // A rectangle that keeps the whole document is Core's `edit_noop`, so Apply
   // says so instead of sending it; any smaller rectangle arms it again.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
-                                    Q_ARG(QVariant, QVariant(0)),
-                                    Q_ARG(QVariant, QVariant(0)),
-                                    Q_ARG(QVariant, QVariant(800)),
-                                    Q_ARG(QVariant, QVariant(600))));
-  QVERIFY(!apply->property("enabled").toBool());
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
                                     Q_ARG(QVariant, QVariant(0)),
                                     Q_ARG(QVariant, QVariant(0)),
@@ -1897,86 +2265,87 @@ void TestEditor::theAppliedCropLeavesAFreshFrame()
   QVERIFY(apply->property("enabled").toBool());
 }
 
-/// Another edit can shrink the document under an armed Crop frame. A rectangle
-/// that no longer fits cannot be applied, and clamping its sides one by one
-/// would break the chosen ratio, so the view replaces it with the starting
-/// frame on the new size. A rectangle that still fits is never touched: the
-/// user's rectangle is not the view's to move.
-void TestEditor::theCropFrameRefitsAfterADocumentChange()
+/// Reset is a statement about the panel, not about the picture: it restores the
+/// options to their defaults and leaves the frame where the user put it. Clear
+/// is the other half: it puts the frame down and keeps the options.
+void TestEditor::resetRestoresTheCropOptionsAndKeepsTheFrame()
 {
-  QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("width"), 400);
-  editor.insert(QStringLiteral("height"), 300);
-  setState(editor);
+  setState(documentState());
   selectTool("crop");
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropRect",
-                                    Q_ARG(QVariant, QVariant(50)),
-                                    Q_ARG(QVariant, QVariant(50)),
-                                    Q_ARG(QVariant, QVariant(300)),
-                                    Q_ARG(QVariant, QVariant(200))));
+  QQuickItem* width = expectItem("cropWidth");
+  QQuickItem* height = expectItem("cropHeight");
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+  QQuickItem* preset = expectItem("cropPreset");
 
-  // Shrink to 200 × 150: the 300 × 200 rectangle is outside now, so four
-  // fifths of the new document is seeded at (20, 15).
-  QVariantMap smaller = editor;
-  smaller.insert(QStringLiteral("width"), 200);
-  smaller.insert(QStringLiteral("height"), 150);
-  setState(smaller);
-  QTRY_COMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("160"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("120"));
-  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("20"));
-  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("15"));
+  typeInto(width, QStringLiteral("800"));
+  typeInto(height, QStringLiteral("600"));
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("1200"));
 
-  // Grow to 800 × 600: the frame still fits, so it must not move.
-  QVariantMap bigger = editor;
-  bigger.insert(QStringLiteral("width"), 800);
-  bigger.insert(QStringLiteral("height"), 600);
-  setState(bigger);
-  QTest::qWait(40);
-  QCOMPARE(expectItem("cropWidth")->property("text").toString(), QStringLiteral("160"));
-  QCOMPARE(expectItem("cropHeight")->property("text").toString(), QStringLiteral("120"));
-  QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("20"));
-  QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("15"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("4:3")))));
+  scrollOptionsIntoView(expectItem("cropAnchor_bottom_right"));
+  clickItem(expectItem("cropAnchor_bottom_right"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("grow")))));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
+                                    Q_ARG(QVariant, QVariant(1))));
+  clickItem(expectItem("cropLockWidth"));
+  preset->setProperty("currentIndex", 2);
+  QCOMPARE(preset->property("currentIndex").toInt(), 2);
+  const QString keptX = cropX->property("text").toString();
+  const QString keptY = cropY->property("text").toString();
+
+  clickItem(expectItem("resetCropOptions"));
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("free"));
+  QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("center"));
+  QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("center"));
+  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("transparent"));
+  QVERIFY(!m_editor->property("cropLockWidth").toBool());
+  QVERIFY(!m_editor->property("cropLockHeight").toBool());
+  QVERIFY(!m_editor->property("cropLockRatio").toBool());
+  QCOMPARE(preset->property("currentIndex").toInt(), -1);
+  // The rectangle is exactly where it was.
+  QCOMPARE(width->property("text").toString(), QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+  QCOMPARE(cropX->property("text").toString(), keptX);
+  QCOMPARE(cropY->property("text").toString(), keptY);
+  QVERIFY(expectItem("cropFrame")->isVisible());
   QCOMPARE(m_commands->count(), 0);
-}
 
-/// A crop draft is the cut result and fills the canvas at its own size, so the
-/// rectangle's handles would sit outside it (or, for a full-width crop, point
-/// at pixels that are not the source). The frame is drawn only while the
-/// source is on screen; turning the preview off brings it back.
-void TestEditor::theCropFrameHidesWhileItsPreviewIsOn()
-{
-  QVariantMap draft;
-  draft.insert(QStringLiteral("path"), m_previewTwo);
-  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
-  draft.insert(QStringLiteral("width"), 80);
-  draft.insert(QStringLiteral("height"), 60);
-  QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("width"), 200);
-  editor.insert(QStringLiteral("height"), 150);
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  selectTool("crop");
-  expectItem("cropX")->setProperty("text", QStringLiteral("10"));
-  expectItem("cropY")->setProperty("text", QStringLiteral("10"));
-  expectItem("cropWidth")->setProperty("text", QStringLiteral("80"));
-  expectItem("cropHeight")->setProperty("text", QStringLiteral("60"));
-  QTest::qWait(20);
+  // Clear removes the frame and releases the locks, but the mode, the border
+  // colour, the ratio and the anchor are panel options and stay.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("4:3")))));
+  scrollOptionsIntoView(expectItem("cropAnchor_top_left"));
+  clickItem(expectItem("cropAnchor_top_left"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("grow")))));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
+                                    Q_ARG(QVariant, QVariant(1))));
+  clickItem(expectItem("cropLockHeight"));
+  clickItem(expectItem("clearCrop"));
 
-  // With the preview off, the draft is not drawn and the frame is.
-  QVERIFY(m_editor->property("cropFrameShown").toBool());
-  QVERIFY(expectItem("cropFrame")->isVisible());
-  QVERIFY(expectItem("cropOverlay")->isEnabled());
-
-  clickItem(expectItem("cropLivePreviewButton"));
-  QVERIFY(m_editor->property("cropLivePreview").toBool());
-  QTRY_VERIFY(!m_editor->property("cropFrameShown").toBool());
+  QCOMPARE(width->property("text").toString(), QString());
+  QCOMPARE(height->property("text").toString(), QString());
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("0"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("0"));
   QVERIFY(!expectItem("cropFrame")->isVisible());
-  QVERIFY(!expectItem("cropOverlay")->isEnabled());
+  QVERIFY(!m_editor->property("cropLockWidth").toBool());
+  QVERIFY(!m_editor->property("cropLockHeight").toBool());
+  QVERIFY(!m_editor->property("cropLockRatio").toBool());
+  QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("grow"));
+  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("black"));
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("4:3"));
+  QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("top_left"));
 
-  clickItem(expectItem("cropLivePreviewButton"));
-  QVERIFY(!m_editor->property("cropLivePreview").toBool());
-  QTRY_VERIFY(m_editor->property("cropFrameShown").toBool());
+  // And the empty state still accepts a new frame.
+  scrollOptionsIntoView(expectItem("cropAnchor_top_left"));
+  clickItem(expectItem("cropAnchor_top_left"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
   QVERIFY(expectItem("cropFrame")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
 }
 
 /// Transform carries four source corners and nothing else. The canvas shows
@@ -1990,7 +2359,7 @@ void TestEditor::theTransformToolDragsCornersAndEdges()
   setState(editor);
   selectTool("transform");
   QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
-           QStringLiteral("Transform"));
+           QStringLiteral("Transform options"));
   QVERIFY(expectItem("transformOverlay")->isVisible());
   QVERIFY(expectItem("applyTransform")->isVisible());
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners.length")).toInt(), 4);
@@ -2178,18 +2547,21 @@ void TestEditor::theMiniToolbarFoldsTheSecondaryActions()
   walk(row);
   QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
   QCOMPARE(overflow->isVisible(), mini);
-  QCOMPARE(buttons, mini ? 7 : 13);
+  QCOMPARE(buttons, mini ? 7 : 14);
 
   if (mini) {
     QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
     QObject* menu = m_editor->findChild<QObject*>(QStringLiteral("editorOverflowMenu"));
     QVERIFY2(menu != nullptr, "the editor has no overflow menu");
     QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
-    // zoom out/in, fit, actual size, a separator, save as, export, a separator
-    // and reset: nine rows.
-    QCOMPARE(menu->property("count").toInt(), 9);
+    const int rows = menu->property("count").toInt();
+    // Close first: a failed count used to leave the popup open over the next
+    // case's click, which read as a broken tab strip.
     QMetaObject::invokeMethod(menu, "close");
     QTRY_VERIFY(!menu->property("visible").toBool());
+    // zoom out/in, fit, actual size, a separator, save as, export, a separator,
+    // reset, a separator and the dock toggle: eleven rows.
+    QCOMPARE(rows, 11);
   }
   m_editor->setProperty("miniToolbar", false);
 }
@@ -2248,33 +2620,51 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
                             .arg(QString::fromLatin1(action))));
   }
 
-  // Pointer: document details, thumbnail and the session history.
+  // Pointer: the dock opens on Info. Thumbnail and history are their own tabs,
+  // so no tool can push them away.
   selectTool("pointer");
+  selectRightTab("info");
   for (const char* option : {"toolOptionsHeading", "imageHeading", "imageName", "imageSize",
-                             "saveTarget", "pointerThumbnail", "historyList"}) {
+                             "saveTarget"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
                                                  .arg(QString::fromLatin1(option))));
     QVERIFY2(item->isVisible(), qPrintable(QStringLiteral("%1 is not visible")
                                                .arg(QString::fromLatin1(option))));
   }
+  QVERIFY(!expectItem("originalThumbnail")->isVisible());
+  QVERIFY(!expectItem("historyList")->isVisible());
 
-  // A canvas tool: only its options, inside the same inspector.
+  selectRightTab("history");
+  QVERIFY2(inside(right, expectItem("historyList")),
+           "the history list is not in the inspector");
+  QVERIFY(expectItem("historyList")->isVisible());
+
+  selectRightTab("original");
+  QVERIFY2(inside(right, expectItem("originalThumbnail")),
+           "the preview is not in the inspector");
+  QVERIFY(expectItem("originalThumbnail")->isVisible());
+
+  // A canvas tool: its options sit above the same tabs, and the open tab stays
+  // open. That is the whole point of the split — the picture being cropped and
+  // the history of how it got there are visible at the same time.
   selectTool("crop");
   for (const char* option : {"toolOptionsHeading", "cropWidth", "cropHeight",
-                             "applyCrop", "resetToolFields", "cropPreset", "cropRatio",
-                             "cropLivePreviewButton", "cropAnchorPad"}) {
+                             "cropLockWidth", "cropLockHeight", "cropLockRatio",
+                             "applyCrop", "resetCropOptions", "clearCrop",
+                             "cropPreset", "cropRatio", "cropAnchorPad"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(inside(right, item), qPrintable(QStringLiteral("%1 is not in the inspector")
                                                  .arg(QString::fromLatin1(option))));
     QVERIFY2(item->isVisible(), qPrintable(QStringLiteral("%1 is not visible")
                                                .arg(QString::fromLatin1(option))));
   }
-  QVERIFY(!expectItem("pointerThumbnail")->isVisible());
+  QVERIFY(expectItem("originalThumbnail")->isVisible());
 
   // Resize is not a column of the inspector any more: its controls live in its
   // own modal form, and the editor stays on the pointer underneath.
   selectTool("pointer");
+  selectRightTab("info");
   openResizeDialog();
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
   for (const char* option : {"resizeWidth", "resizeHeight", "resizeApply", "resizeReset",
@@ -2309,8 +2699,9 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QObject* dialog = resizeDialogObject();
 
   selectTool("pointer");
+  selectRightTab("info");
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
-  QCOMPARE(heading->property("text").toString(), QStringLiteral("Pointer"));
+  QCOMPARE(heading->property("text").toString(), QStringLiteral("Pointer options"));
   QVERIFY(imageName->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
@@ -2323,8 +2714,10 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   clickItem(expectItem("toolCrop"));
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("crop"));
   QTRY_VERIFY(cropApply->isVisible());
-  QCOMPARE(heading->property("text").toString(), QStringLiteral("Crop"));
-  QVERIFY(!imageName->isVisible());
+  QCOMPARE(heading->property("text").toString(), QStringLiteral("Crop options"));
+  // The tool zone opens above the tabs instead of replacing the document
+  // panel: the open Info page is still there, which is what the split buys.
+  QVERIFY(imageName->isVisible());
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("cropY")->isVisible());
   QVERIFY(!expectItem("resizeSizePreset")->isVisible());
@@ -2344,7 +2737,7 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   clickItem(expectItem("toolResize"));
   QTRY_VERIFY(dialog->property("opened").toBool());
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
-  QCOMPARE(heading->property("text").toString(), QStringLiteral("Pointer"));
+  QCOMPARE(heading->property("text").toString(), QStringLiteral("Pointer options"));
   QVERIFY(imageName->isVisible());
   QVERIFY(resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
@@ -2354,36 +2747,431 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(!expectItem("toolResize")->property("highlighted").toBool());
 }
 
-/// Reset puts the crop frame back where arming the tool puts it — the default
-/// free ratio's frame at four fifths of the picture, centred — and sends no
-/// command, so nothing half-adjusted reaches Core and the tool never becomes a
-/// dead panel.
-void TestEditor::resetRestoresTheStartingCropFrame()
+/// The dock is two zones: the armed tool's options above, the document itself
+/// as three tabs below. The split is what keeps the preview and the history on
+/// screen while Crop is in hand; the tab, the split and the fold are
+/// presentation state and no command leaves the view.
+void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("history"),
+                QVariantList{QVariantMap{{QStringLiteral("code"), QStringLiteral("rotate_right")},
+                                         {QStringLiteral("args"), QVariantList{}}}});
+  setState(editor);
+
+  QQuickItem* zone = expectItem("editorToolZone");
+  // The pointer has no options: its zone is the heading alone, with no toggle.
+  QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
+  QVERIFY(!expectItem("toolZoneToggle")->isVisible());
+  // The pointer's zone is the heading plus the line saying it has no options.
+  QVERIFY2(zone->height() <= 70.0,
+           qPrintable(QStringLiteral("the pointer zone is %1 px tall").arg(zone->height())));
+  QVERIFY(expectItem("infoPanel")->isVisible());
+  QVERIFY(!expectItem("historyPanel")->isVisible());
+  QVERIFY(!expectItem("originalPanel")->isVisible());
+
+  // One page at a time, and a tab click is not a command.
+  selectRightTab("history");
+  QVERIFY(expectItem("historyPanel")->isVisible());
+  QVERIFY(!expectItem("infoPanel")->isVisible());
+  selectRightTab("original");
+  QVERIFY(expectItem("originalPanel")->isVisible());
+  QVERIFY(!expectItem("historyPanel")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+
+  // Arming Crop opens the tool zone above the tabs; the Original page stays
+  // open, which is the whole reason for the split.
+  selectTool("crop");
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+  QVERIFY(expectItem("toolZoneToggle")->isVisible());
+  QVERIFY(zone->height() > 200.0);
+  QVERIFY(expectItem("cropX")->isVisible());
+  QVERIFY(expectItem("originalPanel")->isVisible());
+  QVERIFY(expectItem("originalThumbnail")->isVisible());
+
+  // The zone is sized by its content: the action row ends just above the tab
+  // strip, so the tabs take the rest of the dock. A divider used to sit here,
+  // and a 440 px zone left a band of nothing between the last field and Apply.
+  const qreal zoneBottom = zone->mapToScene(QPointF(0, zone->height())).y();
+  // The action row is a grid: at this dock width Apply takes a line of its own
+  // and Reset/Clear the next, so the row's bottom is the grid's, not Apply's.
+  QQuickItem* actions = expectItem("cropActions");
+  const qreal actionsBottom =
+    actions->mapToScene(QPointF(0, actions->height())).y();
+  QVERIFY2(zoneBottom - actionsBottom <= 12.0,
+           qPrintable(QStringLiteral("the action row ends %1 px above the tool zone")
+                        .arg(zoneBottom - actionsBottom)));
+  QVERIFY2(zoneBottom - actionsBottom >= 0.0, "the action row left the tool zone");
+  QCOMPARE(m_commands->count(), 0);
+
+  // The heading folds the options away and the tabs take the whole dock.
+  clickItem(expectItem("toolZoneToggle"));
+  QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
+  QVERIFY(zone->height() <= 40.0);
+  QVERIFY(expectItem("originalPanel")->isVisible());
+  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("original"));
+  clickItem(expectItem("toolZoneToggle"));
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+  QVERIFY(zone->height() > 200.0);
+
+  // Folding is a decision about this visit, not a setting: arming another tool
+  // opens its options even though the last one was folded away.
+  clickItem(expectItem("toolZoneToggle"));
+  QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
+  clickItem(expectItem("toolBrush"));
+  QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+  QVERIFY(!m_editor->property("toolZoneFolded").toBool());
+
+  // A narrow dock folds the labels to their drawings; the icons stay. The
+  // pinned action row is the other thing width takes away: Apply, Reset and
+  // Clear have to stay whole words, so Crop gives Apply a line of its own.
+  selectTool("crop");
+  m_editor->setProperty("rightPanelWidth", 220);
+  QTRY_VERIFY(!expectItem("editorTabLabel_history")->isVisible());
+  QVERIFY(expectItem("editorTabIcon_history")->isVisible());
+  QQuickItem* apply = expectItem("applyCrop");
+  QQuickItem* reset = expectItem("resetCropOptions");
+  QQuickItem* clear = expectItem("clearCrop");
+  for (QQuickItem* button : {apply, reset, clear}) {
+    QVERIFY2(button->width() + 0.5 >= button->implicitWidth(),
+             qPrintable(QStringLiteral("%1 is %2 px wide but needs %3")
+                          .arg(button->objectName())
+                          .arg(button->width())
+                          .arg(button->implicitWidth())));
+  }
+  QTRY_VERIFY2_WITH_TIMEOUT(apply->y() + apply->height() <= reset->y() + 0.5,
+                            "Apply shares its line with Reset in a 220 px dock",
+                            3000);
+  m_editor->setProperty("rightPanelWidth", 340);
+  QTRY_VERIFY(expectItem("editorTabLabel_history")->isVisible());
+  QTRY_COMPARE(apply->y(), reset->y());
+  QCOMPARE(reset->y(), clear->y());
+  m_editor->setProperty("rightPanelWidth", 260);
+
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The tool zone is as tall as what it draws: heading, the armed tool's
+/// options, then its action row. A tall window must not stretch the zone and
+/// leave a band of nothing between the last field and Apply; the reference
+/// tabs take the leftover height instead.
+void TestEditor::theToolOptionsHugTheActionRow()
 {
   setState(documentState());
   selectTool("crop");
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+
+  auto gapToActions = [this]() {
+    QQuickItem* options = expectItem("toolOptionsScroll");
+    QQuickItem* actions = expectItem("applyCrop");
+    const qreal optionsBottom =
+      options->mapToScene(QPointF(0, options->height())).y();
+    const qreal actionsTop = actions->mapToScene(QPointF(0, 0)).y();
+    return actionsTop - optionsBottom;
+  };
+  const qreal compactGap = gapToActions();
+  QVERIFY2(compactGap >= 0.0 && compactGap <= 20.0,
+           qPrintable(QStringLiteral("the options end %1 px above Apply")
+                        .arg(compactGap)));
+  const qreal zoneHeight = expectItem("editorToolZone")->height();
+
+  // Give the window another 250 px. The zone keeps its content height and the
+  // tabs get the room, so the gap does not grow with the window.
+  m_editor->setHeight(kHostHeight + 250);
+  QCoreApplication::processEvents();
+  QTRY_VERIFY2(expectItem("editorReferencePages")->height() > 0.0,
+               "the reference tabs got no height");
+  QTRY_VERIFY2(qAbs(expectItem("editorToolZone")->height() - zoneHeight) <= 1.0,
+               "the tool zone stretched with the window");
+  QTRY_VERIFY2(gapToActions() <= 20.0, "the gap grew with the window");
+  m_editor->setHeight(kHostHeight);
+  QCoreApplication::processEvents();
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The pointer is a tool with nothing to configure, and the dock says so
+/// instead of drawing an empty column that reads as a panel that failed to
+/// load. Its heading still names the column.
+void TestEditor::thePointerSaysItHasNoOptions()
+{
+  setState(documentState());
+  selectTool("pointer");
+
+  QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
+           QStringLiteral("Pointer options"));
+  QQuickItem* note = expectItem("pointerNoOptions");
+  QVERIFY(note->isVisible());
+  QVERIFY(!note->property("text").toString().isEmpty());
+  QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
+  QVERIFY(!expectItem("applyCrop")->isVisible());
+  QVERIFY(!expectItem("toolZoneToggle")->isVisible());
+  // The tabs are the whole dock in this state.
+  QVERIFY(expectItem("infoPanel")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// A short window caps the options instead of pushing the tabs out: the column
+/// scrolls, and the reference tabs keep their room. This is the one state where
+/// the tool zone does not hug its content.
+void TestEditor::theReferenceZoneKeepsRoomWhenTheWindowIsShort()
+{
+  setState(documentState());
+  selectTool("crop");
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+
+  m_editor->setHeight(430);
+  // Two 430 px windows' worth of layout: the cap is computed from the dock's
+  // height, which the resize moves before the column re-lays.
+  QTRY_VERIFY2_WITH_TIMEOUT(expectItem("toolOptionsHost")->height() < 200.0,
+                            "the options were not capped by the short window",
+                            3000);
+  QTRY_VERIFY2(expectItem("editorReferencePages")->height() >= 110.0,
+               "the reference tabs lost their room in a short window");
+  QVERIFY2(expectItem("toolOptionsScroll")->property("height").toDouble() <= 150.0,
+           "the options column ignored the cap");
+  // The options really are scrollable: their content is taller than the host.
+  QVERIFY(expectItem("toolOptionsHost")->height()
+          < readQml(m_editor, QStringLiteral("toolOptionsColumn.implicitHeight")).toDouble());
+  QVERIFY(expectItem("cropX")->isVisible());
+
+  m_editor->setHeight(kHostHeight);
+  QCoreApplication::processEvents();
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// Opening the size form puts the tool down: the form is the answer to "how
+/// big", not a mode the canvas stays in. Arming Crop first proves the palette
+/// really returns to the pointer.
+void TestEditor::theResizeFormReturnsToThePointer()
+{
+  setState(documentState());
+  selectTool("crop");
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("crop"));
+
+  clickItem(expectItem("toolResize"));
+  QTRY_VERIFY(resizeDialogObject()->property("opened").toBool());
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
+  QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
+           QStringLiteral("Pointer options"));
+  QVERIFY(!expectItem("applyCrop")->isVisible());
+  closeResizeDialog(expectItem("resizeCancel"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The third tab is the file on disk, not the working preview: its name, its
+/// size and its identity follow a save, so a rewritten JPEG shows the new file
+/// rather than a cached picture of the old one.
+void TestEditor::theOriginalTabShowsTheSavedFile()
+{
+  setState(documentState());
+  selectRightTab("original");
+  QVERIFY(expectItem("originalPanel")->isVisible());
+
+  QQuickItem* thumb = expectItem("originalThumbnail");
+  QVERIFY(thumb->isVisible());
+  QCOMPARE(thumb->property("path").toString(), QStringLiteral("/pics/photo.png"));
+  QCOMPARE(thumb->property("modified").toLongLong(), Q_INT64_C(1700000000002));
+  QCOMPARE(thumb->property("fileSize").toLongLong(), Q_INT64_C(123456));
+  const QString caption = expectItem("originalCaption")->property("text").toString();
+  QVERIFY2(caption.contains(QStringLiteral("photo.png")), qPrintable(caption));
+  QVERIFY2(caption.contains(QStringLiteral("KB")), qPrintable(caption));
+
+  // A Save publishes a new save path and a new file identity; the tab follows
+  // both without the tool or the open tab changing.
+  QVariantMap saved = documentState();
+  saved.insert(QStringLiteral("savePath"), QStringLiteral("/pics/exported.png"));
+  saved.insert(QStringLiteral("saved"), true);
+  saved.insert(QStringLiteral("fileModified"), Q_INT64_C(1700000000999));
+  saved.insert(QStringLiteral("fileSize"), Q_INT64_C(654321));
+  setState(saved);
+  QTRY_COMPARE(expectItem("originalThumbnail")->property("modified").toLongLong(),
+               Q_INT64_C(1700000000999));
+  QCOMPARE(expectItem("originalThumbnail")->property("path").toString(),
+           QStringLiteral("/pics/exported.png"));
+  QVERIFY(expectItem("originalCaption")->property("text").toString()
+            .contains(QStringLiteral("exported.png")));
+  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("original"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The left column is a tool rail, not a second toolbar: a drawing with its
+/// sentence in a tooltip, two columns wide, and one column for a narrow
+/// window. The fold is presentation state — no command leaves the view — and
+/// the icons are the repository's own files, because an icon-only rail with a
+/// blank button is a memory test.
+void TestEditor::theToolRailIsAnIconColumn()
+{
+  setState(documentState());
+
+  QQuickItem* rail = expectItem("editorTools");
+  QQuickItem* grid = expectItem("editorToolGrid");
+  QQuickItem* edits = expectItem("editorEditGrid");
+  QCOMPARE(grid->property("columns").toInt(), 2);
+  QCOMPARE(edits->property("columns").toInt(), 2);
+  // 8 px margins either side, two 34 px buttons and the 4 px gap between them.
+  QCOMPARE(rail->width(), 88.0);
+
+  const QList<QPair<QString, QString>> expected = {
+    { QStringLiteral("toolPointer"), QStringLiteral("icons/pointer.svg") },
+    { QStringLiteral("toolResize"), QStringLiteral("icons/resize.svg") },
+    { QStringLiteral("toolCrop"), QStringLiteral("icons/crop.svg") },
+    { QStringLiteral("toolTransform"), QStringLiteral("icons/transform.svg") },
+    { QStringLiteral("toolBrush"), QStringLiteral("icons/brush.svg") },
+    { QStringLiteral("toolEraser"), QStringLiteral("icons/eraser.svg") },
+    { QStringLiteral("editsRotateLeft"), QStringLiteral("icons/rotate-left.svg") },
+    { QStringLiteral("editsRotateRight"), QStringLiteral("icons/rotate-right.svg") },
+    { QStringLiteral("editsFlipHorizontal"), QStringLiteral("icons/flip-horizontal.svg") },
+    { QStringLiteral("editsFlipVertical"), QStringLiteral("icons/flip-vertical.svg") },
+  };
+  for (const auto& entry : expected) {
+    QQuickItem* button = expectItem(entry.first.toLatin1().constData());
+    QVERIFY2(button->isVisible(), qPrintable(entry.first));
+    // Icon-only: the drawing carries the meaning and the tooltip carries the
+    // words, so there is no label to be elided in a 34 px column.
+    QCOMPARE(button->property("text").toString(), QString());
+    QCOMPARE(readQml(button, QStringLiteral("icon.source")).toString(), entry.second);
+    // The button draws the drawing itself. `icon.source` alone is not enough:
+    // Breeze's Button content item only reads `icon.name` and puts a generic
+    // document glyph in every square, so a rail that delegated the drawing to
+    // the style was a row of identical pages.
+    QCOMPARE(readQml(button, QStringLiteral("iconDrawing.source")).toString(), entry.second);
+    QCOMPARE(readQml(button, QStringLiteral("iconDrawing.width")).toDouble(), 20.0);
+    QCOMPARE(readQml(button, QStringLiteral("iconDrawing.height")).toDouble(), 20.0);
+    const QString tooltip = readQml(button, QStringLiteral("ToolTip.text")).toString();
+    QVERIFY2(!tooltip.isEmpty(), qPrintable(entry.first + QStringLiteral(" has no tooltip")));
+    QCOMPARE(readQml(button, QStringLiteral("Accessible.name")).toString(), tooltip);
+  }
+
+  // The rail's own width is its one control. A single column is 38 px narrower
+  // (34 px of button and the 4 px gap), the heading no longer fits, and every
+  // button is still there — a fold, not a different set of tools.
+  QQuickItem* toggle = expectItem("toolRailColumns");
+  QCOMPARE(readQml(toggle, QStringLiteral("icon.source")).toString(),
+           QStringLiteral("icons/columns-one.svg"));
+  clickItem(toggle);
+  QCOMPARE(m_editor->property("toolColumns").toInt(), 1);
+  QCOMPARE(grid->property("columns").toInt(), 1);
+  QCOMPARE(edits->property("columns").toInt(), 1);
+  QCOMPARE(rail->width(), 50.0);
+  QVERIFY(!expectItem("editsHeading")->isVisible());
+  for (const auto& entry : expected) {
+    QQuickItem* button = expectItem(entry.first.toLatin1().constData());
+    QVERIFY2(button->isVisible(), qPrintable(entry.first));
+    QCOMPARE(readQml(button, QStringLiteral("icon.source")).toString(), entry.second);
+  }
+
+  clickItem(toggle);
+  QCOMPARE(m_editor->property("toolColumns").toInt(), 2);
+  QCOMPARE(grid->property("columns").toInt(), 2);
+  QCOMPARE(rail->width(), 88.0);
+  QCOMPARE(readQml(toggle, QStringLiteral("icon.source")).toString(),
+           QStringLiteral("icons/columns-one.svg"));
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// A unit is a way of writing the same pixel quantity. The document, the
+/// protocol and Core stay in whole pixels, the panel re-displays the rectangle
+/// it already has, and a unit change is not an edit: it must not re-link the
+/// two sides or count as a typed value.
+void TestEditor::theUnitsAreAnotherSpellingOfTheSamePixels()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("crop");
+
   QQuickItem* width = expectItem("cropWidth");
   QQuickItem* height = expectItem("cropHeight");
-  QQuickItem* cropX = expectItem("cropX");
-  QQuickItem* cropY = expectItem("cropY");
-  QQuickItem* preset = expectItem("cropPreset");
-  width->setProperty("text", QStringLiteral("800"));
-  height->setProperty("text", QStringLiteral("600"));
-  cropX->setProperty("text", QStringLiteral("4"));
-  cropY->setProperty("text", QStringLiteral("6"));
-  preset->setProperty("currentIndex", 2);
-  QCOMPARE(preset->property("currentIndex").toInt(), 2);
+  QQuickItem* x = expectItem("cropX");
+  QQuickItem* y = expectItem("cropY");
 
-  clickItem(expectItem("resetToolFields"));
-  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("free"));
-  QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("center"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("3200"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("2400"));
-  QCOMPARE(cropX->property("text").toString(), QStringLiteral("400"));
-  QCOMPARE(cropY->property("text").toString(), QStringLiteral("300"));
-  QCOMPARE(preset->property("currentIndex").toInt(), -1);
-  QVERIFY(expectItem("cropFrame")->isVisible());
+  typeInto(width, QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+  QCOMPARE(x->property("text").toString(), QStringLiteral("1600"));
+  QCOMPARE(y->property("text").toString(), QStringLiteral("1200"));
+
+  // A place is a pixel coordinate, so X and Y carry no unit selector at all.
+  QVERIFY(!expectItem("cropXUnit")->isVisible());
+  QVERIFY(!expectItem("cropYUnit")->isVisible());
+
+  // A percentage is taken of the side the field describes: Width of the
+  // document's width, Height of its height.
+  chooseUnit("cropWidth", QStringLiteral("%"));
+  chooseUnit("cropHeight", QStringLiteral("%"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("20"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("20"));
   QCOMPARE(m_commands->count(), 0);
+
+  // Back to pixels: the same numbers, because the unit switch redraws the
+  // quantity it already holds instead of re-deriving it.
+  chooseUnit("cropWidth", QStringLiteral("px"));
+  chooseUnit("cropHeight", QStringLiteral("px"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+
+  // The same 50 % on the other axis is 1500 px, not 2000: a percentage is of
+  // the document side the field belongs to.
+  typeInto(height, QStringLiteral("1500"));
+  chooseUnit("cropHeight", QStringLiteral("%"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("50"));
+  chooseUnit("cropHeight", QStringLiteral("px"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1500"));
+
+  // A percentage is written with two decimals, so a one-pixel quantity of a
+  // 4000 px document survives a trip through `%`: 1 px → 0.03 % → 1 px. A
+  // whole-number percentage would lose it (0 % → 0 px).
+  typeInto(width, QStringLiteral("1"));
+  chooseUnit("cropWidth", QStringLiteral("%"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("0.03"));
+  chooseUnit("cropWidth", QStringLiteral("px"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1"));
+
+  // Typing a percentage is the same typed value as typing pixels: the command
+  // still carries whole pixels, and the fields keep their own units.
+  typeInto(width, QStringLiteral("800"));
+  typeInto(height, QStringLiteral("600"));
+  typeInto(x, QStringLiteral("1000"));
+  typeInto(y, QStringLiteral("1200"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("800"));
+
+  clickItem(expectItem("applyCrop"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap crop = m_commands->takeFirst().at(0).toMap();
+  QCOMPARE(crop.value(QStringLiteral("type")).toString(), QStringLiteral("editor_crop"));
+  QCOMPARE(crop.value(QStringLiteral("x")).toInt(), 1000);
+  QCOMPARE(crop.value(QStringLiteral("y")).toInt(), 1200);
+  QCOMPARE(crop.value(QStringLiteral("width")).toInt(), 800);
+  QCOMPARE(crop.value(QStringLiteral("height")).toInt(), 600);
+}
+
+/// The size form shares the same field: a scale can be described as a
+/// percentage of the document, and Apply still sends pixels.
+void TestEditor::theResizeFormTakesPercentagesToo()
+{
+  setState(documentState());  // 4000 × 3000
+  openResizeDialog();
+
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  // A form opens in pixels whatever the previous visit chose.
+  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("free"));
+
+  chooseUnit("resizeWidth", QStringLiteral("%"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("100"));
+
+  typeInto(width, QStringLiteral("50"));
+  // The chain keeps the document's shape, so 50 % of 3000 is 1500 — written in
+  // the unit the height field already has.
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1500"));
+  chooseUnit("resizeHeight", QStringLiteral("%"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("50"));
+
+  clickItem(expectItem("resizeApply"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap resize = m_commands->takeFirst().at(0).toMap();
+  QCOMPARE(resize.value(QStringLiteral("type")).toString(), QStringLiteral("editor_resize"));
+  QCOMPARE(resize.value(QStringLiteral("width")).toInt(), 2000);
+  QCOMPARE(resize.value(QStringLiteral("height")).toInt(), 1500);
 }
 
 /// Save is offered only when there is something to write, and both buttons send
@@ -2883,7 +3671,7 @@ void TestEditor::thePaintToolSendsOneStrokeOnRelease()
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
   QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("brush"));
   QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
-           QStringLiteral("Brush"));
+           QStringLiteral("Brush options"));
   QVERIFY(expectItem("paintSwatch")->isVisible());
   QVERIFY(expectItem("paintSize")->isVisible());
   QVERIFY(!expectItem("applyCrop")->isVisible());
@@ -2937,7 +3725,7 @@ void TestEditor::theEraserStrokeCarriesItsModeAndBrush()
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
   QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("eraser"));
   QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
-           QStringLiteral("Eraser"));
+           QStringLiteral("Eraser options"));
 
   m_editor->forceActiveFocus();
   QQuickItem* host =

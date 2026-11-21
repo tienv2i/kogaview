@@ -64,6 +64,7 @@ private slots:
   void theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen();
   void theShellBindsTheCopyKeysItsMenusName();
   void theDiscardAnswerResetsTheDocumentBeforeLeaving();
+  void theShellSharesOneDockWidthAndRevealsThroughThePlatform();
 
 private:
   /// The dialog is a `Popup`: its header, content and buttons are QObjects of
@@ -578,6 +579,33 @@ void TestSettings::theDiscardAnswerResetsTheDocumentBeforeLeaving()
   // reverting it first would write a preview for a process that is leaving.
   const int quit = body.indexOf(QStringLiteral("runLeave(\"quit\")"));
   QVERIFY2(quit >= 0 && quit < reset, "the quit path resets the document first");
+}
+
+/// `Main.qml` owns the two things the three workspaces share about their right
+/// dock: one width, and the shell call that reveals a path in the desktop's own
+/// file manager. The views only ask (`panelWidthRequested`, `revealPath`); this
+/// pins the shell half, which cannot be instantiated here.
+void TestSettings::theShellSharesOneDockWidthAndRevealsThroughThePlatform()
+{
+  QFile main(qmlDir() + QStringLiteral("/Main.qml"));
+  QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+  const QString source = QString::fromUtf8(main.readAll());
+
+  QVERIFY2(source.contains(QStringLiteral("property real rightPanelWidth: appTheme.previewWidth")),
+           "the shell does not seed the shared dock width");
+  const int given = source.count(QStringLiteral("rightPanelWidth: root.rightPanelWidth"));
+  QVERIFY2(given == 3,
+           qPrintable(QStringLiteral("the shared width reaches %1 views, expected 3").arg(given)));
+  const int taken = source.count(
+    QStringLiteral("onPanelWidthRequested: function(width) { root.rightPanelWidth = width }"));
+  QVERIFY2(taken == 3,
+           qPrintable(QStringLiteral("%1 views ask for a new width, expected 3").arg(taken)));
+
+  const int reveal = source.count(
+    QStringLiteral("onRevealPath: function(path) { Platform.revealInFolder(path); }"));
+  QVERIFY2(reveal == 2,
+           qPrintable(QStringLiteral("%1 reveal requests reach the platform, expected 2")
+                        .arg(reveal)));
 }
 
 QTEST_MAIN(TestSettings)

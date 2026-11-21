@@ -447,11 +447,12 @@ QSize PlatformHelper::imageSize(const QString& path) const
 
 QString PlatformHelper::imageNameFilter() const
 {
-  // Built from the protocol's list so the dialog and the browser agree.
-  // The extension list is the same in every language (an extension is not a
-  // word), so it is spelled here rather than handed through CXX-Qt.
+  // Spelled out so no extension travels through CXX-Qt, but the browser and
+  // this chooser must agree: `scripts/check_packaging.py` reads both lists and
+  // fails when they differ, which is how `.jpe` was missing here while the
+  // Browser already listed it.
   static const char* const extensions[] = {
-    "jpg", "jpeg", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif",
+    "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif",
     "heic", "heif", "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm",
     "qoi", "tga", "ff", nullptr,
   };
@@ -657,11 +658,40 @@ void PlatformHelper::openWith(const QString& path)
 void PlatformHelper::revealInFolder(const QString& path)
 {
   const QFileInfo info(path);
-  const QUrl url = QUrl::fromLocalFile(info.isDir() ? info.absoluteFilePath() : info.absolutePath());
-  if (openUriWithPortal(url, true)) {
+  const QUrl url = QUrl::fromLocalFile(info.absoluteFilePath());
+
+  // The desktop's own "show in folder" is a *selection*, not a new window: a
+  // file manager that implements org.freedesktop.FileManager1 selects the file
+  // in the window it is already showing. A sandbox cannot reach the host's
+  // service directly, so the direct call is skipped there and the portal below
+  // is the only path (this GNOME session does not implement the portal, which
+  // is why the default-handler fallback stays).
+  const bool sandboxed = QFileInfo::exists(QStringLiteral("/.flatpak-info"));
+  if (!sandboxed) {
+    const QString service = QStringLiteral("org.freedesktop.FileManager1");
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (bus.interface() != nullptr && bus.interface()->isServiceRegistered(service)) {
+      const QStringList uris{url.toString()};
+      const QString method = info.isDir() ? QStringLiteral("ShowFolders")
+                                          : QStringLiteral("ShowItems");
+      QDBusMessage message = QDBusMessage::createMethodCall(
+          service, QStringLiteral("/org/freedesktop/FileManager1"), service, method);
+      message << uris << QString();
+      const QDBusMessage reply = bus.call(message, QDBus::Block, 2000);
+      if (reply.type() == QDBusMessage::ReplyMessage) {
+        return;
+      }
+      qWarning() << "KogaView reveal: FileManager1 refused" << path
+                 << reply.errorMessage();
+    }
+  }
+
+  const QUrl folder = QUrl::fromLocalFile(info.isDir() ? info.absoluteFilePath()
+                                                       : info.absolutePath());
+  if (openUriWithPortal(folder, true)) {
     return;
   }
-  if (!QDesktopServices::openUrl(url)) {
+  if (!QDesktopServices::openUrl(folder)) {
     emit dialogError(tr("Cannot open the containing folder."));
   }
 }

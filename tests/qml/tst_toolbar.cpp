@@ -439,6 +439,39 @@ private slots:
     }
   }
 
+  /// The way out of a picture workspace sits in the same place in both of them:
+  /// first, before the separator that starts the workspace's own actions.
+  ///
+  /// The Viewer always had it there and the Editor had it at the far end, after
+  /// a document-dependent number of buttons, so the one control every picture
+  /// workspace shares moved between them.
+  void theBackButtonLeadsEveryWorkspaceToolbar()
+  {
+    const QStringList files = {QStringLiteral("Viewer.qml"),
+                               QStringLiteral("EditorView.qml")};
+    for (const QString& file : files) {
+      QFile source(qmlDir() + QLatin1Char('/') + file);
+      QVERIFY2(source.open(QIODevice::ReadOnly | QIODevice::Text),
+               qPrintable(QStringLiteral("cannot read %1").arg(file)));
+      const QString text = QString::fromUtf8(source.readAll());
+      const int start = text.indexOf(QStringLiteral("property Component toolbar: Component"));
+      QVERIFY2(start >= 0, qPrintable(QStringLiteral("%1 has no toolbar component").arg(file)));
+      const QString toolbar = text.mid(start);
+
+      const int first = toolbar.indexOf(QStringLiteral("ToolbarButton {"));
+      QVERIFY2(first >= 0, qPrintable(QStringLiteral("%1's toolbar has no button").arg(file)));
+      const int next = toolbar.indexOf(QStringLiteral("ToolbarButton {"), first + 1);
+      QVERIFY2(next > first, qPrintable(QStringLiteral("%1's toolbar has one button").arg(file)));
+      const QString block = toolbar.mid(first, next - first);
+
+      QVERIFY2(block.contains(QStringLiteral("go-previous-symbolic")),
+               qPrintable(QStringLiteral("%1's first toolbar button is not the back button")
+                            .arg(file)));
+      QVERIFY2(block.contains(QStringLiteral("set_workspace")),
+               qPrintable(QStringLiteral("%1's back button does not leave the workspace").arg(file)));
+    }
+  }
+
   /// A button is the icon square with no label, and exactly its labelled width
   /// with one. The layout is what gives it that width, so the number the shell
   /// budgets must be the number the button asks for.

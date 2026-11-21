@@ -1,0 +1,37 @@
+<!--
+  The Editor tool rail's own icons.
+
+  They live beside the QML module so the rail looks the same on every desktop:
+  Breeze ships `transform-crop-symbolic` and friends, Adwaita and Papirus do
+  not, and the rail is icon-only — a missing icon would be an empty button.
+  The prefix is where the QML module registers `EditorView.qml` itself — the
+  module keeps its `qml/` directory in the alias, so the file is at
+  `qrc:/qt/qml/io/github/tienv2i/KogaView/qml/EditorView.qml`. A relative
+  `source: "icons/crop.svg"` therefore has to land in `.../KogaView/qml/icons/`
+  here, which is also the path the QML suites read as a real file.
+
+  Each SVG is a plain two-tone drawing; `AbstractButton.icon.color` tints it
+  with the theme colour, which is why the artwork is drawn in one dark colour
+  rather than with its own palette.
+-->
+<RCC>
+  <qresource prefix="/qt/qml/io/github/tienv2i/KogaView/qml">
+    <file alias="icons/pointer.svg">qml/icons/pointer.svg</file>
+    <file alias="icons/crop.svg">qml/icons/crop.svg</file>
+    <file alias="icons/transform.svg">qml/icons/transform.svg</file>
+    <file alias="icons/brush.svg">qml/icons/brush.svg</file>
+    <file alias="icons/eraser.svg">qml/icons/eraser.svg</file>
+    <file alias="icons/resize.svg">qml/icons/resize.svg</file>
+    <file alias="icons/rotate-left.svg">qml/icons/rotate-left.svg</file>
+    <file alias="icons/rotate-right.svg">qml/icons/rotate-right.svg</file>
+    <file alias="icons/flip-horizontal.svg">qml/icons/flip-horizontal.svg</file>
+    <file alias="icons/flip-vertical.svg">qml/icons/flip-vertical.svg</file>
+    <file alias="icons/columns-two.svg">qml/icons/columns-two.svg</file>
+    <file alias="icons/columns-one.svg">qml/icons/columns-one.svg</file>
+    <file alias="icons/info.svg">qml/icons/info.svg</file>
+    <file alias="icons/history.svg">qml/icons/history.svg</file>
+    <file alias="icons/preview.svg">qml/icons/preview.svg</file>
+    <file alias="icons/original.svg">qml/icons/original.svg</file>
+    <file alias="icons/chevron.svg">qml/icons/chevron.svg</file>
+  </qresource>
+</RCC>

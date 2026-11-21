@@ -88,6 +88,13 @@ ApplicationWindow {
     /// buttons into one overflow menu (`*OverflowMenu` in the view).
     readonly property bool toolbarMini: root.toolbarMode === "mini"
 
+    /// The right dock's width, shared by the three workspaces. A width dragged
+    /// in the Browser is the width the Editor opens at; each view clamps it to
+    /// its own range before drawing, so a narrow Viewer panel cannot become a
+    /// sliver in the Editor. Session-only: the width is presentation state, not
+    /// a stored preference.
+    property real rightPanelWidth: appTheme.previewWidth
+
     /// The floor is also enforced here, and not only through `minimumWidth`.
     ///
     /// On this GNOME/Wayland session the compositor does not honour a QML
@@ -924,6 +931,9 @@ ApplicationWindow {
             entries: snapshot.entries
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             listFolders: root.listFolders
+            rightPanelWidth: root.rightPanelWidth
+            onPanelWidthRequested: function(width) { root.rightPanelWidth = width }
+            onRevealPath: function(path) { Platform.revealInFolder(path); }
             onCommand: function(command) { root.send(command); }
             onToast: function(message) { root.showToast(message); }
             onCopyImage: function(path) { Platform.copyImage(path); }
@@ -960,6 +970,9 @@ ApplicationWindow {
             entries: snapshot.entries
             viewerImages: snapshot.viewerImages
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
+            rightPanelWidth: root.rightPanelWidth
+            onPanelWidthRequested: function(width) { root.rightPanelWidth = width }
+            onRevealPath: function(path) { Platform.revealInFolder(path); }
             onCommand: function(command) { root.send(command); }
             onCopyImage: function(path) { Platform.copyImage(path); }
             onCopyText: function(text) { Platform.copyText(text); }
@@ -989,6 +1002,8 @@ ApplicationWindow {
             miniToolbar: root.toolbarMini
             state: root.state
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
+            rightPanelWidth: root.rightPanelWidth
+            onPanelWidthRequested: function(width) { root.rightPanelWidth = width }
             onCommand: function(command) { root.send(command); }
             onRequestOpen: root.chooseEditorImage()
             onRequestSaveAs: root.chooseEditorSaveAs()

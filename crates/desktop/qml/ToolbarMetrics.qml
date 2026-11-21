@@ -69,9 +69,9 @@ Item {
     /// never draws.
     readonly property int browserButtons: 6
     readonly property int browserSeparators: 1
-    readonly property int viewerButtons: 12
+    readonly property int viewerButtons: 13
     readonly property int viewerSeparators: 4
-    readonly property int editorButtons: 13
+    readonly property int editorButtons: 14
     readonly property int editorSeparators: 5
 
     /// The buttons each workspace keeps once the window is too narrow for the

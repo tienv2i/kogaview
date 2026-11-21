@@ -89,7 +89,12 @@ QtObject {
         qsTr("Zoom in"), qsTr("Zoom out"), qsTr("Toggle thumbnail filmstrip"),
         qsTr("Toggle quick access and folder tree"),
         qsTr("Toggle preview and metadata panel"),
-        qsTr("Save as…"), qsTr("Export a copy…"), qsTr("Reset to original")
+        qsTr("Save as…"), qsTr("Export a copy…"), qsTr("Reset to original"),
+        // The shared right dock and the file manager's own "locate" (row 96).
+        // Appended again: the views and the shell address this list by index.
+        qsTr("Show in folder"),
+        qsTr("Toggle information panel"),
+        qsTr("Toggle tool and reference panel")
     ]
     /// The labels the menus are built from (`Main.qml`, the Editor's canvas
     /// menu). Same list, kept as a name of its own so the views read

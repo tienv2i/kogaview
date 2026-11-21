@@ -42,6 +42,13 @@ Item {
     signal requestDelete(var paths)
     /// "Open folder": the shell owns the dialog, so the view only asks for it.
     signal requestOpenFolder()
+    /// Ask the shell to select the file in the desktop's file manager (`Show
+    /// in folder`). The platform layer owns the FileManager1/portal choice, so
+    /// the view only names the path.
+    signal revealPath(string path)
+    /// The user dragged the right dock's splitter: the shell keeps one width
+    /// for the three workspaces, so the view reports the number.
+    signal panelWidthRequested(real width)
 
     property string menuPath: ""
     property bool menuIsImage: false
@@ -61,6 +68,10 @@ Item {
     // both panels are resizable; nothing is persisted yet.
     property real leftPanelWidth: theme.panelWidth
     property real rightPanelWidth: theme.previewWidth
+    /// The shell keeps one width for all three workspaces; this view draws it
+    /// within its own range, so a width dragged in the Editor cannot become a
+    /// sliver here.
+    readonly property real dockWidth: Math.max(200, Math.min(640, rightPanelWidth))
 
     // Expansion lives outside the tree nodes so the tree can be rebuilt after a
     // file operation without collapsing what the user had open.
@@ -814,126 +825,61 @@ Item {
             direction: -1
             minimum: 200
             maximum: 640
-            onMoved: function(width) { view.rightPanelWidth = width }
+            onMoved: function(width) {
+                view.rightPanelWidth = width
+                view.panelWidthRequested(width)
+            }
         }
 
         // --------------------------------------------------- right sidebar
-        Rectangle {
+        // One page, no strip: the picture and the file's details are read
+        // together, so a tab that hid one of them would only add a click. The
+        // dock is shared with the Viewer and the Editor (`RightDock.qml`), and
+        // its width is the shell's one value for all three workspaces.
+        RightDock {
             objectName: "rightPanel"
             visible: !!view.state.rightPanel
-            Layout.preferredWidth: view.rightPanelWidth
+            Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
-            color: view.theme.sidebar
-            border.width: 1
-            border.color: view.theme.border
+            theme: view.theme
+            backgroundColor: view.theme.sidebar
+            tabs: [{ key: "info", label: qsTr("Info"), icon: "" }]
+            currentKey: "info"
+            stripObjectName: ""
+            pagesObjectName: "browserRightPages"
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
+            ScrollView {
+                id: browserInfoPage
+                contentWidth: availableWidth
+                clip: true
 
-                Label {
-                    text: qsTr("Preview")
-                    color: view.theme.textMuted
-                    font.bold: true
-                    font.pixelSize: 12
-                }
+                ColumnLayout {
+                    width: browserInfoPage.availableWidth
+                    spacing: 12
 
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Math.min(230, width * 0.72)
-                    radius: view.theme.radius
-                    color: view.theme.thumb
-                    clip: true
-
-                    CachedThumbnail {
-                        id: previewImage
-                        objectName: "previewThumbnail"
-                        anchors.fill: parent
-                        anchors.margins: 4
-                        readonly property var info: view.selectionInfo
+                    PreviewPanel {
+                        Layout.fillWidth: true
+                        theme: view.theme
                         book: thumbs
-                        path: info ? info.path : ""
-                        thumbnailable: !!(info && info.isImage)
-                        modified: info ? info.modified : 0
-                        fileSize: info ? info.size : 0
-                        asynchronous: true
-                        fillMode: Image.PreserveAspectFit
-                        sourceSize.width: Math.ceil(width * 2)
-                        sourceSize.height: Math.ceil(height * 2)
+                        path: view.selectionInfo ? view.selectionInfo.path : ""
+                        thumbnailable: !!(view.selectionInfo && view.selectionInfo.isImage)
+                        modified: view.selectionInfo ? view.selectionInfo.modified : 0
+                        fileSize: view.selectionInfo ? view.selectionInfo.size : 0
+                        heading: qsTr("Preview")
+                        placeholder: view.selectionInfo ? qsTr("No image preview")
+                                                     : qsTr("Nothing selected")
+                        captionObjectName: "previewCaption"
+                        thumbnailObjectName: "previewThumbnail"
                     }
 
-                    Label {
-                        anchors.centerIn: parent
-                        visible: !view.selectionInfo || !view.selectionInfo.isImage
-                        text: view.selectionInfo ? qsTr("No image preview") : qsTr("Nothing selected")
-                        color: view.theme.textMuted
-                    }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: view.selectionInfo ? view.selectionInfo.name : "—"
-                    color: view.theme.text
-                    font.bold: true
-                    elide: Text.ElideMiddle
-                }
-
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 2
-                    columnSpacing: 10
-                    rowSpacing: 4
-
-                    Label { text: qsTr("Type"); color: view.theme.textMuted; font.pixelSize: 12 }
-                    Label {
-                        text: view.selectionInfo ? view.selectionInfo.kind : "—"
-                        color: view.theme.text
-                        elide: Text.ElideRight
+                    InfoPanel {
                         Layout.fillWidth: true
+                        theme: view.theme
+                        info: view.selectionInfo
                     }
 
-                    Label { text: qsTr("Size"); color: view.theme.textMuted; font.pixelSize: 12 }
-                    Label {
-                        text: view.selectionInfo
-                              ? view.theme.formatBytes(view.selectionInfo.size) : "—"
-                        color: view.theme.text
-                    }
-
-                    Label { text: qsTr("Dimensions"); color: view.theme.textMuted; font.pixelSize: 12 }
-                    Label {
-                        text: (view.selectionInfo && view.selectionInfo.width)
-                              ? (view.selectionInfo.width + " × " + view.selectionInfo.height)
-                              : "—"
-                        color: view.theme.text
-                    }
-
-                    Label { text: qsTr("Modified"); color: view.theme.textMuted; font.pixelSize: 12 }
-                    Label {
-                        text: view.selectionInfo
-                              ? view.theme.formatDate(view.selectionInfo.modified) : "—"
-                        color: view.theme.text
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
+                    Item { Layout.fillHeight: true }
                 }
-
-                Label {
-                    text: qsTr("Path")
-                    color: view.theme.textMuted
-                    font.pixelSize: 12
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: view.selectionInfo ? view.selectionInfo.path : "—"
-                    color: view.theme.text
-                    font.pixelSize: 11
-                    wrapMode: Text.WrapAnywhere
-                    maximumLineCount: 4
-                    elide: Text.ElideRight
-                }
-
-                Item { Layout.fillHeight: true }
             }
         }
     }
@@ -1154,6 +1100,11 @@ Item {
             icon.name: "application-x-executable-symbolic"
             onTriggered: view.openWith(view.menuPath)
         }
+        MenuItem {
+            text: view.theme.menuEntries[39]
+            icon.name: "folder-documents-symbolic"
+            onTriggered: view.revealPath(view.menuPath)
+        }
         MenuSeparator {}
         MenuItem {
             text: qsTr("Copy image content")
@@ -1212,6 +1163,11 @@ Item {
             icon.name: "folder-new-symbolic"
             onTriggered: view.promptNewFolder(view.menuPath)
         }
+        MenuItem {
+            text: view.theme.menuEntries[39]
+            icon.name: "folder-documents-symbolic"
+            onTriggered: view.revealPath(view.menuPath)
+        }
         MenuSeparator {}
         MenuItem {
             text: qsTr("Copy path")
@@ -1267,6 +1223,11 @@ Item {
             text: qsTr("Explore here")
             icon.name: "folder-symbolic"
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
+        }
+        MenuItem {
+            text: view.theme.menuEntries[39]
+            icon.name: "folder-documents-symbolic"
+            onTriggered: view.revealPath(view.menuPath)
         }
         MenuSeparator {}
         MenuItem {

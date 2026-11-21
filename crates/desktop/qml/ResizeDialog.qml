@@ -97,8 +97,8 @@ Dialog {
     /// Start the chain from the pair on screen, or from the document when a
     /// side is empty. This is the only place the lock is captured.
     function captureRatio() {
-        var width = widthField.acceptableInput ? parseInt(widthField.text) : 0
-        var height = heightField.acceptableInput ? parseInt(heightField.text) : 0
+        var width = widthField.acceptableInput ? widthField.pixels() : 0
+        var height = heightField.acceptableInput ? heightField.pixels() : 0
         if (!(width > 0) || !(height > 0)) {
             if (!dialog.documentReady) return
             width = Math.max(1, Math.round(dialog.documentWidth))
@@ -119,10 +119,15 @@ Dialog {
     /// what is on screen before anything is typed. `Reset` and every open go
     /// through here; the background and filter start at their defaults.
     function fillFromDocument() {
+        // A size form opens in pixels, the unit the document is measured in;
+        // a previous visit's `%` would describe the same size in a way that
+        // makes the two fields read `100` before anything is typed.
+        widthField.unit = "px"
+        heightField.unit = "px"
         var width = Math.max(1, Math.round(dialog.documentWidth))
         var height = Math.max(1, Math.round(dialog.documentHeight))
-        widthField.text = String(width)
-        heightField.text = String(height)
+        widthField.setPixels(width)
+        heightField.setPixels(height)
         dialog.backgroundMode = "none"
         dialog.filter = "auto"
         dialog.lockedRatio = { width: width, height: height }
@@ -145,12 +150,12 @@ Dialog {
     /// Height (bound on the field) and Enter applies from either one.
     function focusWidth() {
         if (!dialog.focusPending) return
-        widthField.forceActiveFocus()
-        widthField.selectAll()
+        widthField.inputField.forceActiveFocus()
+        widthField.inputField.selectAll()
         // Keep the request alive until the field really owns the keyboard:
         // before the popup is visible `forceActiveFocus` can do nothing, and
         // `opened` gets one more try.
-        if (widthField.activeFocus) dialog.focusPending = false
+        if (widthField.inputField.activeFocus) dialog.focusPending = false
     }
 
     /// Whether Apply would do something. Core's own rule: the same width and
@@ -158,21 +163,21 @@ Dialog {
     /// into its own size adds nothing.
     function changed() {
         if (!dialog.fieldsValid()) return false
-        return parseInt(widthField.text) !== Math.round(dialog.documentWidth)
-                || parseInt(heightField.text) !== Math.round(dialog.documentHeight)
+        return widthField.pixels() !== Math.round(dialog.documentWidth)
+                || heightField.pixels() !== Math.round(dialog.documentHeight)
     }
 
     function fieldsValid() {
         return !!dialog.documentReady
                 && widthField.acceptableInput && heightField.acceptableInput
-                && parseInt(widthField.text) > 0 && parseInt(heightField.text) > 0
+                && widthField.pixels() > 0 && heightField.pixels() > 0
     }
 
     /// Index of the preset that matches both fields, or -1 for `Custom`.
     function matchingPreset() {
         if (!widthField.acceptableInput || !heightField.acceptableInput) return -1
-        var width = parseInt(widthField.text)
-        var height = parseInt(heightField.text)
+        var width = widthField.pixels()
+        var height = heightField.pixels()
         for (var index = 0; index < dialog.presets.length; ++index) {
             var preset = dialog.presets[index]
             if (preset.width === width && preset.height === height) return index
@@ -185,11 +190,11 @@ Dialog {
     /// they never feed back on themselves.
     function linkHeightFromWidth() {
         if (!dialog.constraint || !widthField.acceptableInput) return
-        var width = parseInt(widthField.text)
+        var width = widthField.pixels()
         if (!(width > 0)) return
         var factor = dialog.lockedRatio
         if (factor && factor.width > 0 && factor.height > 0) {
-            heightField.text = String(Math.max(1, Math.min(20000,
+            heightField.setPixels(Math.max(1, Math.min(20000,
                     Math.round(width * factor.height / factor.width))))
         }
         presetBox.currentIndex = dialog.matchingPreset()
@@ -197,11 +202,11 @@ Dialog {
 
     function linkWidthFromHeight() {
         if (!dialog.constraint || !heightField.acceptableInput) return
-        var height = parseInt(heightField.text)
+        var height = heightField.pixels()
         if (!(height > 0)) return
         var factor = dialog.lockedRatio
         if (factor && factor.width > 0 && factor.height > 0) {
-            widthField.text = String(Math.max(1, Math.min(20000,
+            widthField.setPixels(Math.max(1, Math.min(20000,
                     Math.round(height * factor.width / factor.height))))
         }
         presetBox.currentIndex = dialog.matchingPreset()
@@ -214,8 +219,8 @@ Dialog {
     function choosePreset(index) {
         if (index < 0 || index >= dialog.presets.length) return
         var preset = dialog.presets[index]
-        widthField.text = String(preset.width)
-        heightField.text = String(preset.height)
+        widthField.setPixels(preset.width)
+        heightField.setPixels(preset.height)
         dialog.lockedRatio = { width: preset.width, height: preset.height }
         presetBox.currentIndex = index
     }
@@ -285,7 +290,7 @@ Dialog {
 
     function apply() {
         if (!dialog.changed()) return
-        dialog.resizeRequested(parseInt(widthField.text), parseInt(heightField.text),
+        dialog.resizeRequested(widthField.pixels(), heightField.pixels(),
                                dialog.fillForCommand(), dialog.fillAlpha(),
                                dialog.filter)
         dialog.close()
@@ -384,18 +389,20 @@ Dialog {
                     text: qsTr("Width")
                     color: dialog.theme.textMuted
                 }
-                TextField {
+                UnitField {
                     id: widthField
                     objectName: "resizeWidth"
                     Layout.fillWidth: true
                     font.pixelSize: 12
                     placeholderText: dialog.documentReady
-                                     ? String(Math.round(dialog.documentWidth)) : "0"
-                    inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator { bottom: 1; top: 20000 }
+                                     ? (widthField.percent ? "100"
+                                        : String(Math.round(dialog.documentWidth))) : "0"
+                    unitReference: dialog.documentWidth
+                    minimumPixels: 1
+                    maximumPixels: 20000
                     // The keyboard path this form is built around: opening
                     // selects the width, Tab goes to Height, Enter applies.
-                    KeyNavigation.tab: heightField
+                    nextField: heightField
                     onTextEdited: dialog.linkHeightFromWidth()
                     onAccepted: dialog.apply()
                 }
@@ -469,16 +476,18 @@ Dialog {
                     text: qsTr("Height")
                     color: dialog.theme.textMuted
                 }
-                TextField {
+                UnitField {
                     id: heightField
                     objectName: "resizeHeight"
                     Layout.fillWidth: true
                     font.pixelSize: 12
                     placeholderText: dialog.documentReady
-                                     ? String(Math.round(dialog.documentHeight)) : "0"
-                    inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator { bottom: 1; top: 20000 }
-                    KeyNavigation.backtab: widthField
+                                     ? (heightField.percent ? "100"
+                                        : String(Math.round(dialog.documentHeight))) : "0"
+                    unitReference: dialog.documentHeight
+                    minimumPixels: 1
+                    maximumPixels: 20000
+                    previousField: widthField
                     onTextEdited: dialog.linkWidthFromHeight()
                     onAccepted: dialog.apply()
                 }

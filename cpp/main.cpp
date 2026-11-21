@@ -406,11 +406,14 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     unlock the chain, choose a background and a filter, then optionally
   //     press Apply
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
-  //     one of the nine anchor buttons (`_ARG3=plain` leaves Live preview off,
-  //     which is when the canvas frame is drawn; `_ARG=seed` keeps the frame
-  //     arming the tool places; `_ARG4=swap` turns it; `_ARG5=apply` presses it;
-  //     `_ARG6=center|grow` picks the mode; `_ARG7` names the grow fill
-  //     (`transparent`, `black`, `white`, `gray` or `#rrggbb`))
+  //     one of the nine anchor buttons; `_ARG` is a preset size, `unframed` to
+  //     stop with no frame, `full` for the click-made whole-image frame, or
+  //     `clear` to build a preset frame and press Clear; `_ARG3` names the
+  //     locks (`width`, `height`, `ratio`,
+  //     `width+height`, `width+ratio`, `height+ratio`); `_ARG4=reset` presses
+  //     Reset options; `_ARG5=apply` presses Apply crop; `_ARG6=center|grow`
+  //     picks the mode; `_ARG7` names the grow fill (`transparent`, `black`,
+  //     `white`, `gray` or `#rrggbb`); `_ARG8` types a ratio such as `3:2`)
   //   KOGAVIEW_DEV_UI_REQUEST=editor-transform  -> click the Transform tool and
   //     move one corner (`_ARG` = `X,Y` in document pixels, `_ARG2` = the corner
   //     index or `e0`–`e3` for an edge), optionally arming Live preview and
@@ -422,7 +425,12 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //   KOGAVIEW_DEV_UI_REQUEST=editor-export     -> click the toolbar's Export
   //     button, write the dialog's path/quality/size, and optionally press
   //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
-  //   The four editor requests exist because this session's compositor does not
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-dock       -> choose a reference tab
+  //     (`_ARG` = `info`, `history`, `original`), fold the tool options
+  //     (`_ARG2=fold`), set the dock width (`_ARG3`) and optionally arm a tool
+  //     (`_ARG4` = `crop`, `brush`, `eraser`, `transform`) by clicking its rail
+  //     button — the tab, fold and width are view state and send no command
+  //   The five editor requests exist because this session's compositor does not
   //   deliver synthetic pointer moves to the window; each one calls the handler
   //   the real control calls, and none of them invents a command of its own.
   //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
@@ -715,44 +723,67 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         emitted = true;
       } else if (uiRequest == QLatin1String("editor-crop")) {
-        // The Crop panel without a pointer: the tool button, an anchor button
-        // and the live toggle are `click()`ed, and the preset dropdown is
-        // written the way its own selection writes it. `_ARG` is
-        // WIDTHxHEIGHT of a preset (default 1024x1024); `_ARG2` names the
-        // anchor (default center). `_ARG=seed` clicks Crop and stops, so the
-        // shot shows the frame that arming the tool places by itself.
+        // The Crop panel without a pointer. `_ARG` is the request itself:
+        //   `WIDTHxHEIGHT`  choose a fitting preset (default `1024x1024`), which
+        //                   also builds the frame when Crop opens unframed;
+        //   `unframed`      arm Crop and stop, showing the state the tool
+        //                   opens in: no frame, empty Width/Height;
+        //   `full`          arm Crop and click the picture once, the whole-image
+        //                   frame a click without travel asks for;
+        //   `clear`         arm Crop, choose the preset given by `_ARG9`
+        //                   (default 512x384) so a frame exists, then press
+        //                   Clear, so the shot shows the state it leaves.
+        // `_ARG2` names the anchor (default `center`), `_ARG3` the locks to
+        // engage (`width`, `height`, `ratio`, `width+height`, `width+ratio`,
+        // `height+ratio`), `_ARG4` is `reset` to press Reset options, `_ARG5`
+        // is `apply` to press Apply, `_ARG6` is `center` or `grow`, `_ARG7` the
+        // grow border colour (a key such as `black`, or `#rrggbb`) and `_ARG8`
+        // a ratio typed into the ratio field (`3:2`, `free`).
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
           return;
         }
         const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
-        const bool seedOnly = size == QLatin1String("seed");
+        // `unframed` (the old `seed` spelling still works) arms Crop and stops
+        // before a frame exists, which is the state the tool opens in.
+        const bool unframed = size == QLatin1String("unframed")
+                              || size == QLatin1String("seed");
+        const bool fullFrame = size == QLatin1String("full");
+        const bool clearAfter = size == QLatin1String("clear");
         const QString anchor = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
         const QString anchorKey = anchor.isEmpty() ? QStringLiteral("center") : anchor;
-        const QStringList parts = size.split(QLatin1Char('x'));
-        const int wantedWidth = parts.value(0).toInt();
-        const int wantedHeight = parts.value(1).toInt();
         QObject* tool = editor->findChild<QObject*>(QStringLiteral("toolCrop"));
         if (tool == nullptr) {
           qWarning() << "KogaView dev ui request: Crop tool button missing";
           return;
         }
-        // Same toggle as Resize: only click while Crop is not already selected.
+        // Selecting a tool is a toggle: click only while Crop is not selected.
         if (!tool->property("highlighted").toBool()) {
           QMetaObject::invokeMethod(tool, "click");
         }
         // The mode decides which preset list is legal (a growing crop may hold
-        // a size the picture cannot), so it is chosen before the preset. The
-        // same helper the mode dropdown calls also steps the view back to give
-        // the new border somewhere to be dragged.
+        // a size the picture cannot), so it is chosen before the preset.
         const QString modeArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
         if (modeArg == QLatin1String("grow") || modeArg == QLatin1String("center")) {
           QMetaObject::invokeMethod(editor, "setCropMode",
                                     Q_ARG(QVariant, QVariant(modeArg)));
         }
-        const QVariantList presets =
-          seedOnly ? QVariantList() : editor->property("cropPresets").toList();
+        // A preset builds the frame at the current anchor; `unframed` and
+        // `full` are the two states the panel must not build one for. `clear`
+        // wants one first, so the Clear button has something to put down.
+        const QVariantList presets = (unframed || fullFrame)
+          ? QVariantList() : editor->property("cropPresets").toList();
+        // `clear` is a verb, not a size: the frame it clears is built from
+        // `_ARG9` (default 512x384), which must fit on the open picture.
+        const QString presetSize = clearAfter
+          ? (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG9").isEmpty()
+               ? QStringLiteral("512x384")
+               : qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG9"))
+          : size;
+        const QStringList parts = presetSize.split(QLatin1Char('x'));
+        const int wantedWidth = parts.value(0).toInt();
+        const int wantedHeight = parts.value(1).toInt();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
           const QVariantMap entry = presets.at(i).toMap();
@@ -762,20 +793,36 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             break;
           }
         }
-        if (seedOnly) {
-          // `onToolChanged` already seeded the frame; nothing else is written.
+        if (unframed || fullFrame) {
+          // No preset: the frame is the state under test.
         } else if (index >= 0) {
           QMetaObject::invokeMethod(editor, "chooseCropPreset",
                                     Q_ARG(QVariant, QVariant(index)));
         } else {
           qWarning() << "KogaView dev ui request: no fitting crop preset" << size;
         }
+        // The ratio is typed after the preset, so a run that says both keeps
+        // the ratio it asked for instead of the preset's own shape. The text
+        // goes into the field first: `applyCropRatioText()` reads what is on
+        // screen, exactly as `onTextEdited`/`onEditingFinished` do.
+        const QString ratioArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG8");
+        if (!ratioArg.isEmpty()) {
+          QObject* ratioField = editor->findChild<QObject*>(QStringLiteral("cropRatio"));
+          if (ratioField != nullptr) {
+            ratioField->setProperty("text", ratioArg);
+          } else {
+            qWarning() << "KogaView dev ui request: no crop ratio field";
+          }
+          QMetaObject::invokeMethod(editor, "applyCropRatioText");
+        }
         // Repeater delegates are visual children, not QObject children of the
         // view, so `findChild` cannot see the anchor buttons. Walk the item
         // tree the way the QML test harness does.
         QObject* anchorButton = nullptr;
         const QString anchorName = QStringLiteral("cropAnchor_") + anchorKey;
-        if (!seedOnly) {
+        if (unframed || fullFrame) {
+          // Nothing to place yet.
+        } else {
           if (auto* window = qobject_cast<QQuickWindow*>(rootObject)) {
             QList<QQuickItem*> pending{window->contentItem()};
             while (!pending.isEmpty()) {
@@ -820,21 +867,51 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             }
           }
         }
-        QObject* live = editor->findChild<QObject*>(QStringLiteral("cropLivePreviewButton"));
-        // `_ARG3=plain` leaves the preview off, which is the state the canvas
-        // frame (and its eight handles) is drawn in. A seed shot never arms it.
-        const bool armPreview = !seedOnly
-          && qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") != QLatin1String("plain");
-        if (live != nullptr && armPreview) {
-          QMetaObject::invokeMethod(live, "click");
+        // A click with no travel asks for the whole picture, through the same
+        // helper the canvas `MouseArea` calls when the pointer did not move.
+        if (fullFrame) {
+          QMetaObject::invokeMethod(editor, "createFullCropFrame");
         }
-        // `_ARG4=swap` turns the rectangle through 90° through the same helper
-        // the inspector's button calls, and `_ARG5=apply` presses Apply, so a
-        // run can photograph the swapped frame and the cropped document on the
-        // real window instead of only in the QML suite.
-        const QVariant ratioBeforeSwap = editor->property("cropRatio");
-        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4") == QLatin1String("swap")) {
-          QMetaObject::invokeMethod(editor, "swapCropOrientation");
+        // Locks are pressed through their own buttons, so a refused third lock
+        // snaps back exactly as it does under a hand.
+        const QString lockArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        if (!lockArg.isEmpty()) {
+          const QStringList wanted = lockArg.split(QLatin1Char('+'));
+          for (const QString& which : wanted) {
+            const QString name = QStringLiteral("cropLock")
+              + which.left(1).toUpper() + which.mid(1);
+            QObject* button = editor->findChild<QObject*>(name);
+            if (button != nullptr) {
+              QMetaObject::invokeMethod(button, "click");
+            } else {
+              qWarning() << "KogaView dev ui request: no crop lock" << which;
+            }
+          }
+        }
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4") == QLatin1String("reset")) {
+          QObject* reset = editor->findChild<QObject*>(QStringLiteral("resetCropOptions"));
+          if (reset != nullptr) {
+            QMetaObject::invokeMethod(reset, "click");
+          }
+        }
+        auto fieldText = [editor](const char* name) {
+          QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
+          return field != nullptr ? field->property("text") : QVariant();
+        };
+        if (clearAfter) {
+          // Log what Clear is about to put down: the shot alone cannot say
+          // whether the frame, the fields and the locks were there first.
+          qInfo().noquote() << "KogaView dev ui request editor-crop before clear"
+                            << "locks" << editor->property("cropLockWidth")
+                            << editor->property("cropLockHeight")
+                            << editor->property("cropLockRatio") << "frame"
+                            << editor->property("cropFrameShown") << "rect"
+                            << fieldText("cropX") << fieldText("cropY")
+                            << fieldText("cropWidth") << fieldText("cropHeight");
+          QObject* clear = editor->findChild<QObject*>(QStringLiteral("clearCrop"));
+          if (clear != nullptr) {
+            QMetaObject::invokeMethod(clear, "click");
+          }
         }
         if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5") == QLatin1String("apply")) {
           QObject* applyButton = editor->findChild<QObject*>(QStringLiteral("applyCrop"));
@@ -844,24 +921,22 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             qWarning() << "KogaView dev ui request: no Apply crop button";
           }
         }
-        auto fieldText = [editor](const char* name) {
-          QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
-          return field != nullptr ? field->property("text") : QVariant();
-        };
         qInfo().noquote() << "KogaView dev ui request editor-crop" << size << "preset"
                           << index << "anchor" << editor->property("cropAnchor")
                           << "mode" << editor->property("cropMode") << "fill"
                           << editor->property("cropFill") << "ratio"
-                          << ratioBeforeSwap << "->"
-                          << editor->property("cropRatio") << "tool"
-                          << editor->property("tool") << "live"
-                          << editor->property("cropLivePreview") << "frame"
+                          << editor->property("cropRatio") << "locks"
+                          << editor->property("cropLockWidth")
+                          << editor->property("cropLockHeight")
+                          << editor->property("cropLockRatio") << "tool"
+                          << editor->property("tool") << "frame"
                           << editor->property("cropFrameShown") << "document"
                           << editor->property("documentWidth")
                           << editor->property("documentHeight") << "rect"
                           << fieldText("cropX") << fieldText("cropY")
                           << fieldText("cropWidth") << fieldText("cropHeight");
-        emitted = live != nullptr && (seedOnly || (index >= 0 && anchorButton != nullptr));
+        emitted = unframed || fullFrame || clearAfter
+          || (index >= 0 && anchorButton != nullptr);
       } else if (uiRequest == QLatin1String("editor-transform")) {
         // The Transform quad without a pointer: the tool button is clicked,
         // and a corner or an edge is moved through the same helpers the canvas
@@ -995,6 +1070,48 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         qInfo().noquote() << "KogaView dev ui request editor-paint sent"
                           << "stroking" << editor->property("paintStroking");
         emitted = mapped > 0;
+      } else if (uiRequest == QLatin1String("editor-dock")) {
+        // The right dock without a pointer: `_ARG` is the reference tab
+        // (`info`, `history` or `original`), `_ARG2` the literal `fold` to fold
+        // the tool options away, `_ARG3` the dock's width in pixels and `_ARG4`
+        // a tool to arm (`crop`, `brush`, `eraser`, `transform`) by clicking
+        // its real rail button. It writes the same properties the tabs, the
+        // fold button and the splitter write, and sends no command.
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        const QString wantedTool = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
+        if (!wantedTool.isEmpty()) {
+          const QString name = QStringLiteral("tool") + wantedTool.left(1).toUpper()
+                               + wantedTool.mid(1);
+          QObject* button = editor->findChild<QObject*>(name);
+          if (button == nullptr) {
+            qWarning() << "KogaView dev ui request: no tool button" << name;
+            return;
+          }
+          // A tool button is a toggle: click only while it is not selected.
+          if (!button->property("highlighted").toBool()) {
+            QMetaObject::invokeMethod(button, "click");
+          }
+        }
+        const QString tab = requestArg.isEmpty() ? QStringLiteral("info") : requestArg;
+        editor->setProperty("rightTab", tab);
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2") == QLatin1String("fold")) {
+          editor->setProperty("toolZoneFolded", true);
+        }
+        const QString width = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        if (!width.isEmpty()) {
+          editor->setProperty("rightPanelWidth", width.toInt());
+        }
+        qInfo().noquote() << "KogaView dev ui request editor-dock" << "tab"
+                          << editor->property("rightTab") << "folded"
+                          << editor->property("toolZoneFolded") << "width"
+                          << editor->property("rightPanelWidth") << "tool"
+                          << editor->property("tool") << "index"
+                          << editor->property("rightTabIndex");
+        emitted = true;
       } else if (uiRequest == QLatin1String("editor-export")) {
         // The toolbar's Export button is `click()`ed, which is the same handler
         // a press runs, and the dialog's fields are written the way the dialog's

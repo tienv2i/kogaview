@@ -5,6 +5,8 @@ fn main() {
         "qml/Main.qml",
         "qml/Icon.qml",
         "qml/ToolbarButton.qml",
+        "qml/ToolRailButton.qml",
+        "qml/UnitField.qml",
         "qml/CompactToolbarButton.qml",
         "qml/MenuShortcut.qml",
         "qml/ToolbarMetrics.qml",
@@ -12,6 +14,11 @@ fn main() {
         "qml/WorkspaceSwitcher.qml",
         "qml/Theme.qml",
         "qml/PanelSplitter.qml",
+        "qml/PanelTabs.qml",
+        "qml/RightDock.qml",
+        "qml/InfoPanel.qml",
+        "qml/PreviewPanel.qml",
+        "qml/HistoryPanel.qml",
         "qml/ThumbnailBook.qml",
         "qml/WheelScroll.qml",
         "qml/StateSnapshot.qml",
@@ -23,6 +30,10 @@ fn main() {
         "qml/SettingsDialog.qml",
         "qml/ResizeDialog.qml",
     ]))
+    // The Editor tool rail's own icons. They are not themed icons: Breeze
+    // ships crop/brush/eraser drawings, Adwaita and Papirus do not, and an
+    // icon-only rail with missing icons is a row of blank buttons.
+    .qrc("icons.qrc")
     .qt_module("Core")
     .qt_module("Gui")
     .qt_module("Qml")

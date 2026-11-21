@@ -17,8 +17,12 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/BrowserView.qml \
           ../crates/desktop/qml/Viewer.qml \
           ../crates/desktop/qml/EditorView.qml \
+          ../crates/desktop/qml/UnitField.qml \
           ../crates/desktop/qml/SettingsDialog.qml \
           ../crates/desktop/qml/ResizeDialog.qml \
+          ../crates/desktop/qml/InfoPanel.qml \
+          ../crates/desktop/qml/PreviewPanel.qml \
+          ../crates/desktop/qml/HistoryPanel.qml \
           ../crates/desktop/qml/WorkspaceSwitcher.qml \
           ../crates/desktop/qml/UiLines.qml \
           ../crates/desktop/qml/ToolbarMetrics.qml \

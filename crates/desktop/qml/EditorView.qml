@@ -75,8 +75,11 @@ Item {
                 onPaint: {
                     var ctx = getContext("2d")
                     ctx.reset()
+                    // On a checked button the background is the accent, so the
+                    // padlock itself is drawn in the surface colour; an accent
+                    // glyph on an accent chip is a square, not a lock.
                     var colour = lockButton.checked
-                            ? lockButton.lockedColor : lockButton.unlockedColor
+                            ? "#ffffff" : lockButton.unlockedColor
                     ctx.strokeStyle = colour
                     ctx.fillStyle = colour
                     ctx.lineWidth = 1.6
@@ -89,7 +92,8 @@ Item {
                     ctx.rect(2, 8, 12, 8)
                     ctx.fill()
                     // Keyhole, in the surface behind the button.
-                    ctx.fillStyle = "#ffffff"
+                    ctx.fillStyle = lockButton.checked
+                            ? lockButton.lockedColor : "#ffffff"
                     ctx.beginPath()
                     ctx.arc(8, 11, 1.1, 0, Math.PI * 2)
                     ctx.fill()
@@ -108,8 +112,57 @@ Item {
 
         onCheckedChanged: lockGlyph.requestPaint()
     }
-    property int leftPanelWidth: 220
-    property int rightPanelWidth: 260
+    /// The icon rail's shape: two columns, or one for a narrow window. Like
+    /// the zoom and `panelsHidden`, this is presentation state — Core neither
+    /// owns it nor is told about it, and it is not remembered between runs.
+    property int toolColumns: 2
+    /// 8 px of margin on each side, a 34 px button per column, and the 4 px
+    /// gap between two columns. Written as one sum so the rail and its
+    /// buttons cannot disagree.
+    readonly property int toolRailWidth:
+        16 + toolColumns * 34 + (toolColumns - 1) * 4
+    /// The pinned Crop action row shows Apply, Reset and Clear on one line only
+    /// while their words fit. The sentences are translated, so the rule is the
+    /// measured sum of the three labels plus the two 6 px gaps, not a dock
+    /// width: the 260 px Vietnamese dock elided `Bỏ khung` to `Bỏ khu…`.
+    readonly property bool cropActionsStack: tool === "crop"
+                                             && applyCropButton.parent.width > 0
+                                             && applyCropButton.parent.width
+                                                  < (applyCropButton.implicitWidth
+                                                     + resetCropButton.implicitWidth
+                                                     + clearCropButton.implicitWidth
+                                                     + 12)
+    /// The right dock's width. The shell owns one value for all three
+    /// workspaces, so a width dragged in the Browser is the width the Editor
+    /// opens at; the view writes it through `panelWidthRequested` and keeps the
+    /// shell's number even while its own splitter clamps what is drawn.
+    property real rightPanelWidth: 300
+    /// What this dock draws: the Editor's own range, applied to the shared
+    /// width so a Browser drag past it cannot make the tool column wider than
+    /// its splitter allows.
+    readonly property real dockWidth:
+        Math.max(220, Math.min(400, rightPanelWidth))
+    /// The tool zone folded to its heading by the user. Arm a tool and it opens
+    /// again, so a folded dock never hides a tool the user just chose.
+    property bool toolZoneFolded: false
+    /// Which reference tab is open: `info`, `history` or `original`. A pointer
+    /// has no tool options, so this is the whole dock in that state.
+    property string rightTab: "info"
+    /// The tabs and the words they draw. The labels are translated here, in
+    /// `EditorView`'s context, so `PanelTabs.qml` keeps no string of its own.
+    readonly property var rightTabEntries: [
+        { key: "info", label: qsTr("Info"), icon: "icons/info.svg" },
+        { key: "history", label: qsTr("History"), icon: "icons/history.svg" },
+        { key: "original", label: qsTr("Original"), icon: "icons/original.svg" }
+    ]
+    /// The `StackLayout` index for `rightTab`. An unknown key falls back to the
+    /// first tab instead of leaving the pages without a current index.
+    readonly property int rightTabIndex: {
+        for (var index = 0; index < rightTabEntries.length; ++index) {
+            if (rightTabEntries[index].key === rightTab) return index
+        }
+        return 0
+    }
     /// Which tool is armed on the canvas: `pointer` (no tool), `crop` or
     /// `transform`. The pointer is the default and the no-op tool, so opening
     /// the Editor never leaves an Apply button armed. Resize is not a canvas
@@ -134,6 +187,12 @@ Item {
     property bool cropLockWidth: false
     property bool cropLockHeight: false
     property bool cropLockRatio: false
+    /// While a free-shape frame is being created by typing one side, the other
+    /// side follows the document's own aspect for every keystroke. Once the
+    /// user types that side, it is theirs and stops following. A preset, a
+    /// drag, a click or a ratio writes both sides and clears the flags.
+    property bool cropHeightAuto: false
+    property bool cropWidthAuto: false
     /// A field is editable unless it is locked, or unless it is the side the
     /// other locked side and the locked ratio derive. W+H locks the shape
     /// outright, so the ratio stops being an input at all.
@@ -827,6 +886,8 @@ Item {
             return
         }
         var cleaned = String(text === undefined || text === null ? "" : text).trim()
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
         if (cleaned === "" || cleaned.toLowerCase() === "free") {
             view.cropRatio = "free"
             view.syncCropRatioField()
@@ -853,8 +914,8 @@ Item {
             cropPreset.currentIndex = view.matchingCropPreset()
             return
         }
-        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
-        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+        var width = cropWidthField.acceptableInput ? cropWidthField.pixels() : 0
+        var height = cropHeightField.acceptableInput ? cropHeightField.pixels() : 0
         if (view.cropLockWidth && width > 0) {
             height = width * pair.height / pair.width
         } else if (view.cropLockHeight && height > 0) {
@@ -867,8 +928,10 @@ Item {
             return
         }
         var clamped = view.clampCropPair(width, height, true)
-        cropWidthField.text = String(clamped.width)
-        cropHeightField.text = String(clamped.height)
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
+        cropWidthField.setPixels(clamped.width)
+        cropHeightField.setPixels(clamped.height)
         view.applyCropAnchor()
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
@@ -896,30 +959,48 @@ Item {
     /// side makes the other side derived.
     function setCropLock(which, locked) {
         if (which === "width") {
-            if (view.cropLockWidth === locked) return
-            if (locked && view.cropLockHeight && view.cropLockRatio) return
+            if (view.cropLockWidth === locked) {
+                view.syncCropLockButtons()
+                return
+            }
+            if (locked && view.cropLockHeight && view.cropLockRatio) {
+                view.syncCropLockButtons()
+                return
+            }
             view.cropLockWidth = locked
             if (locked && !cropWidthField.acceptableInput && view.hasDocument) {
-                cropWidthField.text = String(Math.round(view.documentWidth))
+                cropWidthField.setPixels(Math.round(view.documentWidth))
             }
         } else if (which === "height") {
-            if (view.cropLockHeight === locked) return
-            if (locked && view.cropLockWidth && view.cropLockRatio) return
+            if (view.cropLockHeight === locked) {
+                view.syncCropLockButtons()
+                return
+            }
+            if (locked && view.cropLockWidth && view.cropLockRatio) {
+                view.syncCropLockButtons()
+                return
+            }
             view.cropLockHeight = locked
             if (locked && !cropHeightField.acceptableInput && view.hasDocument) {
-                cropHeightField.text = String(Math.round(view.documentHeight))
+                cropHeightField.setPixels(Math.round(view.documentHeight))
             }
         } else if (which === "ratio") {
-            if (view.cropLockRatio === locked) return
-            if (locked && view.cropLockWidth && view.cropLockHeight) return
+            if (view.cropLockRatio === locked) {
+                view.syncCropLockButtons()
+                return
+            }
+            if (locked && view.cropLockWidth && view.cropLockHeight) {
+                view.syncCropLockButtons()
+                return
+            }
             view.cropLockRatio = locked
             if (locked && view.cropRatio === "free") {
                 // Locking a free shape freezes the one on screen; with no frame
                 // yet, the document's own shape is the honest starting point.
                 if (view.cropHasRect()) {
                     view.cropRatio = view.reducedRatio(
-                                parseInt(cropWidthField.text),
-                                parseInt(cropHeightField.text))
+                                cropWidthField.pixels(),
+                                cropHeightField.pixels())
                 } else if (view.hasDocument) {
                     view.cropRatio = view.reducedRatio(view.documentWidth,
                                                        view.documentHeight)
@@ -935,8 +1016,8 @@ Item {
             // follows the pair.
             view.cropLockRatio = false
             if (cropWidthField.acceptableInput && cropHeightField.acceptableInput) {
-                view.setCropRatioFromPair(parseInt(cropWidthField.text),
-                                          parseInt(cropHeightField.text))
+                view.setCropRatioFromPair(cropWidthField.pixels(),
+                                          cropHeightField.pixels())
             }
         }
         // A side locked together with the ratio is the only combination where
@@ -979,8 +1060,8 @@ Item {
     /// Index of the crop preset that matches both fields, or -1 for custom.
     function matchingCropPreset() {
         if (!cropWidthField.acceptableInput || !cropHeightField.acceptableInput) return -1
-        var w = parseInt(cropWidthField.text)
-        var h = parseInt(cropHeightField.text)
+        var w = cropWidthField.pixels()
+        var h = cropHeightField.pixels()
         for (var index = 0; index < view.cropPresets.length; ++index) {
             var preset = view.cropPresets[index]
             if (preset.width === w && preset.height === h) return index
@@ -995,8 +1076,8 @@ Item {
     function applyCropAnchor() {
         if (!view.hasDocument || !cropWidthField.acceptableInput
                 || !cropHeightField.acceptableInput) return
-        var width = parseInt(cropWidthField.text)
-        var height = parseInt(cropHeightField.text)
+        var width = cropWidthField.pixels()
+        var height = cropHeightField.pixels()
         if (!(width > 0) || !(height > 0)) return
         var anchor = view.cropAnchors[0]
         for (var index = 0; index < view.cropAnchors.length; ++index) {
@@ -1005,10 +1086,10 @@ Item {
                 break
             }
         }
-        cropX.text = String(view.cropGrow()
+        cropX.setPixels(view.cropGrow()
                             ? Math.round((view.documentWidth - width) * anchor.column / 2)
                             : Math.max(0, Math.round((view.documentWidth - width) * anchor.column / 2)))
-        cropY.text = String(view.cropGrow()
+        cropY.setPixels(view.cropGrow()
                             ? Math.round((view.documentHeight - height) * anchor.row / 2)
                             : Math.max(0, Math.round((view.documentHeight - height) * anchor.row / 2)))
     }
@@ -1028,8 +1109,10 @@ Item {
     /// side follows the ratio, or the document's shape when the ratio is free.
     function ensureCropFrame() {
         if (view.cropHasRect() || !view.hasDocument) return
-        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
-        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
+        var width = cropWidthField.acceptableInput ? cropWidthField.pixels() : 0
+        var height = cropHeightField.acceptableInput ? cropHeightField.pixels() : 0
         var pair = view.cropRatioPair()
         if (!(width > 0) && !(height > 0)) {
             width = view.documentWidth
@@ -1042,8 +1125,8 @@ Item {
                          : width * view.documentHeight / view.documentWidth
         }
         var clamped = view.clampCropPair(width, height, pair !== null)
-        cropWidthField.text = String(clamped.width)
-        cropHeightField.text = String(clamped.height)
+        cropWidthField.setPixels(clamped.width)
+        cropHeightField.setPixels(clamped.height)
         view.applyCropAnchor()
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
@@ -1056,10 +1139,10 @@ Item {
     function linkHeightFromWidth() {
         if (!view.cropWidthEditable) return
         if (!cropWidthField.acceptableInput) return
-        var width = parseInt(cropWidthField.text)
+        var width = cropWidthField.pixels()
         if (!(width > 0)) return
         var pair = view.cropRatioPair()
-        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+        var height = cropHeightField.acceptableInput ? cropHeightField.pixels() : 0
         if (pair) {
             if (view.cropLockHeight) {
                 // The locked side stays; the unlocked ratio follows the pair.
@@ -1074,13 +1157,16 @@ Item {
                 height = linked.height
             }
         } else {
-            if (!(height > 0)) height = width * view.documentHeight / view.documentWidth
+            if (!(height > 0) || view.cropHeightAuto) {
+                height = width * view.documentHeight / view.documentWidth
+                view.cropHeightAuto = true
+            }
             var free = view.clampCropPair(width, height, false)
             width = free.width
             height = free.height
         }
-        cropWidthField.text = String(width)
-        cropHeightField.text = String(height)
+        cropWidthField.setPixels(width)
+        cropHeightField.setPixels(height)
         view.applyCropAnchor()
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
@@ -1089,10 +1175,10 @@ Item {
     function linkWidthFromHeight() {
         if (!view.cropHeightEditable) return
         if (!cropHeightField.acceptableInput) return
-        var height = parseInt(cropHeightField.text)
+        var height = cropHeightField.pixels()
         if (!(height > 0)) return
         var pair = view.cropRatioPair()
-        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
+        var width = cropWidthField.acceptableInput ? cropWidthField.pixels() : 0
         if (pair) {
             if (view.cropLockWidth) {
                 // The locked side stays; the unlocked ratio follows the pair.
@@ -1107,13 +1193,17 @@ Item {
                 height = linked.height
             }
         } else {
-            if (!(width > 0)) width = height * view.documentWidth / view.documentHeight
+            view.cropHeightAuto = false
+            if (!(width > 0) || view.cropWidthAuto) {
+                width = height * view.documentWidth / view.documentHeight
+                view.cropWidthAuto = true
+            }
             var free = view.clampCropPair(width, height, false)
             width = free.width
             height = free.height
         }
-        cropWidthField.text = String(width)
-        cropHeightField.text = String(height)
+        cropWidthField.setPixels(width)
+        cropHeightField.setPixels(height)
         view.applyCropAnchor()
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
@@ -1153,11 +1243,11 @@ Item {
         view.cropRatio = preset.ratio
         view.syncCropRatioField()
         var width = view.cropLockWidth
-                ? (cropWidthField.acceptableInput ? parseInt(cropWidthField.text)
+                ? (cropWidthField.acceptableInput ? cropWidthField.pixels()
                                                   : preset.width)
                 : preset.width
         var height = view.cropLockHeight
-                ? (cropHeightField.acceptableInput ? parseInt(cropHeightField.text)
+                ? (cropHeightField.acceptableInput ? cropHeightField.pixels()
                                                    : preset.height)
                 : preset.height
         if (view.cropLockWidth && !view.cropLockHeight) {
@@ -1166,8 +1256,10 @@ Item {
             width = height * preset.width / preset.height
         }
         var clamped = view.clampCropPair(width, height, true)
-        cropWidthField.text = String(clamped.width)
-        cropHeightField.text = String(clamped.height)
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
+        cropWidthField.setPixels(clamped.width)
+        cropHeightField.setPixels(clamped.height)
         view.applyCropAnchor()
         cropPreset.currentIndex = index
         draftDebounce.restart()
@@ -1177,11 +1269,11 @@ Item {
         if (!view.hasDocument || !cropWidthField.acceptableInput
                 || !cropHeightField.acceptableInput) return false
         if (!cropX.acceptableInput || !cropY.acceptableInput) return false
-        var width = parseInt(cropWidthField.text)
-        var height = parseInt(cropHeightField.text)
+        var width = cropWidthField.pixels()
+        var height = cropHeightField.pixels()
         if (!(width > 0) || !(height > 0)) return false
-        var x = parseInt(cropX.text)
-        var y = parseInt(cropY.text)
+        var x = cropX.pixels()
+        var y = cropY.pixels()
         if (view.cropGrow()) {
             // Core's grow rule: the canvas may reach outside, but the rectangle
             // must still cover part of the picture — a border, not a blank page.
@@ -1199,10 +1291,10 @@ Item {
     /// second copy of the rectangle.
     readonly property var cropRect: {
         return {
-            x: cropX.acceptableInput ? parseInt(cropX.text) : 0,
-            y: cropY.acceptableInput ? parseInt(cropY.text) : 0,
-            width: cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0,
-            height: cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+            x: cropX.acceptableInput ? cropX.pixels() : 0,
+            y: cropY.acceptableInput ? cropY.pixels() : 0,
+            width: cropWidthField.acceptableInput ? cropWidthField.pixels() : 0,
+            height: cropHeightField.acceptableInput ? cropHeightField.pixels() : 0
         }
     }
 
@@ -1233,34 +1325,6 @@ Item {
     function reshapeCropToRatio() {
         if (!view.hasDocument) return
         view.applyCropRatio()
-    }
-
-    /// Turn the rectangle through 90° around its own centre — the crop-tool
-    /// "swap orientation" every common editor offers, useful for a portrait
-    /// cut out of a landscape frame and back. The pair stays inside the
-    /// document; a chosen ratio turns with it. A lock on either axis or on the
-    /// ratio would be changed by the turn, so swap is refused then.
-    function swapCropOrientation() {
-        if (!view.documentReady || !view.cropHasRect()) return
-        if (view.cropLockWidth || view.cropLockHeight || view.cropLockRatio) return
-        var rect = view.cropRect
-        var centreX = rect.x + rect.width / 2
-        var centreY = rect.y + rect.height / 2
-        var width = Math.max(1, rect.height)
-        var height = Math.max(1, rect.width)
-        var scale = view.cropGrow()
-                ? Math.min(1, 20000 / width, 20000 / height)
-                : Math.min(1, view.documentWidth / width, view.documentHeight / height)
-        width = Math.max(1, Math.round(width * scale))
-        height = Math.max(1, Math.round(height * scale))
-        view.setCropRect(Math.round(centreX - width / 2),
-                         Math.round(centreY - height / 2), width, height)
-        var pair = view.cropRatioPair()
-        if (pair) {
-            view.cropRatio = view.reducedRatio(pair.height, pair.width)
-            view.syncCropRatioField()
-        }
-        cropPreset.currentIndex = view.matchingCropPreset()
     }
 
     /// Arrow-key nudges. The rectangle is clamped by `setCropRect`, so holding
@@ -1308,9 +1372,11 @@ Item {
     function clearCropFields() {
         cropWidthField.text = ""
         cropHeightField.text = ""
-        cropX.text = "0"
-        cropY.text = "0"
+        cropX.setPixels(0)
+        cropY.setPixels(0)
         cropPreset.currentIndex = -1
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
     }
 
     /// Opening Crop never shows a frame: the rectangle is the user's answer,
@@ -1338,6 +1404,8 @@ Item {
     function createFullCropFrame() {
         if (!view.documentReady) return
         view.releaseCropLocks()
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
         view.setCropRect(0, 0, view.documentWidth, view.documentHeight)
     }
 
@@ -1404,6 +1472,8 @@ Item {
                 || view.documentHeight !== view.pendingCropResult.height) return false
         view.pendingCropResult = null
         view.releaseCropLocks()
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
         view.setCropRect(0, 0, view.documentWidth, view.documentHeight)
         return true
     }
@@ -1447,6 +1517,8 @@ Item {
         }
         var x = endX >= startX ? startX : startX - width
         var y = endY >= startY ? startY : startY - height
+        view.cropHeightAuto = false
+        view.cropWidthAuto = false
         view.setCropRect(x, y, width, height)
     }
 
@@ -1501,10 +1573,10 @@ Item {
             x = Math.max(0, Math.min(view.documentWidth - width, Math.round(x)))
             y = Math.max(0, Math.min(view.documentHeight - height, Math.round(y)))
         }
-        cropX.text = String(x)
-        cropY.text = String(y)
-        cropWidthField.text = String(width)
-        cropHeightField.text = String(height)
+        cropX.setPixels(x)
+        cropY.setPixels(y)
+        cropWidthField.setPixels(width)
+        cropHeightField.setPixels(height)
         // Mirror the pair in the preset dropdown without re-applying it.
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
@@ -1567,8 +1639,8 @@ Item {
             }
             view.setCropRect(x, y, width, height)
             if (view.cropRatio !== "free") {
-                view.setCropRatioFromPair(parseInt(cropWidthField.text),
-                                          parseInt(cropHeightField.text))
+                view.setCropRatioFromPair(cropWidthField.pixels(),
+                                          cropHeightField.pixels())
             }
             return
         }
@@ -1692,6 +1764,9 @@ Item {
     signal requestSaveAs()
     /// Raised by Export's Browse button: Main owns the file chooser.
     signal requestExportPath()
+    /// The user dragged the dock's splitter: the shell keeps one width for all
+    /// three workspaces, so the view reports the number rather than owning it.
+    signal panelWidthRequested(real width)
     signal command(var command)
 
     readonly property var editor: state.editor || null
@@ -2003,6 +2078,9 @@ Item {
     // tool does not guess which part of the picture is wanted.
     onToolChanged: {
         draftDebounce.restart()
+        // A tool the user just chose opens its zone: folding it is a decision
+        // about this visit, not a setting that would hide the next tool.
+        if (view.tool !== "pointer") view.toolZoneFolded = false
         if (view.tool === "transform") view.resetTransformCorners()
         if (view.tool === "crop") view.enterCropTool()
     }
@@ -2110,6 +2188,23 @@ Item {
     property Component toolbar: Component {
         RowLayout {
             spacing: 2
+
+            // The way out of the workspace sits first, as it does in the
+            // Viewer: escaping an editor must not mean hunting for the button
+            // at the far end of a row whose length depends on the document.
+            ToolbarButton {
+                objectName: "editorBack"
+                theme: view.theme
+                icon.name: "go-previous-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Back to browser")
+                onClicked: view.command({ type: "set_workspace", workspace: "browser" })
+            }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
 
             ToolbarButton {
                 objectName: "editorOpenButton"
@@ -2253,17 +2348,16 @@ Item {
                 visible: !view.miniToolbar
             }
             ToolbarButton {
-                objectName: "editorBack"
-                theme: view.theme
-                icon.name: "go-previous-symbolic"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Back to browser")
-                onClicked: view.command({ type: "set_workspace", workspace: "browser" })
-            }
-            ToolbarSeparator {
+                objectName: "editorRightPanelButton"
                 theme: view.theme
                 visible: !view.miniToolbar
+                checkable: true
+                checked: !!view.state.rightPanelEditor
+                icon.name: "sidebar-show-right-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Toggle tool and reference panel")
+                onClicked: view.command({ type: "toggle_right_panel", workspace: "editor" })
             }
             ToolbarButton {
                 objectName: "editorClose"
@@ -2293,158 +2387,184 @@ Item {
         spacing: 0
 
         // -------------------------------------------------------- tools (left)
-        // Every action that changes the picture, plus the two tools whose
-        // options the right column shows. The history list is gone: Core still
-        // keeps the steps for undo, but a list of past edits is not a tool. The
-        // toolbar no longer repeats these actions, so an edit has one home.
+        // An icon rail, the way Krita's toolbox and Photoshop's toolbar are: the
+        // picture keeps the width, and a tool is a drawing with its sentence in
+        // a tooltip. The rail folds between two columns (the default) and one
+        // for a narrow window; that is presentation state like the zoom, so it
+        // sends nothing to Core and is not remembered.
+        //
+        // The icons are this repository's own (`qml/icons/`, registered by
+        // `icons.qrc`) because the desktop themes disagree: Breeze ships crop,
+        // brush and eraser drawings, Adwaita and Papirus do not, and a missing
+        // icon in an icon-only rail is an empty button.
         Rectangle {
             objectName: "editorTools"
-            Layout.preferredWidth: view.leftPanelWidth
+            Layout.preferredWidth: view.toolRailWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
             // Tab gives the picture the whole window, as Krita's canvas-only
-            // mode does; the side panels and their splitters are the only
-            // things this view owns, so the toolbar stays.
+            // mode does; the side panels are the only things this view owns, so
+            // the toolbar stays.
             visible: !view.panelsHidden
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 8
+                anchors.margins: 8
+                spacing: 6
 
                 Label {
                     objectName: "editsHeading"
+                    // A one-column rail is narrower than the word; the tooltips
+                    // already name everything, so the heading goes rather than
+                    // eliding to "T…".
+                    visible: view.toolColumns === 2
                     text: qsTr("Tools")
                     color: view.theme.text
                     font.bold: true
                 }
 
-                // The pointer is the no-op tool: it selects nothing, so Core
-                // never sees a command from it. It is the tool the Editor
-                // opens on, and clicking the selected Resize/Crop again
-                // returns to it.
-                Button {
-                    objectName: "toolPointer"
+                // The tools. The pointer selects nothing, so Core never sees a
+                // command from it; Crop, Transform and Paint write the canvas
+                // and their options live in the right column. Resize is not a
+                // canvas mode: it opens a dialog, and its button stays lit
+                // while that form is up so the rail still says where the
+                // question came from.
+                GridLayout {
+                    objectName: "editorToolGrid"
                     Layout.fillWidth: true
-                    text: qsTr("Pointer")
-                    highlighted: view.tool === "pointer"
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.tool = "pointer"
-                }
-                // Resize is not a mode: it opens a dialog, and the dialog's own
-                // buttons are the way out. The button stays lit while the form
-                // is up so the palette says where the question came from.
-                Button {
-                    objectName: "toolResize"
-                    Layout.fillWidth: true
-                    text: qsTr("Resize…")
-                    highlighted: view.resizeDialogOpen
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.openResizeDialog()
-                }
-                Button {
-                    objectName: "toolCrop"
-                    Layout.fillWidth: true
-                    text: qsTr("Crop")
-                    highlighted: view.tool === "crop"
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
-                }
-                Button {
-                    objectName: "toolTransform"
-                    Layout.fillWidth: true
-                    text: qsTr("Transform")
-                    highlighted: view.tool === "transform"
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Drag the corners onto the picture's edges to straighten it")
-                    onClicked: view.tool = view.tool === "transform" ? "pointer" : "transform"
-                }
-                // Krita's freehand brush and eraser are one paint engine with
-                // two modes, so they sit side by side and B/E pick them.
-                Button {
-                    objectName: "toolBrush"
-                    Layout.fillWidth: true
-                    text: qsTr("Brush")
-                    highlighted: view.tool === "paint" && view.paintMode === "brush"
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Paint freehand (B)")
-                    onClicked: {
-                        view.selectPaintMode("brush")
-                        view.forceActiveFocus()
+                    columns: view.toolColumns
+                    columnSpacing: 4
+                    rowSpacing: 4
+
+                    ToolRailButton {
+                        objectName: "toolPointer"
+                        theme: view.theme
+                        iconSource: "icons/pointer.svg"
+                        tooltip: qsTr("Pointer")
+                        active: view.tool === "pointer"
+                        onClicked: view.tool = "pointer"
                     }
-                }
-                Button {
-                    objectName: "toolEraser"
-                    Layout.fillWidth: true
-                    text: qsTr("Eraser")
-                    highlighted: view.tool === "paint" && view.paintMode === "eraser"
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Erase with the brush (E)")
-                    onClicked: {
-                        view.selectPaintMode("eraser")
-                        view.forceActiveFocus()
+                    ToolRailButton {
+                        objectName: "toolResize"
+                        theme: view.theme
+                        iconSource: "icons/resize.svg"
+                        tooltip: qsTr("Resize…")
+                        active: view.resizeDialogOpen
+                        enabled: view.documentReady
+                        onClicked: view.openResizeDialog()
+                    }
+                    ToolRailButton {
+                        objectName: "toolCrop"
+                        theme: view.theme
+                        iconSource: "icons/crop.svg"
+                        tooltip: qsTr("Crop")
+                        active: view.tool === "crop"
+                        enabled: view.documentReady
+                        onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
+                    }
+                    ToolRailButton {
+                        objectName: "toolTransform"
+                        theme: view.theme
+                        iconSource: "icons/transform.svg"
+                        tooltip: qsTr("Drag the corners onto the picture's edges to straighten it")
+                        active: view.tool === "transform"
+                        enabled: view.documentReady
+                        onClicked: view.tool = view.tool === "transform" ? "pointer" : "transform"
+                    }
+                    // Krita's freehand brush and eraser are one paint engine with
+                    // two modes, so they are two buttons over one `paint` tool.
+                    ToolRailButton {
+                        objectName: "toolBrush"
+                        theme: view.theme
+                        iconSource: "icons/brush.svg"
+                        tooltip: qsTr("Paint freehand (B)")
+                        active: view.tool === "paint" && view.paintMode === "brush"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.selectPaintMode("brush")
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolEraser"
+                        theme: view.theme
+                        iconSource: "icons/eraser.svg"
+                        tooltip: qsTr("Erase with the brush (E)")
+                        active: view.tool === "paint" && view.paintMode === "eraser"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.selectPaintMode("eraser")
+                            view.forceActiveFocus()
+                        }
                     }
                 }
 
-                MenuSeparator {}
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    Layout.topMargin: 2
+                    Layout.bottomMargin: 2
+                    color: view.theme.border
+                }
 
                 // These change pixels the moment they are pressed, so they are
                 // actions rather than tools. Undo, Redo and Reset live on the
-                // toolbar; the palette keeps the tools and the quick edits.
-                Button {
-                    objectName: "editsRotateLeft"
+                // toolbar; the rail keeps the tools and the quick edits.
+                GridLayout {
+                    objectName: "editorEditGrid"
                     Layout.fillWidth: true
-                    text: qsTr("Rotate left")
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.command({ type: "editor_rotate", degrees: -90 })
-                }
-                Button {
-                    objectName: "editsRotateRight"
-                    Layout.fillWidth: true
-                    text: qsTr("Rotate right")
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.command({ type: "editor_rotate", degrees: 90 })
-                }
-                Button {
-                    objectName: "editsFlipHorizontal"
-                    Layout.fillWidth: true
-                    text: qsTr("Flip horizontal")
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
-                }
-                Button {
-                    objectName: "editsFlipVertical"
-                    Layout.fillWidth: true
-                    text: qsTr("Flip vertical")
-                    enabled: view.documentReady
-                    focusPolicy: Qt.NoFocus
-                    onClicked: view.command({ type: "editor_flip", axis: "vertical" })
+                    columns: view.toolColumns
+                    columnSpacing: 4
+                    rowSpacing: 4
+
+                    ToolRailButton {
+                        objectName: "editsRotateLeft"
+                        theme: view.theme
+                        iconSource: "icons/rotate-left.svg"
+                        tooltip: qsTr("Rotate left")
+                        enabled: view.documentReady
+                        onClicked: view.command({ type: "editor_rotate", degrees: -90 })
+                    }
+                    ToolRailButton {
+                        objectName: "editsRotateRight"
+                        theme: view.theme
+                        iconSource: "icons/rotate-right.svg"
+                        tooltip: qsTr("Rotate right")
+                        enabled: view.documentReady
+                        onClicked: view.command({ type: "editor_rotate", degrees: 90 })
+                    }
+                    ToolRailButton {
+                        objectName: "editsFlipHorizontal"
+                        theme: view.theme
+                        iconSource: "icons/flip-horizontal.svg"
+                        tooltip: qsTr("Flip horizontal")
+                        enabled: view.documentReady
+                        onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
+                    }
+                    ToolRailButton {
+                        objectName: "editsFlipVertical"
+                        theme: view.theme
+                        iconSource: "icons/flip-vertical.svg"
+                        tooltip: qsTr("Flip vertical")
+                        enabled: view.documentReady
+                        onClicked: view.command({ type: "editor_flip", axis: "vertical" })
+                    }
                 }
 
                 Item { Layout.fillHeight: true }
-            }
-        }
 
-        PanelSplitter {
-            objectName: "editorLeftSplitter"
-            theme: view.theme
-            Layout.fillHeight: true
-            value: view.leftPanelWidth
-            minimum: 160
-            maximum: 360
-            visible: !view.panelsHidden
-            onMoved: function(width) { view.leftPanelWidth = width }
+                // The rail's own width is its one control: no splitter, because
+                // a rail dragged wide is a column again.
+                ToolRailButton {
+                    objectName: "toolRailColumns"
+                    theme: view.theme
+                    iconSource: view.toolColumns === 2 ? "icons/columns-one.svg"
+                                                       : "icons/columns-two.svg"
+                    tooltip: view.toolColumns === 2 ? qsTr("One column")
+                                                    : qsTr("Two columns")
+                    onClicked: view.toolColumns = view.toolColumns === 2 ? 1 : 2
+                }
+            }
         }
 
         // ------------------------------------------------------------- canvas
@@ -2468,8 +2588,13 @@ Item {
                 width: Math.max(1, view.displayedWidth)
                 height: Math.max(1, view.displayedHeight)
                 scale: view.zoom
-                x: (canvasHost.width - width) / 2 + view.offsetX
-                y: (canvasHost.height - height) / 2 + view.offsetY
+                // A whole pixel, so the picture's edges land on the device
+                // grid at 100 % and a document coordinate maps to the pixel
+                // under the pointer instead of straddling two. Without this a
+                // centred picture at an odd host width sat at `x.5`, and a
+                // crop dragged from document pixel 10 started at 11.
+                x: Math.round((canvasHost.width - width) / 2 + view.offsetX)
+                y: Math.round((canvasHost.height - height) / 2 + view.offsetY)
                 // The preview is already encoded at the document aspect ratio;
                 // the item is the document coordinate system and its scale is
                 // purely presentation state.
@@ -2600,12 +2725,13 @@ Item {
                     // crop tool shows what is about to be discarded. It covers
                     // the picture only (not the matte), and every edge is
                     // computed from the same document rectangle the frame and
-                    // the command read, so they cannot disagree.
+                    // the command read, so they cannot disagree. With no
+                    // rectangle yet, the whole picture is dimmed: nothing is
+                    // selected, and a bright picture would read as chosen.
                     Item {
                         id: cropShade
                         objectName: "cropShade"
                         anchors.fill: parent
-                        visible: view.cropFrameShown
                         enabled: false
                         readonly property real pictureX: view.docToHostX(0)
                         readonly property real pictureY: view.docToHostY(0)
@@ -2617,6 +2743,17 @@ Item {
                             view.docToHostX(view.cropRect.x + view.cropRect.width)
                         readonly property real frameBottom:
                             view.docToHostY(view.cropRect.y + view.cropRect.height)
+
+                        Rectangle {
+                            objectName: "cropShadeEmpty"
+                            x: cropShade.pictureX
+                            y: cropShade.pictureY
+                            width: cropShade.pictureWidth
+                            height: cropShade.pictureHeight
+                            color: "#000000"
+                            opacity: 0.45
+                            visible: !view.cropFrameShown
+                        }
 
                         Rectangle {
                             objectName: "cropShadeTop"
@@ -3101,814 +3238,906 @@ Item {
             objectName: "editorRightSplitter"
             theme: view.theme
             Layout.fillHeight: true
-            value: view.rightPanelWidth
+            value: view.dockWidth
+            defaultValue: 300
             direction: -1
             minimum: 220
             maximum: 400
-            visible: !view.panelsHidden
-            onMoved: function(width) { view.rightPanelWidth = width }
+            visible: !view.panelsHidden && !!view.state.rightPanelEditor
+            onMoved: function(width) {
+                view.rightPanelWidth = width
+                view.panelWidthRequested(width)
+            }
         }
 
         // -------------------------------------------------- tool options (right)
-        // The options of the tool chosen on the left: a resize needs a new
-        // size, a crop needs the rectangle's corner as well. Apply sends the
-        // same typed command the palette does; Reset only clears the fields,
-        // so a half-entered size never reaches Core. Saving lives on the
-        // toolbar, where it is reachable from every tool.
+        // The dock is two places, not one. The top is the armed tool's own
+        // options and the verbs that apply them; below it is the document
+        // itself — what it is, what was done to it, and the file on disk — as
+        // three reference tabs. They were one scrolling column once, so arming
+        // Crop hid the history and the original exactly when the user might
+        // want to check them.
+        //
+        // The tool zone hugs its content: heading, options, then the action
+        // row directly under them. A tall window therefore has no empty band
+        // between the last field and Apply, and the tabs take whatever height
+        // is left. The options scroll only when the dock is too short to show
+        // them whole, which is what keeps the 180 px the tabs need.
+        // Everything here is presentation state: no command leaves the view and
+        // the open tab and the fold are remembered for this run only.
         Rectangle {
             id: inspector
             objectName: "editorInspector"
-            property int preferredWidth: view.rightPanelWidth
-            property int minimumWidth: 220
-            Layout.preferredWidth: view.rightPanelWidth
+            Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
             color: view.theme.surface
-            visible: !view.panelsHidden
+            visible: !view.panelsHidden && !!view.state.rightPanelEditor
 
-            ScrollView {
+            // The heading row is the zone's minimum: it is what stays when the
+            // options are folded.
+            readonly property int headerHeight: 34
+            /// Height the pinned action row adds, so the options can be capped
+            /// before the tabs lose their floor. A tool with no verbs adds
+            /// nothing.
+            readonly property int actionRowHeight:
+                (view.tool === "crop" || view.tool === "transform") && !view.toolZoneFolded
+                ? cropActions.implicitHeight + 10 : 0
+            /// How tall the options may be: their own content, unless the dock
+            /// cannot also keep `header + options + actions + 180 px of tabs`.
+            /// Only then do they scroll.
+            readonly property real optionsCap: Math.max(
+                40, height - 180 - headerHeight - actionRowHeight - 10)
+            readonly property bool toolOptionsShown:
+                view.tool !== "pointer" && !view.toolZoneFolded
+            /// The tool's name for the heading. The sentence is "… options", so
+            /// the heading says whose column this is whether or not a tool is
+            /// armed.
+            readonly property string toolName:
+                view.tool === "pointer"
+                ? qsTr("Pointer")
+                : (view.tool === "crop"
+                   ? qsTr("Crop")
+                   : (view.tool === "transform"
+                      ? qsTr("Transform")
+                      : (view.tool === "paint"
+                         ? (view.paintMode === "eraser" ? qsTr("Eraser") : qsTr("Brush"))
+                         : qsTr("Resize"))))
+            /// Under this width the tab labels no longer fit in two languages;
+            /// the icons and their tooltips carry the tab instead.
+            readonly property bool tabsCompact: width < 240
+
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                clip: true
-                contentWidth: availableWidth
+                spacing: 0
 
+                // ------------------------------------------ tool zone (top)
                 ColumnLayout {
-                    width: inspector.width - 24
-                    spacing: 10
+                    objectName: "editorToolZone"
+                    Layout.fillWidth: true
+                    // The zone is as tall as what it draws; the tabs below get
+                    // the rest of the dock.
+                    Layout.preferredHeight: implicitHeight
+                    spacing: 0
 
-                    // The heading names the tool whose column this is. With the
-                    // pointer selected there is no tool, so the column becomes
-                    // the document itself.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 10
+                        Layout.rightMargin: 4
+                        Layout.preferredHeight: inspector.headerHeight
+                        implicitHeight: inspector.headerHeight
+                        spacing: 2
+
+                        // The heading names whose column this is. With the
+                        // pointer selected there is no tool, so the header
+                        // reports the pointer and the line below says why it is
+                        // empty.
+                        Label {
+                            objectName: "toolOptionsHeading"
+                            Layout.fillWidth: true
+                            text: qsTr("%1 options").arg(inspector.toolName)
+                            color: view.theme.text
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
+
+                        // The fold is the dock's own, not Core's: it writes
+                        // `toolZoneFolded` and sends nothing. Breeze and the QML
+                        // suite both read the drawing through `ToolRailButton`,
+                        // the same component the left rail uses.
+                        ToolRailButton {
+                            objectName: "toolZoneToggle"
+                            visible: view.tool !== "pointer"
+                            iconSource: "icons/chevron.svg"
+                            tooltip: view.toolZoneFolded
+                                     ? qsTr("Expand tool options")
+                                     : qsTr("Collapse tool options")
+                            // The chevron points down when the options are open
+                            // and up when they are folded away.
+                            rotation: view.toolZoneFolded ? 180 : 0
+                            onClicked: view.toolZoneFolded = !view.toolZoneFolded
+                        }
+                    }
+
+                    // The pointer is a tool with nothing to configure. Saying
+                    // so is better than an empty column that reads as a panel
+                    // that failed to load.
                     Label {
-                        objectName: "toolOptionsHeading"
-                        text: view.tool === "pointer"
-                              ? qsTr("Pointer")
-                              : (view.tool === "crop"
-                                 ? qsTr("Crop")
-                                 : (view.tool === "transform"
-                                    ? qsTr("Transform")
-                                    : (view.tool === "paint"
-                                       ? (view.paintMode === "eraser" ? qsTr("Eraser") : qsTr("Brush"))
-                                       : qsTr("Resize"))))
-                        color: view.theme.text
-                        font.bold: true
-                    }
-
-                    // ------------------------------- pointer: document details
-                    // The pointer changes no pixels, so its column shows what
-                    // the document is, what it looks like and what has been
-                    // done to it in this session — never an Apply button.
-                    ColumnLayout {
+                        objectName: "pointerNoOptions"
                         Layout.fillWidth: true
+                        Layout.leftMargin: 12
+                        Layout.rightMargin: 12
+                        Layout.bottomMargin: 10
                         visible: view.tool === "pointer"
-                        spacing: 8
-
-                        Label {
-                            objectName: "imageHeading"
-                            text: qsTr("Image")
-                            color: view.theme.text
-                            font.bold: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            objectName: "imageName"
-                            text: view.hasDocument
-                                  ? (view.editor.name + (view.modified ? " · " + qsTr("edited") : ""))
-                                  : "—"
-                            color: view.theme.text
-                            elide: Text.ElideMiddle
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            objectName: "imageSize"
-                            text: view.sizeLabel()
-                            color: view.theme.textMuted
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            objectName: "saveTarget"
-                            text: {
-                                if (!view.hasDocument) return "—"
-                                var where = view.editor.savePath || view.editor.path || ""
-                                var name = where.split("/").pop()
-                                var style = view.editor.format ? " (" + view.editor.format + ")" : ""
-                                var state = view.saved ? qsTr("saved") : qsTr("unsaved changes")
-                                return name + style + " · " + state
-                            }
-                            color: view.saved ? view.theme.textMuted : view.theme.accent
-                            font.pixelSize: 11
-                            elide: Text.ElideMiddle
-                            wrapMode: Text.NoWrap
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            BusyIndicator {
-                                Layout.preferredWidth: 18
-                                Layout.preferredHeight: 18
-                                running: view.saving
-                                visible: running
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: qsTr("Saving…")
-                                visible: view.saving
-                                color: view.theme.textMuted
-                                font.pixelSize: 11
-                            }
-                        }
-
-                        // The current preview through the grid's thumbnail
-                        // cache, in the same frame the grid uses: a small
-                        // cached decode that follows each edit.
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(180, width * 0.72)
-                            radius: view.theme.radius
-                            color: view.theme.thumb
-                            clip: true
-
-                            CachedThumbnail {
-                                objectName: "pointerThumbnail"
-                                anchors.fill: parent
-                                anchors.margins: 4
-                                book: thumbs
-                                // The current preview through the grid's own
-                                // thumbnail cache: a small cached decode, and
-                                // a new preview path after each edit refreshes
-                                // it. The QML harness passes no cache and uses
-                                // fake paths, so it draws the placeholder.
-                                //
-                                // The preview names repeat on every run
-                                // (`preview-1.png` …), so the path alone cannot
-                                // identify the pixels: `modified`/`fileSize`
-                                // carry the file's identity, without which the
-                                // cache answered a fresh preview with the
-                                // thumbnail of the last run's document.
-                                path: view.hasDocument && view.thumbnails
-                                      ? (view.editor.previewPath || "") : ""
-                                modified: view.editor ? (view.editor.previewModified || 0) : 0
-                                fileSize: view.editor ? (view.editor.previewSize || 0) : 0
-                                thumbnailable: view.hasDocument
-                                fillMode: Image.PreserveAspectFit
-                            }
-                            Label {
-                                anchors.centerIn: parent
-                                visible: !view.hasDocument
-                                text: qsTr("No image open")
-                                color: view.theme.textMuted
-                            }
-                        }
-
-                        Label {
-                            text: qsTr("History")
-                            color: view.theme.text
-                            font.bold: true
-                        }
-
-                        ListView {
-                            id: historyList
-                            objectName: "historyList"
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 220
-                            Layout.minimumHeight: 120
-                            clip: true
-                            model: view.history
-                            spacing: 2
-                            delegate: Rectangle {
-                                required property var modelData
-                                required property int index
-                                width: ListView.view.width
-                                height: 26
-                                radius: view.theme.radius
-                                color: "transparent"
-
-                                Label {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 6
-                                    objectName: "historyLine" + index
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                    color: view.theme.text
-                                    font.pixelSize: 12
-                                    text: (index + 1) + ". " + uiLines.text(modelData, view.state.language)
-                                }
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: view.history.length === 0
-                            text: view.hasDocument ? qsTr("No edits yet") : qsTr("No image open")
-                            color: view.theme.textMuted
-                            font.pixelSize: 11
-                        }
+                        text: qsTr("This tool has no options.")
+                        color: view.theme.textMuted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
                     }
 
-                    // ------------------------------- paint: brush and eraser
-                    // One engine, two modes. A stroke changes pixels only when
-                    // the button comes up, so nothing here is an Apply; the
-                    // fields are the brush's own properties, and the [ ] X D
-                    // keys reach the same properties as the controls.
-                    ColumnLayout {
+                    // The options column is wrapped in an Item because a
+                    // ScrollView answers a layout with its content's implicit
+                    // height: a `Layout.maximumHeight` on it was ignored and a
+                    // 430 px window still drew a 362 px ScrollView, pushing the
+                    // tabs out of the dock. The host owns the height; the
+                    // ScrollView fills it.
+                    Item {
+                        id: toolOptionsHost
+                        objectName: "toolOptionsHost"
+                        visible: inspector.toolOptionsShown
                         Layout.fillWidth: true
-                        visible: view.tool === "paint"
-                        spacing: 10
+                        Layout.leftMargin: 12
+                        Layout.rightMargin: 12
+                        // Natural height, capped so the action row and 180 px
+                        // of tabs still fit. The 10 px is the gap under the
+                        // last field, which a content layout's own margin does
+                        // not add inside a ScrollView.
+                        Layout.preferredHeight: visible
+                                                ? Math.min(toolOptionsColumn.implicitHeight + 10,
+                                                           inspector.optionsCap)
+                                                : 0
+                        Layout.maximumHeight: Layout.preferredHeight
+                        clip: true
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
+                        ScrollView {
+                            id: toolOptionsScroll
+                            objectName: "toolOptionsScroll"
+                            anchors.fill: parent
+                            clip: true
+                            contentWidth: availableWidth
 
-                            Button {
-                                objectName: "paintBrushMode"
+                            ColumnLayout {
+                                id: toolOptionsColumn
+                                width: toolOptionsScroll.availableWidth
+                                spacing: 10
+
+                            // ------------------------------- paint: brush and eraser
+                            // One engine, two modes. A stroke changes pixels only when
+                            // the button comes up, so nothing here is an Apply; the
+                            // fields are the brush's own properties, and the [ ] X D
+                            // keys reach the same properties as the controls.
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                text: qsTr("Brush")
-                                checkable: true
-                                checked: view.paintMode === "brush"
-                                enabled: view.documentReady
-                                focusPolicy: Qt.NoFocus
-                                onClicked: {
-                                    view.selectPaintMode("brush")
-                                    view.forceActiveFocus()
-                                }
-                            }
-                            Button {
-                                objectName: "paintEraserMode"
-                                Layout.fillWidth: true
-                                text: qsTr("Eraser")
-                                checkable: true
-                                checked: view.paintMode === "eraser"
-                                enabled: view.documentReady
-                                focusPolicy: Qt.NoFocus
-                                onClicked: {
-                                    view.selectPaintMode("eraser")
-                                    view.forceActiveFocus()
-                                }
-                            }
-                        }
+                                visible: view.tool === "paint"
+                                spacing: 10
 
-                        // The colour row is the foreground swatch, its hex
-                        // field, the background swatch X swaps with, and the
-                        // swap button itself.
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
 
-                            Rectangle {
-                                objectName: "paintSwatch"
-                                implicitWidth: 22
-                                implicitHeight: 22
-                                radius: 3
-                                color: view.paintColor
-                                border.width: 1
-                                border.color: view.theme.border
-                            }
-
-                            TextField {
-                                id: paintColorField
-                                objectName: "paintColorField"
-                                Layout.fillWidth: true
-                                font.pixelSize: 12
-                                text: view.paintColor
-                                placeholderText: qsTr("#rrggbb")
-                                onEditingFinished: {
-                                    view.setPaintColor(text)
-                                    text = view.paintColor
-                                    // Enter belongs to the field; the next key
-                                    // should reach the canvas keys again.
-                                    view.forceActiveFocus()
-                                }
-                            }
-
-                            Rectangle {
-                                objectName: "paintBackgroundSwatch"
-                                implicitWidth: 22
-                                implicitHeight: 22
-                                radius: 3
-                                color: view.paintBackgroundColor
-                                border.width: 1
-                                border.color: view.theme.border
-                            }
-
-                            Button {
-                                objectName: "paintSwap"
-                                implicitWidth: 30
-                                text: qsTr("X")
-                                enabled: view.documentReady
-                                focusPolicy: Qt.NoFocus
-                                ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Swap the foreground and background colours (X)")
-                                onClicked: {
-                                    view.swapPaintColors()
-                                    view.forceActiveFocus()
-                                }
-                            }
-                        }
-
-                        // The field and the swatch follow X and D even after
-                        // the field has been typed into, which breaks its
-                        // initial binding.
-                        Connections {
-                            target: view
-                            function onPaintColorChanged() {
-                                if (!paintColorField.activeFocus)
-                                    paintColorField.text = view.paintColor
-                            }
-                        }
-
-                        GridLayout {
-                            Layout.fillWidth: true
-                            columns: 8
-                            columnSpacing: 4
-                            rowSpacing: 4
-
-                            Repeater {
-                                model: view.paintSwatches
-
-                                Rectangle {
-                                    required property string modelData
-                                    objectName: "paintSwatch_" + modelData.substring(1)
-                                    Layout.preferredWidth: 22
-                                    Layout.preferredHeight: 22
-                                    radius: 3
-                                    color: modelData
-                                    border.width: view.paintColor === modelData ? 2 : 1
-                                    border.color: view.paintColor === modelData
-                                                  ? view.theme.accent : view.theme.border
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
+                                    Button {
+                                        objectName: "paintBrushMode"
+                                        Layout.fillWidth: true
+                                        text: qsTr("Brush")
+                                        checkable: true
+                                        checked: view.paintMode === "brush"
+                                        enabled: view.documentReady
+                                        focusPolicy: Qt.NoFocus
                                         onClicked: {
-                                            view.setPaintColor(modelData)
+                                            view.selectPaintMode("brush")
+                                            view.forceActiveFocus()
+                                        }
+                                    }
+                                    Button {
+                                        objectName: "paintEraserMode"
+                                        Layout.fillWidth: true
+                                        text: qsTr("Eraser")
+                                        checkable: true
+                                        checked: view.paintMode === "eraser"
+                                        enabled: view.documentReady
+                                        focusPolicy: Qt.NoFocus
+                                        onClicked: {
+                                            view.selectPaintMode("eraser")
                                             view.forceActiveFocus()
                                         }
                                     }
                                 }
-                            }
-                        }
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
+                                // The colour row is the foreground swatch, its hex
+                                // field, the background swatch X swaps with, and the
+                                // swap button itself.
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
 
-                            Label {
-                                text: qsTr("Brush size")
-                                color: view.theme.textMuted
-                            }
-                            Slider {
-                                id: paintSizeSlider
-                                objectName: "paintSize"
-                                Layout.fillWidth: true
-                                from: view.minimumPaintSize
-                                to: view.maximumPaintSize
-                                stepSize: 1
-                                value: view.paintSize
-                                enabled: view.documentReady
-                                onMoved: view.paintSize = Math.round(value)
-                            }
-                            Label {
-                                objectName: "paintSizeValue"
-                                text: qsTr("%1 px").arg(Math.round(view.paintSize))
-                                color: view.theme.text
-                                font.pixelSize: 12
-                                Layout.preferredWidth: 52
-                            }
-                        }
+                                    Rectangle {
+                                        objectName: "paintSwatch"
+                                        implicitWidth: 22
+                                        implicitHeight: 22
+                                        radius: 3
+                                        color: view.paintColor
+                                        border.width: 1
+                                        border.color: view.theme.border
+                                    }
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
+                                    TextField {
+                                        id: paintColorField
+                                        objectName: "paintColorField"
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        text: view.paintColor
+                                        placeholderText: qsTr("#rrggbb")
+                                        onEditingFinished: {
+                                            view.setPaintColor(text)
+                                            text = view.paintColor
+                                            // Enter belongs to the field; the next key
+                                            // should reach the canvas keys again.
+                                            view.forceActiveFocus()
+                                        }
+                                    }
 
-                            Label {
-                                text: qsTr("Opacity")
-                                color: view.theme.textMuted
-                            }
-                            Slider {
-                                id: paintOpacitySlider
-                                objectName: "paintOpacity"
-                                Layout.fillWidth: true
-                                from: 1
-                                to: 100
-                                stepSize: 1
-                                value: view.paintOpacity
-                                enabled: view.documentReady
-                                onMoved: view.paintOpacity = Math.round(value)
-                            }
-                            Label {
-                                objectName: "paintOpacityValue"
-                                text: qsTr("%1 %").arg(Math.round(view.paintOpacity))
-                                color: view.theme.text
-                                font.pixelSize: 12
-                                Layout.preferredWidth: 52
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("Drag on the picture to paint. [ and ] change the size, X swaps colours, D resets them, Space pans.")
-                            color: view.theme.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-
-                    // ------------------------------- crop/transform: tool options
-                    // Crop's rectangle is the user's answer: four numbers, a
-                    // shape and a place. Width, Height and Ratio each carry a
-                    // lock; the locks decide which of the three is an input and
-                    // which is derived from the other two. Resize is a dialog
-                    // of its own, because a size is a decision, not a mode.
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        visible: view.tool === "crop" || view.tool === "transform"
-                        spacing: 10
-
-                        GridLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            columns: 3
-                            columnSpacing: 6
-                            rowSpacing: 4
-
-                            Label {
-                                text: qsTr("X")
-                                color: view.theme.textMuted
-                            }
-                            TextField {
-                                id: cropX
-                                objectName: "cropX"
-                                Layout.fillWidth: true
-                                font.pixelSize: 12
-                                text: "0"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator {
-                                    bottom: view.cropGrow() ? -20000 : 0
-                                    top: 20000
-                                }
-                            }
-                            // A place has no lock: the locks are about the
-                            // shape, not about where it sits.
-                            Item {}
-
-                            Label {
-                                text: qsTr("Y")
-                                color: view.theme.textMuted
-                            }
-                            TextField {
-                                id: cropY
-                                objectName: "cropY"
-                                Layout.fillWidth: true
-                                font.pixelSize: 12
-                                text: "0"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator {
-                                    bottom: view.cropGrow() ? -20000 : 0
-                                    top: 20000
-                                }
-                            }
-                            Item {}
-
-                            Label {
-                                text: qsTr("Width")
-                                color: view.theme.textMuted
-                            }
-                            TextField {
-                                id: cropWidthField
-                                objectName: "cropWidth"
-                                Layout.fillWidth: true
-                                font.pixelSize: 12
-                                placeholderText: view.hasDocument ? String(view.editor.width) : "0"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator { bottom: 1; top: 20000 }
-                                enabled: view.cropWidthEditable
-                                onTextEdited: view.linkHeightFromWidth()
-                            }
-                            CropLockButton {
-                                id: cropLockWidthButton
-                                objectName: "cropLockWidth"
-                                checked: view.cropLockWidth
-                                enabled: view.documentReady
-                                Accessible.name: qsTr("Lock width")
-                                ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Lock width")
-                                onToggled: view.setCropLock("width", checked)
-                            }
-
-                            Label {
-                                text: qsTr("Height")
-                                color: view.theme.textMuted
-                            }
-                            TextField {
-                                id: cropHeightField
-                                objectName: "cropHeight"
-                                Layout.fillWidth: true
-                                font.pixelSize: 12
-                                placeholderText: view.hasDocument ? String(view.editor.height) : "0"
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator { bottom: 1; top: 20000 }
-                                enabled: view.cropHeightEditable
-                                onTextEdited: view.linkWidthFromHeight()
-                            }
-                            CropLockButton {
-                                id: cropHeightButton
-                                objectName: "cropLockHeight"
-                                checked: view.cropLockHeight
-                                enabled: view.documentReady
-                                Accessible.name: qsTr("Lock height")
-                                ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Lock height")
-                                onToggled: view.setCropLock("height", checked)
-                            }
-
-                            Label {
-                                text: qsTr("Ratio")
-                                color: view.theme.textMuted
-                            }
-                            TextField {
-                                id: cropRatioField
-                                objectName: "cropRatio"
-                                Layout.fillWidth: true
-                                font.pixelSize: 12
-                                placeholderText: qsTr("Free")
-                                enabled: view.cropRatioEditable
-                                onTextEdited: view.applyCropRatioText()
-                                onEditingFinished: view.setCropRatio(cropRatioField.text)
-                            }
-                            CropLockButton {
-                                id: cropRatioButton
-                                objectName: "cropLockRatio"
-                                checked: view.cropLockRatio
-                                enabled: view.documentReady
-                                Accessible.name: qsTr("Lock ratio")
-                                ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Lock ratio")
-                                onToggled: view.setCropLock("ratio", checked)
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            visible: view.tool === "crop"
-                            color: view.theme.border
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            spacing: 8
-
-                            Label {
-                                text: qsTr("Crop mode")
-                                color: view.theme.textMuted
-                            }
-                            ComboBox {
-                                id: cropModeBox
-                                objectName: "cropMode"
-                                Layout.fillWidth: true
-                                model: view.cropModes
-                                textRole: "label"
-                                currentIndex: view.cropModeIndex()
-                                onActivated: view.setCropMode(view.cropModes[currentIndex].key)
-                            }
-                        }
-
-                        // A growing crop needs a colour for the new margin.
-                        // Only shown in Grow: in Center there is no leftover to
-                        // paint, and an unused control would ask a question the
-                        // user cannot answer.
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop" && view.cropGrow()
-                            spacing: 8
-
-                            Label {
-                                text: qsTr("Grow fill color")
-                                color: view.theme.textMuted
-                            }
-                            ComboBox {
-                                id: cropFillBox
-                                objectName: "cropBackground"
-                                Layout.fillWidth: true
-                                model: view.cropBackdrops
-                                textRole: "label"
-                                currentIndex: view.cropFillIndex()
-                                onActivated: view.chooseCropFill(currentIndex)
-                            }
-                            Rectangle {
-                                objectName: "cropBackgroundSwatch"
-                                Layout.preferredWidth: 24
-                                Layout.preferredHeight: 24
-                                radius: 4
-                                color: view.cropFillPreviewColor()
-                                border.width: 1
-                                border.color: view.theme.border
-                                Label {
-                                    anchors.centerIn: parent
-                                    visible: view.cropFill === "transparent"
-                                    text: "0"
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 10
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            visible: view.tool === "crop"
-                            color: view.theme.border
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            spacing: 2
-
-                            Label {
-                                text: qsTr("Size preset")
-                                color: view.theme.textMuted
-                            }
-                            ComboBox {
-                                id: cropPreset
-                                objectName: "cropPreset"
-                                Layout.fillWidth: true
-                                // This model is filtered by the document, so it
-                                // changes when a document arrives; an
-                                // `onCurrentIndexChanged` handler would apply
-                                // its first row then. Only a real pick counts.
-                                currentIndex: -1
-                                model: view.cropPresets
-                                textRole: "label"
-                                displayText: currentIndex < 0 ? qsTr("Custom") : currentText
-                                onActivated: view.chooseCropPreset(currentIndex)
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            spacing: 8
-
-                            Label {
-                                text: qsTr("Anchor")
-                                color: view.theme.textMuted
-                            }
-                            Grid {
-                                objectName: "cropAnchorPad"
-                                columns: 3
-                                columnSpacing: 2
-                                rowSpacing: 2
-
-                                Repeater {
-                                    // The arrow points at the corner or edge
-                                    // of the document the rectangle keeps.
-                                    model: view.cropAnchors
+                                    Rectangle {
+                                        objectName: "paintBackgroundSwatch"
+                                        implicitWidth: 22
+                                        implicitHeight: 22
+                                        radius: 3
+                                        color: view.paintBackgroundColor
+                                        border.width: 1
+                                        border.color: view.theme.border
+                                    }
 
                                     Button {
-                                        required property var modelData
-                                        objectName: "cropAnchor_" + modelData.key
-                                        width: 24
-                                        height: 24
-                                        text: modelData.glyph
-                                        font.pixelSize: 12
-                                        // The glyph alone in a 24 px square
-                                        // needs the button padding removed.
-                                        padding: 0
-                                        highlighted: view.cropAnchor === modelData.key
+                                        objectName: "paintSwap"
+                                        implicitWidth: 30
+                                        text: qsTr("X")
                                         enabled: view.documentReady
-                                        onClicked: view.setCropAnchor(modelData.key)
-                                        Accessible.name: modelData.label
+                                        focusPolicy: Qt.NoFocus
                                         ToolTip.visible: hovered
-                                        ToolTip.text: modelData.label
+                                        ToolTip.text: qsTr("Swap the foreground and background colours (X)")
+                                        onClicked: {
+                                            view.swapPaintColors()
+                                            view.forceActiveFocus()
+                                        }
+                                    }
+                                }
+
+                                // The field and the swatch follow X and D even after
+                                // the field has been typed into, which breaks its
+                                // initial binding.
+                                Connections {
+                                    target: view
+                                    function onPaintColorChanged() {
+                                        if (!paintColorField.activeFocus)
+                                        paintColorField.text = view.paintColor
+                                    }
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 8
+                                    columnSpacing: 4
+                                    rowSpacing: 4
+
+                                    Repeater {
+                                        model: view.paintSwatches
+
+                                        Rectangle {
+                                            required property string modelData
+                                            objectName: "paintSwatch_" + modelData.substring(1)
+                                            Layout.preferredWidth: 22
+                                            Layout.preferredHeight: 22
+                                            radius: 3
+                                            color: modelData
+                                            border.width: view.paintColor === modelData ? 2 : 1
+                                            border.color: view.paintColor === modelData
+                                            ? view.theme.accent : view.theme.border
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    view.setPaintColor(modelData)
+                                                    view.forceActiveFocus()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        text: qsTr("Brush size")
+                                        color: view.theme.textMuted
+                                    }
+                                    Slider {
+                                        id: paintSizeSlider
+                                        objectName: "paintSize"
+                                        Layout.fillWidth: true
+                                        from: view.minimumPaintSize
+                                        to: view.maximumPaintSize
+                                        stepSize: 1
+                                        value: view.paintSize
+                                        enabled: view.documentReady
+                                        onMoved: view.paintSize = Math.round(value)
+                                    }
+                                    Label {
+                                        objectName: "paintSizeValue"
+                                        text: qsTr("%1 px").arg(Math.round(view.paintSize))
+                                        color: view.theme.text
+                                        font.pixelSize: 12
+                                        Layout.preferredWidth: 52
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        text: qsTr("Opacity")
+                                        color: view.theme.textMuted
+                                    }
+                                    Slider {
+                                        id: paintOpacitySlider
+                                        objectName: "paintOpacity"
+                                        Layout.fillWidth: true
+                                        from: 1
+                                        to: 100
+                                        stepSize: 1
+                                        value: view.paintOpacity
+                                        enabled: view.documentReady
+                                        onMoved: view.paintOpacity = Math.round(value)
+                                    }
+                                    Label {
+                                        objectName: "paintOpacityValue"
+                                        text: qsTr("%1 %").arg(Math.round(view.paintOpacity))
+                                        color: view.theme.text
+                                        font.pixelSize: 12
+                                        Layout.preferredWidth: 52
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Drag on the picture to paint. [ and ] change the size, X swaps colours, D resets them, Space pans.")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            // ------------------------------- crop/transform: tool options
+                            // Crop's rectangle is the user's answer: four numbers, a
+                            // shape and a place. Width, Height and Ratio each carry a
+                            // lock; the locks decide which of the three is an input and
+                            // which is derived from the other two. Resize is a dialog
+                            // of its own, because a size is a decision, not a mode.
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                // Each tool's options are one block that is
+                                // hidden as a whole: a layout keeps the space of
+                                // a hidden child inside a visible column, so a
+                                // shared block left the transform panel below
+                                // three hundred pixels of invisible crop fields.
+                                visible: view.tool === "crop"
+                                spacing: 10
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 3
+                                    columnSpacing: 6
+                                    rowSpacing: 4
+
+                                    Label {
+                                        text: qsTr("X")
+                                        color: view.theme.textMuted
+                                    }
+                                    UnitField {
+                                        id: cropX
+                                        objectName: "cropX"
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        text: "0"
+                                        // A place is a pixel coordinate, never a
+                                        // fraction of the picture.
+                                        unitsVisible: false
+                                        minimumPixels: view.cropGrow() ? -20000 : 0
+                                        maximumPixels: 20000
+                                    }
+                                    // A place has no lock: the locks are about the
+                                    // shape, not about where it sits.
+                                    Item {}
+
+                                    Label {
+                                        text: qsTr("Y")
+                                        color: view.theme.textMuted
+                                    }
+                                    UnitField {
+                                        id: cropY
+                                        objectName: "cropY"
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        text: "0"
+                                        unitsVisible: false
+                                        minimumPixels: view.cropGrow() ? -20000 : 0
+                                        maximumPixels: 20000
+                                    }
+                                    Item {}
+
+                                    Label {
+                                        text: qsTr("Width")
+                                        color: view.theme.textMuted
+                                    }
+                                    UnitField {
+                                        id: cropWidthField
+                                        objectName: "cropWidth"
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        placeholderText: cropWidthField.percent
+                                        ? "100" : (view.hasDocument ? String(view.editor.width) : "0")
+                                        unitReference: view.documentWidth
+                                        minimumPixels: 1
+                                        maximumPixels: 20000
+                                        enabled: view.cropWidthEditable
+                                        onTextEdited: view.linkHeightFromWidth()
+                                    }
+                                    CropLockButton {
+                                        id: cropLockWidthButton
+                                        objectName: "cropLockWidth"
+                                        checked: view.cropLockWidth
+                                        enabled: view.documentReady
+                                        Accessible.name: qsTr("Lock width")
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Lock width")
+                                        onToggled: view.setCropLock("width", checked)
+                                    }
+
+                                    Label {
+                                        text: qsTr("Height")
+                                        color: view.theme.textMuted
+                                    }
+                                    UnitField {
+                                        id: cropHeightField
+                                        objectName: "cropHeight"
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        placeholderText: cropHeightField.percent
+                                        ? "100" : (view.hasDocument ? String(view.editor.height) : "0")
+                                        unitReference: view.documentHeight
+                                        minimumPixels: 1
+                                        maximumPixels: 20000
+                                        enabled: view.cropHeightEditable
+                                        onTextEdited: view.linkWidthFromHeight()
+                                    }
+                                    CropLockButton {
+                                        id: cropHeightButton
+                                        objectName: "cropLockHeight"
+                                        checked: view.cropLockHeight
+                                        enabled: view.documentReady
+                                        Accessible.name: qsTr("Lock height")
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Lock height")
+                                        onToggled: view.setCropLock("height", checked)
+                                    }
+
+                                    Label {
+                                        text: qsTr("Ratio")
+                                        color: view.theme.textMuted
+                                    }
+                                    TextField {
+                                        id: cropRatioField
+                                        objectName: "cropRatio"
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                        placeholderText: qsTr("Free")
+                                        enabled: view.cropRatioEditable
+                                        onTextEdited: view.applyCropRatioText()
+                                        onEditingFinished: view.setCropRatio(cropRatioField.text)
+                                    }
+                                    CropLockButton {
+                                        id: cropRatioButton
+                                        objectName: "cropLockRatio"
+                                        checked: view.cropLockRatio
+                                        enabled: view.documentReady
+                                        Accessible.name: qsTr("Lock ratio")
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Lock ratio")
+                                        onToggled: view.setCropLock("ratio", checked)
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 1
+                                    visible: view.tool === "crop"
+                                    color: view.theme.border
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "crop"
+                                    spacing: 8
+
+                                    Label {
+                                        text: qsTr("Crop mode")
+                                        color: view.theme.textMuted
+                                    }
+                                    ComboBox {
+                                        id: cropModeBox
+                                        objectName: "cropMode"
+                                        Layout.fillWidth: true
+                                        model: view.cropModes
+                                        textRole: "label"
+                                        currentIndex: view.cropModeIndex()
+                                        onActivated: view.setCropMode(view.cropModes[currentIndex].key)
+                                    }
+                                }
+
+                                // A growing crop needs a colour for the new margin.
+                                // Only shown in Grow: in Center there is no leftover to
+                                // paint, and an unused control would ask a question the
+                                // user cannot answer.
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "crop" && view.cropGrow()
+                                    spacing: 8
+
+                                    Label {
+                                        text: qsTr("Grow fill color")
+                                        color: view.theme.textMuted
+                                    }
+                                    ComboBox {
+                                        id: cropFillBox
+                                        objectName: "cropBackground"
+                                        Layout.fillWidth: true
+                                        model: view.cropBackdrops
+                                        textRole: "label"
+                                        currentIndex: view.cropFillIndex()
+                                        onActivated: view.chooseCropFill(currentIndex)
+                                    }
+                                    Rectangle {
+                                        objectName: "cropBackgroundSwatch"
+                                        Layout.preferredWidth: 24
+                                        Layout.preferredHeight: 24
+                                        radius: 4
+                                        color: view.cropFillPreviewColor()
+                                        border.width: 1
+                                        border.color: view.theme.border
+                                        Label {
+                                            anchors.centerIn: parent
+                                            visible: view.cropFill === "transparent"
+                                            text: "0"
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 10
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 1
+                                    visible: view.tool === "crop"
+                                    color: view.theme.border
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "crop"
+                                    spacing: 2
+
+                                    Label {
+                                        text: qsTr("Size preset")
+                                        color: view.theme.textMuted
+                                    }
+                                    ComboBox {
+                                        id: cropPreset
+                                        objectName: "cropPreset"
+                                        Layout.fillWidth: true
+                                        // This model is filtered by the document, so it
+                                        // changes when a document arrives; an
+                                        // `onCurrentIndexChanged` handler would apply
+                                        // its first row then. Only a real pick counts.
+                                        currentIndex: -1
+                                        model: view.cropPresets
+                                        textRole: "label"
+                                        displayText: currentIndex < 0 ? qsTr("Custom") : currentText
+                                        onActivated: view.chooseCropPreset(currentIndex)
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "crop"
+                                    spacing: 8
+
+                                    Label {
+                                        text: qsTr("Anchor")
+                                        color: view.theme.textMuted
+                                    }
+                                    Grid {
+                                        objectName: "cropAnchorPad"
+                                        columns: 3
+                                        columnSpacing: 2
+                                        rowSpacing: 2
+
+                                        Repeater {
+                                            // The arrow points at the corner or edge
+                                            // of the document the rectangle keeps.
+                                            model: view.cropAnchors
+
+                                            Button {
+                                                required property var modelData
+                                                objectName: "cropAnchor_" + modelData.key
+                                                width: 24
+                                                height: 24
+                                                text: modelData.glyph
+                                                font.pixelSize: 12
+                                                // The glyph alone in a 24 px square
+                                                // needs the button padding removed.
+                                                padding: 0
+                                                highlighted: view.cropAnchor === modelData.key
+                                                enabled: view.documentReady
+                                                onClicked: view.setCropAnchor(modelData.key)
+                                                Accessible.name: modelData.label
+                                                ToolTip.visible: hovered
+                                                ToolTip.text: modelData.label
+                                            }
+                                        }
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                visible: view.tool === "crop"
+                                color: view.theme.border
+                            }
+
+                            // Transform: the quad is the command, so there is
+                            // nothing to type. The four corners and four edges on
+                            // the canvas are the only controls; the panel names
+                            // what they do and offers the two buttons that matter.
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                visible: view.tool === "transform"
+                                spacing: 6
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Drag a corner, or an edge, onto the picture's own corner to straighten it.")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    objectName: "transformSizeHint"
+                                    text: qsTr("The result keeps the document's size.")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "transform"
+                                    && view.previewDraft !== null
+                                    text: qsTr("Turn Live preview off to move the corners on the picture.")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Button {
+                                    objectName: "transformLivePreviewButton"
+                                    Layout.fillWidth: true
+                                    enabled: view.documentReady
+                                    text: qsTr("Live preview")
+                                    checkable: true
+                                    checked: view.transformLivePreview
+                                    highlighted: checked
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("Show the straightened image before applying it")
+                                    onToggled: {
+                                        view.transformLivePreview = checked
+                                        draftDebounce.restart()
                                     }
                                 }
                             }
-                            Item { Layout.fillWidth: true }
                         }
+                    }
+                    }
+                    // The action row is pinned below the scrolling options, so
+                    // Apply, Reset and Clear never scroll out of reach — the
+                    // crop panel grows when Grow adds its fill row.
+                    //
+                    // It is a grid rather than a row because even the 260 px
+                    // default cannot hold three 80 px buttons: on one line the
+                    // labels elided (74.6 px each at the default row, 61 px at
+                    // 220 px). When the labels do not fit, Apply spans both
+                    // columns and Reset/Clear take the next line; when they do,
+                    // the three share equal cells.
+                    GridLayout {
+                        id: cropActions
+                        objectName: "cropActions"
+                        visible: (view.tool === "crop" || view.tool === "transform")
+                                 && !view.toolZoneFolded
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 12
+                        Layout.rightMargin: 12
+                        Layout.topMargin: 6
+                        Layout.bottomMargin: 10
+                        // Three verbs share a line only while their words fit:
+                        // at the 260 px default the Vietnamese row elided
+                        // `Bỏ khung` to `Bỏ khu…`, so the rule measures the
+                        // labels instead of assuming a dock width.
+                        columns: view.tool === "transform" ? 2
+                                                          : (view.cropActionsStack ? 2 : 3)
+                        columnSpacing: 6
+                        rowSpacing: 6
 
-                        Rectangle {
+                        Button {
+                            id: applyCropButton
+                            objectName: "applyCrop"
+                            text: qsTr("Apply")
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 1
+                            // Apply is the row's verb; Reset and Clear are the
+                            // corrections, so a dock too narrow for the three
+                            // gives it a line of its own.
+                            Layout.columnSpan: view.cropActionsStack ? 2 : 1
                             visible: view.tool === "crop"
-                            color: view.theme.border
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.cropCanApply()
+                            onClicked: view.applyCrop()
                         }
-
-                        // Transform: the quad is the command, so there is
-                        // nothing to type. The four corners and four edges on
-                        // the canvas are the only controls; the panel names
-                        // what they do and offers the two buttons that matter.
-                        ColumnLayout {
+                        Button {
+                            id: resetCropButton
+                            objectName: "resetCropOptions"
+                            text: qsTr("Reset")
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady
+                            onClicked: view.resetCropOptions()
+                        }
+                        Button {
+                            id: clearCropButton
+                            objectName: "clearCrop"
+                            text: qsTr("Clear")
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady
+                            onClicked: view.clearCropFrame()
+                        }
+                        Button {
+                            objectName: "applyTransform"
+                            text: qsTr("Apply")
                             Layout.fillWidth: true
                             visible: view.tool === "transform"
-                            spacing: 6
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: qsTr("Drag a corner, or an edge, onto the picture's own corner to straighten it.")
-                                color: view.theme.textMuted
-                                font.pixelSize: 11
-                                wrapMode: Text.WordWrap
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                objectName: "transformSizeHint"
-                                text: qsTr("The result keeps the document's size.")
-                                color: view.theme.textMuted
-                                font.pixelSize: 11
-                                wrapMode: Text.WordWrap
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                visible: view.tool === "transform"
-                                         && view.previewDraft !== null
-                                text: qsTr("Turn Live preview off to move the corners on the picture.")
-                                color: view.theme.textMuted
-                                font.pixelSize: 11
-                                wrapMode: Text.WordWrap
-                            }
-
-                            Button {
-                                objectName: "transformLivePreviewButton"
-                                Layout.fillWidth: true
-                                enabled: view.documentReady
-                                text: qsTr("Live preview")
-                                checkable: true
-                                checked: view.transformLivePreview
-                                highlighted: checked
-                                ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Show the straightened image before applying it")
-                                onToggled: {
-                                    view.transformLivePreview = checked
-                                    draftDebounce.restart()
-                                }
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.transformUsable() && view.transformChanged()
+                            onClicked: {
+                                view.command({
+                                    type: "editor_transform",
+                                    corners: view.transformCorners
+                                })
+                                view.transformLivePreview = false
+                                view.resetTransformCorners()
                             }
                         }
-
-                        RowLayout {
+                        Button {
+                            objectName: "resetTransformFields"
+                            text: qsTr("Reset")
                             Layout.fillWidth: true
-                            spacing: 6
+                            visible: view.tool === "transform"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady
+                            onClicked: view.resetTransformCorners()
+                        }
+                    }
+                }
 
-                            Button {
-                                objectName: "applyCrop"
-                                text: qsTr("Apply crop (Enter)")
-                                Layout.fillWidth: true
-                                visible: view.tool === "crop"
-                                focusPolicy: Qt.NoFocus
-                                enabled: view.cropCanApply()
-                                onClicked: view.applyCrop()
-                            }
-                            Button {
-                                objectName: "resetCropOptions"
-                                text: qsTr("Reset")
-                                visible: view.tool === "crop"
-                                focusPolicy: Qt.NoFocus
-                                enabled: view.documentReady
-                                onClicked: view.resetCropOptions()
-                            }
-                            Button {
-                                objectName: "clearCrop"
-                                text: qsTr("Clear")
-                                visible: view.tool === "crop"
-                                focusPolicy: Qt.NoFocus
-                                enabled: view.documentReady
-                                onClicked: view.clearCropFrame()
-                            }
-                            Button {
-                                objectName: "applyTransform"
-                                text: qsTr("Apply")
-                                Layout.fillWidth: true
-                                visible: view.tool === "transform"
-                                focusPolicy: Qt.NoFocus
-                                enabled: view.transformUsable() && view.transformChanged()
-                                onClicked: {
-                                    view.command({
-                                        type: "editor_transform",
-                                        corners: view.transformCorners
-                                    })
-                                    view.transformLivePreview = false
-                                    view.resetTransformCorners()
-                                }
-                            }
-                            Button {
-                                objectName: "resetTransformFields"
-                                text: qsTr("Reset")
-                                visible: view.tool === "transform"
-                                focusPolicy: Qt.NoFocus
-                                enabled: view.documentReady
-                                onClicked: view.resetTransformCorners()
-                            }
+                // -------------------------------------- reference zone (tabs)
+                // The shared dock: a strip and one page at a time. The tool
+                // zone above it hugs its own content, so these tabs start
+                // right under the action row (or under the heading, for the
+                // pointer) and take whatever height is left.
+                RightDock {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    theme: view.theme
+                    backgroundColor: "transparent"
+                    borderColor: "transparent"
+                    tabs: view.rightTabEntries
+                    currentKey: view.rightTab
+                    compact: inspector.tabsCompact
+                    stripObjectName: "editorRightTabs"
+                    pagesObjectName: "editorReferencePages"
+                    onActivated: function(key) { view.rightTab = key }
+
+                    // ------------------------------------ Info
+                    // What the document is: name, size, save target. The words
+                    // are the same the pointer column carried; they just live
+                    // in a tab now so a tool cannot hide them.
+                    ScrollView {
+                        id: infoPanel
+                        objectName: "infoPanel"
+                        contentWidth: availableWidth
+                        clip: true
+
+                        InfoPanel {
+                            width: infoPanel.availableWidth
+                            theme: view.theme
+                            editor: view.editor
+                            hasDocument: view.hasDocument
+                            sizeText: view.sizeLabel()
+                            saving: view.saving
                         }
                     }
 
-                    Item { Layout.fillHeight: true }
+                    // ------------------------------------ History
+                    // The steps applied in this session, oldest first. Core
+                    // owns the list and the undo/redo state; the panel only
+                    // draws the translated labels.
+                    Item {
+                        objectName: "historyPanel"
+
+                        HistoryPanel {
+                            anchors.fill: parent
+                            theme: view.theme
+                            history: view.history
+                            hasDocument: view.hasDocument
+                            language: view.state.language || ""
+                        }
+                    }
+
+                    // ------------------------------------ Original
+                    // The file on disk: the source until a save moves it, and
+                    // the rewritten file after every save. This is not the
+                    // working preview — the preview is what Core holds in
+                    // memory, this is what a file manager would show.
+                    ScrollView {
+                        id: originalPanel
+                        objectName: "originalPanel"
+                        contentWidth: availableWidth
+                        clip: true
+
+                        PreviewPanel {
+                            width: originalPanel.availableWidth
+                            theme: view.theme
+                            book: thumbs
+                            path: view.hasDocument ? (view.editor.savePath || "") : ""
+                            modified: view.editor ? (view.editor.fileModified || 0) : 0
+                            fileSize: view.editor ? (view.editor.fileSize || 0) : 0
+                            thumbnailable: view.hasDocument
+                            heading: qsTr("Saved file")
+                            caption: {
+                                if (!view.hasDocument) return ""
+                                var name = (view.editor.savePath || "").split("/").pop()
+                                return name + " · "
+                                       + view.theme.formatBytes(view.editor.fileSize || 0)
+                            }
+                            captionObjectName: "originalCaption"
+                            thumbnailObjectName: "originalThumbnail"
+                            placeholder: qsTr("No saved file yet")
+                        }
+                    }
                 }
             }
         }
@@ -4010,6 +4239,14 @@ Item {
             icon.name: "document-revert-symbolic"
             enabled: view.modified
             onTriggered: view.command({ type: "editor_reset" })
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: view.theme.menuEntries[41]
+            icon.name: "sidebar-show-right-symbolic"
+            checkable: true
+            checked: !!view.state.rightPanelEditor
+            onTriggered: view.command({ type: "toggle_right_panel", workspace: "editor" })
         }
     }
 

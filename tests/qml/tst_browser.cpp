@@ -1469,7 +1469,7 @@ private slots:
     QVariantMap info;
     info.insert(QStringLiteral("path"), QStringLiteral("/root/img.png"));
     info.insert(QStringLiteral("name"), QStringLiteral("img.png"));
-    info.insert(QStringLiteral("kind"), QStringLiteral("JPEG image"));
+    info.insert(QStringLiteral("kind"), QStringLiteral(".png"));
     info.insert(QStringLiteral("isImage"), true);
     info.insert(QStringLiteral("size"), qint64(4096));
     info.insert(QStringLiteral("modified"), qint64(1731000000));
@@ -2073,6 +2073,86 @@ private slots:
     QCOMPARE(spy.count(), 2);
     QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
              QStringList{ QStringLiteral("/root/dirA") });
+  }
+
+  /// The right column is one page holding the picture and the file's details.
+  /// A tab strip over a single page would only add a click, and a hidden one
+  /// must take no room, so the preview starts at the dock's top edge.
+  void theSidebarIsOnePreviewPage()
+  {
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("rightPanel"), true);
+    QVariantMap info;
+    info.insert(QStringLiteral("path"), QStringLiteral("/root/img.png"));
+    info.insert(QStringLiteral("name"), QStringLiteral("img.png"));
+    info.insert(QStringLiteral("kind"), QStringLiteral(".png"));
+    info.insert(QStringLiteral("isImage"), true);
+    info.insert(QStringLiteral("size"), qint64(4096));
+    info.insert(QStringLiteral("modified"), qint64(1731000000));
+    state.insert(QStringLiteral("selectionInfo"), info);
+    showState(browserItem(), state);
+    settle();
+
+    QQuickItem* panel = findItem(QStringLiteral("rightPanel"));
+    QVERIFY2(panel != nullptr, "the browser has no right dock");
+    QVERIFY(panel->isVisible());
+    QVERIFY2(!panel->property("stripShown").toBool(),
+             "a one-page dock drew a tab strip");
+    QCOMPARE(panel->property("tabs").toList().size(), 1);
+
+    QQuickItem* preview = findItem(QStringLiteral("previewThumbnail"));
+    QQuickItem* name = findItem(QStringLiteral("infoName"));
+    QVERIFY2(preview != nullptr, "the dock has no preview panel");
+    QVERIFY2(name != nullptr, "the dock has no information panel");
+    QVERIFY(preview->isVisible());
+    QVERIFY(name->isVisible());
+    QCOMPARE(name->property("text").toString(), QStringLiteral("img.png"));
+    QCOMPARE(findItem(QStringLiteral("infoKind"))->property("text").toString(),
+             QStringLiteral(".png"));
+    QCOMPARE(findItem(QStringLiteral("infoPath"))->property("text").toString(),
+             QStringLiteral("/root/img.png"));
+
+    // Both are read together, so there is no page to switch to.
+    QVERIFY(!findItem(QStringLiteral("browserRightTabs")) ||
+            !findItem(QStringLiteral("browserRightTabs"))->isVisible());
+  }
+
+  /// "Show in folder" is the shell's request, not the view's: every Browser
+  /// menu that can name a path offers it, and it carries that path.
+  void theFileMenusAskTheShellToRevealThePath()
+  {
+    QSignalSpy reveal(browserRoot(), SIGNAL(revealPath(QString)));
+    int expected = 0;
+    for (const char* name : {"fileMenu", "folderMenu", "quickMenu"}) {
+      QObject* menu = findPopup(QString::fromLatin1(name));
+      QVERIFY2(menu != nullptr, qPrintable(QString::fromLatin1(name) + " is missing"));
+      browserRoot()->setProperty("menuPath", QStringLiteral("/root/img.png"));
+      QMetaObject::invokeMethod(menu, "popup");
+      QTRY_VERIFY2(menu->property("visible").toBool(),
+                   qPrintable(QString::fromLatin1(name) + " did not open"));
+
+      QQuickItem* entry = nullptr;
+      const int count = menu->property("count").toInt();
+      for (int index = 0; index < count && entry == nullptr; ++index) {
+        QQuickItem* candidate = nullptr;
+        QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, candidate),
+                                  Q_ARG(int, index));
+        if (candidate != nullptr &&
+            candidate->property("text").toString() == QStringLiteral("Show in folder")) {
+          entry = candidate;
+        }
+      }
+      QVERIFY2(entry != nullptr,
+               qPrintable(QString::fromLatin1(name) + " has no \"Show in folder\" entry"));
+      QVERIFY(entry->isEnabled());
+      QVERIFY(QMetaObject::invokeMethod(entry, "click"));
+      ++expected;
+      QTRY_COMPARE(reveal.count(), expected);
+      QCOMPARE(reveal.at(expected - 1).at(0).toString(),
+               QStringLiteral("/root/img.png"));
+      QMetaObject::invokeMethod(menu, "close");
+      QTRY_VERIFY(!menu->property("visible").toBool());
+    }
   }
 };
 

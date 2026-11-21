@@ -80,6 +80,11 @@ Item {
     signal editInEditor(string path)
     signal requestDestination(string action, var paths)
     signal requestDelete(var paths)
+    /// Ask the shell to select the file in the desktop's file manager.
+    signal revealPath(string path)
+    /// The user dragged the dock's splitter: the shell keeps one width for the
+    /// three workspaces, so the view reports the number rather than owning it.
+    signal panelWidthRequested(real width)
 
     /// Keyboard ownership. The viewing area is the window's focus target while
     /// this workspace is up, so the shortcuts below reach the view instead of a
@@ -98,11 +103,39 @@ Item {
     /// toolbar keeps its navigation and folds the rest into `viewerOverflowMenu`.
     property bool miniToolbar: false
 
+    /// The right dock's width. Seeded from the theme, then owned by the drag
+    /// handle; the shell keeps one value for the three workspaces and this
+    /// view clamps it to its own range before drawing.
+    property real rightPanelWidth: theme.previewWidth
+    readonly property real dockWidth:
+        Math.max(200, Math.min(640, rightPanelWidth))
+
     property string currentPath: view.state.viewerPath || ""
     property var images: view.viewerImages || []
     property int imageIndex: (view.state.viewerIndex === undefined
                               || view.state.viewerIndex === null)
                              ? -1 : view.state.viewerIndex
+
+    /// The open image described the way `InfoPanel` expects a selection: the
+    /// folder listing carries its size and time, and the decoded picture its
+    /// dimensions. Null when nothing is open.
+    readonly property var currentInfo: {
+        if (!view.currentPath) return null
+        var meta = view.imageMeta[view.currentPath] || null
+        var name = view.currentPath.split("/").pop()
+        var dot = name.lastIndexOf(".")
+        var extension = dot > 0 ? name.substring(dot).toLowerCase() : ""
+        return {
+            path: view.currentPath,
+            name: name,
+            kind: extension,
+            size: meta ? meta.size : 0,
+            modified: meta ? meta.modified : 0,
+            isImage: true,
+            width: image.status === Image.Ready ? image.implicitWidth : 0,
+            height: image.status === Image.Ready ? image.implicitHeight : 0
+        }
+    }
 
     function setZoom(value) {
         // A typed or stepped zoom is a deliberate one; it leaves auto fit.
@@ -383,317 +416,375 @@ Item {
         }
     }
 
-    ColumnLayout {
+    RowLayout {
         anchors.fill: parent
         spacing: 0
 
-        Item {
-            id: viewport
-            objectName: "viewerViewport"
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-            // The area the picture is fitted into changes on a window resize,
-            // a panel split and a filmstrip toggle; fitting here covers all
-            // three, not just the window.
-            onWidthChanged: view.refitOrClamp()
-            onHeightChanged: view.refitOrClamp()
-
-            Rectangle {
-                anchors.fill: parent
-                color: view.theme.background
-            }
+        // The picture and its filmstrip share the centre column; the right
+        // dock is a fourth column and can be revealed or hidden from the
+        // toolbar. Core remembers the choice per workspace.
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
 
             Item {
-                id: canvas
-                objectName: "viewerCanvas"
-                width: Math.max(1, image.implicitWidth)
-                height: Math.max(1, image.implicitHeight)
-                // `scale` and `rotation` pivot on the item centre, so the
-                // position is the unscaled top-left that centres the item in
-                // the viewport. Multiplying `width` by `scale` here would
-                // count the scale twice and push the image down/right.
-                scale: view.zoom
-                rotation: view.rotationAngle
-                x: (viewport.width - width) / 2 + view.offsetX
-                y: (viewport.height - height) / 2 + view.offsetY
+                id: viewport
+                objectName: "viewerViewport"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                // The area the picture is fitted into changes on a window resize,
+                // a panel split and a filmstrip toggle; fitting here covers all
+                // three, not just the window.
+                onWidthChanged: view.refitOrClamp()
+                onHeightChanged: view.refitOrClamp()
 
-                // A `Scale` transform pivots on its `origin`, which defaults to
-                // the item's top-left corner; mirroring there would throw the
-                // image out of the viewport, so flip around the centre.
-                transform: Scale {
-                    origin.x: canvas.width / 2
-                    origin.y: canvas.height / 2
-                    xScale: view.flipH ? -1 : 1
-                    yScale: view.flipV ? -1 : 1
+                Rectangle {
+                    anchors.fill: parent
+                    color: view.theme.background
                 }
 
-                Image {
-                    id: image
-                    objectName: "viewerImage"
-                    anchors.fill: parent
-                    source: view.currentPath ? "file://" + view.currentPath : ""
-                    asynchronous: true
-                    cache: false
-                    fillMode: Image.PreserveAspectFit
+                Item {
+                    id: canvas
+                    objectName: "viewerCanvas"
+                    width: Math.max(1, image.implicitWidth)
+                    height: Math.max(1, image.implicitHeight)
+                    // `scale` and `rotation` pivot on the item centre, so the
+                    // position is the unscaled top-left that centres the item in
+                    // the viewport. Multiplying `width` by `scale` here would
+                    // count the scale twice and push the image down/right.
+                    scale: view.zoom
+                    rotation: view.rotationAngle
+                    x: (viewport.width - width) / 2 + view.offsetX
+                    y: (viewport.height - height) / 2 + view.offsetY
 
-                    onStatusChanged: {
-                        if (status === Image.Ready && view.autoFit) {
-                            view.fit();
+                    // A `Scale` transform pivots on its `origin`, which defaults to
+                    // the item's top-left corner; mirroring there would throw the
+                    // image out of the viewport, so flip around the centre.
+                    transform: Scale {
+                        origin.x: canvas.width / 2
+                        origin.y: canvas.height / 2
+                        xScale: view.flipH ? -1 : 1
+                        yScale: view.flipV ? -1 : 1
+                    }
+
+                    Image {
+                        id: image
+                        objectName: "viewerImage"
+                        anchors.fill: parent
+                        source: view.currentPath ? "file://" + view.currentPath : ""
+                        asynchronous: true
+                        cache: false
+                        fillMode: Image.PreserveAspectFit
+
+                        onStatusChanged: {
+                            if (status === Image.Ready && view.autoFit) {
+                                view.fit();
+                            }
                         }
                     }
                 }
-            }
 
-            WheelHandler {
-                objectName: "viewerWheelHandler"
-                acceptedDevices: PointerDevice.AllDevices
-                onWheel: function(event) {
-                    if (!view.currentPath) return;
-                    // A mouse wheel reports `angleDelta`; Wayland touchpads
-                    // report continuous `pixelDelta` with angleDelta 0, so both
-                    // must be supported or scrolling does nothing on a laptop.
-                    var factor = 1;
-                    if (event.angleDelta.y !== 0) {
-                        factor = Math.pow(1.0015, event.angleDelta.y);
-                    } else if (event.pixelDelta.y !== 0) {
-                        factor = Math.pow(1.01, event.pixelDelta.y);
-                    } else {
-                        return;
-                    }
-                    // Keep a single event from jumping wildly on high-resolution
-                    // wheels or very fast trackpad gestures.
-                    factor = Math.max(0.5, Math.min(2, factor));
-                    view.zoomAt(factor, event.x, event.y);
-                    event.accepted = true;
-                }
-            }
-
-            DragHandler {
-                id: pan
-                target: null
-                property real startX: 0
-                property real startY: 0
-
-                onActiveChanged: {
-                    if (active) {
-                        startX = view.offsetX;
-                        startY = view.offsetY;
+                WheelHandler {
+                    objectName: "viewerWheelHandler"
+                    acceptedDevices: PointerDevice.AllDevices
+                    onWheel: function(event) {
+                        if (!view.currentPath) return;
+                        // A mouse wheel reports `angleDelta`; Wayland touchpads
+                        // report continuous `pixelDelta` with angleDelta 0, so both
+                        // must be supported or scrolling does nothing on a laptop.
+                        var factor = 1;
+                        if (event.angleDelta.y !== 0) {
+                            factor = Math.pow(1.0015, event.angleDelta.y);
+                        } else if (event.pixelDelta.y !== 0) {
+                            factor = Math.pow(1.01, event.pixelDelta.y);
+                        } else {
+                            return;
+                        }
+                        // Keep a single event from jumping wildly on high-resolution
+                        // wheels or very fast trackpad gestures.
+                        factor = Math.max(0.5, Math.min(2, factor));
+                        view.zoomAt(factor, event.x, event.y);
+                        event.accepted = true;
                     }
                 }
-                onTranslationChanged: {
-                    view.offsetX = startX + translation.x;
-                    view.offsetY = startY + translation.y;
-                }
-            }
 
-            TapHandler {
-                acceptedButtons: Qt.LeftButton
-                onDoubleTapped: {
-                    if (view.autoFit) view.actualSize();
-                    else view.fit();
-                }
-            }
+                DragHandler {
+                    id: pan
+                    target: null
+                    property real startX: 0
+                    property real startY: 0
 
-            /// Right click anywhere in the viewing area opens the canvas menu
-            /// for the image on screen. It only takes the right button, so it
-            /// neither competes with the left-button double tap above nor with
-            /// the drag that pans.
-            TapHandler {
-                objectName: "viewerContextTap"
-                acceptedButtons: Qt.RightButton
-                onSingleTapped: function(point) {
-                    if (!view.currentPath) {
-                        return;
+                    onActiveChanged: {
+                        if (active) {
+                            startX = view.offsetX;
+                            startY = view.offsetY;
+                        }
                     }
-                    // Open at the click, not at the global pointer: `popup()` with
-                    // no arguments asks the compositor for the cursor position,
-                    // which is stale for a synthetic event (and not always
-                    // reported under Wayland). `point.position` is in the
-                    // handler's parent, the viewport.
-                    var local = viewport.mapToItem(view, point.position.x,
-                                                   point.position.y);
-                    canvasMenu.popup(view, local.x, local.y);
+                    onTranslationChanged: {
+                        view.offsetX = startX + translation.x;
+                        view.offsetY = startY + translation.y;
+                    }
+                }
+
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onDoubleTapped: {
+                        if (view.autoFit) view.actualSize();
+                        else view.fit();
+                    }
+                }
+
+                /// Right click anywhere in the viewing area opens the canvas menu
+                /// for the image on screen. It only takes the right button, so it
+                /// neither competes with the left-button double tap above nor with
+                /// the drag that pans.
+                TapHandler {
+                    objectName: "viewerContextTap"
+                    acceptedButtons: Qt.RightButton
+                    onSingleTapped: function(point) {
+                        if (!view.currentPath) {
+                            return;
+                        }
+                        // Open at the click, not at the global pointer: `popup()` with
+                        // no arguments asks the compositor for the cursor position,
+                        // which is stale for a synthetic event (and not always
+                        // reported under Wayland). `point.position` is in the
+                        // handler's parent, the viewport.
+                        var local = viewport.mapToItem(view, point.position.x,
+                                                       point.position.y);
+                        canvasMenu.popup(view, local.x, local.y);
+                    }
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: !view.currentPath
+                    text: qsTr("Open an image to start viewing")
+                    color: view.theme.textMuted
+                    font.pixelSize: 16
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: image.status === Image.Error
+                    text: qsTr("This image cannot be decoded")
+                    color: view.theme.danger
+                    font.pixelSize: 15
+                }
+
+                // Guidance for the one case where "fitted" is not what the eye
+                // expects: the picture is smaller than the window, so it sits at
+                // 100 % surrounded by space. It says what happened and what to do,
+                // and it stays out of the way — centred under the picture, muted,
+                // hidden the moment a zoom leaves the fitted size.
+                Label {
+                    objectName: "viewerSmallImageHint"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    // Bottom of the viewport rather than under the picture: the
+                    // picture can be any size, and a caption that follows it would
+                    // move with every zoom.
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 12
+                    visible: view.imageSmallerThanViewport && view.autoFit
+                    text: qsTr("Small image shown at 100 % — scroll or press + to enlarge")
+                    color: view.theme.textMuted
+                    font.pixelSize: 12
+                    background: Rectangle {
+                        radius: view.theme.radius
+                        color: view.theme.surface
+                        border.width: 1
+                        border.color: view.theme.border
+                    }
+                    padding: 8
                 }
             }
 
-            Label {
-                anchors.centerIn: parent
-                visible: !view.currentPath
-                text: qsTr("Open an image to start viewing")
-                color: view.theme.textMuted
-                font.pixelSize: 16
-            }
+            Rectangle {
+                id: filmstrip
+                objectName: "viewerFilmstripHost"
+                // A single-image folder has no strip to scroll, so the toggle in
+                // the toolbar hides it even though the preference is on; the
+                // checkpoint there still shows the preference, so turning it off
+                // and on again is not needed to get the strip back in a folder
+                // that has one.
+                visible: view.filmstripShown
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? 106 : 0
+                color: view.theme.surface
 
-            Label {
-                anchors.centerIn: parent
-                visible: image.status === Image.Error
-                text: qsTr("This image cannot be decoded")
-                color: view.theme.danger
-                font.pixelSize: 15
-            }
-
-            // Guidance for the one case where "fitted" is not what the eye
-            // expects: the picture is smaller than the window, so it sits at
-            // 100 % surrounded by space. It says what happened and what to do,
-            // and it stays out of the way — centred under the picture, muted,
-            // hidden the moment a zoom leaves the fitted size.
-            Label {
-                objectName: "viewerSmallImageHint"
-                anchors.horizontalCenter: parent.horizontalCenter
-                // Bottom of the viewport rather than under the picture: the
-                // picture can be any size, and a caption that follows it would
-                // move with every zoom.
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: 12
-                visible: view.imageSmallerThanViewport && view.autoFit
-                text: qsTr("Small image shown at 100 % — scroll or press + to enlarge")
-                color: view.theme.textMuted
-                font.pixelSize: 12
-                background: Rectangle {
-                    radius: view.theme.radius
-                    color: view.theme.surface
-                    border.width: 1
-                    border.color: view.theme.border
+                Rectangle {
+                    anchors.top: parent.top
+                    width: parent.width
+                    height: 1
+                    color: view.theme.border
                 }
-                padding: 8
+
+                ListView {
+                    id: strip
+                    objectName: "viewerFilmstrip"
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    orientation: ListView.Horizontal
+                    spacing: 6
+                    clip: true
+                    model: view.images
+                    currentIndex: view.imageIndex
+                    boundsBehavior: Flickable.StopAtBounds
+                    /// The strip is horizontal, and Qt only scrolls the axis the
+                    /// wheel reports — a mouse wheel reports vertical, so without
+                    /// this the filmstrip ignores it entirely. The wheel is taken
+                    /// here so it scrolls the strip instead of bubbling up to the
+                    /// canvas's scroll-to-zoom handler behind it.
+                    WheelHandler {
+                        objectName: "filmstripWheelHandler"
+                        /// `PointerDevice.Mouse` only, the default, silently ignores
+                        /// touchpads on Wayland.
+                        acceptedDevices: PointerDevice.AllDevices
+                        onWheel: function(event) {
+                            event.accepted = true;
+                            /// Two groups of three 78 px tiles plus their 6 px gaps
+                            /// per mouse notch (504 px), so one notch moves the strip
+                            /// by a pair of tile groups instead of a single tile.
+                            var step = 504;
+                            var maxX = Math.max(0, strip.contentWidth - strip.width);
+                            var dx = 0;
+                            /// The device decides which delta is real: a mouse on
+                            /// this desktop sends `angleDelta` ±120 *and* a
+                            /// `pixelDelta` of a tenth of a notch, so checking the
+                            /// pixel delta first would drop a notch to 20 px.
+                            var notches = event.angleDelta.y !== 0 ? event.angleDelta.y / 120
+                                                                   : event.angleDelta.x / 120;
+                            if (notches !== 0) {
+                                /// Mouse: a vertical wheel moves the strip sideways,
+                                /// and a notch down (negative, "towards the user")
+                                /// advances to the next images, the same direction
+                                /// the grid below moves.
+                                dx = -notches * step;
+                            } else if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
+                                /// Touchpad: the pixels it reported, doubled the same
+                                /// way `WheelScroll` doubles them so the strip keeps
+                                /// up with the grid. A finger moving down the pad
+                                /// reports a negative `y`, and that advances the strip
+                                /// — the same direction a notch down does, and the
+                                /// direction the grid already scrolls.
+                                dx = (event.pixelDelta.x - event.pixelDelta.y)
+                                     * 2;
+                            }
+                            if (dx === 0) return;
+                            // Accumulate on the *target*, not on the animated
+                            // position: a second notch that arrives while the strip
+                            // is still gliding would otherwise restart from where it
+                            // happens to be and lose the first notch's travel.
+                            var base = filmstripGlide.running ? filmstripGlide.to
+                                                              : strip.contentX;
+                            filmstripGlide.to = Math.max(0, Math.min(maxX, base + dx));
+                            filmstripGlide.restart();
+                        }
+                    }
+                    NumberAnimation {
+                        id: filmstripGlide
+                        target: strip
+                        property: "contentX"
+                        duration: 150
+                        easing.type: Easing.OutCubic
+                    }
+
+                    delegate: Item {
+                        width: 78
+                        height: strip.height
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: view.theme.radius
+                            color: view.theme.thumb
+                            border.width: index === view.imageIndex ? 2 : 1
+                            border.color: index === view.imageIndex
+                                          ? view.theme.accent : view.theme.border
+                            clip: true
+
+                            CachedThumbnail {
+                                id: stripThumb
+                                objectName: "stripThumbnail"
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                /// Entry of this image, for the cache key.
+                                readonly property var meta: view.imageMeta[modelData] || null
+                                book: thumbs
+                                path: modelData
+                                modified: meta ? meta.modified : 0
+                                fileSize: meta ? meta.size : 0
+                                asynchronous: true
+                                fillMode: Image.PreserveAspectCrop
+                                sourceSize.width: 160
+                                sourceSize.height: 160
+                            }
+                        }
+
+                        TapHandler {
+                            acceptedButtons: Qt.LeftButton
+                            onSingleTapped: view.command({
+                                type: "viewer_open",
+                                path: modelData
+                            })
+                        }
+                    }
+                }
             }
         }
 
-        Rectangle {
-            id: filmstrip
-            objectName: "viewerFilmstripHost"
-            // A single-image folder has no strip to scroll, so the toggle in
-            // the toolbar hides it even though the preference is on; the
-            // checkpoint there still shows the preference, so turning it off
-            // and on again is not needed to get the strip back in a folder
-            // that has one.
-            visible: view.filmstripShown
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 106 : 0
-            color: view.theme.surface
-
-            Rectangle {
-                anchors.top: parent.top
-                width: parent.width
-                height: 1
-                color: view.theme.border
+        PanelSplitter {
+            objectName: "viewerRightSplitter"
+            visible: !!view.state.rightPanelViewer
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.dockWidth
+            defaultValue: view.theme.previewWidth
+            direction: -1
+            minimum: 200
+            maximum: 640
+            onMoved: function(width) {
+                view.rightPanelWidth = width
+                view.panelWidthRequested(width)
             }
+        }
 
-            ListView {
-                id: strip
-                objectName: "viewerFilmstrip"
-                anchors.fill: parent
-                anchors.margins: 8
-                orientation: ListView.Horizontal
-                spacing: 6
+        // One page, no strip: a viewer has exactly one thing to say about
+        // the file on screen. The same `InfoPanel` as the Browser's, so the
+        // words for a file's details are written once.
+        RightDock {
+            objectName: "viewerRightPanel"
+            visible: !!view.state.rightPanelViewer
+            Layout.preferredWidth: view.dockWidth
+            Layout.fillHeight: true
+            theme: view.theme
+            backgroundColor: view.theme.sidebar
+            tabs: [{ key: "info", label: qsTr("Info"), icon: "" }]
+            currentKey: "info"
+            stripObjectName: ""
+            pagesObjectName: "viewerRightPages"
+
+            ScrollView {
+                id: viewerInfoPage
+                contentWidth: availableWidth
                 clip: true
-                model: view.images
-                currentIndex: view.imageIndex
-                boundsBehavior: Flickable.StopAtBounds
-                /// The strip is horizontal, and Qt only scrolls the axis the
-                /// wheel reports — a mouse wheel reports vertical, so without
-                /// this the filmstrip ignores it entirely. The wheel is taken
-                /// here so it scrolls the strip instead of bubbling up to the
-                /// canvas's scroll-to-zoom handler behind it.
-                WheelHandler {
-                    objectName: "filmstripWheelHandler"
-                    /// `PointerDevice.Mouse` only, the default, silently ignores
-                    /// touchpads on Wayland.
-                    acceptedDevices: PointerDevice.AllDevices
-                    onWheel: function(event) {
-                        event.accepted = true;
-                        /// Two groups of three 78 px tiles plus their 6 px gaps
-                        /// per mouse notch (504 px), so one notch moves the strip
-                        /// by a pair of tile groups instead of a single tile.
-                        var step = 504;
-                        var maxX = Math.max(0, strip.contentWidth - strip.width);
-                        var dx = 0;
-                        /// The device decides which delta is real: a mouse on
-                        /// this desktop sends `angleDelta` ±120 *and* a
-                        /// `pixelDelta` of a tenth of a notch, so checking the
-                        /// pixel delta first would drop a notch to 20 px.
-                        var notches = event.angleDelta.y !== 0 ? event.angleDelta.y / 120
-                                                               : event.angleDelta.x / 120;
-                        if (notches !== 0) {
-                            /// Mouse: a vertical wheel moves the strip sideways,
-                            /// and a notch down (negative, "towards the user")
-                            /// advances to the next images, the same direction
-                            /// the grid below moves.
-                            dx = -notches * step;
-                        } else if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
-                            /// Touchpad: the pixels it reported, doubled the same
-                            /// way `WheelScroll` doubles them so the strip keeps
-                            /// up with the grid. A finger moving down the pad
-                            /// reports a negative `y`, and that advances the strip
-                            /// — the same direction a notch down does, and the
-                            /// direction the grid already scrolls.
-                            dx = (event.pixelDelta.x - event.pixelDelta.y)
-                                 * 2;
-                        }
-                        if (dx === 0) return;
-                        // Accumulate on the *target*, not on the animated
-                        // position: a second notch that arrives while the strip
-                        // is still gliding would otherwise restart from where it
-                        // happens to be and lose the first notch's travel.
-                        var base = filmstripGlide.running ? filmstripGlide.to
-                                                          : strip.contentX;
-                        filmstripGlide.to = Math.max(0, Math.min(maxX, base + dx));
-                        filmstripGlide.restart();
-                    }
-                }
-                NumberAnimation {
-                    id: filmstripGlide
-                    target: strip
-                    property: "contentX"
-                    duration: 150
-                    easing.type: Easing.OutCubic
-                }
 
-                delegate: Item {
-                    width: 78
-                    height: strip.height
+                ColumnLayout {
+                    width: viewerInfoPage.availableWidth
+                    spacing: 8
 
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: view.theme.radius
-                        color: view.theme.thumb
-                        border.width: index === view.imageIndex ? 2 : 1
-                        border.color: index === view.imageIndex
-                                      ? view.theme.accent : view.theme.border
-                        clip: true
-
-                        CachedThumbnail {
-                            id: stripThumb
-                            objectName: "stripThumbnail"
-                            anchors.fill: parent
-                            anchors.margins: 3
-                            /// Entry of this image, for the cache key.
-                            readonly property var meta: view.imageMeta[modelData] || null
-                            book: thumbs
-                            path: modelData
-                            modified: meta ? meta.modified : 0
-                            fileSize: meta ? meta.size : 0
-                            asynchronous: true
-                            fillMode: Image.PreserveAspectCrop
-                            sourceSize.width: 160
-                            sourceSize.height: 160
-                        }
+                    InfoPanel {
+                        Layout.fillWidth: true
+                        theme: view.theme
+                        info: view.currentInfo
                     }
 
-                    TapHandler {
-                        acceptedButtons: Qt.LeftButton
-                        onSingleTapped: view.command({
-                            type: "viewer_open",
-                            path: modelData
-                        })
-                    }
+                    Item { Layout.fillHeight: true }
                 }
             }
         }
     }
 
-    // ------------------------------------------------------------- canvas menu
     /// The right-click menu on the image itself. The first block is the file
     /// actions the browser's file menu already offers (the image is on screen,
     /// so there is no "Open" entry — it is already open); the last block is the
@@ -719,6 +810,12 @@ Item {
             icon.name: "application-x-executable-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.openWith(view.currentPath)
+        }
+        MenuItem {
+            text: view.theme.menuEntries[39]
+            icon.name: "folder-documents-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.revealPath(view.currentPath)
         }
         MenuSeparator {}
         MenuItem {
@@ -861,6 +958,16 @@ Item {
             checked: !!view.state.filmstrip
             onTriggered: view.command({ type: "toggle_filmstrip" })
             MenuShortcut { text: "T" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[40]
+            icon.name: "sidebar-show-right-symbolic"
+            checkable: true
+            checked: !!view.state.rightPanelViewer
+            onTriggered: view.command({
+                type: "toggle_right_panel",
+                workspace: "viewer"
+            })
         }
     }
 
@@ -1029,6 +1136,21 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
                 onClicked: view.command({ type: "toggle_filmstrip" })
+            }
+            ToolbarButton {
+                objectName: "viewerRightPanelButton"
+                theme: view.theme
+                visible: !view.miniToolbar
+                checkable: true
+                checked: !!view.state.rightPanelViewer
+                icon.name: "sidebar-show-right-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Toggle information panel")
+                onClicked: view.command({
+                    type: "toggle_right_panel",
+                    workspace: "viewer"
+                })
             }
 
             ToolbarButton {
