@@ -44,18 +44,17 @@ ApplicationWindow {
 
     // --------------------------------------------------- toolbar compaction
     //
-    // A narrow window must not cut the toolbar in half. Every toolbar button is
-    // an icon square, a label only appears when the window is wide enough to
-    // give it room (`CompactToolbarButton.useText`), and below the full icon
-    // row the less-used buttons fold into one overflow menu. `ToolbarMetrics`
-    // owns the measuring; the shell only reads the answers:
+    // A narrow window must not cut the toolbar in half. The header has three
+    // modes, decided per open workspace because the switcher's three buttons
+    // are part of every row:
     //
-    //   width ≥ labelThreshold      ⇒ labels may appear
-    //   width ≥ compactThreshold    ⇒ every icon may appear
-    //   width ≥ minimumWindowWidth  ⇒ the window may exist at all
+    //   "full"     width ≥ that workspace's label threshold ⇒ labels appear
+    //   "compact"  width ≥ that workspace's icon row       ⇒ every icon appears
+    //   "mini"     narrower                                ⇒ buttons fold
     //
-    // All three come from the same arithmetic, so a window that may exist can
-    // always draw a complete row. See `docs/adr/0010-*.md` and ADR 0015.
+    // and no window may be narrower than `minimumWindowWidth`. `ToolbarMetrics`
+    // owns the measuring (`modeFor`); the shell only reads the answer. See
+    // `docs/adr/0010-*.md`, ADR 0015 and ADR 0017.
 
     ToolbarMetrics {
         id: toolbarMetrics
@@ -63,14 +62,31 @@ ApplicationWindow {
 
     /// Where a label first has room, where the icon row stops fitting, and what
     /// the window may shrink to.
-    readonly property real toolbarLabelThreshold: toolbarMetrics.labelThreshold
-    readonly property real toolbarCompactThreshold: toolbarMetrics.compactToolbarWidth
     readonly property real minimumWindowWidth: toolbarMetrics.minimumWindowWidth
-    /// True while the window is wide enough for labels beside the icons.
-    readonly property bool toolbarLabels: root.width >= root.toolbarLabelThreshold
-    /// True below the full icon row: each workspace folds its secondary
+
+    /// The open workspace, or the Browser before Core has answered.
+    readonly property string toolbarWorkspace: root.state.workspace || "browser"
+    /// That workspace's own label and fold points, for the dev harness log and
+    /// for anything that wants the numbers rather than the mode.
+    readonly property real toolbarLabelThreshold:
+        toolbarMetrics.labelThresholdFor(root.toolbarWorkspace)
+    readonly property real toolbarFoldWidth:
+        toolbarMetrics.compactRowFor(root.toolbarWorkspace)
+    /// The tier the header is in: "full" (labels), "compact" (every icon) or
+    /// "mini" (folded into the overflow menu).
+    ///
+    /// This is measured per workspace, not once for the widest one: a window
+    /// wide enough for the Browser's six buttons must not fold just because the
+    /// Editor, which is not on screen, carries thirteen. Switching workspace
+    /// re-runs the same decision with the switcher's three buttons counted
+    /// against that workspace's row (`ToolbarMetrics.modeFor`).
+    readonly property string toolbarMode:
+        toolbarMetrics.modeFor(root.toolbarWorkspace, root.width)
+    /// True while the open workspace's row can afford labels beside the icons.
+    readonly property bool toolbarLabels: root.toolbarMode === "full"
+    /// True below the open workspace's icon row: the view folds its secondary
     /// buttons into one overflow menu (`*OverflowMenu` in the view).
-    readonly property bool toolbarMini: root.width < root.toolbarCompactThreshold
+    readonly property bool toolbarMini: root.toolbarMode === "mini"
 
     /// The floor is also enforced here, and not only through `minimumWidth`.
     ///

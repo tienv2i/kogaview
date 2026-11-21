@@ -15,6 +15,7 @@
 #include <QQmlEngine>
 #include <QQmlExpression>
 #include <QTest>
+#include <QVariant>
 
 #include "language.h"
 
@@ -163,30 +164,52 @@ private slots:
     // A floor that is not a usable desktop window width is a bug either way.
     QVERIFY2(floor > 400 && floor < 1200,
              qPrintable(QStringLiteral("the window floor is %1").arg(floor)));
+
+    // Each workspace folds into a narrower row, and each has its own label
+    // point above its icon row. The floor may sit above the Browser's icon row
+    // (the side panels decide 580), which is why the Browser simply never needs
+    // its overflow menu — the row fits.
+    const QStringList workspaces = { QStringLiteral("browser"),
+                                     QStringLiteral("viewer"),
+                                     QStringLiteral("editor") };
+    for (const QString& workspace : workspaces) {
+      const qreal miniRow = real(m_metrics, qPrintable(workspace + QStringLiteral("MiniRowWidth")));
+      const qreal compactRow = real(m_metrics, qPrintable(workspace + QStringLiteral("CompactRowWidth")));
+      QVERIFY2(compactRow > miniRow,
+               qPrintable(QStringLiteral("%1: folding saves nothing (%2 vs %3)")
+                            .arg(workspace)
+                            .arg(miniRow)
+                            .arg(compactRow)));
+    }
   }
 
-  /// `compactToolbarWidth` and `miniToolbarWidth` are what the header row really
-  /// needs with the labels off and with the secondary buttons folded, not
-  /// approximations of them.
-  ///
-  /// The real window is the authority here: the `RowLayout` in `Main.qml` wraps
-  /// its children with 4 px gaps and 8 px side margins, and a workspace toolbar
-  /// carries text readouts (the Viewer's counter, the Editor's zoom) that a
-  /// plain button count misses. This lays out the same six children with the
-  /// same spacing and margins and asserts the two agree to within the slack;
-  /// it caught the arithmetic being 84 px short, which let a window exist that
-  /// squeezed the toolbar. The mini row is the same fixture with its workspace
-  /// slot folded, and it is the one the window floor has to fit.
+  /// One workspace's row in each mode. The fold and label points are per
+  /// workspace now, so the fixture is measured three times with its workspace
+  /// slot at that view's width — a global "widest workspace" number would hide
+  /// the Browser being folded at the Editor's width, which is the defect this
+  /// change fixes.
   void theWidthsMatchTheRealHeaderRow_data()
   {
+    QTest::addColumn<QString>("workspace");
     QTest::addColumn<bool>("mini");
     QTest::addColumn<QString>("measured");
-    QTest::newRow("compact") << false << "compactToolbarWidth";
-    QTest::newRow("mini") << true << "miniToolbarWidth";
+    QTest::newRow("browser-compact")
+      << QStringLiteral("browser") << false << "browserCompactRowWidth";
+    QTest::newRow("viewer-compact")
+      << QStringLiteral("viewer") << false << "viewerCompactRowWidth";
+    QTest::newRow("editor-compact")
+      << QStringLiteral("editor") << false << "editorCompactRowWidth";
+    QTest::newRow("browser-mini")
+      << QStringLiteral("browser") << true << "browserMiniRowWidth";
+    QTest::newRow("viewer-mini")
+      << QStringLiteral("viewer") << true << "viewerMiniRowWidth";
+    QTest::newRow("editor-mini")
+      << QStringLiteral("editor") << true << "editorMiniRowWidth";
   }
 
   void theWidthsMatchTheRealHeaderRow()
   {
+    QFETCH(QString, workspace);
     QFETCH(bool, mini);
     QFETCH(QString, measured);
 
@@ -196,6 +219,7 @@ private slots:
     QVERIFY2(fixture.root() != nullptr, qPrintable(fixture.error()));
     QQuickItem* row = fixture.root();
     QVERIFY2(row != nullptr, "the fixture has no row layout");
+    row->setProperty("workspace", workspace);
     row->setProperty("mini", mini);
     QCoreApplication::processEvents();
 
@@ -242,16 +266,86 @@ private slots:
                           .arg(measured)
                           .arg(expected)));
 
-    // The floor has to fit the mini row: at the narrowest window, every control
-    // the folded toolbar keeps is still at its intrinsic width. The compact row
-    // is deliberately allowed to be wider than the floor — that is what the
-    // overflow menu is for.
+    // The floor has to fit every workspace's mini row: at the narrowest window,
+    // every control that row keeps is still at its intrinsic width. The compact
+    // rows are deliberately allowed to be wider than the floor — that is what
+    // the overflow menu is for — but the widest one is the compact ceiling.
     if (mini) {
       QVERIFY2(real(metrics, "minimumWindowWidth") >= live,
-               qPrintable(QStringLiteral("the window floor is below the mini row (%1 < %2)")
+               qPrintable(QStringLiteral("the window floor is below the %1 mini row (%2 < %3)")
+                            .arg(workspace)
                             .arg(real(metrics, "minimumWindowWidth"))
                             .arg(live)));
+    } else {
+      QVERIFY2(real(metrics, "compactToolbarWidth") >= live,
+               qPrintable(QStringLiteral("compactToolbarWidth is below the %1 compact row "
+                                         "(%2 < %3)")
+                            .arg(workspace)
+                            .arg(real(metrics, "compactToolbarWidth"))
+                            .arg(live)));
     }
+  }
+
+  /// The tier is chosen for the workspace on screen, not for the widest one.
+  ///
+  /// Before this, `toolbarMini` compared the window against the Editor's
+  /// thirteen-button row whatever view was open, so the Browser — six buttons,
+  /// a row about 440 px wide — was folded into the overflow menu at any width
+  /// under ~780 px while three hundred pixels sat unused. Two windows of the
+  /// same width now get two answers, because each workspace has its own fold
+  /// and label point and the switcher's three buttons are counted in both.
+  void theTierFollowsTheOpenWorkspace()
+  {
+    const auto number = [this](const QString& name) {
+      return m_metrics->property(name.toLatin1().constData()).toReal();
+    };
+    const auto mode = [this](const QString& workspace, qreal width) {
+      QVariant result;
+      const bool ok = QMetaObject::invokeMethod(
+        m_metrics, "modeFor", Q_RETURN_ARG(QVariant, result),
+        Q_ARG(QVariant, workspace), Q_ARG(QVariant, width));
+      if (!ok) {
+        qWarning() << "ToolbarMetrics.modeFor" << workspace << width << "is not invokable";
+      }
+      return result.toString();
+    };
+
+    const QStringList workspaces = { QStringLiteral("browser"),
+                                     QStringLiteral("viewer"),
+                                     QStringLiteral("editor") };
+    for (const QString& workspace : workspaces) {
+      const qreal compact = number(workspace + QStringLiteral("CompactRowWidth"));
+      const qreal labelled = number(workspace + QStringLiteral("LabelThreshold"));
+      QVERIFY2(compact > 0, qPrintable(workspace + QStringLiteral(" has no compact width")));
+      QVERIFY2(labelled > compact,
+               qPrintable(QStringLiteral("%1: labels are allowed at %2 but the icon row needs %3")
+                            .arg(workspace)
+                            .arg(labelled)
+                            .arg(compact)));
+      // All three modes are reachable, at that workspace's own points.
+      QCOMPARE(mode(workspace, labelled), QStringLiteral("full"));
+      QCOMPARE(mode(workspace, labelled - 1), QStringLiteral("compact"));
+      QCOMPARE(mode(workspace, compact), QStringLiteral("compact"));
+      QCOMPARE(mode(workspace, compact - 1), QStringLiteral("mini"));
+    }
+
+    // The same window width, two workspaces, two answers. The Browser's row
+    // fits its six buttons with room to spare at a width where the Editor still
+    // has to fold — the surplus the old global switch ignored.
+    const qreal narrow = number(QStringLiteral("browserCompactRowWidth")) + 10;
+    QVERIFY2(narrow < number(QStringLiteral("editorCompactRowWidth")) - 50,
+             "the Browser and Editor rows are too close for this test to prove anything");
+    QCOMPARE(mode(QStringLiteral("editor"), narrow), QStringLiteral("mini"));
+    QVERIFY2(mode(QStringLiteral("browser"), narrow) != QStringLiteral("mini"),
+             qPrintable(QStringLiteral("the Browser folded at %1 px although its own row needs %2")
+                          .arg(narrow)
+                          .arg(number(QStringLiteral("browserCompactRowWidth")))));
+
+    // And the Browser earns its labels before the Editor does, for the same
+    // reason: its row is shorter.
+    QVERIFY2(number(QStringLiteral("browserLabelThreshold"))
+               < number(QStringLiteral("editorLabelThreshold")),
+             "the Browser and Editor label thresholds are not per workspace");
   }
 
   /// The counted buttons in `ToolbarMetrics` must match the real toolbars. A
@@ -503,7 +597,7 @@ private slots:
       return shown;
     };
 
-    const qreal threshold = real(metrics, "labelThreshold");
+    const qreal threshold = real(metrics, "browserLabelThreshold");
 
     // Narrow: at the floor, labels are off.
     fixture.root()->setWidth(real(metrics, "minimumWindowWidth"));

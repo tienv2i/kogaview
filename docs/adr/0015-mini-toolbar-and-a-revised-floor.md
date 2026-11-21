@@ -94,3 +94,14 @@ accepts a programmatic resize below a window's minimum.
   and metadata panel*) is the only pointer route to them at that width. Their
   check marks follow Core's state because they send the same `toggle_*_panel`
   commands.
+
+## Revision — 2026-11-21 (ADR 0017)
+
+The three tiers stand, but the tier is no longer chosen from one global row.
+`compactToolbarWidth` was built from the widest workspace (the Editor), and
+`toolbarMini` compared the window against it whichever view was open, so the
+Browser folded at ~782 px although its own six buttons need 438. Each workspace
+now has its own compact, folded and labelled row, and `ToolbarMetrics.modeFor`
+decides per workspace. `compactToolbarWidth` survives only as the widest-row
+aggregate the floor and tests use; `Main.qml` publishes `toolbarMode` instead of
+`toolbarCompactThreshold`. The floor is unchanged at 580 px. See ADR 0017.

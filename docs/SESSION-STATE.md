@@ -60,7 +60,10 @@ their keys in a measured right-hand column because a `MenuItem` has no shortcut
 column of its own. The same session gave the header a third state (row 88):
 below the icon-only width each workspace keeps a few buttons and folds the rest
 into one `⋮` menu, which lowered the window floor from ~798 px to a measured
-580 px.
+580 px. A follow-up (row 89) moved the fold and label points from the widest
+workspace to the workspace on screen: the three switcher buttons now decide
+which row the window must fit, so the Browser no longer folds at the Editor's
+width and shows its labels about 350 px sooner.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -110,6 +113,11 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   ADR 0015 and ADR 0016 plus a revision note in ADR 0010, and the eight
   screenshots. It is one commit rather than two because `Main.qml`, `Theme.qml`
   and the `.ts` carry both rows; the tree at each row was not separately run.
+  The follow-up (row 89) is one commit on top, `fix(shell): measure the toolbar
+  tier for the open workspace`: `ToolbarMetrics.qml`'s per-workspace rows and
+  `modeFor`, `Main.qml`'s single `toolbarMode` binding, the two fixtures, six
+  row measurements and `theTierFollowsTheOpenWorkspace`, ADR 0017, a revision
+  note in ADR 0015, and three screenshots. No `.ts` change: no new words.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -253,6 +261,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 85 | The Editor had no brush and no eraser: every edit was chosen with numbers, and no pixel could be placed by hand. A stroke is also continuous in time, unlike a rotate or a crop | `crates/app-protocol/src/lib.rs` (`EditorPaintStroke { points, color, radius, opacity, erase }`, `name()`, a round-trip case, and `#[serde(default)]` on `erase` so an older payload is a brush), `crates/app-core/src/editor.rs` (`EditOperation::Paint`, `MAX_BRUSH_RADIUS`, the `brush_stroke`/`eraser_stroke` labels, snapshot undo, `validate_paint` with four codes, `paint_stroke`: a bbox coverage mask of round-capped capsules, **maximum** coverage so a crossing stroke does not darken, one-pixel feather, source-over for the brush and alpha-only for the eraser), `core.rs` (dispatch + preview test), `crates/desktop/qml/EditorView.qml` (Brush/Eraser palette buttons as one `paint` tool, the paint inspector with swatch/hex/swap/eight colours/size/opacity, the in-flight `Canvas` overlay, the pan yielding the left button except while Space is held, and the Krita keys `B E [ ] X D Space + - Tab` plus `Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+Y`), `UiLines.qml` + `kogaview_vi.ts` (17 strings), `cpp/main.cpp` (`editor-paint`), `tests/qml/tst_editor.cpp` (5 cases + the matte press; `init()`/`openResizeDialog()` now wait for a closing modal to be invisible), ADR 0014 | `just test` 311 strings / 110 C++ / 307 drawn; cargo 82 + 4; editor 46; real window: a blue 40 px stroke on the exact line (`docs/evidence/M1-editor-paint-vi.png`), a brush then an eraser at rev 5 → 7 with alpha 0 under the eraser in `preview-3.png` and History `1. Brush stroke` / `2. Eraser stroke` (`M1-editor-paint-history.png`; the Vietnamese eraser grab is `M1-editor-eraser-vi.png`), an undo that restored the picture; 8 mutations, each caught after one test was strengthened |
 | 87 | The copy entries were menu-only and no entry said which key reached them; `Ctrl+C` was not available (a focused Editor field owns it) and a `MenuItem` draws no shortcut column | two `Shortcut`s in `Main.qml` (`Ctrl+Shift+C` → `copyImageContent`, `Ctrl+Alt+C` → `copySelectedPaths`, both gated on `modalDialogOpen`), `MenuShortcut.qml` (right-aligned label, `objectName: "shortcutHint"`, colour from the entry's content item), `Theme.qml`'s `menuShortcutLabels`/`menuWidth(widths, shortcutWidths)`, hints in `Viewer.qml`/`BrowserView.qml`, `tst_viewer`/`tst_browser::theCopyEntriesNameTheirKeys`, `tst_settings::theShellBindsTheCopyKeysItsMenusName`, `KOGAVIEW_DEV_KEY`, ADR 0016 | `just test` 316 strings / 313 drawn; viewer 40, browser 48, settings 17; **real window**: clipboard image `1200x800` and the toast, then clipboard text = the path; a Browser selection of `two.png` gave `640x480`, an empty selection toasted `Select one image to copy its content.` while the path key copied the folder; two menus photographed after a colour fix (white-on-light first); 3 mutations, each caught |
 | 88 | The header had only two states and its floor *was* the icon-only row (~798 px), so a window could not be narrower than the widest workspace toolbar | `ToolbarMetrics.qml` (`*MiniButtons`, `miniToolbarWidth`, `minimumWindowWidth = max(miniToolbarWidth, 260 + 320)`), `Main.qml` (`toolbarMini`), the three views (`visible: !view.miniToolbar` plus one `⋮` overflow menu each, Editor zoom hidden), `Theme.menuEntries` 31–38 appended, the mini fixture and `theFloorIsTheMiniToolbar`, three view cases, ADR 0015 and a revision note in ADR 0010 | toolbar 12, viewer 40, browser 48, editor 49; **real window** at 700 × 620 and at the 580 px floor: Browser 4 buttons, Viewer 5 + counter, Editor 7 with no zoom, each ending in `⋮`; overflow menus open with their folded actions; 2 mutations, each caught |
+| 89 | The three tiers were chosen from the widest workspace, so the Browser folded at ~782 px although it needs 438 and showed labels only at the Editor's ~1000 px; the switcher's three buttons were counted only in that global maximum | per-workspace `*CompactRowWidth`/`*MiniRowWidth`/`*LabelledRowWidth` and `modeFor(workspace,width)` in `ToolbarMetrics.qml`, `Main.qml`'s single `toolbarMode` binding, the per-workspace fixture and six row measurements, `theTierFollowsTheOpenWorkspace`, ADR 0017 + ADR 0015 revision | toolbar 17; real window at 600/700 px: Browser all six icons / labels while Viewer and Editor fold (`M1-toolbar-tier-*.png`); 3 mutations, each caught |
 
 ## Test gate
 
@@ -263,14 +272,14 @@ one now; `/tmp/opencode/lrel` no longer exists):
 translations: 316 strings in kogaview_vi.ts, 110 of them compiled into C++, 313 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 82 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 49 · language 7 · toolbar 12
+viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 49 · language 7 · toolbar 17
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84, 85, 86, 87 and 88
+`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84, 85, 86, 87, 88 and 89
 add no new warning (the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
@@ -702,6 +711,34 @@ add no new warning (the protocol's `Anchor` and the anchored Core helpers are st
   (`M1-toolbar-mini-floor.png`). The panels are draggable, Tab hides the
   Editor's, and their toggles are in the overflow menu; a floor of
   `260 + 260 + 320` would have been wider than the row this change replaced.
+
+## Design decisions, per-workspace toolbar tier (row 89, ADR 0017)
+
+- **The row that is drawn is the row that is measured.** `ToolbarMetrics` now
+  has `*CompactRowWidth`, `*MiniRowWidth` and `*LabelledRowWidth` for each
+  workspace, all through one `rowWidth(switcher, toolbar)` that includes the
+  switcher's three buttons. The widest aggregates (`compactToolbarWidth`,
+  `miniToolbarWidth`, `labelledToolbarWidth`) are maxima of those rows, so the
+  580 px floor and the tests keep one arithmetic.
+- **One function decides, one binding publishes.** `modeFor(workspace, width)`
+  returns `"full"`, `"compact"` or `"mini"`; `Main.qml` binds `toolbarMode` to
+  it with `root.state.workspace` and `root.width`, and `toolbarLabels` /
+  `toolbarMini` are comparisons against that string. There is no
+  `toolbarCompactThreshold` left to fall out of step, and switching workspace
+  re-evaluates the binding because the workspace is an input to it.
+- **The Browser never folds at a legal size.** Its icon row is 438 px and the
+  floor is 580 px (two panels' worth of width), so a 580 px Browser shows every
+  button; the overflow menu is still there as the rule's consequence. The
+  Viewer (771) and the Editor (782) do fold between the floor and their rows.
+- **Each workspace earns labels on its own row.** At the test font the label
+  points are 653 / 986 / 997 px, so a 700 px window has Browser labels and
+  Editor icons; the real window font measures 665 / 1011 and the screenshots at
+  600 and 700 are what locate the boundary there. Switching to a heavier
+  workspace can drop the labels at a fixed width — the row must still fit.
+- **The fixture is measured per workspace.** `tst_ToolbarRow.qml` takes a
+  `workspace` and a `mini` flag, and `theWidthsMatchTheRealHeaderRow` runs six
+  rows against the real layout; `theTierFollowsTheOpenWorkspace` checks every
+  boundary and the same-width/different-workspace case that was the defect.
 
 ## Design decisions, fit/settings session (ADR 0009)
 

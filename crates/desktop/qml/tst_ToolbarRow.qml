@@ -23,8 +23,26 @@ RowLayout {
     /// Draw the row as the mini toolbar: the workspace slot takes its folded
     /// width. The test sets this between two measurements in the same window.
     property bool mini: false
+    /// Which workspace's toolbar fills the workspace slot. Each has its own
+    /// compact and folded width, so the fixture is measured once per workspace.
+    property string workspace: "editor"
 
     property alias metrics: rowMetrics
+
+    /// That workspace's toolbar at its full and folded widths, so one fixture
+    /// can be measured for all three views.
+    function workspaceToolbarWidth(folded) {
+        if (rowFixture.workspace === "browser") {
+            return folded ? rowMetrics.browserMiniToolbarWidth
+                          : rowMetrics.browserToolbarWidth
+        }
+        if (rowFixture.workspace === "viewer") {
+            return folded ? rowMetrics.viewerMiniToolbarWidth
+                          : rowMetrics.viewerToolbarWidth
+        }
+        return folded ? rowMetrics.editorMiniToolbarWidth
+                      : rowMetrics.editorToolbarWidth
+    }
 
     ToolbarMetrics {
         id: rowMetrics
@@ -42,8 +60,8 @@ RowLayout {
     }
     Item {
         implicitWidth: rowFixture.mini
-                       ? rowMetrics.widestMiniToolbarWidth
-                       : rowMetrics.widestToolbarWidth
+                       ? rowFixture.workspaceToolbarWidth(true)
+                       : rowFixture.workspaceToolbarWidth(false)
         implicitHeight: 34
     }
     Item {

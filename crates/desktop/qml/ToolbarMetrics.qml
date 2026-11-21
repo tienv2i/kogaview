@@ -2,16 +2,20 @@ import QtQuick
 
 // The measured pieces the main toolbar's layout is decided from.
 //
-// One object, read by `Main.qml` (what the window must be and whether labels
-// are allowed) and by `WorkspaceSwitcher.qml` (how wide each of its buttons
-// is). Keeping the arithmetic here is what stops the window floor and the
-// label threshold from drifting apart as buttons are added: both are derived
-// from `compactToolbarWidth` and `labelledToolbarWidth`.
+// One object, read by `Main.qml` (which of the three modes the window is in,
+// what the window must be and whether labels are allowed) and by
+// `WorkspaceSwitcher.qml` (how wide each of its buttons is). Keeping the
+// arithmetic here is what stops the window floor and the label thresholds from
+// drifting apart as buttons are added: the floor and every threshold are derived
+// from these widths.
 //
-// A narrow window has two ways to make room: drop the labels (the compact row)
-// and, below that, fold the less-used buttons into one overflow menu (the mini
-// row). The window floor is the mini row, so the two states sit at measured
-// widths instead of at a hand-typed minimum.
+// A workspace row has three modes: labels (`full`), every icon (`compact`) and
+// the folded row (`mini`). Each workspace is measured on its own, because a
+// window that fits the Browser's six buttons has no reason to fold its toolbar
+// just because the Editor — three workspace switches away — needs twelve. The
+// switcher's three buttons are part of every one of those sums, so switching
+// workspace re-measures the row instead of inheriting a tier chosen for
+// another view. See `modeFor()`.
 //
 // Text is measured with `TextMetrics` at the application font — the font the
 // labels are drawn in. Nothing here reads a width that any of it writes, so
@@ -185,9 +189,10 @@ Item {
         metrics.toolbarWidth(metrics.editorButtons, metrics.editorSeparators)
         + Math.max(metrics.editorZoomLabelWidth, editorZoomLabel.advanceWidth)
 
-    /// The widest workspace toolbar: the one that decides the floor, because
-    /// the window must be able to show whichever workspace is open. Every
-    /// workspace can be the open one, so the floor takes the widest.
+    /// The widest workspace toolbar: kept for the window floor and for the
+    /// tests that assert no workspace is forgotten. The fold points themselves
+    /// are per workspace (see `modeFor()`), so the Browser is not folded at the
+    /// Editor's width.
     readonly property real widestToolbarWidth:
         Math.max(metrics.browserToolbarWidth,
                  Math.max(metrics.viewerToolbarWidth, metrics.editorToolbarWidth))
@@ -206,25 +211,66 @@ Item {
         Math.max(metrics.browserMiniToolbarWidth,
                  Math.max(metrics.viewerMiniToolbarWidth, metrics.editorMiniToolbarWidth))
 
-    /// Every gap in the header row, whatever the label state: between the
-    /// switcher, the separator, the workspace toolbar, the spacer, the busy
-    /// indicator and the menu — plus the row's own margins.
+    /// Every gap in the header row, whatever the mode: between the switcher, the
+    /// separator, the workspace toolbar, the spacer, the busy indicator and the
+    /// menu — plus the row's own margins.
     readonly property real rowGaps:
         metrics.childSpacing * (metrics.rowChildren - 1) + metrics.rowSideMargins
 
-    /// The toolbar with every label turned off. This is the widest row that
-    /// still shows every control, so it is the width at which the mini form
-    /// starts: below it the row could not hold its own icons.
-    readonly property real compactToolbarWidth:
-        metrics.switcherIconsWidth + metrics.separatorWidth + metrics.widestToolbarWidth
-        + metrics.busyIndicatorWidth + metrics.menuButtonWidth + metrics.rowGaps
+    /// One workspace's header row with the labels off: the switcher as three
+    /// icons, the separator, that workspace's toolbar, the busy indicator, the
+    /// Menu button and every gap. The switcher's three buttons are inside this
+    /// sum, which is why switching workspace changes the answer.
+    function rowWidth(switcherWidth, workspaceWidth) {
+        return switcherWidth + metrics.separatorWidth + workspaceWidth
+                + metrics.busyIndicatorWidth + metrics.menuButtonWidth
+                + metrics.rowGaps
+    }
 
-    /// The header row with the workspace actions folded into one overflow
-    /// button. This is what the window floor is built from now: the window may
-    /// be narrower than the full icon row, but never narrower than this.
+    /// The row with every workspace control on screen and no labels. This is
+    /// where that workspace starts folding: below it its own icons do not fit.
+    readonly property real browserCompactRowWidth:
+        metrics.rowWidth(metrics.switcherIconsWidth, metrics.browserToolbarWidth)
+    readonly property real viewerCompactRowWidth:
+        metrics.rowWidth(metrics.switcherIconsWidth, metrics.viewerToolbarWidth)
+    readonly property real editorCompactRowWidth:
+        metrics.rowWidth(metrics.switcherIconsWidth, metrics.editorToolbarWidth)
+
+    /// The same rows folded. One of these is what the window floor fits.
+    readonly property real browserMiniRowWidth:
+        metrics.rowWidth(metrics.switcherIconsWidth, metrics.browserMiniToolbarWidth)
+    readonly property real viewerMiniRowWidth:
+        metrics.rowWidth(metrics.switcherIconsWidth, metrics.viewerMiniToolbarWidth)
+    readonly property real editorMiniRowWidth:
+        metrics.rowWidth(metrics.switcherIconsWidth, metrics.editorMiniToolbarWidth)
+
+    /// What the two labelled controls add to any row: the switcher's labels
+    /// beyond its three icon squares, and the Menu's label beyond its square.
+    readonly property real labelExtraWidth:
+        (metrics.switcherLabelsWidth - metrics.switcherIconsWidth)
+        + (metrics.labelledButtonWidth(menuLabel.advanceWidth) - metrics.menuButtonWidth)
+
+    /// The row with its workspace labels and the Menu label.
+    readonly property real browserLabelledRowWidth:
+        metrics.browserCompactRowWidth + metrics.labelExtraWidth
+    readonly property real viewerLabelledRowWidth:
+        metrics.viewerCompactRowWidth + metrics.labelExtraWidth
+    readonly property real editorLabelledRowWidth:
+        metrics.editorCompactRowWidth + metrics.labelExtraWidth
+
+    /// The widest of the three rows in each state. They are derived from the
+    /// per-workspace rows above, so there is one arithmetic and no second set of
+    /// constants: the floor fits the widest folded row and the label test uses
+    /// the widest labelled row.
+    readonly property real compactToolbarWidth:
+        Math.max(metrics.browserCompactRowWidth,
+                 Math.max(metrics.viewerCompactRowWidth, metrics.editorCompactRowWidth))
     readonly property real miniToolbarWidth:
-        metrics.switcherIconsWidth + metrics.separatorWidth + metrics.widestMiniToolbarWidth
-        + metrics.busyIndicatorWidth + metrics.menuButtonWidth + metrics.rowGaps
+        Math.max(metrics.browserMiniRowWidth,
+                 Math.max(metrics.viewerMiniRowWidth, metrics.editorMiniRowWidth))
+    readonly property real labelledToolbarWidth:
+        Math.max(metrics.browserLabelledRowWidth,
+                 Math.max(metrics.viewerLabelledRowWidth, metrics.editorLabelledRowWidth))
 
     /// The Browser's and the Editor's fixed side panels, plus a picture wide
     /// enough to be worth looking at. A window that satisfies only the toolbar
@@ -232,33 +278,73 @@ Item {
     readonly property real sidePanelWidth: 260
     readonly property real pictureWidth: 320
 
-    /// The header row with the labels showing: the compact row plus the room
-    /// the two labelled controls take beyond their icon squares.
-    readonly property real labelledToolbarWidth:
-        metrics.compactToolbarWidth
-        + (metrics.switcherLabelsWidth - metrics.switcherIconsWidth)
-        + (metrics.labelledButtonWidth(menuLabel.advanceWidth) - metrics.menuButtonWidth)
-
-    /// Headroom the labelled row keeps beyond its own intrinsic width. Qt's
+    /// Headroom a labelled row keeps beyond its own intrinsic width. Qt's
     /// `Text` rounds each label to a whole pixel and the layout rounds again,
     /// so a window exactly as wide as the arithmetic says can still lose the
     /// last pixel.
     ///
     /// Measured on the real window with the widest workspace (Editor) open:
     /// the labelled row's own `implicitWidth` is 1039 px in English and 1133 px
-    /// in Vietnamese, while `labelledToolbarWidth` says 1114 px and 1208 px —
-    /// it budgets the widest workspace whichever one is open, so it is
-    /// deliberately generous. The threshold is therefore the widest row plus
-    /// this slack, and it moves with the interface language because the labels
-    /// above are measured translated.
+    /// in Vietnamese, while `labelledToolbarWidth` says 1114 px and 1208 px, so
+    /// the arithmetic budgets a little more than the row needs. The threshold
+    /// is therefore the row plus this slack, and it moves with the interface
+    /// language because the labels above are measured translated.
     readonly property real labelSlack: 16
 
-    /// The width at which the window can afford the labels.
-    readonly property real labelThreshold:
-        Math.ceil(metrics.labelledToolbarWidth + metrics.labelSlack)
+    /// The width at which one workspace's row can afford its labels. Each is
+    /// that workspace's own row: the Browser draws them earlier than the
+    /// Editor, because it has six buttons rather than thirteen.
+    readonly property real browserLabelThreshold:
+        Math.ceil(metrics.browserLabelledRowWidth + metrics.labelSlack)
+    readonly property real viewerLabelThreshold:
+        Math.ceil(metrics.viewerLabelledRowWidth + metrics.labelSlack)
+    readonly property real editorLabelThreshold:
+        Math.ceil(metrics.editorLabelledRowWidth + metrics.labelSlack)
 
-    /// The window floor: the mini toolbar *and* room left for a sidebar and a
-    /// picture. The window must never be so narrow that a control is cut off;
+    /// The widest label threshold, for tests and for the fallback that has no
+    /// workspace name.
+    readonly property real labelThreshold:
+        Math.max(metrics.browserLabelThreshold,
+                 Math.max(metrics.viewerLabelThreshold, metrics.editorLabelThreshold))
+
+    /// One workspace's fold point: below this width its own icon row does not
+    /// fit, so it folds.
+    function compactRowFor(workspace) {
+        if (workspace === "viewer") return metrics.viewerCompactRowWidth
+        if (workspace === "editor") return metrics.editorCompactRowWidth
+        return metrics.browserCompactRowWidth
+    }
+
+    /// One workspace's label point: at or above this width its row fits with
+    /// the switcher and Menu labels showing.
+    function labelThresholdFor(workspace) {
+        if (workspace === "viewer") return metrics.viewerLabelThreshold
+        if (workspace === "editor") return metrics.editorLabelThreshold
+        return metrics.browserLabelThreshold
+    }
+
+    /// Which of the three modes a workspace is in at an arbitrary window width.
+    ///
+    /// `Main.qml` calls this with the open workspace and the real window width,
+    /// and the toolbar test calls it directly. Keeping the decision here —
+    /// instead of a boolean in the shell that mentions only the widest row —
+    /// is what makes switching workspace re-measure the row: the switcher's
+    /// three buttons are in every row width, and each workspace has its own
+    /// fold and label points.
+    ///
+    ///   width ≥ that workspace's label threshold  ⇒ "full"
+    ///   width ≥ that workspace's compact row      ⇒ "compact"
+    ///   anything narrower                          ⇒ "mini"
+    function modeFor(workspace, width) {
+        var compact = metrics.compactRowFor(workspace)
+        var labelled = metrics.labelThresholdFor(workspace)
+        if (width >= labelled) return "full"
+        if (width >= compact) return "compact"
+        return "mini"
+    }
+
+    /// The window floor: the widest folded row *and* room left for a sidebar and
+    /// a picture. The window must never be so narrow that a control is cut off;
     /// it *may* be narrower than the icon row and the labelled row — that is
     /// what the overflow menu and the dropped labels are for.
     readonly property real minimumWindowWidth:

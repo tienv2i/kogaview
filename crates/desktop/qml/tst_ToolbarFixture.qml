@@ -23,9 +23,12 @@ Item {
     width: 700
     height: 60
 
-    /// Whether the current width can afford labels — `Main.qml`'s
-    /// `toolbarLabels`, from the same two numbers.
-    property bool labels: width >= toolbarMetrics.labelThreshold
+    /// The workspace whose row is being measured; each has its own fold and
+    /// label points.
+    property string workspace: "browser"
+    /// Whether the current width can afford labels for that workspace —
+    /// `Main.qml`'s `toolbarLabels`, from the same function.
+    property bool labels: toolbarMetrics.modeFor(root.workspace, width) === "full"
     /// The width the floor re-application settles on.
     property real floorWidth: width
 
