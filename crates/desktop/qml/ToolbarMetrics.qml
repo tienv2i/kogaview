@@ -8,6 +8,11 @@ import QtQuick
 // label threshold from drifting apart as buttons are added: both are derived
 // from `compactToolbarWidth` and `labelledToolbarWidth`.
 //
+// A narrow window has two ways to make room: drop the labels (the compact row)
+// and, below that, fold the less-used buttons into one overflow menu (the mini
+// row). The window floor is the mini row, so the two states sit at measured
+// widths instead of at a hand-typed minimum.
+//
 // Text is measured with `TextMetrics` at the application font — the font the
 // labels are drawn in. Nothing here reads a width that any of it writes, so
 // there is no binding loop (the trap a `Menu`'s own font has).
@@ -54,13 +59,27 @@ Item {
     /// `BrowserView.qml`, `Viewer.qml` and `EditorView.qml`. A workspace that
     /// adds a button or a separator must update these two numbers;
     /// `tests/qml/tst_toolbar.cpp` counts the workspace toolbars in the QML
-    /// sources and fails when they disagree.
+    /// sources and fails when they disagree. The overflow button is not
+    /// counted: it is the one control the mini row adds in place of the ones
+    /// it folds, so counting it would budget room for a button the compact row
+    /// never draws.
     readonly property int browserButtons: 6
     readonly property int browserSeparators: 1
     readonly property int viewerButtons: 12
     readonly property int viewerSeparators: 4
     readonly property int editorButtons: 13
     readonly property int editorSeparators: 5
+
+    /// The buttons each workspace keeps once the window is too narrow for the
+    /// whole icon row, the overflow button included. The rest of its actions
+    /// move into that button's menu (`*OverflowMenu` in each view), and the
+    /// mini row draws no separators: at 9 px each they buy nothing when the
+    /// row is being folded. The QML suites count the visible buttons in the
+    /// real toolbars, so a button whose `visible` does not follow this rule
+    /// fails there rather than quietly making the floor too narrow.
+    readonly property int browserMiniButtons: 4
+    readonly property int viewerMiniButtons: 5
+    readonly property int editorMiniButtons: 7
 
     /// `EditorView`'s zoom readout is a fixed 48 px (`Layout.preferredWidth`),
     /// wider than the icon square it stands in for. The Middle other readouts
@@ -173,16 +192,38 @@ Item {
         Math.max(metrics.browserToolbarWidth,
                  Math.max(metrics.viewerToolbarWidth, metrics.editorToolbarWidth))
 
+    /// The same three rows folded into their mini form: fewer buttons, no
+    /// separators, and — in the Editor — no zoom readout, because the buttons
+    /// that change that zoom are the ones that moved into the menu.
+    readonly property real browserMiniToolbarWidth:
+        metrics.toolbarWidth(metrics.browserMiniButtons, 0)
+    readonly property real viewerMiniToolbarWidth:
+        metrics.toolbarWidth(metrics.viewerMiniButtons, 0)
+        + viewerCounterLabel.advanceWidth
+    readonly property real editorMiniToolbarWidth:
+        metrics.toolbarWidth(metrics.editorMiniButtons, 0)
+    readonly property real widestMiniToolbarWidth:
+        Math.max(metrics.browserMiniToolbarWidth,
+                 Math.max(metrics.viewerMiniToolbarWidth, metrics.editorMiniToolbarWidth))
+
     /// Every gap in the header row, whatever the label state: between the
     /// switcher, the separator, the workspace toolbar, the spacer, the busy
     /// indicator and the menu — plus the row's own margins.
     readonly property real rowGaps:
         metrics.childSpacing * (metrics.rowChildren - 1) + metrics.rowSideMargins
 
-    /// The toolbar with every label turned off. This is the narrowest window
-    /// that can still show every control.
+    /// The toolbar with every label turned off. This is the widest row that
+    /// still shows every control, so it is the width at which the mini form
+    /// starts: below it the row could not hold its own icons.
     readonly property real compactToolbarWidth:
         metrics.switcherIconsWidth + metrics.separatorWidth + metrics.widestToolbarWidth
+        + metrics.busyIndicatorWidth + metrics.menuButtonWidth + metrics.rowGaps
+
+    /// The header row with the workspace actions folded into one overflow
+    /// button. This is what the window floor is built from now: the window may
+    /// be narrower than the full icon row, but never narrower than this.
+    readonly property real miniToolbarWidth:
+        metrics.switcherIconsWidth + metrics.separatorWidth + metrics.widestMiniToolbarWidth
         + metrics.busyIndicatorWidth + metrics.menuButtonWidth + metrics.rowGaps
 
     /// The Browser's and the Editor's fixed side panels, plus a picture wide
@@ -216,12 +257,12 @@ Item {
     readonly property real labelThreshold:
         Math.ceil(metrics.labelledToolbarWidth + metrics.labelSlack)
 
-    /// The window floor: the toolbar with every label dropped *and* room left
-    /// for a sidebar and a picture. The window must never be so narrow that a
-    /// control is cut off; it *may* be narrower than the labelled toolbar —
-    /// that is what dropping the labels is for.
+    /// The window floor: the mini toolbar *and* room left for a sidebar and a
+    /// picture. The window must never be so narrow that a control is cut off;
+    /// it *may* be narrower than the icon row and the labelled row — that is
+    /// what the overflow menu and the dropped labels are for.
     readonly property real minimumWindowWidth:
-        Math.ceil(Math.max(metrics.compactToolbarWidth,
+        Math.ceil(Math.max(metrics.miniToolbarWidth,
                            metrics.sidePanelWidth + metrics.pictureWidth))
 
 }

@@ -38,6 +38,10 @@ Item {
     property var thumbnails: null
     /// The published Core state; `editor` is null until a document is open.
     property var state: ({})
+    /// True while the window is below the full icon row (`Main.qml`): the
+    /// toolbar keeps open/save/undo/redo/back/close and folds the rest into
+    /// `editorOverflowMenu`.
+    property bool miniToolbar: false
 
     /// Turns Core's `{ code, args }` history lines into sentences.
     UiLines {
@@ -1149,7 +1153,8 @@ Item {
     // shows up as "Crop to selection…" losing its ellipsis.
     Menu {
         id: contextMenu
-        implicitWidth: view.theme.menuWidth(view.theme.menuLabelWidths)
+        implicitWidth: view.theme.menuWidth(view.theme.menuLabelWidths,
+                                            view.theme.menuShortcutWidths)
 
         MenuItem {
             text: view.theme.menuEntries[24]
@@ -1198,10 +1203,14 @@ Item {
                 ToolTip.text: qsTr("Open an image for editing")
                 onClicked: view.requestOpen()
             }
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
             ToolbarButton {
                 objectName: "editorZoomOut"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady
@@ -1211,7 +1220,7 @@ Item {
             }
             Label {
                 objectName: "editorZoomLabel"
-                visible: view.hasDocument
+                visible: view.hasDocument && !view.miniToolbar
                 horizontalAlignment: Text.AlignHCenter
                 Layout.preferredWidth: 48
                 text: view.zoomPercent + " %"
@@ -1221,6 +1230,7 @@ Item {
             ToolbarButton {
                 objectName: "editorZoomIn"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-in-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady
@@ -1231,6 +1241,7 @@ Item {
             ToolbarButton {
                 objectName: "editorFit"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-fit-best-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady
@@ -1241,6 +1252,7 @@ Item {
             ToolbarButton {
                 objectName: "editorActualSize"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-original-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady
@@ -1248,7 +1260,10 @@ Item {
                 ToolTip.text: qsTr("Actual size (100%)")
                 onClicked: view.actualSize()
             }
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
             ToolbarButton {
                 objectName: "editorToolbarSave"
                 theme: view.theme
@@ -1262,6 +1277,7 @@ Item {
             ToolbarButton {
                 objectName: "editorToolbarSaveAs"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "document-save-as-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady && !view.saving
@@ -1272,6 +1288,7 @@ Item {
             ToolbarButton {
                 objectName: "editorToolbarExport"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "document-send-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady && !view.saving
@@ -1279,7 +1296,10 @@ Item {
                 ToolTip.text: qsTr("Export a copy…")
                 onClicked: view.openExportDialog()
             }
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
             ToolbarButton {
                 objectName: "undoButton"
                 theme: view.theme
@@ -1303,6 +1323,7 @@ Item {
             ToolbarButton {
                 objectName: "resetButton"
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "document-revert-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.modified
@@ -1310,7 +1331,10 @@ Item {
                 ToolTip.text: qsTr("Reset to original")
                 onClicked: view.command({ type: "editor_reset" })
             }
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
             ToolbarButton {
                 objectName: "editorBack"
                 theme: view.theme
@@ -1320,7 +1344,10 @@ Item {
                 ToolTip.text: qsTr("Back to browser")
                 onClicked: view.command({ type: "set_workspace", workspace: "browser" })
             }
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
             ToolbarButton {
                 objectName: "editorClose"
                 theme: view.theme
@@ -1330,6 +1357,16 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: view.theme.menuEntries[29]
                 onClicked: view.command({ type: "editor_close" })
+            }
+            ToolbarButton {
+                objectName: "editorOverflowButton"
+                theme: view.theme
+                visible: view.miniToolbar
+                icon.name: "view-more-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("More editor actions")
+                onClicked: editorOverflow.popup(this)
             }
         }
     }
@@ -2833,6 +2870,64 @@ Item {
                 height: height,
                 fill: fill
             })
+        }
+    }
+
+    /// The actions the mini toolbar cannot show. Same actions, labels and keys
+    /// as the toolbar buttons it replaces; see `Viewer.qml` for why the labels
+    /// come from `Theme.menuEntries`.
+    Menu {
+        id: editorOverflow
+        objectName: "editorOverflowMenu"
+        implicitWidth: view.theme.menuWidth(view.theme.menuLabelWidths,
+                                            view.theme.menuShortcutWidths)
+
+        MenuItem {
+            text: view.theme.menuEntries[32]
+            icon.name: "zoom-out-symbolic"
+            enabled: view.documentReady
+            onTriggered: view.zoomOut()
+            MenuShortcut { text: "-" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[31]
+            icon.name: "zoom-in-symbolic"
+            enabled: view.documentReady
+            onTriggered: view.zoomIn()
+            MenuShortcut { text: "+" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[22]
+            icon.name: "zoom-fit-best-symbolic"
+            enabled: view.documentReady
+            onTriggered: view.fit()
+        }
+        MenuItem {
+            text: view.theme.menuEntries[23]
+            icon.name: "zoom-original-symbolic"
+            enabled: view.documentReady
+            onTriggered: view.actualSize()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: view.theme.menuEntries[36]
+            icon.name: "document-save-as-symbolic"
+            enabled: view.documentReady && !view.saving
+            onTriggered: view.requestSaveAs()
+            MenuShortcut { text: "Ctrl+Shift+S" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[37]
+            icon.name: "document-send-symbolic"
+            enabled: view.documentReady && !view.saving
+            onTriggered: view.openExportDialog()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: view.theme.menuEntries[38]
+            icon.name: "document-revert-symbolic"
+            enabled: view.modified
+            onTriggered: view.command({ type: "editor_reset" })
         }
     }
 

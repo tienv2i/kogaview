@@ -1286,6 +1286,106 @@ private slots:
     }
   }
 
+  /// The two copy entries name the keys that run them, and the hints are drawn
+  /// inside the entries rather than appended to their text: `MenuItem` has no
+  /// shortcut column, so the label is the only place a key can be shown. A hint
+  /// whose key does not match the shell's `Shortcut` would teach a dead key, so
+  /// the strings are compared, not just counted.
+  void theCopyEntriesNameTheirKeys()
+  {
+    openCanvasMenu();
+    const auto hintOf = [this](const QString& label) {
+      QQuickItem* entry = canvasEntry(label);
+      return entry ? entry->findChild<QQuickItem*>(QStringLiteral("shortcutHint")) : nullptr;
+    };
+
+    QQuickItem* copyImage = hintOf(QStringLiteral("Copy image content"));
+    QVERIFY2(copyImage != nullptr, "the copy-image entry draws no key");
+    QCOMPARE(copyImage->property("text").toString(), QStringLiteral("Ctrl+Shift+C"));
+    QVERIFY2(copyImage->property("visible").toBool(), "the copy-image key is hidden");
+
+    QQuickItem* copyPath = hintOf(QStringLiteral("Copy file path"));
+    QVERIFY2(copyPath != nullptr, "the copy-path entry draws no key");
+    QCOMPARE(copyPath->property("text").toString(), QStringLiteral("Ctrl+Alt+C"));
+
+    // The hint is the right edge's column: it must sit to the right of the
+    // label's own text, or it would be drawn over the words it belongs to.
+    QVERIFY2(copyImage->x() > 0, "the key column is not on the right");
+    // No entry without a key may sprout one.
+    QQuickItem* rotate = canvasEntry(QStringLiteral("Rotate right"));
+    QVERIFY(rotate != nullptr);
+    QQuickItem* rotateHint = rotate->findChild<QQuickItem*>(QStringLiteral("shortcutHint"));
+    QVERIFY2(rotateHint != nullptr, "the rotate entry lost its key");
+    QCOMPARE(rotateHint->property("text").toString(), QStringLiteral("R"));
+    QMetaObject::invokeMethod(canvasMenu(), "close");
+  }
+
+  /// Below the full icon row the Viewer keeps navigation and folds zoom,
+  /// rotation, flip and the filmstrip into one overflow button. The count is
+  /// `ToolbarMetrics.viewerMiniButtons`, so the window floor and the row that
+  /// is drawn cannot disagree.
+  void theMiniToolbarFoldsTheSecondaryActions_data()
+  {
+    QTest::addColumn<bool>("mini");
+    QTest::newRow("compact") << false;
+    QTest::newRow("mini") << true;
+  }
+
+  void theMiniToolbarFoldsTheSecondaryActions()
+  {
+    QFETCH(bool, mini);
+    QQuickItem* viewItem = m_view->rootObject();
+    auto* component = qobject_cast<QQmlComponent*>(viewItem->property("toolbar").value<QObject*>());
+    QVERIFY2(component != nullptr, "the viewer has no toolbar component");
+    QScopedPointer<QObject> created(component->create(component->creationContext()));
+    QVERIFY2(created != nullptr, qPrintable(component->errorString()));
+    auto* row = qobject_cast<QQuickItem*>(created.data());
+    QVERIFY(row != nullptr);
+    row->setParentItem(viewItem);
+    row->setWidth(1000);
+    row->setHeight(44);
+    m_viewer->setProperty("miniToolbar", mini);
+    QCoreApplication::processEvents();
+
+    QList<QQuickItem*> all;
+    collectAll(row, &all);
+    int buttons = 0;
+    QQuickItem* overflow = nullptr;
+    for (QQuickItem* candidate : all) {
+      // A `ToolbarButton`, not a layout spacer, a readout or the `QQuickIconLabel`
+      // inside a button (which answers `icon`/`display` from the button's
+      // scope). The composite type's generated class name is what identifies
+      // it.
+      if (!QString::fromLatin1(candidate->metaObject()->className())
+             .contains(QStringLiteral("ToolbarButton"))) {
+        continue;
+      }
+      if (candidate->objectName() == QStringLiteral("viewerOverflowButton")) {
+        overflow = candidate;
+      }
+      if (candidate->isVisible()) {
+        ++buttons;
+      }
+    }
+    QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
+    QCOMPARE(overflow->isVisible(), mini);
+    QCOMPARE(buttons, mini ? 5 : 12);
+
+    if (mini) {
+      // The folded actions are still reachable, from one menu.
+      QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
+      QObject* menu = object("viewerOverflowMenu");
+      QVERIFY2(menu != nullptr, "the viewer has no overflow menu");
+      QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
+      // Eight actions and two separators: zoom in/out, actual size, rotate
+      // left/right, flip horizontal/vertical and the filmstrip.
+      QCOMPARE(menu->property("count").toInt(), 10);
+      QMetaObject::invokeMethod(menu, "close");
+      QTRY_VERIFY(!menu->property("visible").toBool());
+    }
+    m_viewer->setProperty("miniToolbar", false);
+  }
+
   // ---------------------------------------------------------------- keyboard
 
 private:

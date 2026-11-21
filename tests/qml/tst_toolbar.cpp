@@ -117,17 +117,23 @@ private slots:
     QVERIFY2(m_metrics != nullptr, "cannot load ToolbarMetrics.qml");
   }
 
-  /// The floor is the compact toolbar, and the label threshold sits above it:
-  /// a window at the floor shows every control with labels dropped, and a
-  /// window past the threshold can afford every label.
-  void theFloorIsTheCompactToolbar()
+  /// The floor is the mini toolbar, and the two fold points sit above it: at
+  /// the floor the row shows every workspace's primary buttons plus one
+  /// overflow menu, above `compactToolbarWidth` it can draw every icon, and
+  /// past the threshold it can afford every label.
+  void theFloorIsTheMiniToolbar()
   {
+    const qreal mini = real(m_metrics, "miniToolbarWidth");
     const qreal compact = real(m_metrics, "compactToolbarWidth");
     const qreal labelled = real(m_metrics, "labelledToolbarWidth");
     const qreal floor = real(m_metrics, "minimumWindowWidth");
     const qreal threshold = real(m_metrics, "labelThreshold");
 
-    QVERIFY2(compact > 0, "the compact toolbar has no width");
+    QVERIFY2(mini > 0, "the mini toolbar has no width");
+    QVERIFY2(compact > mini,
+             qPrintable(QStringLiteral("folding the buttons saves nothing: mini %1, compact %2")
+                          .arg(mini)
+                          .arg(compact)));
     QVERIFY2(labelled > compact,
              qPrintable(QStringLiteral("labels add nothing: compact %1, labelled %2")
                           .arg(compact)
@@ -138,8 +144,15 @@ private slots:
              qPrintable(QStringLiteral("labels are allowed at %1 but need %2")
                           .arg(threshold)
                           .arg(labelled)));
-    QVERIFY2(floor >= compact,
-             qPrintable(QStringLiteral("no window may be narrower than the toolbar (%1 vs %2)")
+    QVERIFY2(floor >= mini,
+             qPrintable(QStringLiteral("no window may be narrower than the mini toolbar (%1 vs %2)")
+                          .arg(floor)
+                          .arg(mini)));
+    // The floor is no longer the full icon row: the overflow menu is what makes
+    // a narrower window possible.
+    QVERIFY2(floor < compact,
+             qPrintable(QStringLiteral("the floor %1 is not below the compact row %2, so the "
+                                       "overflow menu would never be used")
                           .arg(floor)
                           .arg(compact)));
     QVERIFY2(floor < threshold,
@@ -152,8 +165,9 @@ private slots:
              qPrintable(QStringLiteral("the window floor is %1").arg(floor)));
   }
 
-  /// `compactToolbarWidth` is what the header row really needs with the labels
-  /// off, not an approximation of it.
+  /// `compactToolbarWidth` and `miniToolbarWidth` are what the header row really
+  /// needs with the labels off and with the secondary buttons folded, not
+  /// approximations of them.
   ///
   /// The real window is the authority here: the `RowLayout` in `Main.qml` wraps
   /// its children with 4 px gaps and 8 px side margins, and a workspace toolbar
@@ -161,15 +175,29 @@ private slots:
   /// plain button count misses. This lays out the same six children with the
   /// same spacing and margins and asserts the two agree to within the slack;
   /// it caught the arithmetic being 84 px short, which let a window exist that
-  /// squeezed the toolbar.
-  void theCompactWidthMatchesTheRealHeaderRow()
+  /// squeezed the toolbar. The mini row is the same fixture with its workspace
+  /// slot folded, and it is the one the window floor has to fit.
+  void theWidthsMatchTheRealHeaderRow_data()
   {
+    QTest::addColumn<bool>("mini");
+    QTest::addColumn<QString>("measured");
+    QTest::newRow("compact") << false << "compactToolbarWidth";
+    QTest::newRow("mini") << true << "miniToolbarWidth";
+  }
+
+  void theWidthsMatchTheRealHeaderRow()
+  {
+    QFETCH(bool, mini);
+    QFETCH(QString, measured);
+
     // The header row reproduced with the metrics' own numbers: same children,
     // spacing and side margins.
     QmlViewFixture fixture(&m_engine, headerRowFixture(), QSize(2000, 60));
     QVERIFY2(fixture.root() != nullptr, qPrintable(fixture.error()));
     QQuickItem* row = fixture.root();
     QVERIFY2(row != nullptr, "the fixture has no row layout");
+    row->setProperty("mini", mini);
+    QCoreApplication::processEvents();
 
     QObject* metrics = fixture.root()->property("metrics").value<QObject*>();
     QVERIFY(metrics != nullptr);
@@ -200,24 +228,30 @@ private slots:
     const qreal sideMargins = 2 * 8;
     const qreal gaps = row->property("spacing").toReal() * (children - 1) + sideMargins;
     const qreal live = controls + gaps;
-    const qreal measured = real(metrics, "compactToolbarWidth");
+    const qreal expected = real(metrics, measured.toLatin1().constData());
     QVERIFY2(live > 0, "the header row has no implicit width");
     // The elastic spacer contributes 0, the rest are the metrics' own numbers:
     // a mismatch means a child, a gap or a margin is missing from the
     // arithmetic, and a window at the floor would squeeze a control.
-    QVERIFY2(qAbs(live - measured) < 2.0,
+    QVERIFY2(qAbs(live - expected) < 2.0,
              qPrintable(QStringLiteral("the header row needs %1 px (%2 controls + %3 gaps) "
-                                       "but the metrics say %4")
+                                       "but %4 is %5")
                           .arg(live)
                           .arg(controls)
                           .arg(gaps)
-                          .arg(measured)));
+                          .arg(measured)
+                          .arg(expected)));
 
-    // And the floor can show it: every control at its intrinsic width.
-    QVERIFY2(real(metrics, "minimumWindowWidth") >= live,
-             qPrintable(QStringLiteral("the window floor is below the row's own width (%1 < %2)")
-                          .arg(real(metrics, "minimumWindowWidth"))
-                          .arg(live)));
+    // The floor has to fit the mini row: at the narrowest window, every control
+    // the folded toolbar keeps is still at its intrinsic width. The compact row
+    // is deliberately allowed to be wider than the floor — that is what the
+    // overflow menu is for.
+    if (mini) {
+      QVERIFY2(real(metrics, "minimumWindowWidth") >= live,
+               qPrintable(QStringLiteral("the window floor is below the mini row (%1 < %2)")
+                            .arg(real(metrics, "minimumWindowWidth"))
+                            .arg(live)));
+    }
   }
 
   /// The counted buttons in `ToolbarMetrics` must match the real toolbars. A
@@ -271,7 +305,13 @@ private slots:
       return found;
     };
 
-    const int actualButtons = count(QStringLiteral("ToolbarButton {"));
+    // The overflow button takes the place of the folded ones, so it is not part
+    // of the count the compact row is budgeted from — the mini width counts it
+    // instead (`*MiniButtons`). It is found by its object name, which is what
+    // the mini-visibility case in the view's own suite clicks.
+    const int overflow = count(QStringLiteral("OverflowButton"));
+    QCOMPARE(overflow, 1);
+    const int actualButtons = count(QStringLiteral("ToolbarButton {")) - overflow;
     const int actualSeparators = count(QStringLiteral("ToolbarSeparator {"));
     QCOMPARE(int(real(m_metrics, buttons.toLatin1().constData())), actualButtons);
     QCOMPARE(int(real(m_metrics, separators.toLatin1().constData())), actualSeparators);
@@ -395,29 +435,33 @@ private slots:
              "the threshold did not return to its English value");
   }
 
-  /// The floor is the widest workspace, not whichever one happens to be open.
+  /// The floor is built on the widest workspace, not whichever one happens to
+  /// be open.
   ///
   /// Every workspace can be the current one, so a floor that fits only the
   /// Browser squeezes the Viewer's counter or the Editor's zoom the moment the
   /// user switches. This caught the floor being computed from the Browser's
-  /// six buttons alone.
+  /// six buttons alone. It now measures the folded row, because that is what a
+  /// window at the floor draws.
   void theFloorIsTheWidestWorkspace()
   {
-    const qreal browser = real(m_metrics, "browserToolbarWidth");
-    const qreal viewer = real(m_metrics, "viewerToolbarWidth");
-    const qreal editor = real(m_metrics, "editorToolbarWidth");
-    const qreal widest = real(m_metrics, "widestToolbarWidth");
+    const qreal browser = real(m_metrics, "browserMiniToolbarWidth");
+    const qreal viewer = real(m_metrics, "viewerMiniToolbarWidth");
+    const qreal editor = real(m_metrics, "editorMiniToolbarWidth");
+    const qreal widest = real(m_metrics, "widestMiniToolbarWidth");
     QCOMPARE(widest, qMax(browser, qMax(viewer, editor)));
     // And the floor is built on it: the switcher, a separator, the widest
-    // toolbar and the row's fixed parts.
+    // folded toolbar and the row's fixed parts. The side-panel rule may make
+    // the floor wider still, so this is a lower bound, not an equality.
     QVERIFY2(real(m_metrics, "minimumWindowWidth")
                >= real(m_metrics, "switcherIconsWidth") + real(m_metrics, "separatorWidth")
                     + widest + real(m_metrics, "busyIndicatorWidth")
                     + real(m_metrics, "menuButtonWidth"),
-             "the window floor is narrower than the widest workspace's toolbar");
+             "the window floor is narrower than the widest workspace's mini toolbar");
     // A workspace really is the widest one; if all three were equal the
-    // assertion above would pass without proving the max.
-    QVERIFY2(widest > browser, "the Browser is the widest toolbar: the test proves nothing");
+    // assertion above would pass without proving the max. The Viewer keeps its
+    // counter, so its folded row is still the one to fit.
+    QVERIFY2(widest > browser, "the Browser is the widest mini toolbar: the test proves nothing");
   }
 
   /// The switcher is three icons while the window is narrow and three labelled

@@ -11,7 +11,14 @@ Item {
     /// because this view can run with a `Theme` of its own — in the test harness
     /// — that the shell never touches.
     property var menuLabelWidths: []
-    property real menuWidth: theme.menuWidth(menuLabelWidths)
+    /// Pixels each of `Theme.menuShortcutLabels` needs — the key column a menu
+    /// names at its right edge. Measured by the shell for the same reason as
+    /// `menuLabelWidths`.
+    property var menuShortcutWidths: []
+    property real menuWidth: theme.menuWidth(menuLabelWidths, menuShortcutWidths)
+    /// True while the window is below the full icon row (`Main.qml`): the
+    /// toolbar keeps navigation and folds the rest into `browserOverflowMenu`.
+    property bool miniToolbar: false
     property var state: ({})
     /// The folder listing, published apart from `state` so that an unchanged
     /// listing keeps the same array (and the grid keeps its delegates).
@@ -1153,11 +1160,13 @@ Item {
             icon.name: "edit-copy-symbolic"
             enabled: view.menuIsImage
             onTriggered: view.copyImage(view.menuPath)
+            MenuShortcut { text: "Ctrl+Shift+C" }
         }
         MenuItem {
             text: qsTr("Copy file path")
             icon.name: "edit-copy-symbolic"
             onTriggered: view.copyText(view.menuPath)
+            MenuShortcut { text: "Ctrl+Alt+C" }
         }
         MenuSeparator {}
         MenuItem {
@@ -1208,6 +1217,7 @@ Item {
             text: qsTr("Copy path")
             icon.name: "edit-copy-symbolic"
             onTriggered: view.copyText(view.menuPath)
+            MenuShortcut { text: "Ctrl+Alt+C" }
         }
         MenuItem {
             text: view.isFavorite(view.menuPath)
@@ -1285,6 +1295,36 @@ Item {
                 type: "remove_favorite",
                 path: view.menuPath
             })
+        }
+    }
+
+    /// The actions the mini toolbar cannot show. Same actions, labels and keys
+    /// as the toolbar buttons it replaces; see `Viewer.qml` for why the labels
+    /// come from `Theme.menuEntries`.
+    Menu {
+        id: browserOverflow
+        objectName: "browserOverflowMenu"
+        implicitWidth: view.menuWidth
+
+        MenuItem {
+            text: view.theme.menuEntries[10]
+            icon.name: "folder-new-symbolic"
+            onTriggered: view.promptNewFolder(view.state.currentFolder)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: view.theme.menuEntries[34]
+            icon.name: "sidebar-show-symbolic"
+            checkable: true
+            checked: !!view.state.leftPanel
+            onTriggered: view.command({ type: "toggle_left_panel" })
+        }
+        MenuItem {
+            text: view.theme.menuEntries[35]
+            icon.name: "sidebar-show-right-symbolic"
+            checkable: true
+            checked: !!view.state.rightPanel
+            onTriggered: view.command({ type: "toggle_right_panel" })
         }
     }
 
@@ -1378,15 +1418,20 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "folder-new-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("New folder")
                 onClicked: view.promptNewFolder(view.state.currentFolder)
             }
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 checkable: true
                 checked: !!view.state.leftPanel
                 icon.name: "sidebar-show-symbolic"
@@ -1397,6 +1442,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 checkable: true
                 checked: !!view.state.rightPanel
                 icon.name: "sidebar-show-right-symbolic"
@@ -1404,6 +1450,16 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Toggle preview and metadata panel")
                 onClicked: view.command({ type: "toggle_right_panel" })
+            }
+            ToolbarButton {
+                objectName: "browserOverflowButton"
+                theme: view.theme
+                visible: view.miniToolbar
+                icon.name: "view-more-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("More browser actions")
+                onClicked: browserOverflow.popup(this)
             }
         }
     }

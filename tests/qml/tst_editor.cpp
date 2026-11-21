@@ -79,6 +79,8 @@ private slots:
   void theTransformToolDragsCornersAndEdges();
   void theLiveTransformShowsOnlyItsOwnDraft();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
+  void theMiniToolbarFoldsTheSecondaryActions_data();
+  void theMiniToolbarFoldsTheSecondaryActions();
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
   void thePaletteSelectsTheToolsOptions();
   void resetClearsTheToolFields();
@@ -1627,6 +1629,61 @@ void TestEditor::anInvalidOrEmptySizeKeepsApplyDisabled()
   QVERIFY(!apply->property("enabled").toBool());
   clickItem(apply);
   QCOMPARE(m_commands->count(), 0);
+}
+
+/// Below the full icon row the Editor keeps open, save, undo, redo, back and
+/// close, and folds zoom, save-as, export and reset into one overflow button.
+/// The count is `ToolbarMetrics.editorMiniButtons`, so the window floor and the
+/// row that is drawn cannot disagree.
+void TestEditor::theMiniToolbarFoldsTheSecondaryActions_data()
+{
+  QTest::addColumn<bool>("mini");
+  QTest::newRow("compact") << false;
+  QTest::newRow("mini") << true;
+}
+
+void TestEditor::theMiniToolbarFoldsTheSecondaryActions()
+{
+  QFETCH(bool, mini);
+  auto* row = qobject_cast<QQuickItem*>(m_toolbar);
+  QVERIFY(row != nullptr);
+  row->setWidth(kHostWidth);
+  m_editor->setProperty("miniToolbar", mini);
+  QCoreApplication::processEvents();
+
+  int buttons = 0;
+  QQuickItem* overflow = nullptr;
+  std::function<void(QQuickItem*)> walk = [&](QQuickItem* root) {
+    for (QQuickItem* candidate : root->childItems()) {
+      if (QString::fromLatin1(candidate->metaObject()->className())
+            .contains(QStringLiteral("ToolbarButton"))) {
+        if (candidate->objectName() == QStringLiteral("editorOverflowButton")) {
+          overflow = candidate;
+        }
+        if (candidate->isVisible()) {
+          ++buttons;
+        }
+      }
+      walk(candidate);
+    }
+  };
+  walk(row);
+  QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
+  QCOMPARE(overflow->isVisible(), mini);
+  QCOMPARE(buttons, mini ? 7 : 13);
+
+  if (mini) {
+    QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
+    QObject* menu = m_editor->findChild<QObject*>(QStringLiteral("editorOverflowMenu"));
+    QVERIFY2(menu != nullptr, "the editor has no overflow menu");
+    QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
+    // zoom out/in, fit, actual size, a separator, save as, export, a separator
+    // and reset: nine rows.
+    QCOMPARE(menu->property("count").toInt(), 9);
+    QMetaObject::invokeMethod(menu, "close");
+    QTRY_VERIFY(!menu->property("visible").toBool());
+  }
+  m_editor->setProperty("miniToolbar", false);
 }
 
 /// The palette and the inspector have one job each: the left lists the tools

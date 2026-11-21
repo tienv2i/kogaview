@@ -20,6 +20,10 @@ RowLayout {
     // The header's own spacing and margins (`Main.qml` header).
     spacing: 4
 
+    /// Draw the row as the mini toolbar: the workspace slot takes its folded
+    /// width. The test sets this between two measurements in the same window.
+    property bool mini: false
+
     property alias metrics: rowMetrics
 
     ToolbarMetrics {
@@ -37,7 +41,9 @@ RowLayout {
         implicitHeight: 34
     }
     Item {
-        implicitWidth: rowMetrics.widestToolbarWidth
+        implicitWidth: rowFixture.mini
+                       ? rowMetrics.widestMiniToolbarWidth
+                       : rowMetrics.widestToolbarWidth
         implicitHeight: 34
     }
     Item {

@@ -87,11 +87,16 @@ Item {
     /// dialog moves focus to it and the keys go there until it closes.
     focus: true
 
-    /// The widths `Main.qml` measured for `Theme.menuEntryLabels`, so the canvas
-    /// menu is as wide as the longest label it can show instead of the style's
-    /// fixed 200 px. Empty in the QML harness, where the theme's floor applies.
+    /// The widths `Main.qml` measured for `Theme.menuEntryLabels` and for the
+    /// key column (`Theme.menuShortcutLabels`), so the canvas menu is as wide as
+    /// the longest label it can show instead of the style's fixed 200 px. Empty
+    /// in the QML harness, where the theme's floor applies.
     property var menuLabelWidths: []
-    property real menuWidth: theme.menuWidth(menuLabelWidths)
+    property var menuShortcutWidths: []
+    property real menuWidth: theme.menuWidth(menuLabelWidths, menuShortcutWidths)
+    /// True while the window is below the full icon row (`Main.qml`): the
+    /// toolbar keeps its navigation and folds the rest into `viewerOverflowMenu`.
+    property bool miniToolbar: false
 
     property string currentPath: view.state.viewerPath || ""
     property var images: view.viewerImages || []
@@ -721,12 +726,14 @@ Item {
             icon.name: "edit-copy-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.copyImage(view.currentPath)
+            MenuShortcut { text: "Ctrl+Shift+C" }
         }
         MenuItem {
             text: qsTr("Copy file path")
             icon.name: "edit-copy-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.copyText(view.currentPath)
+            MenuShortcut { text: "Ctrl+Alt+C" }
         }
         MenuSeparator {}
         MenuItem {
@@ -747,6 +754,7 @@ Item {
             icon.name: "user-trash-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.command({ type: "trash", paths: [view.currentPath] })
+            MenuShortcut { text: "Delete" }
         }
         MenuItem {
             text: qsTr("Delete permanently…")
@@ -760,24 +768,99 @@ Item {
             icon.name: "zoom-fit-best-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.fit()
+            MenuShortcut { text: "F" }
         }
         MenuItem {
             text: qsTr("Actual size")
             icon.name: "zoom-original-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.actualSize()
+            MenuShortcut { text: "0/1" }
         }
         MenuItem {
             text: qsTr("Rotate left")
             icon.name: "object-rotate-left-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.rotateLeft()
+            MenuShortcut { text: "Shift+R" }
         }
         MenuItem {
             text: qsTr("Rotate right")
             icon.name: "object-rotate-right-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.rotateRight()
+            MenuShortcut { text: "R" }
+        }
+    }
+
+    /// The actions the mini toolbar cannot show. It is the same buttons, in the
+    /// same order, as the ones the toolbar hides below
+    /// `ToolbarMetrics.compactToolbarWidth`; the labels come from
+    /// `Theme.menuEntries` so they are the strings the menu width was measured
+    /// from, and the keys are the ones the tooltips name.
+    Menu {
+        id: viewerOverflow
+        objectName: "viewerOverflowMenu"
+        implicitWidth: view.menuWidth
+
+        MenuItem {
+            text: view.theme.menuEntries[31]
+            icon.name: "zoom-in-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.zoomIn()
+            MenuShortcut { text: "+" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[32]
+            icon.name: "zoom-out-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.zoomOut()
+            MenuShortcut { text: "-" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[23]
+            icon.name: "zoom-original-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.actualSize()
+            MenuShortcut { text: "0/1" }
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: view.theme.menuEntries[24]
+            icon.name: "object-rotate-left-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.rotateLeft()
+            MenuShortcut { text: "Shift+R" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[25]
+            icon.name: "object-rotate-right-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.rotateRight()
+            MenuShortcut { text: "R" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[26]
+            icon.name: "object-flip-horizontal-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.toggleFlipH()
+            MenuShortcut { text: "H" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[27]
+            icon.name: "object-flip-vertical-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.toggleFlipV()
+            MenuShortcut { text: "V" }
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: view.theme.menuEntries[33]
+            icon.name: "view-list-symbolic"
+            checkable: true
+            checked: !!view.state.filmstrip
+            onTriggered: view.command({ type: "toggle_filmstrip" })
+            MenuShortcut { text: "T" }
         }
     }
 
@@ -810,7 +893,10 @@ Item {
                 onClicked: view.command({ type: "set_workspace", workspace: "browser" })
             }
 
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
 
             ToolbarButton {
                 theme: view.theme
@@ -837,10 +923,14 @@ Item {
                 onClicked: view.command({ type: "viewer_next" })
             }
 
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
 
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-in-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -850,6 +940,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -868,6 +959,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-original-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -876,10 +968,14 @@ Item {
                 onClicked: view.actualSize()
             }
 
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
 
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "object-rotate-left-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -889,6 +985,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "object-rotate-right-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -898,6 +995,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "object-flip-horizontal-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -907,6 +1005,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "object-flip-vertical-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -915,10 +1014,14 @@ Item {
                 onClicked: view.toggleFlipV()
             }
 
-            ToolbarSeparator { theme: view.theme }
+            ToolbarSeparator {
+                theme: view.theme
+                visible: !view.miniToolbar
+            }
 
             ToolbarButton {
                 theme: view.theme
+                visible: !view.miniToolbar
                 checkable: true
                 checked: !!view.state.filmstrip
                 icon.name: "view-list-symbolic"
@@ -926,6 +1029,17 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
                 onClicked: view.command({ type: "toggle_filmstrip" })
+            }
+
+            ToolbarButton {
+                objectName: "viewerOverflowButton"
+                theme: view.theme
+                visible: view.miniToolbar
+                icon.name: "view-more-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("More viewer actions")
+                onClicked: viewerOverflow.popup(this)
             }
         }
     }

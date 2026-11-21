@@ -108,6 +108,19 @@ thumbnail under a picture that is already the whole view). The stored
 `filmstrip` preference is untouched — it still decides the strip for every
 folder where a strip means something.
 
+## Revision — 2026-11-21 (ADR 0015)
+
+The two states this ADR introduced were not enough. `compactToolbarWidth` was
+the window floor, so a window narrower than the widest icon row (~798 px) could
+not exist, and every workspace drew all of its buttons there. A third state now
+sits below it: below `compactToolbarWidth` each workspace keeps a few buttons and
+folds the rest into one overflow menu, and the floor is that *mini* row plus one
+sidebar and a picture (580 px). `compactToolbarWidth` is now the mini switch
+point rather than the floor; `minimumWindowWidth` comes from
+`miniToolbarWidth`. Everything else in this ADR — measured labels, the
+per-language threshold, the double floor guard, the launch-only window sizing —
+stands unchanged. See ADR 0015.
+
 ## Consequences
 
 - The floor and the threshold are *computed*, and `tests/qml/tst_toolbar.cpp`

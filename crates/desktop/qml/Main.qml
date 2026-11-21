@@ -45,25 +45,32 @@ ApplicationWindow {
     // --------------------------------------------------- toolbar compaction
     //
     // A narrow window must not cut the toolbar in half. Every toolbar button is
-    // an icon square, and a label only appears when the window is wide enough
-    // to give it room (`CompactToolbarButton.useText`). `ToolbarMetrics` owns
-    // the measuring; the shell only reads the two answers:
+    // an icon square, a label only appears when the window is wide enough to
+    // give it room (`CompactToolbarButton.useText`), and below the full icon
+    // row the less-used buttons fold into one overflow menu. `ToolbarMetrics`
+    // owns the measuring; the shell only reads the answers:
     //
     //   width ≥ labelThreshold      ⇒ labels may appear
+    //   width ≥ compactThreshold    ⇒ every icon may appear
     //   width ≥ minimumWindowWidth  ⇒ the window may exist at all
     //
-    // Both come from the same arithmetic, so a window that may exist can always
-    // draw every icon. See `docs/adr/0010-*.md`.
+    // All three come from the same arithmetic, so a window that may exist can
+    // always draw a complete row. See `docs/adr/0010-*.md` and ADR 0015.
 
     ToolbarMetrics {
         id: toolbarMetrics
     }
 
-    /// Where a label first has room, and what the window may shrink to.
+    /// Where a label first has room, where the icon row stops fitting, and what
+    /// the window may shrink to.
     readonly property real toolbarLabelThreshold: toolbarMetrics.labelThreshold
+    readonly property real toolbarCompactThreshold: toolbarMetrics.compactToolbarWidth
     readonly property real minimumWindowWidth: toolbarMetrics.minimumWindowWidth
     /// True while the window is wide enough for labels beside the icons.
     readonly property bool toolbarLabels: root.width >= root.toolbarLabelThreshold
+    /// True below the full icon row: each workspace folds its secondary
+    /// buttons into one overflow menu (`*OverflowMenu` in the view).
+    readonly property bool toolbarMini: root.width < root.toolbarCompactThreshold
 
     /// The floor is also enforced here, and not only through `minimumWidth`.
     ///
@@ -97,6 +104,8 @@ ApplicationWindow {
         if (menuWidthsMeasured && force !== true) return
         appTheme.menuLabelWidths =
             Platform.textWidths(appTheme.menuEntryLabels, Qt.application.font)
+        appTheme.menuShortcutWidths =
+            Platform.textWidths(appTheme.menuShortcutLabels, Qt.application.font)
         menuWidthsMeasured = true
     }
 
@@ -292,6 +301,54 @@ ApplicationWindow {
         if (!Platform.requestOpenFile(qsTr("Open images"))) {
             fileFallback.open();
         }
+    }
+
+    // -------------------------------------------------- clipboard shortcuts
+    //
+    // The context menus name these keys beside the copy entries. Ctrl and Alt
+    // combinations belong to the window (a focused field must get first
+    // refusal), and only the shell can read Core's selection whichever
+    // workspace is up. The views keep their own menu entries; these functions
+    // and those entries run the same `Platform.copyImage`/`copyText`.
+    //
+    // A copy is a shortcut for what the menu offers, so it does nothing where
+    // the menus offer nothing: the Editor has no copy entry.
+
+    /// Copy the pixels of the one image the current workspace is looking at.
+    function copyImageContent() {
+        if (root.state.workspace !== "browser" && root.state.workspace !== "viewer") return;
+        var path = "";
+        if (root.state.workspace === "viewer") {
+            path = root.state.viewerPath || "";
+        } else {
+            var selection = root.state.selection || [];
+            if (selection.length === 1 && root.state.selectionInfo
+                    && root.state.selectionInfo.isImage) {
+                path = selection[0];
+            }
+        }
+        if (!path) {
+            root.showToast(qsTr("Select one image to copy its content."));
+            return;
+        }
+        Platform.copyImage(path);
+    }
+
+    /// Copy the path(s) the current workspace points at: the open image, the
+    /// Browser's selection, or the folder the Browser is showing.
+    function copySelectedPaths() {
+        if (root.state.workspace !== "browser" && root.state.workspace !== "viewer") return;
+        var paths = [];
+        if (root.state.workspace === "viewer") {
+            if (root.state.viewerPath) paths = [root.state.viewerPath];
+        } else {
+            paths = root.state.selection || [];
+            if (paths.length === 0 && root.state.currentFolder) {
+                paths = [root.state.currentFolder];
+            }
+        }
+        if (paths.length === 0) return;
+        Platform.copyText(paths.join("\n"));
     }
 
     /// The chooser behind the Editor's Open button and the shell menu's "Open
@@ -678,6 +735,20 @@ ApplicationWindow {
         sequence: "Ctrl+3"
         onActivated: root.guardEditorLeave({ workspace: "editor" })
     }
+    // The keys the context menus name for their copy entries. They follow the
+    // same rule as the shortcuts above: the window, not a view, owns Ctrl/Alt,
+    // so a focused text field keeps its own Ctrl+C. A modal dialog owns the
+    // keyboard while it is up, so the copy keys wait.
+    Shortcut {
+        sequence: "Ctrl+Shift+C"
+        enabled: !root.modalDialogOpen
+        onActivated: root.copyImageContent()
+    }
+    Shortcut {
+        sequence: "Ctrl+Alt+C"
+        enabled: !root.modalDialogOpen
+        onActivated: root.copySelectedPaths()
+    }
 
     header: ToolBar {
         id: headerBar
@@ -820,6 +891,8 @@ ApplicationWindow {
             objectName: "browser"
             theme: appTheme
             menuLabelWidths: appTheme.menuLabelWidths
+            menuShortcutWidths: appTheme.menuShortcutWidths
+            miniToolbar: root.toolbarMini
             state: root.state
             entries: snapshot.entries
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
@@ -854,6 +927,8 @@ ApplicationWindow {
             objectName: "viewer"
             theme: appTheme
             menuLabelWidths: appTheme.menuLabelWidths
+            menuShortcutWidths: appTheme.menuShortcutWidths
+            miniToolbar: root.toolbarMini
             state: root.state
             entries: snapshot.entries
             viewerImages: snapshot.viewerImages
@@ -884,6 +959,7 @@ ApplicationWindow {
         EditorView {
             objectName: "editor"
             theme: appTheme
+            miniToolbar: root.toolbarMini
             state: root.state
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             onCommand: function(command) { root.send(command); }
@@ -896,7 +972,8 @@ ApplicationWindow {
     Menu {
         id: mainMenu
         objectName: "mainMenu"
-        implicitWidth: appTheme.menuWidth(appTheme.menuLabelWidths)
+        implicitWidth: appTheme.menuWidth(appTheme.menuLabelWidths,
+                                          appTheme.menuShortcutWidths)
 
         MenuItem {
             text: appTheme.menuEntries[16]

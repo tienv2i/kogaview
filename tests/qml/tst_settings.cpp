@@ -62,6 +62,7 @@ private slots:
   void cancelUndoesThePreview();
   void theCloseButtonStillClicksThroughTheDragHandler();
   void theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen();
+  void theShellBindsTheCopyKeysItsMenusName();
   void theDiscardAnswerResetsTheDocumentBeforeLeaving();
 
 private:
@@ -506,6 +507,45 @@ void TestSettings::theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen()
              qPrintable(QStringLiteral("%1 does not suspend the workspace")
                           .arg(QLatin1String(dialog))));
   }
+}
+
+/// The context menus name `Ctrl+Shift+C` and `Ctrl+Alt+C` beside their copy
+/// entries, and those words are literals in `Viewer.qml`/`BrowserView.qml`
+/// (`tst_viewer::theCopyEntriesNameTheirKeys`). Nothing in a menu can bind a
+/// key, so the binding is a pair of `Shortcut`s in the shell — which cannot be
+/// instantiated here. This guard pins the shell half: the same two sequences,
+/// which handler each runs, and the modal gate. A renamed or re-bound key now
+/// fails a test instead of leaving a menu advertising a key that does nothing.
+void TestSettings::theShellBindsTheCopyKeysItsMenusName()
+{
+  QFile main(qmlDir() + QStringLiteral("/Main.qml"));
+  QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+  const QString source = QString::fromUtf8(main.readAll());
+
+  // The `Shortcut { … }` block that declares `sequence`, so the handler checked
+  // is the one bound to that key rather than any handler in the file.
+  const auto shortcutFor = [&source](const QString& sequence) {
+    const int at = source.indexOf(QStringLiteral("sequence: \"%1\"").arg(sequence));
+    if (at < 0) return QString();
+    const int begin = source.lastIndexOf(QStringLiteral("Shortcut {"), at);
+    const int end = source.indexOf(QStringLiteral("\n    }"), at);
+    if (begin < 0 || end < begin) return QString();
+    return source.mid(begin, end - begin);
+  };
+
+  const QString copyContent = shortcutFor(QStringLiteral("Ctrl+Shift+C"));
+  QVERIFY2(!copyContent.isEmpty(), "no Shortcut is bound to Ctrl+Shift+C");
+  QVERIFY2(copyContent.contains(QStringLiteral("onActivated: root.copyImageContent()")),
+           "Ctrl+Shift+C does not copy the image content the menu names it for");
+  QVERIFY2(copyContent.contains(QStringLiteral("enabled: !root.modalDialogOpen")),
+           "Ctrl+Shift+C ignores the modal gate");
+
+  const QString copyPath = shortcutFor(QStringLiteral("Ctrl+Alt+C"));
+  QVERIFY2(!copyPath.isEmpty(), "no Shortcut is bound to Ctrl+Alt+C");
+  QVERIFY2(copyPath.contains(QStringLiteral("onActivated: root.copySelectedPaths()")),
+           "Ctrl+Alt+C does not copy the path the menu names it for");
+  QVERIFY2(copyPath.contains(QStringLiteral("enabled: !root.modalDialogOpen")),
+           "Ctrl+Alt+C ignores the modal gate");
 }
 
 /// The Discard answer to the unsaved-changes question has to drop the edits for

@@ -22,5 +22,6 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/WorkspaceSwitcher.qml \
           ../crates/desktop/qml/UiLines.qml \
           ../crates/desktop/qml/ToolbarMetrics.qml \
+          ../crates/desktop/qml/MenuShortcut.qml \
           ../crates/desktop/qml/Theme.qml
 TRANSLATIONS = kogaview_vi.ts

@@ -606,6 +606,117 @@ private slots:
     }
   }
 
+  /// The two copy entries name the keys that run them, drawn at the menu's right
+  /// edge (a `MenuItem` has no shortcut column). The folder menu's "Copy path"
+  /// shares the path key, because both commands put the same text on the
+  /// clipboard.
+  void theCopyEntriesNameTheirKeys()
+  {
+    const auto hintOf = [this](const QString& menuName, const QString& label) -> QQuickItem* {
+      QObject* menu = findPopup(menuName);
+      if (menu == nullptr) {
+        return nullptr;
+      }
+      const int count = menu->property("count").toInt();
+      for (int index = 0; index < count; ++index) {
+        QQuickItem* entry = nullptr;
+        QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                  Q_ARG(int, index));
+        if (entry != nullptr && entry->property("text").toString() == label) {
+          return entry->findChild<QQuickItem*>(QStringLiteral("shortcutHint"));
+        }
+      }
+      return nullptr;
+    };
+
+    const QStringList expectedMenus = { QStringLiteral("fileMenu"), QStringLiteral("folderMenu") };
+    for (const QString& name : expectedMenus) {
+      QObject* menu = findPopup(name);
+      QVERIFY2(menu != nullptr, qPrintable(name + QStringLiteral(" is missing")));
+      QMetaObject::invokeMethod(menu, "popup");
+      QTRY_VERIFY2(menu->property("visible").toBool(),
+                   qPrintable(name + QStringLiteral(" did not open")));
+    }
+
+    QQuickItem* copyImage = hintOf(QStringLiteral("fileMenu"),
+                                   QStringLiteral("Copy image content"));
+    QVERIFY2(copyImage != nullptr, "the copy-image entry draws no key");
+    QCOMPARE(copyImage->property("text").toString(), QStringLiteral("Ctrl+Shift+C"));
+
+    QQuickItem* copyFile = hintOf(QStringLiteral("fileMenu"), QStringLiteral("Copy file path"));
+    QVERIFY2(copyFile != nullptr, "the copy-path entry draws no key");
+    QCOMPARE(copyFile->property("text").toString(), QStringLiteral("Ctrl+Alt+C"));
+
+    QQuickItem* copyFolder = hintOf(QStringLiteral("folderMenu"), QStringLiteral("Copy path"));
+    QVERIFY2(copyFolder != nullptr, "the folder copy entry draws no key");
+    QCOMPARE(copyFolder->property("text").toString(), QStringLiteral("Ctrl+Alt+C"));
+
+    // The keys are a right-hand column, not part of the label: the menu's own
+    // width accounting depends on that separation.
+    QObject* fileMenu = findPopup(QStringLiteral("fileMenu"));
+    QVERIFY(fileMenu != nullptr);
+    QMetaObject::invokeMethod(fileMenu, "close");
+    QMetaObject::invokeMethod(findPopup(QStringLiteral("folderMenu")), "close");
+  }
+
+  /// Below the full icon row the Browser keeps its three navigation buttons and
+  /// folds the new-folder and two sidebar toggles into one overflow button. The
+  /// count is `ToolbarMetrics.browserMiniButtons`, so the window floor and the
+  /// row that is drawn cannot disagree.
+  void theMiniToolbarFoldsTheSecondaryActions_data()
+  {
+    QTest::addColumn<bool>("mini");
+    QTest::newRow("compact") << false;
+    QTest::newRow("mini") << true;
+  }
+
+  void theMiniToolbarFoldsTheSecondaryActions()
+  {
+    QFETCH(bool, mini);
+    QQuickItem* viewItem = browserItem();
+    auto* component = qobject_cast<QQmlComponent*>(viewItem->property("toolbar").value<QObject*>());
+    QVERIFY2(component != nullptr, "the browser has no toolbar component");
+    QScopedPointer<QObject> created(component->create(component->creationContext()));
+    QVERIFY2(created != nullptr, qPrintable(component->errorString()));
+    auto* row = qobject_cast<QQuickItem*>(created.data());
+    QVERIFY(row != nullptr);
+    row->setParentItem(viewItem);
+    row->setWidth(1000);
+    row->setHeight(44);
+    browserItem()->setProperty("miniToolbar", mini);
+    settle();
+
+    int buttons = 0;
+    QQuickItem* overflow = nullptr;
+    for (QQuickItem* candidate : allDescendants(row)) {
+      if (!QString::fromLatin1(candidate->metaObject()->className())
+             .contains(QStringLiteral("ToolbarButton"))) {
+        continue;
+      }
+      if (candidate->objectName() == QStringLiteral("browserOverflowButton")) {
+        overflow = candidate;
+      }
+      if (candidate->isVisible()) {
+        ++buttons;
+      }
+    }
+    QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
+    QCOMPARE(overflow->isVisible(), mini);
+    QCOMPARE(buttons, mini ? 4 : 6);
+
+    if (mini) {
+      QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
+      QObject* menu = findPopup(QStringLiteral("browserOverflowMenu"));
+      QVERIFY2(menu != nullptr, "the browser has no overflow menu");
+      QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
+      // New folder, then the two panel toggles and a separator.
+      QCOMPARE(menu->property("count").toInt(), 4);
+      QMetaObject::invokeMethod(menu, "close");
+      QTRY_VERIFY(!menu->property("visible").toBool());
+    }
+    browserItem()->setProperty("miniToolbar", false);
+  }
+
   /// The quick-access/tree sidebar is resized by dragging its splitter, and the
   /// panel really gets wider — not just a stored number.
   void leftSidebarIsResizable()

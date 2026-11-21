@@ -3,6 +3,7 @@
 #include "thumbnailcache.h"
 
 #include <QColor>
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
@@ -22,6 +23,7 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QShortcutEvent>
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
@@ -246,6 +248,81 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
     QTimer::singleShot(1200, &platform, [&platform, copyImage]() { platform.copyImage(copyImage); });
   }
 
+  // QA hook: deliver a key sequence to the window's registered `Shortcut`s, so
+  // a key bound in `Main.qml` can be exercised without a hand on the keyboard.
+  // A `QTest` key press does not reach a `Shortcut` (Qt resolves shortcuts in
+  // the platform's shortcut path, which synthetic key events bypass), so the
+  // hook finds the `Shortcut` whose `sequence` is the requested one and sends it
+  // the `QShortcutEvent` that shortcut's own handler consumes — the map's last
+  // step, after the key has been matched. A sequence no `Shortcut` declares
+  // fires nothing and is logged as `declared 0` — which is how a hint naming the
+  // wrong key is detected. What this proves is the binding, the `enabled` gate
+  // and the handler; what it does not prove is that the compositor delivered
+  // the key to the window. `;` separates sequences.
+  const QString devKeys = qEnvironmentVariable("KOGAVIEW_DEV_KEY");
+  if (!devKeys.isEmpty()) {
+    const int delay = qEnvironmentVariableIntValue("KOGAVIEW_DEV_KEY_DELAY_MS");
+    const QStringList sequences = devKeys.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QTimer::singleShot(delay > 0 ? delay : 2500, &app, [rootObject, sequences]() {
+      auto* window = qobject_cast<QQuickWindow*>(rootObject);
+      if (window == nullptr) {
+        qWarning() << "KogaView dev key: root object is not a QQuickWindow";
+        return;
+      }
+      for (int index = 0; index < sequences.size(); ++index) {
+        const QString sequence = sequences.at(index).trimmed();
+        if (sequence.isEmpty()) {
+          continue;
+        }
+        QTimer::singleShot(index * 1500, window, [window, sequence]() {
+          const QKeySequence keys(sequence);
+          QList<QObject*> matching;
+          const QList<QObject*> objects = window->findChildren<QObject*>();
+          for (QObject* candidate : objects) {
+            if (!candidate->inherits("QQuickShortcut")) {
+              continue;
+            }
+            // `sequence` is a `QVariant` property, so a QML literal arrives as
+            // a string, not as a `QKeySequence`.
+            if (QKeySequence(candidate->property("sequence").toString()) == keys) {
+              matching.append(candidate);
+            }
+          }
+          // A `Shortcut` only accepts the `QShortcutEvent` carrying the id the
+          // application's shortcut map gave it, and that id is not a property.
+          // `QShortcutMap` counts down from -1 in registration order, so trying
+          // those ids in order finds each shortcut's own one — the same pairing
+          // the map makes before it dispatches the event.
+          int fired = 0;
+          for (QObject* shortcut : matching) {
+            bool activated = false;
+            for (int id = -1; id >= -512 && !activated; --id) {
+              QShortcutEvent event(keys, id, false);
+              activated = QCoreApplication::sendEvent(shortcut, &event);
+            }
+            if (activated) {
+              ++fired;
+            }
+          }
+          QTimer::singleShot(900, window, [window, sequence, fired, matching]() {
+            const QImage copied = QGuiApplication::clipboard()->image();
+            qInfo().noquote()
+              << "KogaView dev key" << sequence << "declared" << matching.size() << "allowed"
+              << fired << "active" << window->isActive() << "window" << window->size()
+              << "toast"
+              << window->property("toastText").toString() << "clipboardText"
+              << QGuiApplication::clipboard()->text().left(160).replace(QLatin1Char('\n'),
+                                                                       QLatin1Char(' '))
+              << "clipboardImage"
+              << (copied.isNull()
+                    ? QStringLiteral("none")
+                    : QStringLiteral("%1x%2").arg(copied.width()).arg(copied.height()));
+          });
+        });
+      }
+    });
+  }
+
   const QString path = qEnvironmentVariable("KOGAVIEW_DEV_SCREENSHOT");
   if (!path.isEmpty()) {
     // The grab has to come from an exposed window. A covered window on this
@@ -361,10 +438,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       }
       bool emitted = false;
       QObject* browser = rootObject->findChild<QObject*>(QStringLiteral("browser"));
+      // The menu requests act on a `Menu` of the shell or of whichever
+      // workspace is open, so they do not need the Browser to exist: with the
+      // Viewer up there is no Browser view at all.
+      const bool menuRequest =
+        uiRequest == QLatin1String("context-menu")
+        || (uiRequest == QLatin1String("context-menu-trigger")
+            && qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_MENU")
+                 == QLatin1String("viewerMenu"));
       if (browser == nullptr && !uiRequest.startsWith(QLatin1String("editor-")) &&
-          uiRequest != QLatin1String("leave-guard") &&
-          !(uiRequest == QLatin1String("context-menu-trigger") &&
-            qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_MENU") == QLatin1String("viewerMenu"))) {
+          uiRequest != QLatin1String("leave-guard") && !menuRequest) {
         qWarning() << "KogaView dev ui request: browser view not found";
         return;
       }
@@ -380,16 +463,27 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       } else if (uiRequest == QLatin1String("context-menu")) {
         // The menu a right click would open, so its width can be photographed.
         // Only the menus an entry opens are named here; the quick-access menu
-        // needs a favourite, which this harness does not know.
-        const QString name = requestArg.isEmpty() ? QStringLiteral("folderMenu")
-                                                  : QStringLiteral("fileMenu");
+        // needs a favourite, which this harness does not know. `_ARG2` opens a
+        // menu by name instead (the mini toolbars' overflow menus), which needs
+        // no path because the shell menu of the workspace is always there.
+        const QString named = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const QString name = !named.isEmpty()
+                               ? named
+                               : (requestArg.isEmpty() ? QStringLiteral("folderMenu")
+                                                       : QStringLiteral("fileMenu"));
         QObject* menu = rootObject->findChild<QObject*>(name);
-        if (menu != nullptr && !requestArg.isEmpty()) {
+        if (menu != nullptr && named.isEmpty() && !requestArg.isEmpty()) {
           browser->setProperty("menuPath", requestArg);
           browser->setProperty("menuIsDir", true);
           browser->setProperty("menuIsImage", true);
         }
         emitted = menu != nullptr && QMetaObject::invokeMethod(menu, "popup");
+        if (emitted) {
+          qInfo() << "KogaView dev ui request context-menu" << name << "opened"
+                  << menu->property("visible").toBool() << "width"
+                  << menu->property("width").toDouble() << "height"
+                  << menu->property("height").toDouble();
+        }
       } else if (uiRequest == QLatin1String("context-menu-trigger")) {
         // Activate one entry of `fileMenu` the way a click does, so the commands
         // the entry emits (`select`, `set_workspace`, `editor_open`) really run.

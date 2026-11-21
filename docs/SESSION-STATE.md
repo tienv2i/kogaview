@@ -53,7 +53,14 @@ colours, Space pans, `Tab` hides the panels, and `Ctrl+Z`/`Ctrl+Shift+Z` undo an
 redo the document. A last fix (row 86) moves both modal forms' centring and
 opening values from `onOpened` to `onAboutToShow`: Breeze's enter fade was
 running while the form sat at the window's left edge, then `opened` moved it to
-the centre when the fade finished.
+the centre when the fade finished. This session added the copy keys (row 87):
+`Ctrl+Shift+C` puts the one picture's pixels on the clipboard and `Ctrl+Alt+C`
+its path, both declared once in `Main.qml`, and the right-click menus now draw
+their keys in a measured right-hand column because a `MenuItem` has no shortcut
+column of its own. The same session gave the header a third state (row 88):
+below the icon-only width each workspace keeps a few buttons and folds the rest
+into one `⋮` menu, which lowered the window floor from ~798 px to a measured
+580 px.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -92,6 +99,17 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   move their opening work to `onAboutToShow`, `tst_editor`/`tst_settings` gain a
   slow-enter case each, and the two first-frame screenshots are new. No ADR:
   this corrects a lifecycle hook, not a decision.
+  This session (rows 87 and 88) is one commit on top, `feat(shell): copy keys in
+  the menus and a mini toolbar`: the two window `Shortcut`s and their copy
+  helpers in `Main.qml`, the new `MenuShortcut.qml` and the measured key column
+  in `Theme.qml`, the hints in `Viewer.qml`/`BrowserView.qml`, the three-tier
+  rows in `ToolbarMetrics.qml` and the three views' overflow menus and folded
+  visibility, `theCopyEntriesNameTheirKeys` in the two view suites,
+  `theShellBindsTheCopyKeysItsMenusName` in `tst_settings`, the mini counts and
+  `theFloorIsTheMiniToolbar` in `tst_toolbar`, the 12 Vietnamese sentences,
+  ADR 0015 and ADR 0016 plus a revision note in ADR 0010, and the eight
+  screenshots. It is one commit rather than two because `Main.qml`, `Theme.qml`
+  and the `.ts` carry both rows; the tree at each row was not separately run.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -143,11 +161,20 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   real Settings header with `QTest` and logged the dialog and Viewer offsets).
   Every temporary hook is gone again; the only surviving debug additions are the
   permanent `editor-resize`, `editor-crop` and `editor-transform` requests
-  above. `editor-transform` (row 82) clicks the Transform tool, moves one corner
+  above, plus row 87's `KOGAVIEW_DEV_KEY`. `editor-transform` (row 82) clicks the
+  Transform tool, moves one corner
   (`_ARG` = `X,Y` in document pixels, `_ARG2` = `0`–`3` or `e0`–`e3`) through the
   same helpers the handles call, and takes `_ARG3=live` and `_ARG4=apply`; it
   found nothing broken, but it is the only way a quad reached the real window
-  this session.
+  this session. `KOGAVIEW_DEV_KEY` (`;`-separated sequences) finds the
+  `Shortcut` that declares each one, sends it the `QShortcutEvent` its handler
+  consumes and logs `declared`/`allowed`, the toast and both clipboards; it
+  exists because no physical key reaches this window. Row 87 also gave
+  `KOGAVIEW_DEV_UI_REQUEST=context-menu` an `_ARG2` naming a menu object, which
+  is how the three overflow menus were photographed, and used a temporary
+  `KOGAVIEW_DEV_RESIZE=WIDTHxHEIGHT` for the mini shots — removed again, and
+  `strings build/dev/bin/kogaview | grep -c KOGAVIEW_DEV_RESIZE` answers `0` on
+  the committed build.
 - **Not pushed:** `origin` has no branches; `git push` answers `remote: No
   anonymous write access`.
 - Installed state: `/usr/local/bin/kogaview` (currently the **`dev-prod`**
@@ -224,6 +251,8 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 83 | Discard did not discard: after an unsaved edit, a Discard answer and another picture in the Viewer, the Editor reopened the old image. Resize was also an Inspector column even though a size is a question, not a mode | `crates/app-core/src/core.rs` (`SetWorkspace` keeps `previous` and passes `previous == Workspace::Viewer` to `link_viewer_into_editor`, which follows the Viewer's picture from the Viewer, keeps an open document from elsewhere and refuses an unsaved one; the test walks discard → viewer open → editor), `crates/desktop/qml/Main.qml` (`leaveAfterDiscard` sends `editor_reset` + the leave through `sendSequence`; quit exempt), `crates/desktop/qml/ResizeDialog.qml` (new modal form: its own fields/ratio/presets/pad/live preview, a draft preview inside the form with the stale-draft guard, theme-coloured switch labels), `crates/desktop/qml/EditorView.qml` (palette `Resize…` opens the dialog and keeps `tool` on `pointer`, the canvas no longer draws a resize draft, the crop fields renamed `cropWidth`/`cropHeight`), `crates/app-core/src/editor.rs` (`invert3` removed), `crates/desktop/build.rs`, `i18n/kogaview_ts.pro`, `i18n/kogaview_vi.ts` (25 new strings), `tests/qml/tst_editor.cpp`, `tests/qml/tst_settings.cpp` (the discard source guard), `cpp/main.cpp` (`_ARG5=apply`), ADR 0012, ADR 0013 | `just test` 299 strings / 110 C++ / 295 drawn; cargo 78 + 4; settings 15, editor 41; real window: the dialog with a live 1024 × 1024 draft and legible switches (`docs/evidence/M1-editor-resize-dialog-vi.png`), applied (journal `editor_resize` rev 7, `M1-editor-resize-applied-vi.png`), and the Discard sequence ending on `two.png` (`M1-discard-follows-viewer-vi.png`, journal `editor_reset` rev 9 → `set_workspace` rev 10 → `viewer_open` rev 12 → `set_workspace` rev 13); 5 mutations, each caught |
 | 84 | The Resize dialog carried a framed preview of its result; its asynchronous picture inside the modal read as the form loading, then "bursting out" on first open | `crates/desktop/qml/ResizeDialog.qml` (preview frame, caption, `Live preview` switch and its state, `documentPreview`/`draft`/`ignoredDraft`/`shownDraft`/`previewSource`/`previewCaption`, `requestDraft`, `draftRequested` and the debounce timer removed; the column is measured at `dialog.width - 40` so the first layout does not use the popup's pre-open width), `crates/desktop/qml/EditorView.qml` (`resizeDraft`/`previewSource` and the draft wiring removed), `tests/qml/tst_editor.cpp` (`theResizeDialogHasNoPreviewSurfaces`; the live-preview case removed; crop no longer drives the resize form), `cpp/main.cpp` (`editor-resize` no longer clicks a live toggle), the harness reference, `i18n/kogaview_vi.ts` (6 vanished preview strings removed), ADR 0012 (revision) | `just test` 294 strings / 110 C++ / 290 drawn; cargo 78 + 4; editor 41; real window: the form at 1472 × 943 with no preview, pad armed (`docs/evidence/M1-editor-resize-dialog-no-preview-vi.png`) and a grab 150 ms after the open request already at its final size; 1 mutation, caught |
 | 85 | The Editor had no brush and no eraser: every edit was chosen with numbers, and no pixel could be placed by hand. A stroke is also continuous in time, unlike a rotate or a crop | `crates/app-protocol/src/lib.rs` (`EditorPaintStroke { points, color, radius, opacity, erase }`, `name()`, a round-trip case, and `#[serde(default)]` on `erase` so an older payload is a brush), `crates/app-core/src/editor.rs` (`EditOperation::Paint`, `MAX_BRUSH_RADIUS`, the `brush_stroke`/`eraser_stroke` labels, snapshot undo, `validate_paint` with four codes, `paint_stroke`: a bbox coverage mask of round-capped capsules, **maximum** coverage so a crossing stroke does not darken, one-pixel feather, source-over for the brush and alpha-only for the eraser), `core.rs` (dispatch + preview test), `crates/desktop/qml/EditorView.qml` (Brush/Eraser palette buttons as one `paint` tool, the paint inspector with swatch/hex/swap/eight colours/size/opacity, the in-flight `Canvas` overlay, the pan yielding the left button except while Space is held, and the Krita keys `B E [ ] X D Space + - Tab` plus `Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+Y`), `UiLines.qml` + `kogaview_vi.ts` (17 strings), `cpp/main.cpp` (`editor-paint`), `tests/qml/tst_editor.cpp` (5 cases + the matte press; `init()`/`openResizeDialog()` now wait for a closing modal to be invisible), ADR 0014 | `just test` 311 strings / 110 C++ / 307 drawn; cargo 82 + 4; editor 46; real window: a blue 40 px stroke on the exact line (`docs/evidence/M1-editor-paint-vi.png`), a brush then an eraser at rev 5 → 7 with alpha 0 under the eraser in `preview-3.png` and History `1. Brush stroke` / `2. Eraser stroke` (`M1-editor-paint-history.png`; the Vietnamese eraser grab is `M1-editor-eraser-vi.png`), an undo that restored the picture; 8 mutations, each caught after one test was strengthened |
+| 87 | The copy entries were menu-only and no entry said which key reached them; `Ctrl+C` was not available (a focused Editor field owns it) and a `MenuItem` draws no shortcut column | two `Shortcut`s in `Main.qml` (`Ctrl+Shift+C` → `copyImageContent`, `Ctrl+Alt+C` → `copySelectedPaths`, both gated on `modalDialogOpen`), `MenuShortcut.qml` (right-aligned label, `objectName: "shortcutHint"`, colour from the entry's content item), `Theme.qml`'s `menuShortcutLabels`/`menuWidth(widths, shortcutWidths)`, hints in `Viewer.qml`/`BrowserView.qml`, `tst_viewer`/`tst_browser::theCopyEntriesNameTheirKeys`, `tst_settings::theShellBindsTheCopyKeysItsMenusName`, `KOGAVIEW_DEV_KEY`, ADR 0016 | `just test` 316 strings / 313 drawn; viewer 40, browser 48, settings 17; **real window**: clipboard image `1200x800` and the toast, then clipboard text = the path; a Browser selection of `two.png` gave `640x480`, an empty selection toasted `Select one image to copy its content.` while the path key copied the folder; two menus photographed after a colour fix (white-on-light first); 3 mutations, each caught |
+| 88 | The header had only two states and its floor *was* the icon-only row (~798 px), so a window could not be narrower than the widest workspace toolbar | `ToolbarMetrics.qml` (`*MiniButtons`, `miniToolbarWidth`, `minimumWindowWidth = max(miniToolbarWidth, 260 + 320)`), `Main.qml` (`toolbarMini`), the three views (`visible: !view.miniToolbar` plus one `⋮` overflow menu each, Editor zoom hidden), `Theme.menuEntries` 31–38 appended, the mini fixture and `theFloorIsTheMiniToolbar`, three view cases, ADR 0015 and a revision note in ADR 0010 | toolbar 12, viewer 40, browser 48, editor 49; **real window** at 700 × 620 and at the 580 px floor: Browser 4 buttons, Viewer 5 + counter, Editor 7 with no zoom, each ending in `⋮`; overflow menus open with their folded actions; 2 mutations, each caught |
 
 ## Test gate
 
@@ -231,18 +260,18 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 311 strings in kogaview_vi.ts, 110 of them compiled into C++, 307 drawn by the QML, 4 looked up by context
+translations: 316 strings in kogaview_vi.ts, 110 of them compiled into C++, 313 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 82 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 16 · editor 47 · language 7 · toolbar 11
+viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 49 · language 7 · toolbar 12
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84, 85 and 86 add no new warning
-(the protocol's `Anchor` and the anchored Core helpers are still gone).
+`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84, 85, 86, 87 and 88
+add no new warning (the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
 
@@ -613,6 +642,67 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   centred while `opened` is still false; reverting either handler to `onOpened`
   fails its case.
 
+## Design decisions, copy-key session (row 87, ADR 0016)
+
+- **`Ctrl+C` stays the field's.** The Editor has a hex colour field, size
+  fields, an export path and a folder name; a window-level `Ctrl+C` would eat
+  every one. The two copy actions therefore take `Ctrl+Shift+C` (pixels) and
+  `Ctrl+Alt+C` (the path), declared once in `Main.qml` and gated on
+  `modalDialogOpen` like every other shell shortcut.
+- **The key hint is a widget, not text.** `MenuItem` has an `Action.shortcut`
+  that Qt Quick Controls never draws, and `\t` appended to `text` renders as
+  nothing. `MenuShortcut.qml` is a right-aligned `Label`
+  (`objectName: "shortcutHint"`, `z: 2`) laid over the entry's content item;
+  the view suites find it by that object name, so a menu that stops naming its
+  key fails a test.
+- **The menu reserves the key column in its width.** `Theme.menuShortcutLabels`
+  lists the keys a menu can draw, `Main.qml` measures them with
+  `Platform.textWidths`, and `menuWidth(widths, shortcutWidths)` adds the widest
+  key plus a 24 px gap. Without that the widest row (`Ctrl+Shift+C`) would be
+  clipped, and the menu's width would jump between right clicks.
+- **The hint colour comes from the entry, not the palette.** A `Menu` popup is
+  painted by the platform style (light, black text) while `palette.*` inside it
+  resolves this app's forced-dark window palette; `palette.windowText` painted
+  `#fcfcfc` hints on `#efefef` (the first grab). The label reads
+  `parent.contentItem.color` and dims it to 70 %, so it follows either theme
+  instead of hard-coding a grey.
+- **"Copy to…" has no key.** It opens a destination chooser, so a key would have
+  to open a dialog rather than do the thing the entry says.
+- **Both halves are pinned separately.** The view suites check the text drawn in
+  the menu; `Main.qml` needs the bridge, so `tst_settings` reads its source and
+  asserts the two sequences, their handlers and the modal gate. Renaming a key
+  in either half alone fails one of them.
+
+## Design decisions, mini-toolbar session (row 88, ADR 0015)
+
+- **The floor was the icon row; now it is the folded row plus a picture.**
+  `compactToolbarWidth` (~782 px) is the point where each workspace folds, not
+  the minimum window width. `minimumWindowWidth` is
+  `max(miniToolbarWidth, sidePanelWidth + pictureWidth)`, measured at 580 px,
+  which is what the compositor is given as `minimumWidth` and what the
+  `onWidthChanged` guard re-applies on this Wayland session.
+- **Each view folds by itself.** `Main.qml` publishes `toolbarMini` and the
+  views put `visible: !view.miniToolbar` on the buttons that fold, plus one
+  overflow button (`⋮`) whose `Menu` carries the same actions.
+  No separate toolbar component and no second command path: a folded entry
+  sends exactly the command its button did and reads its words from
+  `Theme.menuEntries`.
+- **The overflow button is not budgeted twice.** `browserButtons`/`viewerButtons`/
+  `editorButtons` remain the compact rows and exclude it;
+  `browserMiniButtons`/`viewerMiniButtons`/`editorMiniButtons` include it.
+  `tst_toolbar` subtracts it by object name from the live source, so a count
+  that drifts fails the suite instead of narrowing the window by one square.
+- **What stays visible is the frequent action, not the dangerous one.**
+  Browser keeps up/refresh/open-folder; Viewer keeps back/prev/next/fit and its
+  `n / m` counter; Editor keeps open/save/undo/redo/back/close and loses the
+  zoom readout (its buttons are in the menu). Trash, rotate, flip, export,
+  panels and settings fold.
+- **The floor's trade is recorded, not hidden.** At 580 px with both Browser
+  panels open the grid is ~55 px wide and the Editor canvas ~100 px
+  (`M1-toolbar-mini-floor.png`). The panels are draggable, Tab hides the
+  Editor's, and their toggles are in the overflow menu; a floor of
+  `260 + 260 + 320` would have been wider than the row this change replaced.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -786,6 +876,19 @@ pinned to `8` instead of `paintSize / 2` → the same case fails. The matte guar
 removed → the same case fails on the press outside the picture. Each restored,
 then the suite green three runs in a row.
 
+Copy keys and mini toolbar: deleting the `MenuShortcut` from the Viewer's
+`Copy image content` entry → `theCopyEntriesNameTheirKeys` fails with "the
+copy-image entry draws no key"; changing the Browser's `Ctrl+Alt+C` hint to
+`Ctrl+C` → the same case fails `Actual "Ctrl+C" / Expected "Ctrl+Alt+C"`. On the
+shell half, renaming `Ctrl+Shift+C` to `Ctrl+Alt+Shift+C` in `Main.qml` →
+`theShellBindsTheCopyKeysItsMenusName` fails with "no Shortcut is bound to
+Ctrl+Shift+C". For the mini row, dropping `visible: !view.miniToolbar` from the
+Viewer's zoom-in button → `theMiniToolbarFoldsTheSecondaryActions` fails
+(`buttons 6`, expected 5); pointing `minimumWindowWidth` back at
+`compactToolbarWidth` → `theFloorIsTheMiniToolbar` fails with "the floor 782 is
+not below the compact row 782, so the overflow menu would never be used". Each
+restored, then the suite green.
+
 ## Design decisions, export-size session (ADR 0004)
 
 - **A delivery size is one number: the long edge.** `max_edge` scales the whole
@@ -841,6 +944,32 @@ then the suite green three runs in a row.
 
 ## Known gaps, in the words they were last measured with
 
+- **No physical key reaches the copy bindings either.** Row 87's
+  `KOGAVIEW_DEV_KEY` hands each `Shortcut` the `QShortcutEvent` its handler
+  consumes and logs both clipboards and the toast afterwards; that proves the
+  binding, the `enabled` gate and the handler, not the compositor delivering
+  `Ctrl+Shift+C` to the window. That `Ctrl+C` in a focused field stays the
+  field's is a consequence of choosing two other combos, not a measured
+  collision: no text field was focused while a copy key fired.
+- **The mini floor is a trade, not a win everywhere.** At exactly 580 px with
+  both Browser panels open the grid is ~55 px wide and the Editor's canvas
+  ~100 px (`M1-toolbar-mini-floor.png` is that window). The panels can be dragged
+  or toggled from the overflow menu; the floor counts one sidebar plus a
+  picture, not two sidebars.
+- **The overflow menus were opened with `popup()`, not by clicking `⋮`.** Their
+  rows, check marks and keys are real; their placement is the positioner's
+  default (the Browser's opened at the bottom-left of the window), which a click
+  would not produce.
+- **No hand resized the window.** A temporary `QWindow::resize` hook produced the
+  mini-toolbar shots, and on one early run this session's compositor rearranged
+  the window mid-run (a 1296 px window shrank in steps while keys were being
+  delivered); four later runs of the same request held at 700 × 620, and the
+  evidence comes from those. It is recorded as unexplained, not as a product
+  bug; a compositor-clamped drag remains unproven.
+- **A `Menu` popup is still the platform's light theme on a dark window.** The
+  key hint takes the entry's own text colour now, so it is legible on either
+  theme; the popup background, separators and hover colour remain the style's,
+  exactly as before this change.
 - **No key was pressed by a hand.** `xdotool`/XTEST input does not reach the
   Wayland/XWayland window here, so the real-window keys were `QTest`-synthesised
   through the app's real focus path (temporary `KOGAVIEW_DEV_KEYS` hook, removed
@@ -1006,9 +1135,9 @@ the instance reported `profile="prod"`. The owner's own configuration and the
 `image/jpeg` default handler were not touched.
 
 The prefix binary was **not** reinstalled for the keyboard commit or any
-follow-up since; it predates rows 66 and 77–83 until the next `just install-dev`
-(or `just install`). The keyboard, tooltip, menu, export and canvas evidence all
-comes from `build/dev/bin/kogaview`.
+follow-up since; it predates rows 66 and 77–88 until the next `just install-dev`
+(or `just install`). The keyboard, tooltip, menu, export, canvas and row 87–88
+evidence all comes from `build/dev/bin/kogaview`.
 
 ## Next natural step
 
@@ -1047,3 +1176,14 @@ comes from `build/dev/bin/kogaview`.
    tiling it belongs with the same profile that item 5 asks for. Keeping the
    in-flight overlay until `previewRevision` advances would remove the
    one-frame gap where the old preview shows.
+8. **The copy keys need a real keyboard, and a decision about the Editor.**
+   `Ctrl+Shift+C`/`Ctrl+Alt+C` were driven by `QShortcutEvent` injection, so a
+   desktop that already owns either combo (an IME, a clipboard manager, a
+   terminal) has not been ruled out. The Editor has no copy entry at all: whether
+   its document should reach the clipboard before Save/Export is a contract
+   question, not a menu row.
+9. **The mini row has no room for two sidebars.** The floor counts one sidebar
+   plus a picture, so at 580 px a user who wants both panels shrinks the content
+   to a strip. Auto-hiding the panels below a width, or letting each panel fold
+   on its own, would be the next question — the current answer is the overflow
+   menu's two toggles, which is honest but manual.

@@ -35,13 +35,27 @@ QtObject {
     /// empty. The longest label decides the width; its pixels come from
     /// `Platform.textWidths`, measured in C++ because a `Menu`'s own `font`
     /// follows its width and measuring text inside the menu would loop it.
-    function menuWidth(widths) {
+    ///
+    /// `shortcutWidths` is the same measurement for the keys a menu names at
+    /// its right edge (`MenuShortcut.qml`). It is optional: a menu with no
+    /// hints needs no column, and a menu that passes an empty list stays as
+    /// wide as its labels. When hints are shown, the column is the widest key
+    /// plus `menuShortcutGap`, so no key can be drawn over the label it
+    /// belongs to.
+    function menuWidth(widths, shortcutWidths) {
         var widest = 0
         for (var i = 0; i < widths.length; ++i) {
             if (widths[i] > widest) widest = widths[i]
         }
+        var widestKey = 0
+        if (shortcutWidths) {
+            for (var k = 0; k < shortcutWidths.length; ++k) {
+                if (shortcutWidths[k] > widestKey) widestKey = shortcutWidths[k]
+            }
+        }
         return Math.max(theme.menuMinimumWidth,
-                        Math.ceil(widest + theme.menuEntryGutter + theme.menuEntryPostText))
+                        Math.ceil(widest + theme.menuEntryGutter + theme.menuEntryPostText
+                                  + (widestKey > 0 ? widestKey + theme.menuShortcutGap : 0)))
     }
 
     /// Every label a menu in this app can show, in the interface language. The
@@ -69,7 +83,13 @@ QtObject {
         qsTr("Close editor"),
         // Shell menu only: the explicit way into the Editor. Appended so the
         // indices the Browser, Viewer and Editor menus already use do not move.
-        qsTr("Open in editor…")
+        qsTr("Open in editor…"),
+        // Mini-toolbar overflow menus (row 87). Appended for the same reason:
+        // the views address this list by index and the old slots must not move.
+        qsTr("Zoom in"), qsTr("Zoom out"), qsTr("Toggle thumbnail filmstrip"),
+        qsTr("Toggle quick access and folder tree"),
+        qsTr("Toggle preview and metadata panel"),
+        qsTr("Save as…"), qsTr("Export a copy…"), qsTr("Reset to original")
     ]
     /// The labels the menus are built from (`Main.qml`, the Editor's canvas
     /// menu). Same list, kept as a name of its own so the views read
@@ -78,14 +98,29 @@ QtObject {
     /// Pixels each of `menuEntryLabels` needs, measured once by the shell with the
     /// window font the entries are drawn in (`Main.qml` fills this in).
     property var menuLabelWidths: []
+    /// The keys a context menu names at the right edge (`MenuShortcut.qml`).
+    /// Key names are not translated: a keyboard shortcut is a legend for a
+    /// physical key, not a word. Measured like the labels, because a menu has to
+    /// fit the column as well as the text.
+    readonly property var menuShortcutLabels: [
+        "Ctrl+Shift+C", "Ctrl+Alt+C", "Ctrl+O", "Ctrl+Shift+O", "Ctrl+Shift+S",
+        "Ctrl+Q", "Ctrl+Z", "Ctrl+Shift+Z", "Enter", "Delete", "Backspace",
+        "F5", "F", "0", "0/1", "Shift+R", "R", "H", "V", "T", "+", "-"
+    ]
+    /// Pixels each of `menuShortcutLabels` needs, measured by `Main.qml`.
+    property var menuShortcutWidths: []
+    /// Room between the longest label and the key column: 12 px of right
+    /// margin, 12 px of breathing room, and the entry's own right padding.
+    readonly property real menuShortcutGap: 24
     /// Nothing narrower than this, so a menu of short labels is not a sliver.
     readonly property real menuMinimumWidth: 168
     /// What an entry draws before its text: the style's 6 px left padding. The
     /// icon is a separate child that takes no room while it draws nothing (see
     /// `docs/M1-REPORT.md`), so the label begins right after the padding.
     readonly property real menuEntryGutter: 6
-    /// What it draws after the text: the 6 px right padding. No shortcut column
-    /// is used, so nothing else takes room from the label.
+    /// What it draws after the text: the 6 px right padding. The key column is
+    /// accounted for separately (`menuShortcutGap`), because only a menu that
+    /// names keys pays for it.
     readonly property real menuEntryPostText: 6
 
     function formatBytes(bytes) {
