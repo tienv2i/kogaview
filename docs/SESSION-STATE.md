@@ -99,10 +99,10 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   move their opening work to `onAboutToShow`, `tst_editor`/`tst_settings` gain a
   slow-enter case each, and the two first-frame screenshots are new. No ADR:
   this corrects a lifecycle hook, not a decision.
-  This session (rows 87 and 88) is one commit on top, `feat(shell): copy keys in
-  the menus and a mini toolbar`: the two window `Shortcut`s and their copy
-  helpers in `Main.qml`, the new `MenuShortcut.qml` and the measured key column
-  in `Theme.qml`, the hints in `Viewer.qml`/`BrowserView.qml`, the three-tier
+  This session (rows 87 and 88) is one commit on top, `ecb1129 feat(shell):
+  copy keys in the menus and a mini toolbar`: the two window `Shortcut`s and
+  their copy helpers in `Main.qml`, the new `MenuShortcut.qml` and the measured
+  key column in `Theme.qml`, the hints in `Viewer.qml`/`BrowserView.qml`, the three-tier
   rows in `ToolbarMetrics.qml` and the three views' overflow menus and folded
   visibility, `theCopyEntriesNameTheirKeys` in the two view suites,
   `theShellBindsTheCopyKeysItsMenusName` in `tst_settings`, the mini counts and
