@@ -56,80 +56,102 @@
 
 ## Editor layout
 - The header keeps only global actions: open, the zoom controls, Save / Save
-  as…, Undo, Redo, Reset to original, back and close. The left **tool palette**
-  lists Pointer, Resize, Crop, then Rotate/Flip; its labels are full width so
-  none is elided at the 220 px default.
-- **Pointer** is the no-op default and the Editor opens on it. Its right column
-  shows the document title, size, save target, a cached thumbnail of the
-  current preview and the session history. Resize and Crop replace that with
-  their options (the shared Width/Height pair with +/- steppers, plus X/Y for
-  Crop) and Apply/Apply crop. Clicking the selected Resize/Crop again returns to
-  Pointer.
-- **Resize links the two sides through a ratio.** The Ratio combo offers `Free`,
-  `Original`, `Keep current ratio` and six common ratios (1:1, 4:3, 3:2, 16:9,
-  3:4, 9:16); typing or stepping one side recalculates the other, and only `Free`
-  leaves them independent. `Keep current ratio` freezes the Width/Height pair on
-  screen when it is picked, so a custom shape (say 1000 × 700) stays at that
-  shape for later edits; each tool snapshots its own pair. The Size combo lists
-  18 concrete sizes, three per ratio, every side a multiple of 64 (for 1:1:
-  2048, 1024, 512); picking one also selects the ratio it belongs to. Nothing is
-  armed until the user acts: the list opens on `Custom` and Apply stays disabled
-  while the fields are empty. Both size combos apply a preset from their
-  `onActivated`, i.e. only when the user picks it. Crop's list is filtered by
-  the document, so it is rebuilt when a document arrives; an
-  `onCurrentIndexChanged` handler applied its first fitting row then and wrote
-  2048 × 2048 into the shared fields, even under Resize. A programmatic index
-  write (the link code showing that a typed pair matches a preset) must not fill
-  the fields either.
-- **Width and Height carry +/- steppers.** The pair of small arrow buttons next
-  to each field moves that side by one pixel and auto-repeats while held. An
-  empty (or invalid) field starts from the size its placeholder shows (the
-  document's own), and the step runs the same link path as typing, so a locked
-  ratio or Free is respected; the linked side and the Apply state stay inside the
-  same 1–20000 range. The live preview and the Crop anchor see the new size
-  immediately.
-- **Resize has no anchor; Crop keeps its rectangle.** Where the cropped result
-  sits is a Crop decision. By default, when the target aspect differs, Core takes
-  the centred cover rectangle before scaling, so pixels are never stretched.
-  `Pad to fit` is the other choice: the whole image is scaled down to fit inside
-  the target and the leftover is filled, so nothing is cut.
-- **Crop has the anchor, a ratio and fitting presets.** Width/Height link through
-  the Crop Ratio combo (`Free`, `Original`, `Keep current ratio` and the same six
-  common ratios) exactly as Resize does, and the Size preset list offers only
-  concrete 64-divisible sizes both of whose sides fit the document. The 3 × 3
-  anchor pad (four corners, four edges, centre; arrows plus an accessible name
-  and tooltip for each) decides where a rectangle of that size sits: changing
-  the size through the ratio, a preset, a stepper or Reset re-places X/Y, while
-  typing X/Y is the user's own placement. Apply stays disabled unless
-  `x + width` and `y + height` stay inside the document.
-- **Live preview renders the target without editing.** The Live preview toggle
-  asks Core for a draft at the chosen size; the canvas draws that draft (and the
-  zoom refits to it) while the status bar and history keep describing the real
-  document. Crop uses the same draft, tagged `kind: "crop"`, so the canvas shows
-  it only under Crop and never under Resize; toggling it off, leaving the tool,
-  applying the edit, any other edit or undo/redo/reset drops the draft.
-- **Pad to fit keeps the whole picture in the target's frame.** Ticking it adds
-  a fill colour picker (disabled while unticked) and Core scales the source to
-  the largest box of its own shape that fits inside Width × Height, centres it,
-  and fills the rest with that colour. The pad is a letterbox or a pillarbox —
-  only square when the target is square — so a 1595 × 2048 portrait resized to
-  1003 × 698 gets two wide bands, not a 2048-square. The history line names the
-  pad (`Resize 1003 × 698 · pad #ff2d2d`).
-- **The pointer thumbnail is the current preview, not the source.** It goes
-  through the shared `ThumbnailCache`, which keys on the file's path *and* its
-  mtime/size; Core publishes both for the preview, because the preview names
-  restart at `preview-1.png` on every process and the path alone would let a
-  cached thumbnail from an earlier run answer a new document.
+  as…, Undo, Redo, Reset to original, back and close. Back is the first button
+  after the workspace switcher in both the Viewer and the Editor, so the one
+  control the two picture workspaces share does not move.
+- The left **tool rail** is a grid of icon buttons (Pointer, Resize, Crop,
+  Transform, Brush, Eraser, the four rotate/flip actions and the fold). Every
+  button carries a tooltip and an accessible name; the fold switches between
+  two columns and one and is remembered for the session only.
+- **Pointer** is the no-op default and the Editor opens on it. Its tool zone is
+  the heading alone and says `This tool has no options.`; the reference tabs
+  below it take the whole dock.
+- **The right dock is tools over reference.** The tool zone holds the armed
+  tool's options and its action row (Apply / Reset / Clear for Crop, Apply /
+  Reset for Transform); its height is the options' own content, capped only
+  when the window cannot also keep 180 px of reference below it, and the action
+  row sits directly under the options with no divider and no empty gap. The
+  reference tabs are `Info`, `History` and `Original`; arming a tool unfolds the
+  zone and leaves the chosen tab open underneath.
+- **Resize is a dialog, not a tool.** The rail's `Resize…` opens
+  `ResizeDialog.qml` and leaves the pointer armed: a size is a question with a
+  beginning and an end. The form is Width and Height with one drawn chain, a
+  concrete `Size preset`, an always-visible `Background` (None cover-crops, a
+  colour fits and pads) and a real resampling `Filter`; `Ctrl+Alt+I` opens it
+  from the Editor with Width selected, Tab reaches Height and Enter applies.
+- **Crop is a tool you use, not a panel you type into.** It opens unframed; a
+  drag, a click (the whole picture), a typed side, a preset or an anchor builds
+  the rectangle. Width, Height and Ratio each carry a lock and exactly two of
+  them are inputs — Width+Ratio derives Height, Height+Ratio derives Width — and
+  the ratio is a text field (`3:2`, `3/2`, `3x2`, blank for free). `Center`
+  cuts inside the picture; `Grow` lets the rectangle leave it and paints the new
+  border in the chosen colour, shown on the canvas before Apply. Apply refuses
+  the whole picture (`edit_noop`); Reset restores the options and keeps the
+  rectangle, Clear puts the rectangle down and keeps the options. An applied
+  crop leaves a fresh frame over the whole result.
+- **The canvas is an editing surface.** Crop's frame moves from the inside and
+  resizes from eight handles; Transform carries four corners and four edge
+  handles for straightening a keystoned photo; both write the same fields and
+  the same protocol command as typing. While either is armed the pan accepts
+  only the middle button, and arrows/Shift/Alt nudge or resize, Enter applies
+  and Escape puts the tool down.
+- **Brush and Eraser are one paint tool with two modes.** A stroke is one
+  `editor_paint_stroke` sent on release; QML draws the in-flight mark and Core
+  paints the pixels. `B`/`E` pick the modes, `[`/`]` size them, `X`/`D` swap and
+  reset the colours, Space pans, Tab hides the Editor's panels, and
+  `Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+Y` undo and redo.
+- **`Original` is the file on disk, not the preview.** It draws the most
+  recently saved file (the source until Save/Save As) through the shared
+  thumbnail cache, keyed on the path *and* its mtime/size, and Core re-stats the
+  file after every save so the same path with new bytes gets a new identity.
+- The live-preview commands (`editor_resize_preview`, `editor_crop_preview`)
+  remain protocol/Core commands with their own tests, but no window emits them:
+  a size is typed in the form and a crop is drawn on the canvas.
 - Selecting a tool or clearing its fields sends no command; Core still owns the
   history and the undo/redo state.
 
+## The right dock
+- One dock component (`RightDock.qml`: surface, optional tab strip, `StackLayout`)
+  serves all three workspaces; only the pages differ.
+  - Browser: one page, `PreviewPanel` above `InfoPanel`. The preview and the
+    file's details are read together, so there is no tab to switch to and the
+    strip is not drawn.
+  - Viewer: one page, `InfoPanel` for the open picture.
+  - Editor: the tool zone over three tabs, `InfoPanel`, `HistoryPanel` and the
+    `Original` `PreviewPanel`.
+- **A strip is drawn only for two or more panels** (`stripShown`), and an
+  invisible strip takes no room, so a one-page dock starts at its first page.
+- **Visibility belongs to Core, one flag per workspace.** `toggle_right_panel`
+  with no workspace means the one on screen; an explicit `workspace` names the
+  one meant. The three answers live in `config.json`
+  (`right_panel`, `right_panel_viewer`, `right_panel_editor`) and are mirrored
+  in `UiState` as `rightPanel`, `rightPanelViewer` and `rightPanelEditor`.
+  Hiding a panel hides its splitter and its toolbar toggle reads the same flag.
+- **The width is one value for the session.** `Main.qml` owns
+  `rightPanelWidth` (seeded from the theme's preview width), every view binds to
+  it and asks for a new value with `panelWidthRequested` when its splitter is
+  dragged; each view clamps it to its own range before drawing. Nothing about
+  the width is persisted.
+- **"Show in folder" is the shell's.** The Browser's file, folder and quick
+  menus and the Viewer's canvas menu ask `revealPath(path)`; `Main.qml` hands it
+  to `PlatformHelper::revealInFolder`, which selects the file through
+  `org.freedesktop.FileManager1` (`ShowItems`/`ShowFolders`) when the desktop
+  provides it, otherwise asks the portal to open the containing folder, and
+  otherwise falls back to the default handler. Inside a Flatpak the direct call
+  is skipped and the portal is the path.
+
 ## Sidebar widths
-- Both browser sidebars and both editor sidebars are resized by dragging the
-  splitter at their inner edge (double-click restores the theme width). Each
-  side has its own bounds so a panel can neither vanish nor swallow the centre
-  pane, and hiding a panel hides its splitter.
-- The width belongs to the view, the splitter only reports the dragged value, so
-  nothing here writes state or persists to disk yet.
+- The Browser's left panel, and the right dock in all three workspaces, are
+  resized by dragging the splitter at their inner edge. Each side has its own
+  bounds so a panel can neither vanish nor swallow the centre pane, and hiding
+  a panel hides its splitter.
+- The right width is shared: the views only report the dragged value
+  (`panelWidthRequested`) and `Main.qml` owns it, so a width chosen in the
+  Browser is the width the Viewer and the Editor open with. Each view clamps it
+  to its own range before drawing.
+- The width belongs to the session, the splitter only reports the dragged value,
+  so nothing here writes state or persists to disk yet. Panel *visibility* is
+  the opposite: Core persists one flag per workspace.
 - The drag is measured in scene coordinates, never in the handle's own. The
   handle moves as the panel grows, so a handle-local `mouse.x` shrinks by exactly
   what the drag just added; fed back into the next move the panel advances by

@@ -105,3 +105,15 @@ now has its own compact, folded and labelled row, and `ToolbarMetrics.modeFor`
 decides per workspace. `compactToolbarWidth` survives only as the widest-row
 aggregate the floor and tests use; `Main.qml` publishes `toolbarMode` instead of
 `toolbarCompactThreshold`. The floor is unchanged at 580 px. See ADR 0017.
+
+## Revision — 2026-11-21 (shared Back button)
+
+The Viewer opened with its Back-to-browser button and the Editor had the same
+button at the far end of its row, after a document-dependent number of controls,
+so the one action every picture workspace shares moved between them. The
+Editor's Back button now takes the Viewer's first slot, before the separator
+that starts the workspace's own actions. The row's width and separator count are
+unchanged (`editorButtons`/`editorSeparators` and `tst_toolbar` still agree);
+`tst_toolbar::theBackButtonLeadsEveryWorkspaceToolbar` reads both real toolbar
+sources and fails if the first button is not the `go-previous-symbolic` one that
+sends `set_workspace`.

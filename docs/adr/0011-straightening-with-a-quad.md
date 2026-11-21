@@ -169,3 +169,72 @@ coordinates and a colour the pixels outside the picture are painted with.
   second crop; it records a snapshot and uses the same undo budget. A history
   line says `Grow to W × H · #rrggbb border` (or `transparent border`), while a
   crop without a fill keeps `Crop W × H at X,Y`.
+
+## Revision — Crop is drawn, not seeded (2026-11-21)
+
+The crop frame was still a thing the tool placed for the user: arming Crop
+seeded a rectangle, so the first thing on screen was a guess. This revision
+makes the rectangle the user's answer and gives the panel a way to say which of
+its three shape values is an input.
+
+- **Crop opens unframed.** `enterCropTool()` clears the four fields and the
+  locks and nothing else; the frame appears when the user drags one out, clicks
+  the picture without travelling (which asks for the whole picture), types a
+  side, picks a preset or picks an anchor. A click while a frame already exists
+  does not replace it — the create surface is `enabled` only while
+  `cropHasRect()` is false, and the frame owns a press that starts on it.
+- **Width, Height and Ratio are inputs with locks, not a ratio table.** Each
+  field carries a padlock drawn on a `Canvas` (a themed icon would depend on the
+  desktop, and the emoji glyph was blank here). The locks are the old
+  "Which of the three is derived?" question asked directly: Width+Ratio makes
+  Height a consequence, Height+Ratio makes Width one, and Width+Height makes the
+  ratio a consequence (its field is disabled and follows the pair). A third lock
+  is refused through either of the two paths that implement the rule, so the
+  button snaps back instead of showing a state the view does not hold.
+- **Ratio is text, and free is empty.** `3:2`, `3/2`, `3x2` and a bare `2` parse;
+  the display is reduced by its gcd, so a 1024 × 768 preset reads `4:3`. An empty
+  field (whose placeholder says `Free`) means unconstrained, which is a clearer
+  statement than a "Free" row in a dropdown. A preset still sets a concrete size
+  and writes the same ratio field.
+- **A locked side is a lock on the canvas too.** The drag path already pinned an
+  axis for a locked side; now the panel's locks are the only source of that rule.
+  Two pinned values fix the shape, so `cropResizable` is false and the eight
+  handles do nothing while moving the frame from the inside still works.
+- **Typing one free side follows the document's shape.** The first keystrokes of
+  `800` into an empty Width would otherwise leave `8 × 6` behind; while the other
+  side has not been typed in this rectangle (`cropHeightAuto` / `cropWidthAuto`)
+  it follows the ratio, or the document's aspect when the ratio is free. A
+  preset, a drag, a click, a ratio and Clear reset those flags, so a side the
+  user typed is never silently rewritten.
+- **Reset and Clear are different statements.** Reset restores the panel's
+  options (unlock all three, ratio free, mode Center, transparent fill, preset
+  Custom, anchor Center) and leaves the frame where it is. Clear puts the frame
+  down, empties the fields and releases the locks while keeping the options, so
+  the frame is gone and a chosen ratio, mode, colour or anchor survives.
+- **Apply frames the result.** `applyCrop()` records the rectangle's size before
+  sending; when the published document arrives at that size, `settleAppliedCrop`
+  releases the locks and puts a frame over the whole new document, so the next
+  crop starts from what the user can see. A document change that is not the
+  pending cut is handled by the existing clamp/refit instead.
+- **The crop live draft is gone from the UI.** `editor_crop_preview` still exists
+  in protocol/Core with its tests, but no QML emits it and the crop Live preview
+  row, its toggle and the crop hint labels were removed; the Transform tool keeps
+  its own draft and hint. The sidebar order is the interaction order: X/Y/W/H/
+  Ratio, a separator, mode and fill, a separator, preset and anchor, a separator,
+  Apply / Reset / Clear.
+- **`swapCropOrientation` is removed.** With the rectangle drawn by hand and the
+  ratio reduced to one text field, a one-button turn was a second way to say what
+  a drag or the fields already say. The swap button and its QML helper are gone.
+- No protocol or Core change belongs to this pass: a crop is still
+  `{x, y, width, height}` plus the row-91 fill fields, and the locks, ratio text,
+  Clear and settle are all presentation state writing those numbers.
+
+### Follow-up: no rectangle means nothing is selected
+
+The frame's shade used to require a rectangle: with none, the picture stayed
+bright and the only cue was an empty form. It now dims the whole picture at the
+same 45 % while `cropFrameShown` is false, and the four edge strips take over
+the moment a rectangle exists — so "nothing chosen" and "this part is kept" are
+two different pictures. The dim is one rectangle sized from the same document
+projection the frame and the four strips read, so it cannot disagree with the
+picture.

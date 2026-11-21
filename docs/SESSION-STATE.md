@@ -74,7 +74,55 @@ scale form: two numbers with one drawn chain, a concrete size preset, an
 always-visible background and a real resampling filter, opened with
 `Ctrl+Alt+I` with Width selected; Crop gains a Center/Grow choice, where Grow
 lets the rectangle leave the picture and paint the new border in a chosen
-colour.
+colour. This pass (row 92) gives Crop back to the user: it opens with no frame,
+a drag, a click, a typed side, a preset or an anchor builds one, Width/Height/
+Ratio each carry a lock so only two of them can be inputs, the ratio is a text
+field (`3:2`, blank for free), Reset restores the panel while Clear puts the
+frame down, and an applied cut leaves a frame over the whole result. A follow-up
+(row 93) makes the format list true: AVIF now decodes in the Editor (the `avif`
+feature was an encoder; `avif-native` and a libdav1d link line supply the
+decoder), an undecodable file is refused with a translatable line instead of an
+English library error, and `.jpe` is listed as the JPEG it is. This pass
+(row 94) turns the Editor's left column into the drawing-first rail the user
+asked for: twelve of the repository's own SVGs in a two-column grid of 34 px
+squares, a bottom control that folds it to one column, a tooltip and an
+accessible name on every button, and the 220 px text sidebar and its splitter
+gone; the Crop and Resize number fields gained a `px`/`%` selector that
+re-spells the same pixel quantity (percent of the document's width for Width, of
+its height for Height) without ever reaching the protocol. A same-day follow-up
+on that row moves the selector out of the field to sit beside it, leaves X and Y
+without one (a place is a pixel coordinate, not a fraction), dims the whole
+picture while Crop is armed and no frame exists, shortens the crop button to
+`Apply`, pins the rail drawing at its own 20 px so the first click cannot resize
+it, and moves the Editor's Back-to-browser button into the Viewer's first slot.
+The pass after that (row 95) splits the Editor's right column in two — the armed
+tool's options above a draggable divider, and Info / History / Preview as tabs
+below — so a crop no longer hides the document's history and thumbnail and the
+pointer column has room to be reference only. The tab strip is drawn in the
+app's colours (`PanelTabs.qml`), labels fold to drawings under 240 px, arming a
+tool opens the zone, and the pinned Apply/Reset/Clear row is a grid whose column
+count follows the measured width of the three translated labels — three 80 px
+buttons do not fit the default 236 px row, so Apply takes a line of its own and
+`Bỏ khung` stays whole instead of eliding. The latest session (rows 96–98)
+takes the three separate right-hand columns apart and builds one shared dock:
+the Browser shows its preview over the file's details, the Viewer gets the
+details it never had, and the Editor keeps the tool options on top and `Info`,
+`History` and `Original` below — where `Original` is now the file on disk rather
+than Core's working render, keyed on its mtime and size so a save over the same
+path is a new picture. A one-page dock draws no tab strip. Each workspace's
+panel visibility is its own flag in `config.json` and in `UiState`, while the
+dock's width is one session value shared by the three views. The Editor's tool
+zone no longer has a divider or a fixed 440 px height: it is as tall as its
+options, its action row sits directly under them, and only a window that cannot
+keep 180 px of reference below it makes the options scroll — `PanelDivider.qml`
+is deleted. The pointer's heading always reads `Pointer options` and its body
+`This tool has no options.`, and Resize leaves the pointer armed behind its
+modal. Finally the Browser's file, folder and quick menus and the Viewer's
+canvas menu gained `Show in folder`, which asks `org.freedesktop.FileManager1`
+to select the path, falls back to the portal's containing folder and then to the
+default handler. On the real window the Original tab first drew black, because
+it handed the thumbnail cache where a `ThumbnailBook` was expected and the
+`TypeError` left `edge` at 0; the binding and its test were fixed.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -136,21 +184,70 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `editor-crop`'s `seed`/`swap`/`apply` arguments and its ratio/document log;
   the reworded hint, Apply label and swap tooltip in the `.ts`; the stale
   `Apply crop` C++ row removed; ADR 0011's revision; four screenshots.
-  The current scale-form/crop-grow pass (row 91) is **uncommitted**:
-  `ResizeDialog.qml` (`constraint`/`lockedRatio`, `backgroundMode`/`customColor`,
-  `filter`, the drawn chain, the `resizeRequested` signal), `EditorView.qml`
-  (the resize command's `fill_alpha`/`filter`, Crop's `cropMode`,
-  `cropFill`/`cropFillColor`, the grow border, `revealCropGrowth`), `Main.qml`
-  (the `Ctrl+Alt+I` shortcut), `crates/app-protocol/src/lib.rs`
-  (`ResizeFilter`, `fill_alpha`, signed crop fields and the optional fill),
-  `crates/app-core/src/core.rs` + `editor.rs` (`validate_crop_mode`, `grow_crop`,
-  `resample` per kernel, `fit_with_padding` with alpha), `UiLines.qml` (the grow
-  history and refusal lines), `cpp/main.cpp` (both harness requests and the
-  skill reference), `tests/qml/tst_editor.cpp` (the scale-form cases,
-  `aGrowingCropReachesOutsideThePicture`, the init resets), `i18n/kogaview_vi.ts`
-  (19 new sentences), ADR 0012 and ADR 0011 revisions, and four screenshots
-  under `docs/evidence/`. Nothing is committed yet, so `git status` is the
-  authority for this pass.
+  Commit `af3fbfc just play` landed the scale-form/crop-grow work of row 91 and
+  a first cut of row 92's Crop rework (the unframed start, the three locks, the
+  ratio text field, the reordered panel, `ensureCropFrame`, `clearCropFrame`,
+  `resetCropOptions` and `settleAppliedCrop`) without a report row of its own.
+  The crop-rework follow-up is **uncommitted**: `EditorView.qml` (the
+  `cropHeightAuto`/`cropWidthAuto` keystroke follow, the white-on-accent
+  padlock glyph, the lock buttons resyncing after a refused third lock, and the
+  removed `swapCropOrientation`), `cpp/main.cpp` (the `editor-crop`
+  `unframed`/`full`/`clear` and lock/reset arguments, the `_ARG9` preset a
+  `clear` run builds first), `tests/qml/tst_editor.cpp`
+  (the five new crop cases, nine updated bodies and the removed swap/preview
+  cases), `i18n/kogaview_vi.ts` + `cpp/translations.cpp` (4 new sentences and
+  15 vanished entries), ADR 0011's second revision, `docs/M1-REPORT.md` and this
+  file, and six screenshots under `docs/evidence/`. Row 93 is **also
+  uncommitted** on top: `crates/app-core/Cargo.toml` (`avif-native`),
+  `CMakeLists.txt` (`PkgConfig::DAV1D` on the executable), `editor.rs`
+  (`has_decoder` builds the decoder, plus the AVIF and no-decoder tests),
+  `core.rs` (the `open_editor` guard and its test), `app-protocol`'s `jpe`,
+  `ops.rs`, `scripts/dev.py` (doctor's libdav1d line), `docs/BUILD.md`,
+  ADR 0005's revision, `docs/M1-REPORT.md`, this file and four screenshots.
+  Row 94 is **also uncommitted** on top: `crates/desktop/qml/icons/` (twelve
+  SVGs), the new `crates/desktop/icons.qrc` and its `.qrc` line in
+  `crates/desktop/build.rs`, the new `ToolRailButton.qml` and `UnitField.qml`
+  (both added to the QML list, `UnitField.qml` also to `i18n/kogaview_ts.pro`),
+  `EditorView.qml` (the rail, `toolColumns`/`toolRailWidth`, the four crop
+  `UnitField`s with X/Y pixel-only, whole-pixel canvas position, the
+  `cropShadeEmpty` whole-picture dim, the `Apply` label and the Back button moved
+  to the first toolbar slot), `ResizeDialog.qml` (two `UnitField`s, `px` on
+  every open, focus/Tab through `inputField`), the follow-up's `UnitField.qml`
+  as a `RowLayout` around the `TextField` and its selector, `ToolRailButton.qml`'s
+  wrapper `contentItem` (`iconDrawing`), `tests/qml/tst_editor.cpp` (three new
+  cases, the `chooseUnit` helper, `textInput()` for a row-shaped field, the
+  no-frame shade assertions, an `init()` that resets the fold and the units and
+  fits the view), `tests/qml/tst_toolbar.cpp`
+  (`theBackButtonLeadsEveryWorkspaceToolbar`), three Vietnamese sentences in
+  `kogaview_vi.ts` plus the compiled table (`Apply crop (Enter)` retired), ADR
+  0018 and its follow-up notes, ADR 0011's no-frame note, `docs/M1-REPORT.md`,
+  this file and three screenshots.
+  Row 95 is **also uncommitted** on top: the new `PanelTabs.qml` and
+  `PanelDivider.qml` (both in `crates/desktop/build.rs`), four SVGs
+  (`info`, `history`, `preview`, `chevron`) in the new `icons.qrc`,
+  `EditorView.qml`'s two-zone inspector (`rightToolZoneHeight`,
+  `toolZoneFolded`, `rightTab`/`rightTabEntries`/`rightTabIndex`, the heading
+  and its `toolZoneToggle`, `toolOptionsScroll`, the `GridLayout` action row and
+  the view's `cropActionsStack` measurement,
+  the divider, the tabs and the Info/History/Preview `StackLayout` pages),
+  `cpp/main.cpp`'s `editor-dock` request and its comment, `tests/qml/tst_editor.cpp`
+  (`theInspectorSplitsToolsFromThreeReferenceTabs`, `selectRightTab`,
+  `scrollOptionsIntoView`, four rewritten cases, `init()`'s new resets), four
+  Vietnamese sentences in `kogaview_vi.ts`, ADR 0019, `docs/M1-REPORT.md`, this
+  file and six screenshots.
+  Rows 92–98 are committed on top in three commits, not the four originally
+  planned: `6b6ef19 feat(core): panel flags per workspace, saved-file identity
+  and AVIF` (rows 93 and 96's Rust, the format/build plumbing), `f97ec04
+  feat(shell): one right dock, a content-sized tool zone and file reveal`
+  (rows 96–98 plus the QML/C++/tests of rows 92, 94 and 95, which sit on the
+  same files), and the docs commit itself (the report rows, ADRs 0018–0020, the
+  revisions, the contract and the twenty-five grabs). Splitting by row would
+  have been a fiction: `EditorView.qml` carries rows 90–98, the `.ts` carries
+  every string and
+  `docs/M1-REPORT.md` every row, so the split is by layer and the shell commit
+  names the earlier rows it carries. The tree at each row was not separately
+  run; the full gate was run once on the whole tree.
+  `git status` is the authority for exactly what is still open.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -201,9 +298,21 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `KOGAVIEW_DEV_UI_REQUEST=settings-drag` (modal-pointer session; dragged the
   real Settings header with `QTest` and logged the dialog and Viewer offsets).
   Every temporary hook is gone again; the only surviving debug additions are the
-  permanent `editor-resize`, `editor-crop` and `editor-transform` requests
-  above, plus row 87's `KOGAVIEW_DEV_KEY`. `editor-transform` (row 82) clicks the
-  Transform tool, moves one corner
+  permanent `editor-resize`, `editor-crop`, `editor-transform`, `editor-paint`,
+  `editor-export` and `editor-dock` requests above, plus row 87's
+  `KOGAVIEW_DEV_KEY`. `editor-dock` (row 95) is the dock without a pointer:
+  `_ARG` names the reference tab, `_ARG2=fold` presses the chevron,
+  `_ARG3` writes the dock's width and `_ARG4` clicks a rail tool button only
+  while it is not selected; it logs the tab, its index, the fold, the width and
+  the armed tool, and sends no command — which is the point, because a tab
+  click leaves the journal untouched. It is what produced rows 95–97's six
+  dock grabs (the divider it used to mention is gone; the fold and the tab
+  remain), and the `Editor` run for `M1-editor-original-vi.png` is where the
+  black Original frame was seen: the page had handed the `ThumbnailCache` where
+  its `ThumbnailBook` was expected, `edgeFor` raised `TypeError`, `edge` stayed
+  0 and no picture was requested. The log's last label read `tabs` while
+  printing `rightTabIndex`; it now says `index`.
+  `editor-transform` (row 82) clicks the Transform tool, moves one corner
   (`_ARG` = `X,Y` in document pixels, `_ARG2` = `0`–`3` or `e0`–`e3`) through the
   same helpers the handles call, and takes `_ARG3=live` and `_ARG4=apply`; it
   found nothing broken, but it is the only way a quad reached the real window
@@ -297,6 +406,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 89 | The three tiers were chosen from the widest workspace, so the Browser folded at ~782 px although it needs 438 and showed labels only at the Editor's ~1000 px; the switcher's three buttons were counted only in that global maximum | per-workspace `*CompactRowWidth`/`*MiniRowWidth`/`*LabelledRowWidth` and `modeFor(workspace,width)` in `ToolbarMetrics.qml`, `Main.qml`'s single `toolbarMode` binding, the per-workspace fixture and six row measurements, `theTierFollowsTheOpenWorkspace`, ADR 0017 + ADR 0015 revision | toolbar 17; real window at 600/700 px: Browser all six icons / labels while Viewer and Editor fold (`M1-toolbar-tier-*.png`); 3 mutations, each caught |
 | 90 | Crop still asked to be typed into: no frame on a fresh document, a chosen ratio broken by every drag, nothing dimmed outside the frame and no thirds, no one-button turn, no keyboard, Reset emptied the form, Apply accepted the whole document (`edit_noop`), and an applied crop left the tool with no frame | `EditorView.qml` (`cropRatio: "free"`, `seedCropFrame`, `cropSeedDebounce` + `refitCropAfterDocumentChange`, ratio-aware `dragCropHandle`/`dragCropCreate`, `cropShade` + four thirds lines, `swapCropOrientation`, arrow/Shift/Alt/Enter/Escape, `cropCanApply`, `applyCrop` order), `cpp/main.cpp` (`editor-crop` `seed`/`swap`/`apply` + ratio/document log), `tst_editor` (six new cases, `resetRestoresTheStartingCropFrame`, free-default assertion), `.ts` (hint, “Apply crop (Enter)”, swap tooltip), ADR 0011 revision | editor 55; real window (Vietnamese, isolated `XDG_*`): seeded 1003 × 1003 frame with shade/thirds (`M1-crop-seed-vi.png`), 4:3 → 3:4 swap to 384 × 512 at (435,371) (`M1-crop-swap-vi.png`, `M1-crop-ratio-locked-en.png`), apply `512 384 742 870` then a fresh 410 × 307 frame on the 512 × 384 document (`M1-crop-applied-vi.png`); 11 mutations caught, one equivalent reordering recorded |
 | 91 | Resize asked for its shape through a ratio table and a `Pad to fit` checkbox, so the form had a stepper, a hidden fill row and no way to say how the pixels are resampled; the lock's icon had also gone blank. Crop could only cut inside the picture, so a photo could never gain a border | `crates/desktop/qml/ResizeDialog.qml` (the +/- steppers and the Ratio combo removed; `constraint` + `lockedRatio` as the only aspect lock, captured when switched on; `Size preset` kept; an always-visible `Background` dropdown — `None` cover-crops, a colour fits and pads, `Transparent` pads at alpha 0 — with its swatch; a `Filter` dropdown; the chain drawn by a `Canvas` because an emoji glyph was blank and a themed icon would depend on the desktop; Width focused and selected on open, `Tab` to Height, `Enter` applies), `crates/desktop/qml/Main.qml` (`Ctrl+Alt+I` opens the form in the Editor), `crates/desktop/qml/EditorView.qml` (the resize command carries `fill_alpha`/`filter`; Crop gains `cropMode` (`center`/`grow`), `cropFill`/`cropFillColor`, signed X/Y, a grow border drawn on the canvas, `revealCropGrowth` zooming out when the fitted view leaves no room, the `cropFillForCommand` rule that an inside Grow rectangle travels as an ordinary crop), `crates/app-protocol/src/lib.rs` (`ResizeFilter` with `auto`/`nearest`/`bilinear`/`bicubic`/`bspline`/`lanczos3`; `fill_alpha` on resize and crop; `EditorCrop`/`EditorCropPreview` take signed `x`/`y` and an optional fill), `crates/app-core/src/editor.rs` (`resample` per kernel, `fit_with_padding` with alpha, `validate_crop_mode`, `grow_crop`, the grow history lines), `core.rs` (dispatch and draft signatures), `UiLines.qml` + `i18n/kogaview_vi.ts` (grow and refusal sentences; 28 new sources, 4 retired with the steppers and the pad), `cpp/main.cpp` (`editor-resize` background/filter/chain arguments; `editor-crop` `_ARG6`/`_ARG7`), `tests/qml/tst_editor.cpp` (the scale-form cases and `aGrowingCropReachesOutsideThePicture`), ADR 0012 and ADR 0011 revisions | `just test` translations 341/109 C++/338 drawn, cargo 85+4, viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 57 · language 7 · toolbar 17; `just build` and `cargo fmt --check` clean, `qmllint` only the pre-existing unqualified-access warnings; **real window** (window grabs, isolated `XDG_*`, Vietnamese): the scale form with the chain drawn in the accent colour at the checked state, `Nền` reading `Đen` and `Bộ lọc` `Bicubic` (`M1-resize-scale-form-vi.png`); `Ctrl+Alt+I` logged `declared 1 allowed 1` and opened the form with `1200` selected in Width (`M1-resize-shortcut-vi.png`); Crop in `Mở rộng` with X `-336`, Y `-224`, 1536 × 1024 and the black border drawn around the 1200 × 800 picture (`M1-crop-grow-border-vi.png`), then Apply sent `editor_crop` (`crop grow 1536 1024 #000000`, `ok:true` rev 4), the document became 1536 × 1024 with its border and a fresh frame was seeded on it (`M1-crop-grow-applied-vi.png`). No hand touched the form: the fields/buttons were driven by the harness and `QShortcutEvent` injection; the filter's visible effect, a real `Ctrl+Alt+I` press and a hand-dragged grow frame are not verified |
+| 92 | Crop still placed a frame for the user the moment it opened, the ratio was a dropdown, the panel carried hints, a Live preview row and a swap button, and there was no way to say which of Width/Height/Ratio the user is pinning; Reset emptied the form and Clear did not exist | `crates/desktop/qml/EditorView.qml` (`enterCropTool` clears the fields, releases the locks and seeds nothing; `createFullCropFrame` for a click with no travel; `clearCropFrame` vs `resetCropOptions`; `ensureCropFrame` builds from a typed side, a preset or an anchor; `cropLockWidth`/`cropLockHeight`/`cropLockRatio` + `CropLockButton` padlocks painted on a `Canvas`; `cropWidthEditable`/`cropHeightEditable`/`cropRatioEditable`/`cropResizable`; ratio as text with `cropRatioPair`/`parseRatio`/`gcd`/`reducedRatio`/`applyCropRatio`/`setCropRatio`; `cropHeightAuto`/`cropWidthAuto` so a typed side does not leave `8 × 6` behind; `pendingCropResult` + `settleAppliedCrop` for a frame over the applied result; the sidebar reordered to X/Y/W/H/Ratio · mode/fill · preset/anchor · Apply/Reset/Clear; the crop hints, the crop Live preview row and `swapCropOrientation` removed), `cpp/main.cpp` (`editor-crop` takes `unframed`/`full`/`clear` — the old `seed` spelling still works — `_ARG3` lock names, `_ARG4=reset`, `_ARG8` a ratio typed after the preset, `_ARG9` the preset a `clear` run builds and then clears, and logs the three locks), `tests/qml/tst_editor.cpp` (5 new crop cases — `cropStartsWithNoFrameAndClickBuildsOne`, `theCropFieldsCreateTheFrame`, `theCropLocksChooseWhichFieldIsAnInput`, `resetRestoresTheCropOptionsAndKeepsTheFrame`, `aLockedSidePinsTheFrameDrag` — nine existing crop bodies updated, and the swap/Live-preview cases removed; `init()` resets the locks, the auto flags and the pending result), `i18n/kogaview_vi.ts` + `cpp/translations.cpp` (4 new sentences, 15 vanished entries removed), the harness reference, ADR 0011 revision | `just test` translations 332 strings / 106 C++ / 332 drawn / 4 by context, cargo 85 + 4, editor 58 (viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · language 7 · toolbar 17); `just build` and `cargo fmt --check` clean; **real window** (window grabs, isolated `XDG_*`, Vietnamese): Crop open with no frame and empty fields (`M1-crop-unframed-vi.png`), a click creating the whole-picture frame with Apply disabled as `edit_noop` (`M1-crop-click-full-vi.png`), Width+Ratio locked with Height disabled and the frame at `bottom_right` 512 × 384 (`M1-crop-locks-vi.png`), Clear pressed on a framed, ratio-locked 512 × 341 rectangle (harness log `before clear` `frame true rect 344 230 512 341`) returning to the unframed state with X/Y `0`, the Width/Height fields empty (their placeholders show `1200`/`800`), the locks off and the ratio `3:2` kept (`M1-crop-clear-vi.png`), Reset keeping the frame exactly where it was (688,416) while ratio/anchor/mode/preset read their defaults (`M1-crop-reset-vi.png`), and Apply sending `editor_crop 512 384 688 416` (`ok:true` rev 4) with the document at 512 × 384 and a 0,0,512,384 frame on it (`M1-crop-applied-frame-vi.png`, footer rev 5). Mutations, each restored: seeding a frame on open, removing the auto-height follow, Clear keeping its fields, Reset clearing them, a lock surviving the settle, a locked Height being overwritten, `cropWidthEditable` ignoring a ratio lock, the locked-side drag branch removed, `cropResizable` losing its ratio clause, the third-lock rule removed from both its guards, Bilinear resampling swapped to Nearest, and the pad fill's alpha forced to 255 — all caught. Three equivalent/unreached mutations are recorded below. No hand touched the panel: every run drove the helpers and buttons the harness calls |
+| 93 | The advertised formats and Core's decoders disagreed: `.avif` was listed everywhere but the Editor failed with `The image format Avif is not supported` (the `avif` feature is an encoder), `has_decoder` answered `true` from a guessed name, and `.jpe` was invisible in the Browser and, separately, in the fallback chooser | `crates/app-core/Cargo.toml` (`avif-native` beside `avif`), `CMakeLists.txt` (`PkgConfig::DAV1D`; the staticlib alone leaves `dav1d_*` undefined), `editor.rs` (`has_decoder` builds the decoder; `an_advertised_avif_is_really_decoded`, `a_file_with_no_decoder_is_reported_as_such`), `core.rs` (`editor_open` refuses before a worker with the translatable `no_decoder` line), `app-protocol`'s `jpe`, `ops.rs`, `cpp/platform.cpp` (the chooser's second list gains `.jpe`), `scripts/check_packaging.py` (compares the two spellings), `scripts/dev.py` (doctor's libdav1d line), `docs/BUILD.md`, ADR 0005 revision | `just test`: translations 332 / 106 C++ / 332 drawn, packaging 19 MIME, cargo **88 + 4**, all eight QML suites; `cargo fmt --check` clean; **real window** (this session's Wayland, isolated `XDG_*`, Vietnamese): AVIF opens in the Editor at 64 × 48 with the tools live (`M1-editor-avif-fixed.png`), the chooser filter logs `*.jpe` where it stopped at `*.jpeg`, `b.jpe` is listed with a thumbnail (`M1-browser-jpe.png`) and opens at 64 × 48 (`M1-editor-jpe-vi.png`), the folder reads 17 items · **16 images**, and a HEIC is refused with `ok:false` `no_decoder` and an unchanged revision in the journal, the toast reading `Không mở được …/a.heic: không có bộ giải mã cho định dạng này` (`M1-heic-rejected-vi.png`); 6 mutations caught, and the C++ link failure recorded before the CMake line was added |
+| 94 | The Editor's left column was a 220 px text sidebar repeating the toolbar, and no size field could be read as a fraction of the picture | twelve SVGs in `crates/desktop/qml/icons/` registered by the new `crates/desktop/icons.qrc`; `ToolRailButton.qml` (34 px, icon-only, tooltip + accessible name) with its own `IconImage` content item because Breeze replaces a file icon with a generic document glyph, now wrapped so the 20 × 20 drawing (`iconDrawing`) keeps its own size instead of being stretched to the square; `UnitField.qml` (`px`/`%` beside the field in a `RowLayout`, `pixels()`/`setPixels`, `unitReference`, `inputField`/`nextField`/`previousField`, a forwarded `accepted`, `unitsVisible`, two decimals in the `C` locale); `EditorView.qml`'s rail (`toolColumns`, `toolRailWidth`, `editorToolGrid`, `editorEditGrid`, `toolRailColumns`, heading hidden at one column, left splitter removed), Crop's Width/Height with a selector and X/Y as pixel-only fields, the whole-picture 45 % dim with no frame (`cropShadeEmpty`), the button reading `Apply`, the Back button moved to the first toolbar slot, and a whole-pixel canvas position; `ResizeDialog.qml`'s two `UnitField`s with keyboard focus and Tab through `inputField`; `tst_editor`'s three cases plus `tst_toolbar`'s back-button order case; ADR 0018 (two revisions) and ADR 0011's no-frame note | `just test editor` 61 passed and `just test toolbar` 18; translations 334 strings / 106 C++ / 334 drawn / 4 by context after retiring `Apply crop (Enter)`; `just build` and `cargo fmt --check` clean; **real window** (Wayland, isolated `XDG_*`, dev commands, no hand): the 88 px two-column rail with all twelve drawings and, while Crop is armed frameless, the whole picture dimmed, X/Y bare, `px` beside Width/Height and the button reading `Apply` (`M1-editor-crop-unframed.png`), the same panel with a 512 × 384 frame kept bright (`M1-editor-tool-rail.png`), the Resize form's `px` pair beside its fields with the chain on (`M1-editor-resize-units.png`); two runs measured the same muted drawings (resize 14 × 16, transform 15 × 18, brush 19 × 18, eraser 15 × 16) before and after a tool click. The first grab was a column of identical document glyphs — that is how the Breeze behaviour was found; the first grab of the follow-up clipped `px` to one letter in a 42 px selector, which is why it is 56 px wide |
+| 95 | The Editor's right column was one thing at a time: with the pointer it showed the document's identity, history and thumbnail, and arming Crop, Transform or Brush replaced all of that with the tool's fields — the reference disappeared exactly when a crop needed it, and the pointer column had no room for tool options | `PanelTabs.qml` (self-drawn strip, one button per tab, `editorTab_<key>`/`editorTabIcon_<key>`/`editorTabLabel_<key>`, labels folded under 240 px), `PanelDivider.qml` (scene-coordinate drag, clamped, double-click restores 440), four new SVGs, `EditorView.qml`'s two-zone inspector (`rightToolZoneHeight` 440 clamped to `header+40 … height-180`, `toolZoneFolded`, `rightTab`/`rightTabIndex`, `toolOptionsScroll`, a `GridLayout` action row whose `cropActionsStack` measures the three labels, the divider, the tabs, a `StackLayout` keeping `imageName`/`historyList`/`pointerThumbnail`), `onToolChanged` unfolding, `cpp/main.cpp`'s `editor-dock`, `tst_editor`'s `theInspectorSplitsToolsFromThreeReferenceTabs` plus `selectRightTab` and `scrollOptionsIntoView`, four Vietnamese sentences, ADR 0019 | `just test` 337 strings / 106 C++ / 337 drawn / 4 by context, cargo 88 + 4, editor **62** (viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · language 7 · toolbar 18); `cargo fmt --check` clean; **real window** (Wayland, isolated `XDG_*`, `editor-dock`, no hand): Info with no tool zone (`M1-editor-dock-info.png`), Crop over History (`M1-editor-dock-history-crop.png`), Brush over Preview (`M1-editor-dock-preview.png`), the folded zone (`M1-editor-dock-folded.png`), the 260 px Vietnamese dock with `Bỏ khung` whole (`M1-editor-dock-vi-260.png`), and the 220 px dock with icon tabs and Apply on its own line (`M1-editor-dock-compact.png`) — the old three-column row squeezed the three 80 px buttons to 74.6 px at the default 236 px row, so the column count is measured; 9 mutations, each caught |
 
 ## Test gate
 
@@ -304,17 +417,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 341 strings in kogaview_vi.ts, 109 of them compiled into C++, 338 drawn by the QML, 4 looked up by context
+translations: 344 strings in kogaview_vi.ts, 106 of them compiled into C++, 344 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 85 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 57 · language 7 · toolbar 17
+cargo: 91 passed (kogaview-core) + 5 passed (kogaview-protocol)
+viewer 42 · browser 50 · cache 15 · state 7 · settings 18 · editor 67 · language 7 · toolbar 18
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); row 91 adds no new warning (the
+`field_reassign_with_default`, `needless_return`); rows 91 and 92 add no new warning (the
 protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
@@ -671,6 +784,61 @@ protocol's `Anchor` and the anchored Core helpers are still gone).
   intersection of the picture and the rectangle into its place. That is why a
   grow is a snapshot for undo, and why its history line says
   `Grow to W × H · #rrggbb border` (or `transparent border`).
+
+## Design decisions, crop rework (row 92, ADR 0011 revision)
+
+- **The frame is the user's answer, so Crop opens without one.** The old tool
+  seeded a rectangle the moment it was armed, which meant the first thing the
+  user saw was a guess and Apply could be one click from cutting a picture they
+  had not framed. `enterCropTool()` now clears the four fields, releases the
+  locks and does nothing else; a drag, a click (the whole picture), a typed
+  side, a preset or an anchor is what builds a rectangle. Keeping an existing
+  frame across a tool switch would also be wrong: the options survive, the
+  answer does not.
+- **Width, Height and Ratio are three inputs with locks, and one is derived.**
+  The locks replaced a ratio dropdown plus a `Keep current ratio` item because
+  the question the panel is really asking is "which two numbers do I choose, and
+  what follows?". Width+Height fixes the shape (the ratio text is disabled and
+  follows the pair); Width+Ratio derives Height; Height+Ratio derives Width. A
+  third lock is refused, and the button snaps back, because a state with three
+  inputs would have nothing to derive.
+- **The padlocks are drawn, not icon-font glyphs.** The first version used the
+  style's indicator and the second an emoji, which was blank in this session's
+  font; a themed icon would make the control depend on the desktop's icon set.
+  `CropLockButton` paints a two-part padlock in a `Canvas`, white on the accent
+  when checked and grey when not, so the checked state is legible on the dark
+  window without a theme lookup. The first grab showed an accent lock on an
+  accent chip — a blue square — which is why the checked glyph is white.
+- **Ratio is text because a ratio is a pair, not a menu.** `3:2`, `3/2`, `3x2`
+  and a bare `2` parse, the display reduces by its gcd (a 1024 × 768 preset shows
+  `4:3`), and an empty field is `Free`. A ratio typed into an empty panel does
+  not invent a frame; the next typed side uses it.
+- **The auto-follow flags exist because typing is incremental.** Without them,
+  typing `800` into an empty Width set Height on the first keystroke (`8 × 6`)
+  and then refused to move it, because `6` was now "a height the user typed".
+  `cropHeightAuto`/`cropWidthAuto` say "this side has only ever followed", so
+  the rest of the number keeps deriving it; typing that side ends the follow.
+  A drag, a click, a preset, a ratio and Clear reset both flags.
+- **A locked side is a lock on the canvas.** The drag code already had a branch
+  that pinned a locked axis; the panel's locks are now the only source of that
+  rule, and `cropResizable` is false once two values are pinned, so the handles
+  do nothing while the inside of the frame still moves it. The pointer must not
+  be able to change a value the panel says cannot change.
+- **Reset is about the panel; Clear is about the frame.** Reset restores every
+  option to its default (unlocked, free, Center, transparent, Custom, Center)
+  and leaves the rectangle exactly where it is. Clear empties the fields,
+  releases the locks and puts the frame down, but keeps the chosen mode, colour,
+  ratio and anchor — the two verbs a user expects from "Reset" and "Clear".
+- **Apply frames the result.** The document Core publishes after a cut has the
+  rectangle's own size; `pendingCropResult` compares that against the published
+  size and `settleAppliedCrop` releases the locks and writes a 0,0,W,H frame
+  over the whole result. A document change that is not the pending cut keeps the
+  existing clamp/refit rule instead of pretending the user made a new crop.
+- **The crop live draft is gone from the window.** `editor_crop_preview` remains
+  a protocol/Core command with its tests, but no QML emits it and the row, the
+  toggle, the hint labels and `swapCropOrientation` are removed; Transform keeps
+  its own draft and its own hint, which is the only place a live preview still
+  answers a question the typed fields cannot.
 
 ## Design decisions, resize-dialog session (rows 83, ADR 0012 and 0013)
 
@@ -1087,6 +1255,98 @@ reordering is recorded as **equivalent**: moving `clearCropFields()` back after
 seed sees the cleared fields either way; the order before the command is kept
 for clarity, and is not claimed to fix anything.
 
+Crop rework (row 92): seeding a frame in `enterCropTool()` →
+`cropStartsWithNoFrameAndClickBuildsOne` fails (`800 × 600` where an empty field
+was expected); removing the `cropHeightAuto` follow from `linkHeightFromWidth` →
+`theCropFieldsCreateTheFrame` fails with Height `6` instead of `600`; Clear
+keeping its fields → the same case fails with Width `800` where the field should
+be empty; Reset clearing them → `resetRestoresTheCropOptionsAndKeepsTheFrame`
+fails on the frame it was supposed to keep; a lock surviving the settle →
+`theAppliedCropLeavesAFreshFrame` fails with "a lock survived the rectangle it
+described"; a locked Height overwritten by a typed Width → the lock case fails
+with Height `188` instead of `300`; `cropWidthEditable` ignoring the ratio lock
+→ the same case fails because Width is still an input; the locked-side branch
+removed from `dragCropHandle` → `aLockedSidePinsTheFrameDrag` fails with Height
+`190`; `cropResizable` losing its ratio clause → the lock case fails with
+"Width+Ratio still let a handle reshape the frame". Each restored, then the
+suite green. Three are recorded as **equivalent or unreached**, not as passes:
+`settleAppliedCrop`'s `setCropRect` can be removed because the document-change
+refit already pulls an offset rectangle into the result (the result is exactly
+the rectangle's size, so the old x/y can never fit); the per-branch third-lock
+guard and the W+H "ratio becomes a consequence" line each enforce the same rule,
+so removing either alone changes nothing — removing both fails the lock case; and
+the `applyCropRatio` locked-side branch is not reached by that case at all.
+Resize filters, which row 91 added without mutation checks, were run here:
+Bilinear resampling swapped to Nearest → `the_resize_filter_changes_the_pixels`
+fails on the interpolated sample; `fit_with_padding`'s fill alpha forced to 255 →
+`resize_can_leave_the_leftover_transparent` fails (`Rgba([255,0,0,255])` where
+alpha 0 was written). Both restored.
+
+Rail and units (row 94): deleting `ToolRailButton`'s `contentItem: IconImage`
+→ `theToolRailIsAnIconColumn` fails with `contentItem.source` `""` against
+`icons/pointer.svg`, which is the state in which the style puts its own generic
+glyph in every square; making `setPixels` write whole-number percentages
+(`* 100` instead of `* 10000 / 100`) → `theUnitsAreAnotherSpellingOfTheSamePixels`
+fails with `0` where `0.03` was expected — that px → % → px step **was added
+after the mutation first escaped**, so the two-decimal rule is now guarded
+rather than assumed; making `onUnitChanged` write `String(lastPixels)` instead of
+`setPixels(lastPixels)` → `theResizeFormTakesPercentagesToo` fails with `4000`
+where `100` was expected. Each restored, then the suite green. Note for the next
+session: a **QML-only** edit needs no rebuild (`tests/qml` loads the sources from
+disk) but a **test-source** edit does, and the first two runs of these mutations
+used a binary that still had the old assertions — a stale test binary passes.
+
+Rail and units follow-up (row 94, same day): removing `unitsVisible: false` from
+Crop's X → `theUnitsAreAnotherSpellingOfTheSamePixels` fails with "`!expectItem
+("cropXUnit")->isVisible()` returned FALSE"; making the no-frame dim
+`visible: false` → `theCropFrameDrawsItsGuidesAndShade` fails on
+`cropShadeEmpty`; setting `ToolRailButton.iconSize` to 30 → the rail case fails
+with `iconDrawing.width` 30 against 20, which is the property the wrapper was
+introduced for; putting `Apply crop (Enter)` back as the button's text →
+`just test translations` names the QML string that is no longer in
+`kogaview_vi.ts`; moving the Editor's Back button after Open (source only, no
+rebuild) → `theBackButtonLeadsEveryWorkspaceToolbar` fails with "EditorView.qml's
+first toolbar button is not the back button". Each restored, then `just test
+editor` 61, `just test toolbar` 18 and the translations gate green.
+
+Split dock (row 95), every one run against
+`kogaview_editor_tests theInspectorSplitsToolsFromThreeReferenceTabs` and then
+restored: dropping `&& !view.toolZoneFolded` from the pinned action row's
+`visible` → the case fails at `zone->height() <= 40` while folded (the row kept
+69 px under the heading); hardcoding `currentIndex: 0` in the pages'
+`StackLayout` → `historyPanel` is not visible after its tab is chosen; making
+the divider's `onMoved` a no-op → "the divider did not move the split: 440 ->
+440"; passing `compact: false` to `PanelTabs` → the history label is still
+drawn at 220 px; removing the `toolZoneFolded = false` from `onToolChanged` →
+arming Brush while folded leaves `toolOptionsScroll` invisible; letting the
+pointer have options (`toolOptionsShown` without the `tool !== "pointer"` term)
+→ the opening assertion that the pointer has no options zone fails; and the
+action row back to three cells at 220 px (`columns: 3`, `columnSpan: 1`) →
+"applyCrop is 61 px wide but needs 80", which is the measured sliver this grid
+replaced; with the measured rule in place, `cropActionsStack: false` → the same
+"applyCrop is 61 px wide but needs 80" message, and `tabsCompact: width < 120` →
+the history label is still visible at 220 px. After each restore the case
+passed again, and the whole suite was run green afterwards.
+
+One right dock (rows 96–98), each re-run against its own case and then restored:
+`stripShown: tabs.length > 0` in place of `> 1` → `theSidebarIsOneInformationPage`
+(viewer) and `theSidebarIsOnePreviewPage` (browser) fail, because the one-page
+dock grows a strip that switches to itself; removing `toolOptionsHost` and
+leaving the `ScrollView` to answer the layout → `theReferenceZoneKeepsRoomWhenTheWindowIsShort`
+fails with the tabs pushed under the short window's fold; pointing the Original
+page at `editor.previewPath` instead of `editor.savePath` → `theOriginalTabShowsTheSavedFile`
+fails on the preview file's name; binding one view's splitter to a local width
+instead of `root.rightPanelWidth` → the settings guard fails with "the shared
+width reaches 2 views, expected 3"; calling `Platform.openExternal` where the
+menus should reveal → `theShellSharesOneDockWidthAndRevealsThroughThePlatform`
+fails on the reveal call; stubbing `file_identity` to `(0, 0)` → the Core
+identity test fails because a save over the same path does not change the
+number; making `toggle_right_panel` ignore the explicit `workspace` →
+`a_right_panel_toggle_belongs_to_its_workspace` fails with the other two flags
+written. The black-frame bug was mutated last: `book: thumbs` back to `book:
+view.thumbnails` fails `theOriginalTabShowsTheSavedFile` with `edge 0`, which is
+the defect exactly. Each restored, then `just test` green.
+
 ## Design decisions, export-size session (ADR 0004)
 
 - **A delivery size is one number: the long edge.** `max_edge` scales the whole
@@ -1140,7 +1400,365 @@ for clarity, and is not claimed to fix anything.
   because Qt resolves local types as siblings, and are deliberately absent from
   `crates/desktop/build.rs` so they never ship.
 
+## Design decisions, tool-rail session (row 94, ADR 0018)
+
+- **The rail is a view, not a setting.** `toolColumns` is a QML property; folding
+  to one column sends no command and writes no configuration, so a rail width
+  cannot drift between the core, the settings file and the window. The price is
+  that the fold is forgotten on the next launch, which is stated rather than
+  hidden.
+- **The left splitter is gone, not merely unused.** The rail's own control is
+  its width; keeping a drag handle would recreate the column this change
+  removed. The right inspector keeps its splitter and `rightPanelWidth`.
+- **Twelve drawings, one tint.** The SVGs are single-colour so
+  `AbstractButton.icon.color`'s four states (muted, hover, accent, 40 % for
+  disabled) are a colour write rather than four files each. They live next to
+  the QML and are registered by `icons.qrc` at the module's own resource prefix,
+  because that is the one path both the built module and the QML suites resolve.
+- **The button draws its icon because the style will not.** Measured on this
+  desktop: Basic draws a `icon.source` file, Breeze shows a generic document
+  glyph for it. `ToolRailButton` therefore sets a `contentItem` holding an
+  `IconImage` (the styles' own renderer, which keeps the SVG alpha and takes
+  `color`), and the drawing keeps its own 20 × 20 size inside that wrapper:
+  `AbstractButton` sizes the content item to the control, so an `IconImage`
+  declared *as* the content item was re-laid at run time — icons looked one size
+  when the Editor opened and another after the first click. `icon.source` stays
+  set, because that is the intent the suites read; the suite compares
+  `iconDrawing.width`, not the content item's own width.
+- **The unit selector is beside the field, not inside it.** A child cannot be
+  drawn outside a `TextField`, so the old inline `ComboBox` ate into the number's
+  width, had no room for its own height, and at 42 px elided `px` to one clipped
+  letter. `UnitField` is a `RowLayout` now: the `TextField` fills, the selector
+  is a 56 px control 4 px to its right and as tall as it, with a tooltip and an
+  accessible name. `inputField` names the text control, because a layout cannot
+  take the keyboard; the Resize dialog focuses it, Tab walks `nextField`/
+  `previousField` to it, and `accepted` is re-emitted so Enter still applies.
+- **A place has no unit.** X and Y keep the component but hide the selector:
+  a fraction of the picture is a size, not a position, and the protocol never
+  carried a unit for a coordinate.
+- **A unit is a spelling.** `pixels()` is the authority and `%` is
+  `value / 100 · unitReference`; the field keeps `lastPixels` so px → % → px
+  returns the number the user had instead of a rounded one. Nothing new crosses
+  the protocol, and Apply still sends integers.
+- **Nothing chosen dims the whole picture.** With no crop rectangle the old
+  overlay drew nothing, so an armed Crop looked like a bright picture and the
+  only cue was an empty form. One full-picture 45 % rectangle now covers it while
+  `cropFrameShown` is false, and the four edge strips take over as soon as a
+  rectangle exists, so "nothing selected" and "this part is kept" are different
+  pictures.
+- **The crop button says what it does.** `Apply crop (Enter)` was a sentence in
+  a row of one-word verbs; it is `Apply` now, the same word the Resize and
+  Settings forms use. Enter still applies the frame — the Crop tool's key
+  handler owns `Qt.Key_Return`/`Qt.Key_Enter` — but the label no longer doubles
+  as its key hint.
+- **Back leads every picture workspace.** The Editor's Back button sat after a
+  document-dependent number of buttons; it now occupies the Viewer's first slot,
+  before the separator that starts the workspace's own actions, so the one
+  control both workspaces share does not move. `tst_toolbar` reads the real
+  toolbar sources and asserts that first block is the `go-previous-symbolic`
+  button that sends `set_workspace`.
+- **A unit change must not look like typing.** `onUnitChanged` writes `text`
+  directly, which does not emit `textEdited`; the ratio link, the auto-follow
+  flags and the presets only listen to typing, so re-spelling a rectangle cannot
+  arm Apply or lock a side. The two new cases assert both the text and the
+  command.
+- **`pixels()` is a function because `textEdited` leads `text`.** A property
+  bound to `text` is one keystroke behind inside the handler that reacts to the
+  keypress, which is why the pre-existing code read `parseInt(text)` inline.
+- **The canvas sits on whole pixels.** `canvas.x`/`y` are rounded after the
+  centring arithmetic: at 100 % a document coordinate must map to the pixel under
+  the pointer. A centred picture at an odd host width sat at `.5`, and a crop
+  dragged from document pixel 10 started at 11 — the rail's width change flipped
+  the parity and surfaced it.
+
+## Design decisions, split dock (row 95, ADR 0019)
+
+- **The options belong to the tool; the reference belongs to the document.** One
+  column, two zones: `editorToolZone` above `editorRightDivider` above the tab
+  strip and its `StackLayout`. The pointer has no options, so its zone is the
+  34 px heading alone and the tabs take the dock; arming a tool opens its
+  options and leaves the chosen tab open underneath.
+- **The split is view state, clamped so the tabs cannot disappear.**
+  `rightToolZoneHeight` (default 440) is bounded by `header + 40` and
+  `height - 180`; the divider writes it through `moved`, and a double-click
+  restores 440. Nothing about it reaches Core — a drag leaves no journal line,
+  which is the expected evidence, not a missing command.
+- **The zone is fixed, so a short tool leaves space.** Brush's options stop
+  around 300 px and the rest of a 440 px zone is empty. A split that shrank to
+  each tool's content would move the tabs under the pointer on every tool
+  switch; the divider is how a user says "less options, more history".
+- **Folding hides the verbs too.** The pinned Apply/Reset/Clear row is part of
+  the tool zone, so a fold leaves the heading alone. Folding is a deliberate
+  request for the tabs' room and the chevron is the way back; a 69 px row under
+  a 34 px heading would have been a fold that saves nothing.
+- **Arming a tool unfolds.** `onToolChanged` clears `toolZoneFolded` for a
+  non-pointer tool: the fold is about the visit, not a setting that would hide
+  the next tool's fields. The heading, the options and the divider come back in
+  one turn (`theInspectorSplitsToolsFromThreeReferenceTabs` arms Brush while
+  folded).
+- **The tab strip is self-drawn.** `PanelTabs.qml` exists because the platform
+  `TabBar` paints its own light strip inside this forced-dark window and because
+  each tab needs a stable `objectName` for the suite; the labels and icons come
+  from `rightTabEntries`, so the component owns no translated string. Under
+  240 px the labels give way to the drawing, its tooltip and its
+  `Accessible.name`.
+- **The action row measures the words it has.** The style gives a `Button` an
+  80 px minimum, so three verbs plus two 6 px gaps need 252 px and do not fit
+  the default 260 px dock (236 px of row) in either language; the row that
+  pretended otherwise squeezed them to 74.6 px at the default row (61 px at
+  220 px), which is why the labels elided: `Bỏ khu…` at 260 px in Vietnamese.
+  `cropActionsStack` on the view compares the row's width with the sum of the
+  three `implicitWidth`s, so Apply spans both columns and Reset/Clear take the
+  next line exactly when the translated words need it; Transform has two verbs
+  and stays two-up. The rule lives on the *view* because a `Layout.columnSpan`
+  binding on a child cannot see a property declared on its parent `GridLayout`:
+  the first version declared `stacks` on the grid, and while `columns` read 2
+  the span stayed 1 and Apply shared a row with Reset. The case asserts each
+  button's width against its own `implicitWidth`, that Apply is on a different
+  line at 220 and the same line at 340, and the two anchor cases scroll the
+  options column to reach the pad at the 700 px test host, where the wrapped
+  row puts it under the fold.
+- **Existing names stayed put.** `imageName`, `imageSize`, `saveTarget`,
+  `historyList`, `pointerThumbnail` and `previewCaption` keep their object names
+  inside the tabs, so the harness, the thumbnail identity plumbing and the
+  pointer cases moved rather than being rewritten. The cases that asserted
+  "a tool hides the document" were rewritten, because hiding it is the defect.
+
+## Design decisions, one right dock (rows 96–98, ADR 0020)
+
+- **A dock is a surface, not a workspace.** `RightDock.qml` owns the panel
+  background, an optional `PanelTabs` strip and a `StackLayout`; the pages are
+  passed as its default property (`default property alias pages: stack.data`),
+  so a view lists them in order and the component draws no sentence of its own.
+  The pages themselves are shared: `InfoPanel`, `PreviewPanel` and
+  `HistoryPanel` are the same QML in every workspace that shows them, which is
+  why their translations moved to their own contexts and `lupdate` had to be
+  re-run before the window could speak Vietnamese in them.
+- **A strip is drawn only for two or more panels.** `stripShown` is
+  `tabs.length > 1`. An invisible strip in a `ColumnLayout` takes no height, so
+  the Browser's and the Viewer's one-page docks start at their first page
+  instead of leaving an empty 34 px band. The alternative — always drawing the
+  strip so the dock looks the same everywhere — would have made a one-item tab
+  row that switches to itself.
+- **The Browser's one page is two panels.** Its preview and its metadata answer
+  different questions but are read together, so they are stacked inside the
+  single page rather than being two tabs. The Viewer's page is `InfoPanel`
+  alone; the Editor's reference pages are `Info`, `History` and `Original`.
+- **Visibility is per workspace and lives in Core.** `toggle_right_panel` takes
+  an optional `workspace`; absent means the one on screen, which is what an
+  older payload means and what the toolbar toggle sends. The three flags are
+  separate because a narrow Viewer may want its details while the Browser's
+  preview stays shut, and the Editor's dock is the tool options. `Config` keeps
+  the historical `right_panel` for the Browser and adds `right_panel_viewer` /
+  `right_panel_editor` (both default `true`); `UiState` mirrors all three, so a
+  config written before this change opens with both new panels visible.
+- **The width is one session value, clamped by each view.** `Main.qml` owns
+  `rightPanelWidth` (seeded from `appTheme.previewWidth`), every view binds to
+  it, and a splitter drag emits `panelWidthRequested` back to the shell. Each
+  view draws its own `dockWidth` clamp, so the Browser's 200–640 range cannot
+  be violated by a width the Editor set. Nothing about a drag reaches Core or
+  `config.json`, because a splitter is presentation state — the opposite of
+  visibility, which is a domain answer.
+- **`Original` is the file, not the render.** The Editor's third tab used to
+  draw `editor.previewPath` (Core's working preview) under the name `Preview`.
+  It now draws `editor.savePath` — the source until the first Save/Save As — so
+  "what is on disk?" has an answer. `file_identity(path)` returns
+  `(mtime ms, byte size)` and Core publishes it as `fileModified` /
+  `fileSize` on open, on every state publish and after every save; the shared
+  `ThumbnailBook` keys its requests on exactly those values, so saving over the
+  same path with new bytes is a new picture, not a cached old one.
+- **The page needs a `ThumbnailBook`, not the cache.** The first working
+  version passed `view.thumbnails` (the `ThumbnailCache`) into the page's
+  `book`, so `book.edgeFor` was undefined, the `TypeError` left `edge` at 0,
+  the cache was never asked and the frame drew black. The page now takes
+  `thumbs` (the `ThumbnailBook`, as the Browser's preview does) and the suite
+  asserts the request's `edge >= 160` as well as its path, so a black frame
+  with a correct caption cannot pass again.
+- **The tool zone hugs its options.** The divider and `rightToolZoneHeight`
+  are gone; `toolOptionsScroll` sits in a plain `Item` (`toolOptionsHost`) whose
+  `Layout.preferredHeight` is `min(content implicitHeight + 10, optionsCap)`.
+  The wrapper exists because a `Layout.maximumHeight` on a `ScrollView` is
+  ignored — it answers the layout with its content height, which is how a 430 px
+  window drew a 362 px scroll view and pushed the tabs out. `optionsCap` is
+  `max(40, height - 180 - headerHeight - actionRowHeight - 10)`, so only a window
+  that cannot keep 180 px of reference makes the options scroll.
+- **The heading always says whose options they are.** `%1 options` with the tool
+  name, including `Pointer options`; the pointer shows one muted sentence,
+  `This tool has no options.`, and no action row. Brush and Eraser have options
+  and no verbs; Crop has Apply/Reset/Clear and Transform Apply/Reset, directly
+  under the fields with no pinned gap between them.
+- **Resize is a dialog and leaves the pointer armed.** `openResizeDialog()`
+  writes `tool = "pointer"` before `open()`. The form is modal and owns its
+  fields; leaving Crop armed behind it made the tool zone contradict the dialog
+  and could leave Apply armed on a rectangle nobody framed. The window grab for
+  row 96 is that state: form up, Resize button lit, `tool` logged as `pointer`.
+- **"Show in folder" is a platform request, not a command.** The two view menus
+  emit `revealPath(path)`; `Main.qml` calls
+  `PlatformHelper::revealInFolder`. The order is measured by the helper, not by
+  QML: outside a sandbox with `org.freedesktop.FileManager1` on the bus it calls
+  `ShowItems` (file) or `ShowFolders` (folder), which selects the path in the
+  file manager the user already has; otherwise the portal's `OpenURI` on the
+  containing folder; otherwise `QDesktopServices::openUrl`; a refusal reaches
+  the existing `dialogError`. Inside a Flatpak (`/.flatpak-info` present) the
+  direct bus call is skipped, because the host service is not reachable from the
+  sandbox. Nothing about it changes domain state, so there is no journal line to
+  look for — the menu is the evidence.
+- **The three labels are appended, not inserted.** `Theme.menuEntryLabels` is
+  addressed by number from the three views; `Show in folder` is 39,
+  `Toggle information panel` 40 and `Toggle tool and reference panel` 41, so no
+  existing index moved. The new toggles are `visible: !miniToolbar` and are
+  mirrored in each overflow menu, which keeps the 580 px floor and the mini
+  counts unchanged (Viewer 13, Editor 14).
+
 ## Known gaps, in the words they were last measured with
+
+- **Rows 96–98's window runs are synthetic too.** No hand selected a tab,
+  dragged a dock splitter or opened a menu; `KOGAVIEW_DEV_UI_REQUEST=editor-dock`
+  writes `rightTab`/`rightPanelWidth` and clicks a rail button, and
+  `context-menu` calls `popup()`. The six grabs are window grabs of those states.
+- **The shared width is a source guard and a QML assertion, not a drag.** The
+  suite counts three `rightPanelWidth: root.rightPanelWidth` bindings and the
+  three `onPanelWidthRequested` handlers in `Main.qml`; no window run dragged
+  the Browser's splitter and then opened the Viewer to measure the same width,
+  so "a width chosen once is the width the other two open with" is proven at the
+  binding, not with a pointer.
+- **The per-workspace panel flags were never toggled on a window.** Core's
+  `a_right_panel_toggle_belongs_to_its_workspace` and the config/state mirrors
+  are the evidence; no grab shows the Viewer's panel hidden while the Browser's
+  is open, and no journal line from a real menu click was collected.
+- **`Original` was photographed after one save only.** The tab shows the written
+  `saved-one.png` and its 20 KB size; the pre-save state (the source file) is the
+  QML case's `/pics/photo.png`, and the save-over-the-same-path identity change
+  is Core's `file_identity` test. No window run saved twice over one path and
+  watched the thumbnail refresh. That run is also where the black frame was
+  found — a `ThumbnailCache` passed where a `ThumbnailBook` was expected, which
+  raised `TypeError` in `edgeFor` and left `edge` 0 — and the fix is the one
+  mutation above that reproduces it.
+- **"Show in folder" was not seen doing anything.** No file manager is running
+  on this session, `org.freedesktop.portal.OpenURI` is not implemented by this
+  desktop, and the portal therefore sends no response; the screenshot shows the
+  Vietnamese menu entry, not a selected file. The `FileManager1` branch, the
+  portal branch and the `QDesktopServices` fallback are code order, not measured
+  outcomes. Inside a Flatpak the direct call is skipped by design and no
+  sandboxed run exists.
+- **The tool zone's height was photographed for Crop at 1472 × 943 only.** The
+  180 px reference rule, the short window's scroll and the Brush/Eraser (no
+  action row) states are `theReferenceZoneKeepsRoomWhenTheWindowIsShort` and the
+  dock cases at the 700 px QML host; no short-window or Brush grab was taken.
+- **The dock's translations were partly English for one build.** The shared
+  panels are new translation contexts (`InfoPanel`, `PreviewPanel`,
+  `HistoryPanel`), and the `.ts` had their strings under the old `BrowserView`/
+  `EditorView` contexts until `lupdate` was re-run; the first Vietnamese grab of
+  the Original tab read English for the moved labels. The re-run moved them, the
+  gate reads 344 strings / 344 drawn, and `cpp/translations.cpp` stays the
+  C++-only subset (the QML uses the compiled `kogaview_vi.qm`), so a QML string
+  does not belong in that table. One residue is the `.ts` line numbers for the
+  moved entries: they are lupdate's, not hand-written references.
+
+- **Row 95's window runs are synthetic, and a short window needs a scroll.** No
+  hand clicked a tab, dragged the divider or pressed the chevron; the six grabs
+  came from `editor-dock` on the real Wayland window, which calls the same tab
+  handler, divider and rail buttons. At the 943 px default window the Crop
+  panel and the tabs both fit; at a 700 px window the zone is clamped to
+  `height - 180` and the two-row action row leaves the anchor pad 34 px under
+  the fold in the QML host, where the suite now scrolls the options column into
+  view — a user scrolls the same column. No short window was photographed, and
+  the tab, the split and the fold are still forgotten on the next launch.
+- **Row 94's one-column rail was not photographed.** The QML case presses the
+  real toggle and asserts two columns at 88 px → one at 50 px → back, the
+  heading hidden and all twelve buttons still visible; the three window grabs
+  show only the two-column state. No hand pressed the toggle, a tool button, a
+  `px` selector, a table row or a single field: the runs were
+  `KOGAVIEW_DEV_COMMANDS` + `editor-crop` / `editor-resize` on the real Wayland
+  window, and the three pictures are `M1-editor-crop-unframed.png`,
+  `M1-editor-tool-rail.png` and `M1-editor-resize-units.png`.
+- **The icon-size fix is measured from two grabs, not from a watched click.**
+  Two runs at the same window size gave the same muted-drawing bounding boxes
+  (resize 14 × 16, transform 15 × 18, brush 19 × 18, eraser 15 × 16) whether the
+  Editor had just opened or a tool had been clicked, which is what "does not
+  grow on the first click" means here. A real click's frame-by-frame layout was
+  not captured, and no 1.5×/2× display was available to check the scale.
+- **The no-frame dim was not compared with another tool's.** 45 % black is the
+  same value the outside strips already used, chosen for consistency; whether a
+  user wants a lighter "armed but unselected" state was not asked, and no hand
+  dragged a frame out of that state on a real window.
+- **The Back button's new position is photographed in the Editor only.** The
+  grab shows it as the first control after the workspace switcher and
+  `tst_toolbar` reads both toolbar sources, but no screenshot puts the Viewer and
+  the Editor side by side, because the window run opened the Editor.
+- **Only `px` was photographed.** The `%` spelling (20 % of an 800 px side, a
+  typed 25 % reaching the command as 1000 px, `0.03 %` round-tripping to one
+  pixel, the Resize form's 50 % → 2000 × 1500) is asserted by
+  `theUnitsAreAnotherSpellingOfTheSamePixels` and
+  `theResizeFormTakesPercentagesToo`. No harness argument chooses a unit, so no
+  grab shows `%` selected, and the selector is pointer-only (`focusPolicy:
+  Qt.NoFocus`), so no key reaches it either.
+- **The icons are the rail's, not the app's.** Twelve SVGs cover the Editor's
+  tool and quick-edit buttons; the header, the menus, the Browser and the Viewer
+  still draw the desktop's themed icons. Making the whole app
+  icon-theme-independent is a later pass, not this one.
+- **The fold is not remembered and HiDPI was not measured.** `toolColumns`
+  resets to two every launch (it is view state, not `config.json`), and the
+  icons ask for a 2× source size drawn at 20 logical px without a 1.5×/2×
+  display to check that against.
+- **Row 93's AVIF sample is a synthetic 64 × 48 frame.** `an_advertised_avif_is_really_decoded`
+  encodes it with `image`'s own encoder and opens it back; the window run opened
+  the ffmpeg `libaom-av1` sample of the same size. No camera or phone AVIF, no
+  10-bit/HDR AVIF, no AVIF with an alpha plane and no animation was tried.
+  HEIC/HEIF stay listed and refused: Qt draws them, Core does not, and adding a
+  HEIC decoder is a separate library decision.
+- **`has_decoder` costs a file open per Editor open, and proves the decoder can
+  be constructed, not that this particular file decodes.** A truncated JPEG with
+  a valid header still passes the check and fails later on the worker; only a
+  format with no decoder is caught up front. The refusal reply is `no_decoder`;
+  no new code was added for "file is damaged".
+- **libdav1d is now a build dependency that Flatpak and Windows have to carry.**
+  `just doctor` reports the pkg-config version and CMake links
+  `PkgConfig::DAV1D`, but no sandboxed or Windows build was run; the Flatpak
+  manifest does not exist yet. A machine without `libdav1d` fails the C++ link
+  at `dav1d_*` symbols, which is exactly how the first attempt failed.
+- **The Viewer and the Browser's thumbnails are still Qt, not Core.** They draw
+  AVIF/HEIC/JXL only where the Qt image plugins are installed; a Qt build
+  without the AVIF plugin would list the file (Core's `IMAGE_EXTENSIONS`) and
+  show no thumbnail. That mismatch was not reproduced — this machine has the
+  plugins.
+- **`.pam` still decodes but is not listed.** `image`'s PNM decoder reads it and
+  shared-mime-info has no MIME type for it, so the Browser's filter leaves it
+  out; `.jpe` was added because shared-mime-info does map it to `image/jpeg`.
+  The split is recorded, not resolved.
+- **Row 92's window runs were synthetic, like every editor run here.** The
+  `editor-crop` request clicked the real Crop button, the real lock buttons, the
+  real Reset/Clear/Apply buttons and typed through the same helpers a hand uses,
+  but no pointer was on the window and no key reached a field. The six grabs show
+  the resulting states, not a hand's sequence: a real click on the picture, a
+  typed `800`, a pressed padlock and a dragged handle are `QTest` sequences in
+  `tst_editor`, not compositor events.
+- **The post-Apply settle recognises a cut by size.** `pendingCropResult` matches
+  the published document's width and height; only `editor_crop` can produce that
+  size today, but a future command that published the same dimensions would be
+  read as this cut. A document change whose size differs is left to the existing
+  clamp/refit, which is what keeps an unrelated edit from framing the result.
+- **Clear keeps the ratio.** Clear is about the frame, so the ratio text, the mode,
+  the fill and the anchor survive it. The screenshot of a cleared panel can
+  therefore still read `3:2`; that is the chosen split between Reset and Clear,
+  not a measurement of what a user expects, and the ratio field is editable in
+  that state.
+- **The ratio field is validated on commit, not per keystroke.** `3`, `3:` and
+  `3:2` are accepted in turn only when they parse; an unreadable entry snaps back
+  to the previous ratio on `editingFinished`. No grab shows that snap-back, and
+  the placeholder `Free` is the only empty-state cue.
+- **Two locks make the handles refuse, but the inside still moves the frame.**
+  That is a decision (moving is not reshaping) rather than a measured preference;
+  the lock-drag case asserts both halves. The padlocks are 26 px buttons with
+  tooltips, not a keyboard-reachable control: they are `NoFocus`, so Tab skips
+  them and there is no key that toggles a lock.
+- **The reordered panel was photographed at 1472 × 943 only.** It fits there with
+  room to spare; a shorter window with Grow armed (the fill row visible) was not
+  grabbed, and the panel is a scrolling column rather than a folding one.
+- **The crop Live preview command is now UI-less.** `editor_crop_preview` keeps
+  its protocol/Core tests but no QML emits it; whether to delete the command or
+  keep it for a future CLI is an open contract question (item 6 below). The
+  crop hint labels and `swapCropOrientation` are gone with no replacement key.
 
 - **No hand pressed the chain, the dropdowns, or `Ctrl+Alt+I`.** Row 91's window
   runs filled the form through `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (which now
@@ -1404,20 +2022,21 @@ crop evidence all comes from `build/dev/bin/kogaview`.
    a decision about what the user should be told, not a mechanical sweep.
 4. **The canvas now edits, so decide what "outside the quad" should look like.**
    Row 82's warp clamps to the border pixel; transparent or a fill colour would
-   be a different result, and neither was asked for. Crop's remaining questions
-   are smaller now that row 90 landed: whether a ratio-locked side drag should
-   grow the other axis around the centre (the current choice) or keep a corner,
-   whether swap deserves a key, and whether the 80 % starting frame is the right
-   default size.
+   be a different result, and neither was asked for. Row 92 answered Crop's
+   frame, lock and Reset/Clear questions; what is left is smaller: whether a
+   lock deserves a key as well as a button (the three padlocks are `NoFocus`), a
+   clearer cue than a placeholder when the ratio text does not parse, and whether
+   Clear should also drop the ratio rather than only the rectangle.
 5. **The warp is one pass over every pixel on a worker thread.** `spawn_draft`
    already renders drafts on a `std::thread::spawn`, but a corner drag on a 27 MP
    document with Live preview on re-renders the whole frame per settle. Profiling
    it before adding tiling (item 1) is the cheaper move.
-6. **Decide whether `editor_resize_preview` still has a front end.** Row 84
-   removed the only QML that asked for a resize draft. The command is tested in
-   protocol/Core, but no window emits it; keeping it for a future CLI is a
-   contract decision, and deleting it would remove a payload shape that row 73's
-   preview work introduced.
+6. **Decide whether `editor_resize_preview` and `editor_crop_preview` still
+   have a front end.** Row 84 removed the only QML that asked for a resize
+   draft and row 92 removed the crop Live preview row, so neither command has a
+   window emitter. Both are tested in protocol/Core; keeping them for a future
+   CLI is a contract decision, and deleting them would remove payload shapes
+   that rows 73 and 74's preview work introduced.
 7. **Painting is one hard tip and one pass per stroke.** Softness, spacing,
    pressure and a colour eyedropper are the natural next questions, and a long
    stroke on a 27 MP document re-renders the whole bounding box on a worker —
@@ -1435,3 +2054,32 @@ crop evidence all comes from `build/dev/bin/kogaview`.
    to a strip. Auto-hiding the panels below a width, or letting each panel fold
    on its own, would be the next question — the current answer is the overflow
    menu's two toggles, which is honest but manual.
+10. **HEIC is still listed and refused, and the rest of Qt's formats are
+    Viewer-only.** Row 93 made the advertised list true for Core's decoders and
+    gave an undecodable file a translatable sentence. The remaining split is
+    deliberate: `heic`/`heif` are listed because a phone photo should not be
+    invisible, `jxl`, RAW, PSD and SVG open only through `kogaview open FILE`
+    (Qt reads them, Core does not), and `pam` decodes but has no MIME type.
+    Deciding which of those Core should own is a format decision with a native
+    dependency each time.
+11. **The rail's fold and the dock's tab are forgotten, and the app is only
+    half icon-driven.** Row 94's `toolColumns` and row 95's `rightTab` and
+    `toolZoneFolded` live in the view, so a user who folded the rail or chose
+    History does it again next launch; panel *visibility* is now the opposite
+    (three Core flags in `config.json`, row 96) and the dock *width* is
+    deliberately session-only. Persisting the tab would mean a settings field
+    and a protocol decision, not a bigger `Main.qml`. The twelve SVGs cover the
+    Editor's rail only — the header, the menus and the other two workspaces
+    still depend on the desktop's icon theme, so a full set is the next visual
+    pass.
+12. **`%` has no keyboard or pointer story yet.** The selector is a `ComboBox`
+    with `focusPolicy: Qt.NoFocus`, so Tab never reaches it and no key switches
+    a field between `px` and `%`; a unit change is a pointer-only action today.
+    Whether the unit belongs in the field at all, or should follow the panel
+    (all four fields at once), is a design question left open.
+13. **The shared dock width has never been dragged, and "Show in folder" has
+    never reached a file manager.** The three bindings are guarded, but a real
+    splitter drag followed by a workspace switch is the evidence still missing;
+    the reveal path needs this session's file manager (or a Flatpak portal run)
+    to be watched selecting a file. `Original` also only follows one save — a
+    save-over-the-same-path thumbnail refresh would be worth photographing.
