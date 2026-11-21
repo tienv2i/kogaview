@@ -713,8 +713,8 @@ Item {
     /// presentation gating on purpose: Core keeps the draft until an edit lands
     /// or the document changes, and leaving the tool must hide it again without
     /// another command. The draft's own `kind` is checked as well, so a switch
-    /// from Crop to Transform cannot paint the crop result for a frame. Resize
-    /// is not here: its draft belongs to its dialog and is drawn there.
+    /// from Crop to Transform cannot paint the crop result for a frame. A resize
+    /// draft is not here at all: nothing in the window asks for one.
     readonly property var previewDraft: {
         if (!editor || !editor.previewDraft) return null
         var draft = editor.previewDraft
@@ -722,14 +722,6 @@ Item {
         if (tool === "transform" && transformLivePreview
                 && draft.kind === "transform") return draft
         return null
-    }
-    /// Core's newest resize draft, whether or not the dialog is open. The dialog
-    /// decides when it is worth drawing; the canvas never draws it, because a
-    /// modal form in front of the picture is where the user is looking.
-    readonly property var resizeDraft: {
-        if (!editor || !editor.previewDraft) return null
-        var draft = editor.previewDraft
-        return draft.kind === "resize" ? draft : null
     }
     /// True while the Resize dialog is up. It is the Editor's own modal, not one
     /// the shell owns, so the canvas handlers read it directly: Qt delivers
@@ -750,14 +742,6 @@ Item {
     /// previewed, the document's own size otherwise.
     readonly property real displayedWidth: previewDraft ? previewDraft.width : documentWidth
     readonly property real displayedHeight: previewDraft ? previewDraft.height : documentHeight
-
-    /// The picture the Resize dialog shows before any draft lands: the
-    /// document's own preview, which Core publishes with the document.
-    readonly property string previewSource: {
-        if (previewDraft) return "file://" + previewDraft.path
-        if (editor && editor.previewPath) return "file://" + editor.previewPath
-        return ""
-    }
 
     // The document is drawn by a scaled `Image`, so a point in document pixels
     // sits `x * zoom` from the picture's visual corner. `Image.scale` grows
@@ -2258,9 +2242,10 @@ Item {
     }
 
     /// Resize is a dialog, not a tool: choosing a size is a question with a
-    /// beginning and an end, so the form owns its own fields and its own
-    /// preview while the document under it stays untouched. The palette button
-    /// opens it; nothing on the canvas changes mode.
+    /// beginning and an end, so the form owns its own fields while the document
+    /// under it stays untouched. The palette button opens it; nothing on the
+    /// canvas changes mode, and the form draws no preview — the picture does
+    /// not move until Apply.
     ResizeDialog {
         id: resizeDialog
         objectName: "resizeDialog"
@@ -2270,16 +2255,6 @@ Item {
         documentReady: view.documentReady
         ratios: view.sizeRatios
         presets: view.sizePresets
-        documentPreview: view.previewSource
-        draft: view.resizeDraft
-        onDraftRequested: function(width, height, fill) {
-            view.command({
-                type: "editor_resize_preview",
-                width: width,
-                height: height,
-                fill: fill
-            })
-        }
         onResizeRequested: function(width, height, fill) {
             view.command({
                 type: "editor_resize",

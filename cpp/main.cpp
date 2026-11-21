@@ -588,15 +588,10 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qInfo() << "KogaView dev ui request: stepped" << stepArg << "to"
                   << fieldText("resizeWidth") << "×" << fieldText("resizeHeight");
         }
-        QObject* live = dialog->findChild<QObject*>(QStringLiteral("resizeLivePreview"));
-        if (live != nullptr) {
-          QMetaObject::invokeMethod(live, "click");
-        }
         qInfo().noquote() << "KogaView dev ui request editor-resize" << size
                           << "preset" << index << "ratio"
                           << dialog->property("ratio") << "tool"
-                          << editor->property("tool") << "live"
-                          << dialog->property("livePreview");
+                          << editor->property("tool");
         // `_ARG5=apply` presses the dialog's own Apply after the form is filled,
         // so the real `editor_resize` reaches Core and the document changes.
         if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5") == QLatin1String("apply")) {
@@ -608,7 +603,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qInfo() << "KogaView dev ui request editor-resize apply" << (armed ? "pressed" : "disabled")
                   << "dialog open" << dialog->property("opened");
         }
-        emitted = live != nullptr;
+        emitted = true;
       } else if (uiRequest == QLatin1String("editor-crop")) {
         // The Crop panel without a pointer: the tool button, an anchor button
         // and the live toggle are `click()`ed, and the preset dropdown is

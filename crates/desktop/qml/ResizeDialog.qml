@@ -8,9 +8,12 @@ import QtQuick.Layouts
 /// Resize used to be a column of fields in the Editor's inspector. It is a
 /// question with a beginning and an end — what size, and then apply or not — so
 /// it is asked the way Settings is asked: a `Dialog` with its own header drag,
-/// a form that owns its state, and a footer of explicit buttons. The dialog
-/// carries a small preview of the result, because a result is what the user is
-/// choosing between; the document itself does not move until Apply.
+/// a form that owns its state, and a footer of explicit buttons.
+///
+/// The form deliberately carries no picture of the result: the size is typed as
+/// two numbers, and an asynchronous preview inside a modal form read as the
+/// dialog "loading" before it settled. The document itself does not move until
+/// Apply.
 ///
 /// The two answers mirror the old panel exactly, so nothing about the edit
 /// changed, only where it is typed:
@@ -18,9 +21,7 @@ import QtQuick.Layouts
 /// - **Apply** sends `editor_resize` (through the editor's `command` signal)
 ///   and closes. It is disabled while the pair is the document's own size,
 ///   because Core would answer a no-op.
-/// - **Cancel**, the × or Escape close without sending anything. The preview
-///   rendered on the way is a draft: Core keeps it out of the document and the
-///   canvas does not draw it once this dialog is closed.
+/// - **Cancel**, the × or Escape close without sending anything.
 ///
 /// Width and Height are one shape: the ratio combo decides what typing one side
 /// does to the other, `Free` is the only unlinked choice, and the "Keep current
@@ -40,15 +41,6 @@ Dialog {
     /// rather than duplicated so the two size tools offer one list.
     property var ratios: []
     property var presets: []
-    /// The document's own preview (`file://…`), drawn until a draft lands.
-    property string documentPreview: ""
-    /// Core's newest resize draft, if any. It is filtered by `kind` on the
-    /// Editor's side; here it is only drawn.
-    property var draft: null
-
-    /// The draft that was already published when the dialog opened: it belongs
-    /// to an earlier visit, so it is not this form's answer and is not drawn.
-    property string ignoredDraft: ""
 
     // ------------------------------------------------------------- form state
     property string ratio: "original"
@@ -56,34 +48,6 @@ Dialog {
     property var currentRatio: ({ width: 0, height: 0 })
     property bool padFit: false
     property color fillColor: "#ffffff"
-    /// Off every time the dialog opens: the preview shows the document itself
-    /// until the user asks to see the target.
-    property bool livePreview: false
-
-    /// The draft worth drawing: the newest one, and only while Live preview is
-    /// on — that toggle is the user's answer to "show me the result", so a
-    /// draft Core still holds from before is not drawn behind their back. The
-    /// stale draft from an earlier visit is not this form's answer either. A
-    /// draft is only ever a resize here, but the kind is checked anyway so a
-    /// stray crop draft can never be painted as a size.
-    readonly property var shownDraft:
-        livePreview && draft && draft.kind === "resize"
-        && (draft.path || "") !== ignoredDraft ? draft : null
-
-    readonly property string previewSource:
-        shownDraft ? "file://" + shownDraft.path : documentPreview
-
-    /// What the preview is showing, in the words the user needs: the document,
-    /// or the target the draft was rendered at.
-    readonly property string previewCaption: {
-        if (shownDraft) {
-            return qsTr("Preview at %1 × %2 — Apply writes it, Cancel keeps the document.")
-                    .arg(String(shownDraft.width)).arg(String(shownDraft.height))
-        }
-        if (!documentReady) return qsTr("No document")
-        return qsTr("The document at %1 × %2.")
-                .arg(String(Math.round(documentWidth))).arg(String(Math.round(documentHeight)))
-    }
 
     title: qsTr("Resize image")
     modal: true
@@ -96,7 +60,7 @@ Dialog {
                      112 + resizeColumn.implicitHeight + 40)
     padding: 0
     // Escape is Cancel, like Settings and like every other dialog here. A click
-    // outside does not dismiss: a form with a preview should be left on purpose.
+    // outside does not dismiss: a form should be left on purpose.
     closePolicy: Popup.CloseOnEscape
     // x/y are set by hand, not with `anchors.centerIn`: an anchor owns the
     // position and snaps a written x back within a frame, which also makes the
@@ -256,7 +220,6 @@ Dialog {
         } else {
             dialog.linkWidthFromHeight()
         }
-        debounce.restart()
     }
 
     /// Apply a concrete size. `onActivated` calls this for a real pick; a
@@ -269,23 +232,12 @@ Dialog {
         heightField.text = String(preset.height)
         dialog.setRatio(preset.ratio)
         presetBox.currentIndex = index
-        debounce.restart()
     }
 
     /// The three bytes the typed command carries.
     function rgb(color) {
         return [Math.round(color.r * 255), Math.round(color.g * 255),
                 Math.round(color.b * 255)]
-    }
-
-    /// Ask Core for a rendered draft of the current pair. Debounced, so a typed
-    /// side does not spawn one render per key; the previous draft stays on
-    /// screen until the newest one lands.
-    function requestDraft() {
-        debounce.stop()
-        if (!dialog.livePreview || !dialog.fieldsValid() || !dialog.changed()) return
-        dialog.draftRequested(parseInt(widthField.text), parseInt(heightField.text),
-                              dialog.padFit ? dialog.rgb(dialog.fillColor) : null)
     }
 
     function apply() {
@@ -298,8 +250,6 @@ Dialog {
     onOpened: {
         moved = false
         centerInParent()
-        dialog.livePreview = false
-        dialog.ignoredDraft = draft ? (draft.path || "") : ""
         dialog.fillFromDocument()
     }
 
@@ -316,10 +266,10 @@ Dialog {
         color: dialog.theme.surfaceAlt
         border.color: dialog.theme.border
         border.width: 1
-        // The title bar moves the dialog, the way Settings does: the preview
-        // stays in the dialog, but a user may still want it off the picture's
-        // middle. `target: null` keeps the handler off the coordinates and
-        // moves the dialog itself; the clamp stops a drag parking it outside.
+        // The title bar moves the dialog, the way Settings does: a user may
+        // want the form off the picture's middle. `target: null` keeps the
+        // handler off the coordinates and moves the dialog itself; the clamp
+        // stops a drag parking it outside.
         DragHandler {
             target: null
             property real originX: 0
@@ -368,44 +318,8 @@ Dialog {
             objectName: "resizeColumn"
             x: 20
             y: 20
-            width: parent.width - 40
+            width: dialog.width - 40
             spacing: 10
-
-            // What the choice looks like. The document's preview until Live
-            // preview lands a draft; `cache: false` because a draft is a new
-            // file with the same role, not a cached old one.
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 150
-                radius: dialog.theme.radius
-                color: dialog.theme.thumb
-                clip: true
-
-                Image {
-                    objectName: "resizePreview"
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    asynchronous: true
-                    cache: false
-                    fillMode: Image.PreserveAspectFit
-                    source: dialog.previewSource
-                }
-                Label {
-                    anchors.centerIn: parent
-                    visible: dialog.previewSource === ""
-                    text: dialog.documentReady ? qsTr("No preview yet") : qsTr("No document")
-                    color: dialog.theme.textMuted
-                }
-            }
-
-            Label {
-                objectName: "resizeCaption"
-                Layout.fillWidth: true
-                text: dialog.previewCaption
-                color: dialog.theme.textMuted
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-            }
 
             GridLayout {
                 Layout.fillWidth: true
@@ -428,7 +342,6 @@ Dialog {
                     validator: IntValidator { bottom: 1; top: 20000 }
                     onTextEdited: {
                         dialog.linkHeightFromWidth()
-                        debounce.restart()
                     }
                 }
                 // The small +/- pair every size field has: one pixel per press,
@@ -487,7 +400,6 @@ Dialog {
                     validator: IntValidator { bottom: 1; top: 20000 }
                     onTextEdited: {
                         dialog.linkWidthFromHeight()
-                        debounce.restart()
                     }
                 }
                 Column {
@@ -552,7 +464,6 @@ Dialog {
                     onActivated: {
                         dialog.setRatio(dialog.ratios[currentIndex].key)
                         dialog.relinkFields()
-                        debounce.restart()
                     }
                 }
             }
@@ -608,7 +519,6 @@ Dialog {
                 ToolTip.text: qsTr("Keep the whole image in shape and fill the leftover with the fill color")
                 onToggled: {
                     dialog.padFit = checked
-                    debounce.restart()
                 }
             }
 
@@ -647,32 +557,6 @@ Dialog {
                 color: dialog.theme.textMuted
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
-            }
-
-            CheckBox {
-                id: liveCheck
-                objectName: "resizeLivePreview"
-                Layout.fillWidth: true
-                text: qsTr("Live preview")
-                checked: dialog.livePreview
-                enabled: dialog.documentReady
-                contentItem: Text {
-                    leftPadding: liveCheck.indicator && !liveCheck.mirrored
-                                 ? liveCheck.indicator.width + liveCheck.spacing : 0
-                    rightPadding: liveCheck.indicator && liveCheck.mirrored
-                                  ? liveCheck.indicator.width + liveCheck.spacing : 0
-                    text: liveCheck.text
-                    font: liveCheck.font
-                    color: liveCheck.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                }
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Show the resized image before applying it")
-                onToggled: {
-                    dialog.livePreview = checked
-                    debounce.restart()
-                }
             }
         }
     }
@@ -722,20 +606,10 @@ Dialog {
         selectedColor: dialog.fillColor
         onAccepted: {
             dialog.fillColor = selectedColor
-            debounce.restart()
         }
     }
 
-    /// The form changed and Core should render a draft, not an edit.
-    signal draftRequested(int width, int height, var fill)
     /// Apply: the user chose this size. The editor turns it into one
     /// `editor_resize`; the dialog closes on its own.
     signal resizeRequested(int width, int height, var fill)
-
-    Timer {
-        id: debounce
-        interval: 200
-        repeat: false
-        onTriggered: dialog.requestDraft()
-    }
 }

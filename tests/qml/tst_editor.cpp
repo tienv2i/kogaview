@@ -60,7 +60,7 @@ private slots:
   void theCurrentRatioLocksTheTypedPair();
   void theSizeSteppersNudgeBothSides();
   void resizeCarriesThePadFill();
-  void theLivePreviewShowsTheDraftWithoutApplyingIt();
+  void theResizeDialogHasNoPreviewSurfaces();
   void thePointerThumbnailCarriesThePreviewIdentity();
   void cropApplyEmitsTheTypedRectangle();
   void theCropPresetsFitInsideTheDocument();
@@ -388,8 +388,7 @@ void TestEditor::theResizeDialogStartsFromTheDocumentSize()
   openResizeDialog();
 
   // The form describes what is on screen before anything is typed: the
-  // document's own pair, so the steppers start from a real number and the
-  // preview matches the picture behind the dialog.
+  // document's own pair, so the steppers start from a real number.
   QQuickItem* width = expectItem("resizeWidth");
   QQuickItem* height = expectItem("resizeHeight");
   QQuickItem* preset = expectItem("resizeSizePreset");
@@ -401,22 +400,18 @@ void TestEditor::theResizeDialogStartsFromTheDocumentSize()
   // That pair is Core's no-op, so Apply says so before it is pressed.
   QVERIFY(!expectItem("resizeApply")->property("enabled").toBool());
 
-  // The two switches sit on the dialog's own dark surface. Their labels come
-  // from the theme, not from the platform palette: a Popup built inside the
-  // workspace's Loader resolves the platform's light palette, and the first
-  // screenshot of this form showed both labels dark-on-dark.
+  // The switch sits on the dialog's own dark surface. Its label comes from the
+  // theme, not from the platform palette: a Popup built inside the workspace's
+  // Loader resolves the platform's light palette, and the first screenshot of
+  // this form showed the label dark-on-dark.
   const QColor themeText = readQml(m_editor, "theme.text").value<QColor>();
-  for (const char* switchName : {"resizePadToFit", "resizeLivePreview"}) {
-    QQuickItem* box = expectItem(switchName);
-    QCOMPARE(readQml(box, "contentItem.color").value<QColor>(), themeText);
-    QVERIFY2(box->property("contentItem").value<QObject*>() != nullptr,
-             qPrintable(QStringLiteral("%1 has no label item").arg(QString::fromLatin1(switchName))));
-  }
+  QQuickItem* box = expectItem("resizePadToFit");
+  QCOMPARE(readQml(box, "contentItem.color").value<QColor>(), themeText);
+  QVERIFY(box->property("contentItem").value<QObject*>() != nullptr);
 
   // The whole form fits the dialog at the test host's size. `isVisible` does
-  // not notice clipping by the Flickable, so the first screenshot of this
-  // dialog showed the Live preview switch under the footer; this is the
-  // measurement that catches it.
+  // not notice clipping by the Flickable, so this is the measurement that
+  // catches a control hidden under the footer.
   QQuickItem* content = expectItem("resizeContent");
   QQuickItem* column = expectItem("resizeColumn");
   QVERIFY2(column->implicitHeight() + 40 <= content->height(),
@@ -941,69 +936,47 @@ void TestEditor::resizeCarriesThePadFill()
   QCOMPARE(fill.at(2).toInt(), 0);
 }
 
-/// Live preview draws Core's draft at the target size inside the form and
-/// changes nothing in the document: no history, no size, no save target.
-/// Turning it off hides the draft again, and the fields are what ask Core for
-/// a new render. The canvas behind the modal is not the surface that shows the
-/// answer, so it never moves.
-void TestEditor::theLivePreviewShowsTheDraftWithoutApplyingIt()
+/// The Resize form is fields and buttons, nothing else. It used to carry a
+/// framed preview of the result; that frame showed the document's image
+/// asynchronously and made the dialog read as "still loading" before it settled.
+/// The size is typed, the canvas behind the modal already shows the picture, and
+/// nothing in this form asks Core for a rendered draft.
+void TestEditor::theResizeDialogHasNoPreviewSurfaces()
 {
   setState(documentState());
   openResizeDialog();
   QObject* dialog = resizeDialogObject();
 
-  QQuickItem* preview = expectItem("resizePreview");
-  QQuickItem* toggle = expectItem("resizeLivePreview");
-  QQuickItem* canvas = expectItem("canvas");
-  QVERIFY(toggle->isVisible());
-  QVERIFY(!dialog->property("livePreview").toBool());
-  // With the toggle off the form shows the document's own picture, whatever
-  // draft Core still holds — including none at all.
-  QVERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QCOMPARE(expectItem("resizeCaption")->property("text").toString(),
-           QStringLiteral("The document at 4000 × 3000."));
+  QVERIFY2(findObject(QStringLiteral("resizePreview")) == nullptr,
+           "the resize form still has a preview frame");
+  QVERIFY2(findObject(QStringLiteral("resizeCaption")) == nullptr,
+           "the resize form still has a preview caption");
+  QVERIFY2(findObject(QStringLiteral("resizeLivePreview")) == nullptr,
+           "the resize form still has a live-preview switch");
+  QVERIFY2(!dialog->property("livePreview").isValid(),
+           "the resize form still carries live-preview state");
 
-  // A draft that lands while the form is open is this visit's answer.
-  QVariantMap draft;
-  draft.insert(QStringLiteral("path"), m_previewTwo);
-  draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
-  draft.insert(QStringLiteral("width"), 1024);
-  draft.insert(QStringLiteral("height"), 1024);
-  QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-
-  clickItem(toggle);
-  QVERIFY(dialog->property("livePreview").toBool());
-  // The armed state is visible, not only internal: `checked` alone barely
-  // changes this style's button face.
-  QVERIFY(toggle->property("checked").toBool());
-  QTRY_VERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
-  QCOMPARE(expectItem("resizeCaption")->property("text").toString(),
-           QStringLiteral("Preview at 1024 × 1024 — Apply writes it, Cancel keeps the document."));
-  // The document did not move and the canvas did not take the draft: the form
-  // is where the result is being compared.
-  QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
-  QCOMPARE(m_editor->property("modified").toBool(), false);
-  QCOMPARE(canvas->property("width").toDouble(), 4000.0);
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  // Typing a new pair must not ask for a draft: no preview command leaves the
+  // view, only Apply sends `editor_resize`.
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  width->setProperty("text", QStringLiteral("800"));
+  height->setProperty("text", QStringLiteral("800"));
+  QTest::qWait(300);
   QCOMPARE(m_commands->count(), 0);
 
-  clickItem(toggle);
-  QVERIFY(!dialog->property("livePreview").toBool());
-  QVERIFY(preview->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QCOMPARE(m_commands->count(), 0);
+  QVERIFY(expectItem("resizeApply")->property("enabled").toBool());
 
-  // Arming it with a size asks Core for the draft, under the preview name so a
-  // journal never mistakes it for an applied resize.
-  expectItem("resizeWidth")->setProperty("text", QStringLiteral("800"));
-  expectItem("resizeHeight")->setProperty("text", QStringLiteral("800"));
-  clickItem(toggle);
-  QTRY_COMPARE(m_commands->count(), 1);
-  const QVariantMap command = m_commands->at(0).at(0).toMap();
-  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize_preview"));
-  QCOMPARE(command.value("width").toInt(), 800);
-  QCOMPARE(command.value("height").toInt(), 800);
+  // Opening the form is one frame, not a box that grows as its contents settle:
+  // the height is the content column's height, and it must not move after the
+  // first layout pass. The old framed preview plus its caption made this dialog
+  // read as "still loading" before it reached its final size.
+  const qreal openedHeight = dialog->property("height").toReal();
+  QTest::qWait(200);
+  QCOMPARE(dialog->property("height").toReal(), openedHeight);
+
+  clickItem(expectItem("resizeCancel"));
+  QTRY_VERIFY(!dialog->property("opened").toBool());
 }
 
 /// The sidebar thumbnail must give the shared cache the preview file's identity,
@@ -1260,36 +1233,6 @@ void TestEditor::theLiveCropShowsOnlyItsOwnDraft()
   setState(editor);
   QTRY_VERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
   QCOMPARE(canvas->property("width").toDouble(), 4000.0);
-
-  // The Resize form draws only its own kind. It opens on the document's
-  // picture, a crop draft published underneath it stays off the form, and a
-  // resize draft is what it shows.
-  setState(documentState());
-  openResizeDialog();
-  QObject* dialog = resizeDialogObject();
-  QQuickItem* formPreview = expectItem("resizePreview");
-  QVERIFY(formPreview->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  // Live preview is the user's answer to "show me the result": a draft that
-  // arrives while it is off is not drawn. Arming it here with the document's
-  // own size asks for nothing (the pair is a no-op).
-  clickItem(expectItem("resizeLivePreview"));
-  QVERIFY(dialog->property("livePreview").toBool());
-  QCOMPARE(m_commands->count(), 0);
-
-  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  QTest::qWait(50);
-  QVERIFY2(formPreview->property("source").toString().endsWith(QStringLiteral("preview-1.png")),
-           "the Resize form drew another tool's draft");
-
-  draft.insert(QStringLiteral("kind"), QStringLiteral("resize"));
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  QTRY_VERIFY(formPreview->property("source").toString().endsWith(QStringLiteral("preview-2.png")));
-  QCOMPARE(m_editor->property("documentWidth").toDouble(), 4000.0);
-  clickItem(expectItem("resizeCancel"));
-  QTRY_VERIFY(!dialog->property("opened").toBool());
 
   // The command that asks Core for a crop draft carries the whole rectangle.
   m_commands->clear();
@@ -1666,8 +1609,7 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   openResizeDialog();
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
   for (const char* option : {"resizeWidth", "resizeHeight", "resizeApply", "resizeReset",
-                             "resizeSizePreset", "resizeRatio", "resizeLivePreview",
-                             "resizePadToFit"}) {
+                             "resizeSizePreset", "resizeRatio", "resizePadToFit"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(item->isVisible(), qPrintable(QStringLiteral("%1 is not visible")
                                                .arg(QString::fromLatin1(option))));

@@ -42,7 +42,10 @@ rectangle or quad and share the existing preview/Apply path in Core. The latest
 session (row 83) turned Resize into a dialog of its own — the Settings pattern,
 with the form's live draft inside it — and made Discard reset the document before
 the workspace changes; without that reset Core still saw unsaved edits and the
-Editor reopened the old image after the user had already discarded them.
+Editor reopened the old image after the user had already discarded them. A
+follow-up (row 84) took the framed preview out of that dialog: its asynchronous
+picture read as the form loading before it settled, and the size is typed, so
+the form is fields and buttons only.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -66,7 +69,10 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `ResizeDialog.qml`, the Core/`Main.qml` half of the Discard fix, the crop
   field renames, the tests, the `_ARG5=apply` hook and the three screenshots.
   ADR 0012 records why a size is a dialog and ADR 0013 why Discard sends a reset
-  first.
+  first. The preview-removal follow-up (row 84) is one commit on top: the
+  `ResizeDialog.qml` slimming, the `EditorView.qml`/`cpp/main.cpp` wiring it
+  drops, `theResizeDialogHasNoPreviewSurfaces`, the Vietnamese catalogue cleanup
+  and the new first-frame screenshot; ADR 0012 gained a revision note.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -88,7 +94,8 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   Resize button, which since row 83 opens the Resize **dialog**, waits for it
   to open, fills it through the dialog's own helpers (or writes the two fields
   for a custom pair), arms the pad, clicks the dialog's stepper buttons and
-  Live preview, and optionally presses Apply; `editor-crop` (`_ARG` =
+  optionally presses Apply; row 84 removed the Live preview click, because the
+  form no longer has a preview; `editor-crop` (`_ARG` =
   `WIDTHxHEIGHT`, `_ARG2` = an anchor key, default `center`) does the same for
   Crop including an anchor button — found by walking the item tree, because a
   `Repeater` delegate is not a QObject child. Both exist so the panel can be
@@ -196,6 +203,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 81 | Export always wrote the document at its own size: delivering a 27 MP picture at a web or phone size meant editing the document first, which is destructive and easy to forget | `crates/app-protocol/src/lib.rs` (`EditorExport.max_edge`), `crates/app-core/src/editor.rs` (`export_dimensions`, the long-edge rule; `export_pixels` takes the limit; `jpeg_metadata_segments` keeps each marker so a resized copy drops APP1 but keeps APP2/APP13), `core.rs` (`editor_export` passes it, `0`/absent = the document's size), `EditorView.qml` (`exportLongEdge`, `exportEdges`, `chooseExportSize`, an `Output size` row, an EXIF note), `cpp/main.cpp` (`_ARG4` + tool logging), `tests/qml/tst_editor.cpp`, Core tests, ADR 0004 | `just test` 280 strings / 110 C++ / 276 drawn; cargo 72 + 4; editor 37; real window: the Vietnamese `Kích thước xuất` combo reading `800 px cạnh dài`, and `phone.jpg` written at 600 × 800 from a 1200 × 1600 document that stayed 1200 × 1600 (`docs/evidence/M1-export-size-vi.png`, `-written.png`), journal rev 5, tool still `pointer`; 4 mutations, each caught |
 | 82 | Crop had no frame on the canvas to place its rectangle, and a photo shot at an angle could not be straightened at all | `crates/app-protocol/src/lib.rs` (`EditorTransform`/`EditorTransformPreview`), `crates/app-core/src/editor.rs` (the `Transform` operation, `validate_transform`, `square_to_quad`/`invert3`/`warp_quad`, snapshot undo), `core.rs` (`PreviewKind::Transform`, `editor_transform_preview`), `crates/desktop/qml/EditorView.qml` (a fourth tool, the crop frame with eight handles, the transform quad with four corners plus four edge handles, the pan dropping the left button while either is armed, `cropFrameShown`/`transformFrameShown`), `UiLines.qml` + `kogaview_vi.ts` (four lines and the history sentence), `cpp/main.cpp` (`editor-transform`), `tests/qml/tst_editor.cpp` (4 cases + the pan assertions), 6 Core tests | `just test` 293 strings / 110 C++ / 289 drawn; cargo 78 + 4; editor 41; real window: quad grabbed (`docs/evidence/M1-editor-transform-quad-vi.png`), live draft + the `Tắt Xem trước trực tiếp…` hint (`-live-vi.png`, journal `editor_transform_preview` rev 4), applied at `1200 × 1600` with Apply disabled again (`-applied-vi.png`, `editor_transform` rev 4), crop frame 512 × 384 at `bottom_right` (`M1-editor-crop-frame-vi.png`); 8 mutations, each caught |
 | 83 | Discard did not discard: after an unsaved edit, a Discard answer and another picture in the Viewer, the Editor reopened the old image. Resize was also an Inspector column even though a size is a question, not a mode | `crates/app-core/src/core.rs` (`SetWorkspace` keeps `previous` and passes `previous == Workspace::Viewer` to `link_viewer_into_editor`, which follows the Viewer's picture from the Viewer, keeps an open document from elsewhere and refuses an unsaved one; the test walks discard → viewer open → editor), `crates/desktop/qml/Main.qml` (`leaveAfterDiscard` sends `editor_reset` + the leave through `sendSequence`; quit exempt), `crates/desktop/qml/ResizeDialog.qml` (new modal form: its own fields/ratio/presets/pad/live preview, a draft preview inside the form with the stale-draft guard, theme-coloured switch labels), `crates/desktop/qml/EditorView.qml` (palette `Resize…` opens the dialog and keeps `tool` on `pointer`, the canvas no longer draws a resize draft, the crop fields renamed `cropWidth`/`cropHeight`), `crates/app-core/src/editor.rs` (`invert3` removed), `crates/desktop/build.rs`, `i18n/kogaview_ts.pro`, `i18n/kogaview_vi.ts` (25 new strings), `tests/qml/tst_editor.cpp`, `tests/qml/tst_settings.cpp` (the discard source guard), `cpp/main.cpp` (`_ARG5=apply`), ADR 0012, ADR 0013 | `just test` 299 strings / 110 C++ / 295 drawn; cargo 78 + 4; settings 15, editor 41; real window: the dialog with a live 1024 × 1024 draft and legible switches (`docs/evidence/M1-editor-resize-dialog-vi.png`), applied (journal `editor_resize` rev 7, `M1-editor-resize-applied-vi.png`), and the Discard sequence ending on `two.png` (`M1-discard-follows-viewer-vi.png`, journal `editor_reset` rev 9 → `set_workspace` rev 10 → `viewer_open` rev 12 → `set_workspace` rev 13); 5 mutations, each caught |
+| 84 | The Resize dialog carried a framed preview of its result; its asynchronous picture inside the modal read as the form loading, then "bursting out" on first open | `crates/desktop/qml/ResizeDialog.qml` (preview frame, caption, `Live preview` switch and its state, `documentPreview`/`draft`/`ignoredDraft`/`shownDraft`/`previewSource`/`previewCaption`, `requestDraft`, `draftRequested` and the debounce timer removed; the column is measured at `dialog.width - 40` so the first layout does not use the popup's pre-open width), `crates/desktop/qml/EditorView.qml` (`resizeDraft`/`previewSource` and the draft wiring removed), `tests/qml/tst_editor.cpp` (`theResizeDialogHasNoPreviewSurfaces`; the live-preview case removed; crop no longer drives the resize form), `cpp/main.cpp` (`editor-resize` no longer clicks a live toggle), the harness reference, `i18n/kogaview_vi.ts` (6 vanished preview strings removed), ADR 0012 (revision) | `just test` 294 strings / 110 C++ / 290 drawn; cargo 78 + 4; editor 41; real window: the form at 1472 × 943 with no preview, pad armed (`docs/evidence/M1-editor-resize-dialog-no-preview-vi.png`) and a grab 150 ms after the open request already at its final size; 1 mutation, caught |
 
 ## Test gate
 
@@ -203,7 +211,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 299 strings in kogaview_vi.ts, 110 of them compiled into C++, 295 drawn by the QML, 4 looked up by context
+translations: 294 strings in kogaview_vi.ts, 110 of them compiled into C++, 290 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 78 passed (kogaview-core) + 4 passed (kogaview-protocol)
 viewer 37 · browser 45 · cache 15 · state 7 · settings 15 · editor 41 · language 7 · toolbar 11
@@ -213,7 +221,7 @@ viewer 37 · browser 45 · cache 15 · state 7 · settings 15 · editor 41 · la
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80, 81 and 83 add no new warning
+`field_reassign_with_default`, `needless_return`); rows 80, 81, 83 and 84 add no new warning
 (the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
@@ -508,6 +516,14 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   belongs to. Quit skips the reset. A switch *from the Viewer* follows the
   Viewer even when a saved document is open; a switch from anywhere else keeps
   the open document, which is ADR 0013's whole rule.
+- **The size form has no picture (row 84).** The framed preview and its
+  `Live preview` switch were removed: the asynchronous image made the dialog
+  read as loading before it settled, and the picture behind the modal already
+  shows the document. The form is fields, ratio, preset, pad and footer; the
+  content column takes its width from `dialog.width - 40` so the first layout
+  does not use the popup's pre-open width, and a QML case asserts the height
+  does not move after the first layout. `editor_resize_preview` still exists in
+  protocol/Core; no front end emits it now.
 
 ## Design decisions, fit/settings session (ADR 0009)
 
@@ -661,6 +677,10 @@ preview's `source` not ending in `preview-1.png` (a draft drawn while the toggle
 is off); pinning one switch label to the light-theme literal `#1c1f24` →
 `theResizeDialogStartsFromTheDocumentSize` fails on the colour comparison. Each
 restored, then the suite green.
+
+Preview removal: putting a 150 px `Rectangle { objectName: "resizePreview" }`
+back into the form's column → `theResizeDialogHasNoPreviewSurfaces` fails with
+"the resize form still has a preview frame". Restored, then the suite green.
 
 ## Design decisions, export-size session (ADR 0004)
 
@@ -819,6 +839,14 @@ restored, then the suite green.
   QML `palette` write on a `CheckBox`; only `ResizeDialog`'s two labels were
   changed to a `Text` content item with the theme colour. The Editor's export
   dialog and any other popup keep whatever the style gives them.
+- **The Resize form has no live preview anywhere now.** `editor_resize_preview`
+  remains a protocol/Core command with its own tests, but no QML emits it; a
+  resize draft in `editor.previewDraft` is drawn by nothing. Whether the command
+  should be deleted is a protocol decision, not part of the UI change.
+- **The first frame was checked by delay, not by frame capture.** The 150 ms
+  grab shows the form already at its final size, and the QML case asserts the
+  height does not change after the first layout; a capture of the compositor's
+  very first painted frame is still not available here.
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
 
@@ -869,3 +897,8 @@ comes from `build/dev/bin/kogaview`.
    already renders drafts on a `std::thread::spawn`, but a corner drag on a 27 MP
    document with Live preview on re-renders the whole frame per settle. Profiling
    it before adding tiling (item 1) is the cheaper move.
+6. **Decide whether `editor_resize_preview` still has a front end.** Row 84
+   removed the only QML that asked for a resize draft. The command is tested in
+   protocol/Core, but no window emits it; keeping it for a future CLI is a
+   contract decision, and deleting it would remove a payload shape that row 73's
+   preview work introduced.

@@ -61,3 +61,25 @@ that result, rendered on a worker without touching the document.
   steppers, the pad fill, the live draft and the Apply command.
 - The export dialog is untouched; turning it into a themed form is a separate
   change with its own visual questions.
+
+## Revision — the framed preview is gone (2026-11-21)
+
+The first version of this dialog carried a framed preview above the fields: the
+document's picture, replaced by Core's draft while `Live preview` was on. On the
+real window it read as a form that was still loading — the `Image` decoded
+asynchronously inside the modal, so the frame and its caption settled after the
+dialog had already appeared, and the form seemed to "burst out" on first open.
+
+The preview was removed together with its `Live preview` switch and the whole
+draft path:
+
+- the size is typed as two numbers, and the picture is already visible behind
+  the modal, so a second picture only competed with the fields;
+- the form is now just fields, ratio, preset, pad and footer, and its height is
+  the content column's own height from the first layout;
+- the content column is measured at `dialog.width - 40` (the dialog's known
+  width) instead of `parent.width - 40` (the popup's width, which is not final
+  before it opens), so the first layout is not measured at a transient width;
+- `editor_resize_preview` stays in the protocol and in Core — a front end may
+  still ask for one — but the window emits it nowhere. Removing the command is a
+  separate protocol decision, not part of this UI change.
