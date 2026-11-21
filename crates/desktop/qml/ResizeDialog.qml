@@ -247,7 +247,12 @@ Dialog {
         dialog.close()
     }
 
-    onOpened: {
+    // Position and fill the form before it becomes visible. `opened` is emitted
+    // only after the style's enter transition (Breeze fades for ~300 ms), so
+    // centring there made the first frames appear at the positioner's default
+    // corner and then jump to the middle. `aboutToShow` fires before
+    // `visibleChanged`, while the popup already has its parent and its size.
+    onAboutToShow: {
         moved = false
         centerInParent()
         dialog.fillFromDocument()

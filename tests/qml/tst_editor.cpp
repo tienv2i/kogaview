@@ -21,6 +21,7 @@
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -48,6 +49,7 @@ private slots:
   void initTestCase();
   void init();
   void theResizeDialogStartsFromTheDocumentSize();
+  void theResizeDialogIsCentredWhileItOpens();
   void thePointerShowsTheDocumentAndHistory();
   void emptyStateOffersToOpenAnImage();
   void theCanvasPaintsTheOpeningPreviewWhileTheDocumentDecodes();
@@ -469,6 +471,67 @@ void TestEditor::theResizeDialogStartsFromTheDocumentSize()
   QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
   QCOMPARE(m_commands->count(), 0);
+}
+
+/// The style's enter transition is what exposed this: `opened` is emitted only
+/// after it finishes, and for ~300 ms before that the popup was already visible
+/// at the positioner's default corner before jumping to the centre. The case
+/// installs a slow transition so it can inspect the first visible frame.
+void TestEditor::theResizeDialogIsCentredWhileItOpens()
+{
+  setState(documentState());  // 4000 × 3000
+  QObject* dialog = resizeDialogObject();
+  const QVariant originalEnter = dialog->property("enter");
+  // A failure must not leave the custom transition or an open modal behind for
+  // the next case, so the cleanup runs on the failing path too.
+  const auto restoreDialog = qScopeGuard([dialog, originalEnter]() {
+    if (dialog->property("visible").toBool()) {
+      QMetaObject::invokeMethod(dialog, "close");
+    }
+    for (int wait = 0; wait < 200 && dialog->property("visible").toBool(); ++wait) {
+      QTest::qWait(10);
+    }
+    dialog->setProperty("enter", originalEnter);
+  });
+
+  // The transition is created in QML: QQuickTransition has no public C++
+  // header, and an assignment through the dialog's own `enter` property is
+  // exactly what a style does.
+  QQmlContext context(m_engine.rootContext());
+  context.setContextProperty(QStringLiteral("__dialogUnderTest"), dialog);
+  QQmlExpression slowEnter(
+    &context, dialog,
+    QStringLiteral("__dialogUnderTest.enter = Qt.createQmlObject("
+                   "'import QtQuick; Transition { NumberAnimation { "
+                   "property: \"opacity\"; from: 0; to: 1; duration: 600 } }', "
+                   "__dialogUnderTest)"));
+  slowEnter.evaluate();
+  QVERIFY2(!slowEnter.hasError(), qPrintable(slowEnter.error().toString()));
+
+  // Test setup can centre the form through an earlier width/height change.
+  // Start from a corner, as the positioner does before `aboutToShow`, so this
+  // case observes what the first visible frame really does.
+  dialog->setProperty("x", 0.0);
+  dialog->setProperty("y", 0.0);
+  QCoreApplication::processEvents();
+
+  clickItem(expectItem("toolResize"));
+  QTRY_VERIFY_WITH_TIMEOUT(dialog->property("visible").toBool(), 1000);
+  QVERIFY2(!dialog->property("opened").toBool(),
+           "the enter transition finished before the first visible frame could be inspected");
+
+  QQuickItem* parent = dialog->property("parent").value<QQuickItem*>();
+  QVERIFY(parent != nullptr);
+  const qreal expectedX =
+    qRound((parent->width() - dialog->property("width").toDouble()) / 2.0);
+  const qreal expectedY =
+    qRound((parent->height() - dialog->property("height").toDouble()) / 2.0);
+  QCOMPARE(dialog->property("x").toDouble(), expectedX);
+  QCOMPARE(dialog->property("y").toDouble(), expectedY);
+  // The form is filled before it is visible too, not only after the fade.
+  QCOMPARE(expectItem("resizeWidth")->property("text").toString(), QStringLiteral("4000"));
+
+  QTRY_VERIFY_WITH_TIMEOUT(dialog->property("opened").toBool(), 2000);
 }
 
 void TestEditor::thePointerShowsTheDocumentAndHistory()

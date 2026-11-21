@@ -137,7 +137,12 @@ Dialog {
                                 backgroundChoice.checked, dialog.languageCode())
     }
 
-    onOpened: {
+    // Position and fill the form before it becomes visible. `opened` is emitted
+    // only after the style's enter transition, so centring there made the
+    // first frames appear at the positioner's default corner and then jump to
+    // the middle. `aboutToShow` fires before `visibleChanged`, while the popup
+    // already has its parent and its size.
+    onAboutToShow: {
         moved = false
         centerInParent()
         dialog.saved = false

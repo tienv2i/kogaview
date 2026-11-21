@@ -1,4 +1,4 @@
-# Session handoff — state at 2026-11-20
+# Session handoff — state at 2026-11-21
 
 Four sessions' worth of work on the same day: the launch surface speaks
 Vietnamese and the dock icon draws, the mouse wheel moves at the rate the device
@@ -50,7 +50,10 @@ a brush and an eraser with Krita's default keys: a stroke is one typed command
 sent on release, Core paints the pixels and the canvas only shows the stroke in
 flight; `B`/`E` pick the tools, `[`/`]` size them, `X`/`D` swap and reset the
 colours, Space pans, `Tab` hides the panels, and `Ctrl+Z`/`Ctrl+Shift+Z` undo and
-redo the document.
+redo the document. A last fix (row 86) moves both modal forms' centring and
+opening values from `onOpened` to `onAboutToShow`: Breeze's enter fade was
+running while the form sat at the window's left edge, then `opened` moved it to
+the centre when the fade finished.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -84,7 +87,11 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `editor-paint` harness request, the Vietnamese sentences and the two
   screenshots; ADR 0014 records why a stroke is one command, why QML only
   previews it and where the keymap lives. It also fixes the editor suite's
-  cross-case flake (a fading modal took the next case's click).
+  cross-case flake (a fading modal took the next case's click). The dialog-open
+  fix (row 86) is one commit on top: `ResizeDialog.qml`/`SettingsDialog.qml`
+  move their opening work to `onAboutToShow`, `tst_editor`/`tst_settings` gain a
+  slow-enter case each, and the two first-frame screenshots are new. No ADR:
+  this corrects a lifecycle hook, not a decision.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -227,14 +234,14 @@ one now; `/tmp/opencode/lrel` no longer exists):
 translations: 311 strings in kogaview_vi.ts, 110 of them compiled into C++, 307 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 82 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 15 · editor 46 · language 7 · toolbar 11
+viewer 37 · browser 45 · cache 15 · state 7 · settings 16 · editor 47 · language 7 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84 and 85 add no new warning
+`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84, 85 and 86 add no new warning
 (the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
@@ -580,6 +587,32 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   picture; a press outside the document is ignored, because it would send a
   stroke Core clips away and still cost an undo step and a preview render.
 
+## Design decisions, dialog-open fix (row 86)
+
+- **`opened` is "finished opening", not "visible".** Qt Quick Controls emits
+  `opened` after the style's enter transition. Breeze fades opacity from 0 to 1
+  for roughly 300 ms, and the popup is already visible at the positioner's
+  default `(18, 0)` for that whole time. Centring in `onOpened` therefore made
+  the form fade in at the left and jump to the middle when the fade ended.
+- **`onAboutToShow` is the hook with a parent and a size.** Qt sets `visible`,
+  reparents the popup item and emits `aboutToShow`; only then does it give the
+  positioner its parent item and emit `visibleChanged`. The dialog's width and
+  height bindings already resolve there, so `centerInParent()` writes the
+  position for the first rendered frame. The opening values (`fillFromDocument`,
+  the language list and the seen snapshot) move there too, so a second visit
+  does not show the previous visit's fields while fading in.
+- **The user's 300 ms of fade are kept.** The fix does not disable Breeze's
+  enter transition; a fade at the correct position is just an opening, not a
+  jump. `moved` still guards a hand-placed dialog from being recentred by a
+  later width/height change.
+- **The regression test installs the transition it needs.** The QML suites run
+  under the Basic style, where opening can finish in the same event loop, so
+  `theResizeDialogIsCentredWhileItOpens` and `theDialogIsCentredWhileItOpens`
+  assign a 600 ms opacity `enter` transition through the dialog's own property
+  and force a corner start. They then assert the first visible frame is already
+  centred while `opened` is still false; reverting either handler to `onOpened`
+  fails its case.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -918,6 +951,14 @@ then the suite green three runs in a row.
   grab shows the form already at its final size, and the QML case asserts the
   height does not change after the first layout; a capture of the compositor's
   very first painted frame is still not available here.
+- **Row 86's first-frame claim is a log, not a frame capture.** On the real
+  window the trace after the opening click read `visible true, opened false` at
+  the centred `x/y`, and the 100 ms sample had not moved; the two screenshots
+  are window grabs taken after their own raise/exposure wait, so they show the
+  settled form. Breeze's enter transition is not deterministic on every launch
+  (one run finished it before the hook could sample), which is why that run used
+  `QT_QUICK_CONTROLS_STYLE=org.kde.breeze`; no hand opened the form, and only
+  this GNOME Wayland session was measured.
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
 - **No hand drew a stroke.** The real-window runs drove `beginPaintStroke`/

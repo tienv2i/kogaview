@@ -21,9 +21,12 @@
 #include <QGuiApplication>
 #include <QPointingDevice>
 #include <QQmlComponent>
+#include <QQmlContext>
+#include <QQmlExpression>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -47,6 +50,7 @@ private slots:
   void initTestCase();
   void cleanup();
   void opensCentredWithAnInsetContentColumn();
+  void theDialogIsCentredWhileItOpens();
   void aWrittenPositionSticks();
   void draggingTheHeaderMovesTheDialog();
   void escapeRevertsThePreview();
@@ -163,6 +167,54 @@ void TestSettings::opensCentredWithAnInsetContentColumn()
   // ... and the scroll range keeps the same 20 px under the last row, otherwise
   // the bottom margin disappears exactly when the content overflows.
   QCOMPARE(content->property("contentHeight").toReal(), column->implicitHeight() + 40.0);
+}
+
+/// The Settings dialog had the same `onOpened` centring as Resize. A slow enter
+/// transition makes the popup visible (and uncentred) before `opened` fires.
+void TestSettings::theDialogIsCentredWhileItOpens()
+{
+  const QVariant originalEnter = m_dialog->property("enter");
+  // A failure must not leave the custom transition or an open modal behind for
+  // the next case, so the cleanup runs on the failing path too.
+  const auto restoreDialog = qScopeGuard([dialog = m_dialog, originalEnter]() {
+    if (dialog->property("visible").toBool()) {
+      QMetaObject::invokeMethod(dialog, "close");
+    }
+    for (int wait = 0; wait < 200 && dialog->property("visible").toBool(); ++wait) {
+      QTest::qWait(10);
+    }
+    dialog->setProperty("enter", originalEnter);
+  });
+
+  // The transition is created in QML: QQuickTransition has no public C++
+  // header, and an assignment through the dialog's own `enter` property is
+  // exactly what a style does.
+  QQmlContext context(m_engine.rootContext());
+  context.setContextProperty(QStringLiteral("__dialogUnderTest"), m_dialog);
+  QQmlExpression slowEnter(
+    &context, m_dialog,
+    QStringLiteral("__dialogUnderTest.enter = Qt.createQmlObject("
+                   "'import QtQuick; Transition { NumberAnimation { "
+                   "property: \"opacity\"; from: 0; to: 1; duration: 600 } }', "
+                   "__dialogUnderTest)"));
+  slowEnter.evaluate();
+  QVERIFY2(!slowEnter.hasError(), qPrintable(slowEnter.error().toString()));
+
+  // Test setup can centre the form through an earlier width/height change.
+  // Start from a corner, as the positioner does before `aboutToShow`, so this
+  // case observes what the first visible frame really does.
+  m_dialog->setProperty("x", 0.0);
+  m_dialog->setProperty("y", 0.0);
+  QCoreApplication::processEvents();
+
+  QMetaObject::invokeMethod(m_dialog, "open");
+  QTRY_VERIFY(dialogVisible());
+  QVERIFY2(!m_dialog->property("opened").toBool(),
+           "the enter transition finished before the first visible frame could be inspected");
+  QCOMPARE(property("x"), 90.0);
+  QCOMPARE(property("y"), 40.0);
+
+  QTRY_VERIFY_WITH_TIMEOUT(m_dialog->property("opened").toBool(), 2000);
 }
 
 void TestSettings::aWrittenPositionSticks()
