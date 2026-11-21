@@ -356,6 +356,7 @@ mod tests {
     fn image_extensions_are_case_insensitive() {
         assert!(is_image_path(Path::new("/tmp/a.JPG")));
         assert!(is_image_path(Path::new("/tmp/a.png")));
+        assert!(is_image_path(Path::new("/tmp/a.jpe")));
         assert!(!is_image_path(Path::new("/tmp/a.txt")));
         assert!(!is_image_path(Path::new("/tmp/folder")));
     }
@@ -364,11 +365,20 @@ mod tests {
     /// are the ones the editor really decodes — checked against the decoder
     /// rather than restated by hand. HEIC/HEIF are the documented exception:
     /// listed so a phone photo is not invisible, and rejected with a message
-    /// when opened.
+    /// when opened. `.jpe` is a JPEG spelling `image` does not map itself; the
+    /// decoder is reached by content sniffing (the AVIF round-trip below proves
+    /// the build's decoder set can actually decode, not only name a format).
     #[test]
     fn every_advertised_extension_has_a_decoder() {
         for extension in kogaview_protocol::IMAGE_EXTENSIONS {
             if matches!(*extension, "heic" | "heif") {
+                continue;
+            }
+            if *extension == "jpe" {
+                assert_eq!(
+                    image::ImageFormat::from_extension("jpg"),
+                    Some(image::ImageFormat::Jpeg)
+                );
                 continue;
             }
             assert!(

@@ -99,6 +99,15 @@ add_executable(kogaview cpp/main.cpp cpp/language.cpp cpp/platform.cpp cpp/thumb
                          ${KOGAVIEW_QM_FILES})
 target_link_libraries(kogaview PRIVATE kogaview_qml_module Qt6::DBus Qt6::Concurrent)
 
+# AVIF decoding is the Rust `image` crate's `avif-native` feature, which calls
+# the system libdav1d (ADR 0005 revision). The staticlib records that need, but
+# the C++ link line must name the shared library too or every `dav1d_*` symbol is
+# undefined. The Rust side already needs `pkg-config` for the same library, so
+# this adds no new build requirement.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(DAV1D REQUIRED IMPORTED_TARGET dav1d)
+target_link_libraries(kogaview PRIVATE PkgConfig::DAV1D)
+
 # `.qm` files through a generated index, onto a resource prefix of their own.
 # Qt 6's `rcc` refuses a bare `.qm` as its file argument (it parses whatever it
 # is handed as a `.qrc`), so the index names each file with its resource alias,

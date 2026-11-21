@@ -87,6 +87,12 @@ pub struct EditorState {
     /// thumbnail — the paths repeat every run, the timestamps do not.
     pub preview_modified: u64,
     pub preview_size: u64,
+    /// Identity of the file on disk the document was last saved to (or opened
+    /// from), the same pair for the same reason: the Original tab draws that
+    /// file's thumbnail and must follow a Save, whose write changes both
+    /// numbers while the path may stay the same.
+    pub file_modified: u64,
+    pub file_size: u64,
     /// The live-preview resize, when one is armed. Independent of the document
     /// and its history: `null` while nothing is being previewed.
     pub preview_draft: Option<EditorPreviewDraft>,
@@ -133,7 +139,12 @@ pub struct UiState {
     pub selection_info: Option<SelectionInfo>,
     pub favorites: Vec<String>,
     pub left_panel: bool,
+    /// The Browser's right panel (preview and metadata).
     pub right_panel: bool,
+    /// The Viewer's right panel (the file's information).
+    pub right_panel_viewer: bool,
+    /// The Editor's right dock (tool options and the reference tabs).
+    pub right_panel_editor: bool,
     pub filmstrip: bool,
     /// The two settings the Settings dialog edits besides the theme. They are
     /// published so the dialog opens on what is stored, not on a default.
@@ -181,6 +192,12 @@ impl UiState {
             favorites,
             left_panel,
             right_panel,
+            // The two workspace panels that are not the Browser's follow the
+            // same default and are assigned by `Core::new` from the config;
+            // the constructor keeps its arity because every side panel is a
+            // preference, not part of the snapshot's identity.
+            right_panel_viewer: true,
+            right_panel_editor: true,
             filmstrip,
             remember_last_folder,
             background_thumbnails,
@@ -224,6 +241,8 @@ impl UiState {
             favorites: &self.favorites,
             left_panel: self.left_panel,
             right_panel: self.right_panel,
+            right_panel_viewer: self.right_panel_viewer,
+            right_panel_editor: self.right_panel_editor,
             filmstrip: self.filmstrip,
             remember_last_folder: self.remember_last_folder,
             background_thumbnails: self.background_thumbnails,
@@ -273,6 +292,8 @@ pub struct StateMeta<'a> {
     pub favorites: &'a [String],
     pub left_panel: bool,
     pub right_panel: bool,
+    pub right_panel_viewer: bool,
+    pub right_panel_editor: bool,
     pub filmstrip: bool,
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,

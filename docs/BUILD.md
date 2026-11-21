@@ -46,6 +46,15 @@ Use `just` as the developer/agent command surface; Cargo + CMake + CXX-Qt are im
   catalogue and the C++ table in `cpp/translations.cpp` disagree or an entry is
   unfinished.
 
+## Native libraries
+- `libdav1d` (with its `dav1d.pc`) is required to build. AVIF decoding is the
+  Rust `image` crate's `avif-native` feature (ADR 0005 revision): `dav1d-sys`
+  finds the library through `pkg-config`, and `CMakeLists.txt` names
+  `PkgConfig::DAV1D` on the executable's link line as well, or the Rust
+  staticlib's `dav1d_*` calls stay undefined. Arch: `pacman -S libdav1d`;
+  `just doctor` prints its version. A Flatpak or Windows build has to carry the
+  library rather than download it.
+
 ## Isolation and identity
 - Dev app name `KogaView (Dev)`, production `KogaView`; distinct app IDs, config/data/cache, socket endpoints and database by default.
 - Version/build metadata: semantic version, git SHA, build profile, Qt version and protocol version.

@@ -37,6 +37,28 @@ fn save_format_label(path: &Path) -> String {
         .unwrap_or_else(|| ops::kind_label(path))
 }
 
+/// Milliseconds since the epoch and the byte size of a file, or `(0, 0)` when
+/// it cannot be read.
+///
+/// This is the identity a thumbnail cache keys on. A file's path repeats
+/// between runs and after a Save (save-as aside), so the picture behind a path
+/// can change while the name stays — the two numbers are what tell the two
+/// states apart.
+fn file_identity(path: &Path) -> (u64, u64) {
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|age| age.as_millis() as u64)
+                .unwrap_or(0);
+            (modified, metadata.len())
+        })
+        .unwrap_or((0, 0))
+}
+
 /// A save that finished on a worker.
 struct EditorSaveResult {
     save: u64,
@@ -159,7 +181,7 @@ impl Core {
         let journal = Journal::new(&paths.journal_dir);
         let config_path_label = config_path.to_string_lossy().into_owned();
         let (editor_tx, editor_rx) = mpsc::channel();
-        let state = UiState::new(
+        let mut state = UiState::new(
             config.theme,
             config.language,
             config.quick_access.clone(),
@@ -170,6 +192,8 @@ impl Core {
             config.background_thumbnails,
             config_path_label,
         );
+        state.right_panel_viewer = config.right_panel_viewer;
+        state.right_panel_editor = config.right_panel_editor;
 
         let mut core = Self {
             paths,
@@ -257,7 +281,7 @@ impl Core {
         };
         let journal = Journal::new(&paths.journal_dir);
         let (editor_tx, editor_rx) = mpsc::channel();
-        let state = UiState::new(
+        let mut state = UiState::new(
             config.theme,
             config.language,
             config.quick_access.clone(),
@@ -268,6 +292,8 @@ impl Core {
             config.background_thumbnails,
             config_path.to_string_lossy().into_owned(),
         );
+        state.right_panel_viewer = config.right_panel_viewer;
+        state.right_panel_editor = config.right_panel_editor;
         Self {
             paths,
             config,
@@ -677,9 +703,27 @@ impl Core {
                 self.save_config();
                 Ok(None)
             }
-            Command::ToggleRightPanel => {
-                self.config.right_panel = !self.config.right_panel;
-                self.state.right_panel = self.config.right_panel;
+            Command::ToggleRightPanel { workspace } => {
+                // One preference per workspace: the Browser's preview and
+                // metadata panel, the Viewer's information panel and the
+                // Editor's dock show different things and size the picture
+                // differently, so a toggle says which one it means. A front
+                // end that sends no workspace (the toolbar button) means the
+                // one on screen.
+                match workspace.unwrap_or(self.state.workspace) {
+                    Workspace::Browser => {
+                        self.config.right_panel = !self.config.right_panel;
+                        self.state.right_panel = self.config.right_panel;
+                    }
+                    Workspace::Viewer => {
+                        self.config.right_panel_viewer = !self.config.right_panel_viewer;
+                        self.state.right_panel_viewer = self.config.right_panel_viewer;
+                    }
+                    Workspace::Editor => {
+                        self.config.right_panel_editor = !self.config.right_panel_editor;
+                        self.state.right_panel_editor = self.config.right_panel_editor;
+                    }
+                }
                 self.save_config();
                 Ok(None)
             }
@@ -1149,6 +1193,16 @@ impl Core {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path_label.clone());
+        // Refuse before a worker is spawned: otherwise the reply says `ok` and
+        // the failure arrives later as the platform's own English sentence. The
+        // check builds the real decoder, so HEIC (listed, no decoder) and this
+        // build's AVIF are both answered with a line the window can translate.
+        if !editor::has_decoder(&source) {
+            return Err(ProtocolError::line(
+                "no_decoder",
+                UiText::with("no_decoder", [path_label.clone()]),
+            ));
+        }
         let preview_dir = self.editor_preview_dir()?;
         self.editor_generation += 1;
         let generation = self.editor_generation;
@@ -1169,6 +1223,7 @@ impl Core {
         self.state.busy = true;
         let opening = UiText::with("opening_in_editor", [name.clone()]);
         self.state.status = opening.clone();
+        let (file_modified, file_size) = file_identity(&source);
         self.state.editor = Some(EditorState {
             save_path: path_label.clone(),
             path: path_label,
@@ -1184,6 +1239,8 @@ impl Core {
             preview_revision: generation,
             preview_modified: 0,
             preview_size: 0,
+            file_modified,
+            file_size,
             preview_draft: None,
             rendering: true,
             saved: true,
@@ -1741,6 +1798,10 @@ impl Core {
         let format = save_format_label(Path::new(&save_path));
         let previous = self.state.editor.take();
         let (preview_modified, preview_size) = self.editor_preview_stamp.unwrap_or((0, 0));
+        // The file on disk, not the preview: the Original tab draws what Save
+        // last wrote, and a save to the same path changes these two numbers
+        // without changing the path.
+        let (file_modified, file_size) = file_identity(Path::new(&save_path));
         self.state.editor = Some(EditorState {
             path,
             name,
@@ -1761,6 +1822,8 @@ impl Core {
                 .unwrap_or(0),
             preview_modified,
             preview_size,
+            file_modified,
+            file_size,
             preview_draft: self
                 .editor_draft_path
                 .as_ref()
@@ -1802,6 +1865,7 @@ impl Core {
             .unwrap_or_else(|| source.to_string_lossy().into_owned());
         let path = source.to_string_lossy().into_owned();
         let format = save_format_label(source);
+        let (file_modified, file_size) = file_identity(source);
         self.state.editor = Some(EditorState {
             name,
             width,
@@ -1815,6 +1879,8 @@ impl Core {
             preview_revision: generation,
             preview_modified,
             preview_size,
+            file_modified,
+            file_size,
             preview_draft: None,
             rendering: true,
             save_path: path.clone(),
@@ -3095,6 +3161,30 @@ mod tests {
         std::fs::write(path, bytes).unwrap();
     }
 
+    /// A file the build cannot decode is refused before a worker is started:
+    /// `ok:true` followed by an asynchronous failure would leave the window with
+    /// the platform's own English sentence, and it would record an edit that
+    /// never happened as accepted.
+    #[test]
+    fn an_image_without_a_decoder_is_refused_with_a_line() {
+        let base = temp_dir();
+        let path = base.join("phone.heic");
+        std::fs::write(&path, b"this is not a HEIC").unwrap();
+        let mut core = Core::for_test(&base.join("runtime"));
+        let response = dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(r#"{{"type":"editor_open","path":"{}"}}"#, path.display()),
+        );
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "no_decoder", "{response}");
+        assert_eq!(response["error"]["ui"]["code"], "no_decoder", "{response}");
+        assert!(
+            core.state.editor.is_none(),
+            "a refused open left a document"
+        );
+    }
+
     #[test]
     fn export_writes_a_copy_with_the_chosen_quality_and_keeps_the_document() {
         let base = temp_dir();
@@ -4225,6 +4315,148 @@ mod tests {
         assert!(core.state.editor.as_ref().unwrap().preview_draft.is_none());
 
         core.dispatch(&editor_envelope("close-1", r#"{"type":"editor_close"}"#));
+        remove_tree(&base);
+    }
+
+    /// Each workspace keeps its own right-panel preference: hiding the Viewer's
+    /// information must not shut the Browser's preview, and the choice has to
+    /// survive a restart because it is written to `config.json`.
+    #[test]
+    fn a_right_panel_toggle_belongs_to_its_workspace() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+
+        let mut core = Core::for_test(&runtime);
+        assert!(core.state.right_panel);
+        assert!(core.state.right_panel_viewer);
+        assert!(core.state.right_panel_editor);
+
+        let response = dispatch_json(
+            &mut core,
+            "panel-1",
+            r#"{"type":"toggle_right_panel","workspace":"viewer"}"#,
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(!core.state.right_panel_viewer);
+        assert!(core.state.right_panel, "the Browser's panel moved with it");
+        assert!(
+            core.state.right_panel_editor,
+            "the Editor's panel moved with it"
+        );
+
+        // No workspace means the one on screen: the Editor here.
+        core.state.workspace = Workspace::Editor;
+        let response = dispatch_json(&mut core, "panel-2", r#"{"type":"toggle_right_panel"}"#);
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(!core.state.right_panel_editor);
+        assert!(
+            !core.state.right_panel_viewer,
+            "an unrelated toggle came back"
+        );
+
+        // A new process reads the same three answers back.
+        let reloaded = Core::for_test(&runtime);
+        assert!(reloaded.config.right_panel);
+        assert!(!reloaded.config.right_panel_viewer);
+        assert!(!reloaded.config.right_panel_editor);
+        assert!(reloaded.state.right_panel);
+        assert!(!reloaded.state.right_panel_viewer);
+        assert!(!reloaded.state.right_panel_editor);
+
+        remove_tree(&base);
+    }
+
+    /// A config written before the two new flags existed still opens with both
+    /// panels showing, instead of failing to parse or defaulting to hidden.
+    #[test]
+    fn a_config_from_before_the_new_panels_loads_with_both_open() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(
+            runtime.join("config.json"),
+            r#"{"theme":"light","left_panel":false,"right_panel":false}"#,
+        )
+        .unwrap();
+
+        let core = Core::for_test(&runtime);
+        assert!(!core.state.right_panel);
+        assert!(core.state.right_panel_viewer);
+        assert!(core.state.right_panel_editor);
+        remove_tree(&base);
+    }
+
+    /// The Original tab draws the file on disk, so Core has to publish that
+    /// file's identity and publish it again after every save: the path may not
+    /// change and the bytes behind it do.
+    #[test]
+    fn the_saved_file_identity_follows_the_file_on_disk() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let destination = base.join("delivery.jpeg");
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&photo.to_string_lossy()).unwrap()
+            ),
+        );
+        assert!(settle_editor(&mut core), "the document never arrived");
+        assert_eq!(
+            (
+                core.state.editor.as_ref().unwrap().file_modified,
+                core.state.editor.as_ref().unwrap().file_size,
+            ),
+            file_identity(&photo),
+            "the open documents the source's own identity"
+        );
+
+        let response = dispatch_json(
+            &mut core,
+            "save-as-1",
+            &format!(
+                r#"{{"type":"editor_save_as","path":{}}}"#,
+                serde_json::to_string(&destination.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_save(&mut core), "the save never finished");
+        let identity = file_identity(&destination);
+        assert_ne!(identity.0, 0, "the destination was never written");
+        {
+            let editor = core.state.editor.as_ref().unwrap();
+            assert_eq!(editor.save_path, destination.to_string_lossy());
+            assert_eq!(
+                (editor.file_modified, editor.file_size),
+                identity,
+                "the published identity is not the saved file's"
+            );
+        }
+        assert_ne!(
+            identity.1,
+            file_identity(&photo).1,
+            "the source and the copy are the same size, so this test proves nothing"
+        );
+
+        // A second save to the same path re-stats it rather than keeping the
+        // pair the open published.
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+        let response = dispatch_json(&mut core, "save-1", r#"{"type":"editor_save"}"#);
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_save(&mut core), "the save never finished");
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!(
+            (editor.file_modified, editor.file_size),
+            file_identity(&destination)
+        );
+
         remove_tree(&base);
     }
 }

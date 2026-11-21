@@ -1564,7 +1564,11 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
 /// decide whether it can be decoded, so a mislabelled file says so plainly.
 pub fn has_decoder(path: &Path) -> bool {
     match ImageReader::open(path).and_then(|reader| reader.with_guessed_format()) {
-        Ok(reader) => reader.format().is_some(),
+        // `format()` only says the bytes *look* like a known format. Building the
+        // decoder is what proves this build carries one: `image`'s `avif`
+        // feature is an encoder, and a file can be sniffed as AVIF while
+        // `into_decoder` still answers "not supported".
+        Ok(reader) => reader.into_decoder().is_ok(),
         Err(_) => false,
     }
 }
@@ -1993,6 +1997,54 @@ mod tests {
         // quality is lost and no second decode is paid for.
         let path = wide_jpeg(&dir, "small.jpg", 1200, 800);
         assert!(scaled_jpeg_preview(&path).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The browser advertises `.avif`, the Viewer draws it through Qt, and this
+    /// build once answered "The image format Avif is not supported" from the
+    /// Editor because `image`'s `avif` feature is an encoder. The decoder is
+    /// `avif-native` (ADR 0005 revision); this test encodes a real AVIF and
+    /// opens it back, so the advertised format is proven decodable rather than
+    /// only named.
+    #[test]
+    fn an_advertised_avif_is_really_decoded() {
+        let dir = temp_dir();
+        let path = dir.join("sample.avif");
+        let pixels = pattern(16, 12);
+        let mut bytes = Vec::new();
+        image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut bytes, 10, 60)
+            .write_image(
+                pixels.as_raw(),
+                pixels.width(),
+                pixels.height(),
+                ExtendedColorType::Rgba8,
+            )
+            .expect("the encoder must produce an AVIF");
+        std::fs::write(&path, &bytes).unwrap();
+
+        assert!(
+            has_decoder(&path),
+            "the browser lists .avif but the build has no decoder for it"
+        );
+        let document = open_document(&path).expect("the advertised AVIF must open");
+        assert_eq!(document.dimensions(), (16, 12));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An extension is not a decoder. Before `has_decoder` built the decoder it
+    /// answered true for any name `image` could map, which is how a HEIC or this
+    /// build's AVIF reached the worker and failed in English instead of being
+    /// refused with a translatable line.
+    #[test]
+    fn a_file_with_no_decoder_is_reported_as_such() {
+        let dir = temp_dir();
+        let broken = dir.join("broken.jpg");
+        std::fs::write(&broken, b"this is not a JPEG").unwrap();
+        assert!(!has_decoder(&broken), "a .jpg name is not a JPEG decoder");
+
+        let unlisted = dir.join("phone.heic");
+        std::fs::write(&unlisted, b"this is not a HEIC either").unwrap();
+        assert!(!has_decoder(&unlisted), "HEIC has no decoder in this build");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

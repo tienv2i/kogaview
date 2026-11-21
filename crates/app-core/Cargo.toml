@@ -8,11 +8,10 @@ build = "build.rs"
 
 [dependencies]
 # Format support is the feature list here; everything is compiled in, nothing is
-# fetched at runtime. `avif` brings the pure-Rust ravif encoder and the Rust
-# decoder, and `dds`, `exr`, `ff`, `hdr`, `ico`, `pnm`, `qoi` and `tga` are plain
-# Rust decoders. `avif-native` is deliberately absent: it links the system
-# `libdav1d`, which a Flatpak build would then have to carry and CMake would
-# have to be told to link — a packaging decision, not a format decision.
+# fetched at runtime. `avif` is the pure-Rust ravif **encoder**; decoding AVIF
+# needs `avif-native`, which links the system `libdav1d` (ADR 0005 revision).
+# `dds`, `exr`, `ff`, `hdr`, `ico`, `pnm`, `qoi` and `tga` are plain Rust
+# decoders.
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
@@ -21,6 +20,7 @@ image = { version = "0.25", default-features = false, features = [
     "bmp",
     "tiff",
     "avif",
+    "avif-native",
     "dds",
     "exr",
     "ff",

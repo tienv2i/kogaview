@@ -18,14 +18,16 @@ fn opaque_fill_alpha() -> u8 {
 ///
 /// Kept here rather than in Core so every front end (the Qt file dialog now,
 /// the CLI and the IPC/MCP adapters later) offers exactly the same list. The
-/// decoders are compiled into the binary — nothing is fetched at run time —
-/// which is what keeps a sandboxed Flatpak build able to open the same formats.
-/// HEIC/HEIF are listed although no `image` decoder exists for them: hiding a
-/// modern phone format would be worse than saying "no decoder" when one is
-/// opened.
+/// decoders are compiled into or linked against the binary — nothing is fetched
+/// at run time; AVIF's is the system libdav1d the `image` crate links — which is
+/// what keeps a sandboxed Flatpak build able to open the same formats once that
+/// library is carried with it. HEIC/HEIF are listed although no decoder exists
+/// for them: hiding a modern phone format would be worse than saying "no
+/// decoder" when one is opened. `.jpe` is a JPEG spelling `image` does not map
+/// by name; it decodes by content sniffing.
 pub const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif", "heic", "heif",
-    "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm", "qoi", "tga", "ff",
+    "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif", "heic",
+    "heif", "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm", "qoi", "tga", "ff",
 ];
 
 /// The same list as a Qt file-dialog name filter (`Images (*.jpg …)`).
@@ -215,7 +217,17 @@ pub enum Command {
         language: Language,
     },
     ToggleLeftPanel,
-    ToggleRightPanel,
+    /// Show or hide the right panel of a workspace.
+    ///
+    /// Each workspace owns its own preference, because a narrow Viewer wants
+    /// its information panel while a Browser with a wide preview does not, and
+    /// hiding one must not hide the other. `workspace` names the one whose
+    /// panel is toggled; an older client that omits it toggles the workspace
+    /// that is open, which is what a toolbar button means.
+    ToggleRightPanel {
+        #[serde(default)]
+        workspace: Option<Workspace>,
+    },
     ToggleFilmstrip,
     NewFolder {
         parent: String,
@@ -410,7 +422,7 @@ impl Command {
             Self::ToggleTheme => "toggle_theme",
             Self::SetLanguage { .. } => "set_language",
             Self::ToggleLeftPanel => "toggle_left_panel",
-            Self::ToggleRightPanel => "toggle_right_panel",
+            Self::ToggleRightPanel { .. } => "toggle_right_panel",
             Self::ToggleFilmstrip => "toggle_filmstrip",
             Self::NewFolder { .. } => "new_folder",
             Self::CopyTo { .. } => "copy_to",
@@ -606,6 +618,33 @@ mod tests {
     fn theme_toggles_both_ways() {
         assert_eq!(Theme::Dark.toggled(), Theme::Light);
         assert_eq!(Theme::Light.toggled(), Theme::Dark);
+    }
+
+    #[test]
+    fn a_right_panel_toggle_names_its_workspace_or_means_the_open_one() {
+        // The toolbar button sends no workspace: whatever is on screen is what
+        // the user is looking at.
+        let env: Envelope =
+            serde_json::from_str(r#"{"id":"p","command":{"type":"toggle_right_panel"}}"#).unwrap();
+        match env.command {
+            Command::ToggleRightPanel { workspace } => assert_eq!(workspace, None),
+            other => panic!("parsed as {}", other.name()),
+        }
+
+        // A replay or a CLI can name the workspace it means.
+        let command = Command::ToggleRightPanel {
+            workspace: Some(Workspace::Viewer),
+        };
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(json.contains("\"workspace\":\"viewer\""), "{json}");
+        let round: Command = serde_json::from_str(&json).unwrap();
+        match round {
+            Command::ToggleRightPanel { workspace } => {
+                assert_eq!(workspace, Some(Workspace::Viewer))
+            }
+            other => panic!("round trip changed the command to {}", other.name()),
+        }
+        assert_eq!(round.name(), "toggle_right_panel");
     }
 
     #[test]

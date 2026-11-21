@@ -203,6 +203,11 @@ def doctor() -> int:
 
     linguist = lrelease()
     print(f"{'Qt lrelease':18}: {linguist or 'MISSING (set KOGAVIEW_LRELEASE)'}")
+    # AVIF decoding is `image`'s `avif-native` feature; `dav1d-sys` finds it
+    # through pkg-config and CMake links it into the executable (ADR 0005
+    # revision). A missing library fails the build, so say so here.
+    dav1d = output(["pkg-config", "--modversion", "dav1d"]) if which("pkg-config") else ""
+    print(f"{'libdav1d (AVIF)':18}: {dav1d or 'MISSING (pacman -S libdav1d)'}")
     version, prefix, qml_dir = qt_version()
     print(f"{'Qt version':18}: {version or 'unknown'}"
           + (f"  ({prefix})" if prefix else ""))

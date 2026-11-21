@@ -31,7 +31,13 @@ pub struct Config {
     /// sidebar, `~/Pictures/Child` in the list).
     pub tree_root: Option<String>,
     pub left_panel: bool,
+    /// The Browser's right panel. The name is the one the config file has
+    /// always used for it; the Viewer and the Editor each keep their own,
+    /// because they show different things and a narrow Viewer may want its
+    /// information panel while the Browser's preview stays shut.
     pub right_panel: bool,
+    pub right_panel_viewer: bool,
+    pub right_panel_editor: bool,
     pub filmstrip: bool,
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,
@@ -47,6 +53,8 @@ impl Default for Config {
             tree_root: None,
             left_panel: true,
             right_panel: true,
+            right_panel_viewer: true,
+            right_panel_editor: true,
             filmstrip: true,
             remember_last_folder: true,
             background_thumbnails: true,

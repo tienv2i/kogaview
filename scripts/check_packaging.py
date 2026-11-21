@@ -8,7 +8,9 @@ from the code without anything failing:
 * `MimeType=` names the file types the launcher offers KogaView for. It has to
   agree with `kogaview_protocol::IMAGE_EXTENSIONS` *and* with the decoders the
   build actually enables (ADR 0005) — offering a file the app cannot open is a
-  worse bug than not listing it.
+  worse bug than not listing it. The Qt fallback chooser spells the same
+  extension list again in `cpp/platform.cpp`; the check compares the two so a
+  format added to one cannot stay invisible in the other.
 * `Categories=` decides where the app appears in the desktop's menu. The owner
   asked for the image-viewer group, which is `Graphics;Viewer;`.
 * The AppStream `id`, the desktop file name, the icon file name and `Icon=` all
@@ -44,6 +46,13 @@ EXTENSIONS = re.compile(
     r"pub const IMAGE_EXTENSIONS: &\[&str\] = &\[(?P<body>.*?)\];", re.S
 )
 QUOTED = re.compile(r'"([^"]+)"')
+# The Qt fallback chooser spells the same list in C++ (no extension crosses the
+# CXX-Qt bridge). It drifted once — `.jpe` was in the browser and not here — so
+# the two spellings are compared rather than trusted.
+PLATFORM_SOURCE = ROOT / "cpp" / "platform.cpp"
+CHOOSER_EXTENSIONS = re.compile(
+    r"static const char\* const extensions\[\] = \{(?P<body>.*?)nullptr,", re.S
+)
 
 
 def advertised_extensions() -> list[str]:
@@ -52,6 +61,16 @@ def advertised_extensions() -> list[str]:
     match = EXTENSIONS.search(PROTOCOL_SOURCE.read_text(encoding="utf-8"))
     if match is None:
         raise SystemExit("packaging: cannot find IMAGE_EXTENSIONS in the protocol crate")
+    return QUOTED.findall(match.group("body"))
+
+
+def chooser_extensions() -> list[str]:
+    """The Qt fallback chooser's copy of the extension list, from `platform.cpp`."""
+    match = CHOOSER_EXTENSIONS.search(PLATFORM_SOURCE.read_text(encoding="utf-8"))
+    if match is None:
+        raise SystemExit(
+            "packaging: cannot find the chooser's extension array in cpp/platform.cpp"
+        )
     return QUOTED.findall(match.group("body"))
 
 
@@ -111,6 +130,19 @@ def main() -> int:
     entry_text = dev.render_desktop_entry()
     entry = desktop_entry(entry_text)
     claimed = [mime for mime in entry.get("MimeType", "").split(";") if mime]
+
+    # 0. The Qt fallback chooser offers exactly the list the Browser uses. Two
+    #    spellings of one list drift silently: `.jpe` was listed in the grid and
+    #    missing from the dialog's filter.
+    chooser = chooser_extensions()
+    missing = [extension for extension in extensions if extension not in chooser]
+    extra = [extension for extension in chooser if extension not in extensions]
+    if missing or extra:
+        problems.append(
+            "cpp/platform.cpp's chooser list differs from IMAGE_EXTENSIONS"
+            + (f"; missing {missing}" if missing else "")
+            + (f"; extra {extra}" if extra else "")
+        )
 
     # 1. Every codec the app opens is offered, and nothing it cannot open is.
     for extension in extensions:
