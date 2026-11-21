@@ -30,7 +30,6 @@ static const Entry kEntries_vi[] = {
   { "Move to…", "Di chuyển tới…" },
   { "Move to trash", "Chuyển vào thùng rác" },
   { "Delete permanently…", "Xoá vĩnh viễn…" },
-  { "Explore here", "Duyệt tới đây" },
   { "New folder…", "Thư mục mới…" },
   { "Copy path", "Sao chép đường dẫn" },
   { "Move up", "Di chuyển lên" },

@@ -10,7 +10,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 
 use kogaview_protocol::{
-    Command, Envelope, MoveDirection, ProtocolError, Query, ResizeFilter, Theme, Workspace,
+    Command, Envelope, MoveDirection, ProtocolError, Query, ResizeFilter, ResizeMode, Theme,
+    Workspace,
 };
 use serde_json::{json, Value};
 
@@ -754,12 +755,16 @@ impl Core {
                 height,
                 fill,
                 fill_alpha,
+                mode,
                 filter,
             } => self.editor_apply(EditOperation::Resize {
                 width,
                 height,
                 fill,
                 fill_alpha,
+                // A payload from before the modes existed says what it meant
+                // with `fill` alone; see `ResizeMode::for_payload`.
+                mode: ResizeMode::for_payload(mode, fill),
                 filter,
             }),
             Command::EditorResizePreview {
@@ -767,8 +772,9 @@ impl Core {
                 height,
                 fill,
                 fill_alpha,
+                mode,
                 filter,
-            } => self.editor_resize_preview(width, height, fill, fill_alpha, filter),
+            } => self.editor_resize_preview(width, height, fill, fill_alpha, mode, filter),
             Command::EditorCrop {
                 x,
                 y,
@@ -870,7 +876,7 @@ impl Core {
             .collect::<Vec<_>>();
 
         self.state.workspace = Workspace::Viewer;
-        self.state.viewer_path = Some(first.to_string_lossy().into_owned());
+        self.set_viewer_path(Some(first.to_string_lossy().into_owned()));
         self.pending_viewer = self.state.viewer_path.clone();
         self.pending_selection = Some(if scanned_paths.is_empty() {
             vec![first.to_string_lossy().into_owned()]
@@ -1059,13 +1065,14 @@ impl Core {
         if let Some(path) = candidate {
             let index = images.iter().position(|image| image == &path);
             self.state.viewer_index = index;
-            self.state.viewer_path = index.map(|index| images[index].clone());
+            let resolved = index.map(|index| images[index].clone());
+            self.set_viewer_path(resolved);
         } else if self.state.workspace == Workspace::Viewer && !images.is_empty() {
             self.state.viewer_index = Some(0);
-            self.state.viewer_path = Some(images[0].clone());
+            self.set_viewer_path(Some(images[0].clone()));
         } else {
             self.state.viewer_index = None;
-            self.state.viewer_path = None;
+            self.set_viewer_path(None);
         }
     }
 
@@ -1111,6 +1118,23 @@ impl Core {
         })
     }
 
+    /// Point the Viewer at `path` and remember which bytes it will read.
+    ///
+    /// The stamp is the point: `viewer_path` alone is the same string when a
+    /// file is reopened or rewritten underneath the window, and a QML `Image`
+    /// whose `source` did not change never re-reads the file. Publishing the
+    /// mtime and size lets the window key its `source` on them, so "open the
+    /// same picture again" reloads exactly when the bytes are different.
+    fn set_viewer_path(&mut self, path: Option<String>) {
+        let identity = path
+            .as_deref()
+            .map(|path| file_identity(Path::new(path)))
+            .unwrap_or((0, 0));
+        self.state.viewer_path = path;
+        self.state.viewer_modified = identity.0;
+        self.state.viewer_size = identity.1;
+    }
+
     fn ensure_viewer_selection(&mut self) {
         if self.state.viewer_images.is_empty() {
             return;
@@ -1129,11 +1153,11 @@ impl Core {
                 .position(|image| image == &path)
             {
                 self.state.viewer_index = Some(index);
-                self.state.viewer_path = Some(path);
+                self.set_viewer_path(Some(path));
             }
         } else if self.state.viewer_path.is_none() {
             self.state.viewer_index = Some(0);
-            self.state.viewer_path = Some(self.state.viewer_images[0].clone());
+            self.set_viewer_path(Some(self.state.viewer_images[0].clone()));
         }
     }
 
@@ -1145,7 +1169,7 @@ impl Core {
             .position(|image| image == path)
             .ok_or_else(|| ProtocolError::line("not_found", UiText::new("not_in_this_folder")))?;
         self.state.viewer_index = Some(index);
-        self.state.viewer_path = Some(path.to_owned());
+        self.set_viewer_path(Some(path.to_owned()));
         self.state.workspace = Workspace::Viewer;
         self.set_selection(vec![path.to_owned()]);
         Ok(None)
@@ -1163,7 +1187,7 @@ impl Core {
         let next = (current + delta).rem_euclid(length) as usize;
         let path = self.state.viewer_images[next].clone();
         self.state.viewer_index = Some(next);
-        self.state.viewer_path = Some(path.clone());
+        self.set_viewer_path(Some(path.clone()));
         self.state.workspace = Workspace::Viewer;
         self.set_selection(vec![path]);
         Ok(None)
@@ -1204,6 +1228,43 @@ impl Core {
             ));
         }
         let preview_dir = self.editor_preview_dir()?;
+
+        // Reopening what is already open is not a new document. Before this
+        // check every `editor_open` — the Viewer's picture switching into the
+        // Editor a second time, the Editor's own Open pointed at the same file
+        // — tore the document down, deleted its preview, asked the worker to
+        // decode the same bytes again and dropped the undo history. The user
+        // saw the canvas blink and lost their steps for asking to see the same
+        // picture.
+        if let Some(document) = self.editor.as_ref() {
+            if ops::normalize_path(document.save_target().0) == source {
+                // Unsaved edits win over "reload": the file on disk is not
+                // what the window is showing, and an Open that quietly threw
+                // the edits away would be data loss with no question asked.
+                if document.has_unsaved_changes() {
+                    return Ok(Some(UiText::new("editor_already_open")));
+                }
+                // A clean document whose file was rewritten by another program
+                // *is* stale, so it falls through and decodes again; the same
+                // file unchanged keeps the history and the current preview.
+                if !document.source_changed() {
+                    self.state.workspace = Workspace::Editor;
+                    self.set_selection(vec![path_label.clone()]);
+                    self.state.status = UiText::new("editor_already_open");
+                    return Ok(Some(UiText::new("editor_already_open")));
+                }
+            } else if document.has_unsaved_changes() {
+                // A different picture must not replace unsaved work without an
+                // answer. The shell asks first and sends `editor_reset` when
+                // the user discards; a CLI or IPC caller gets this refusal
+                // instead of silent loss.
+                return Err(ProtocolError::line(
+                    "unsaved_document",
+                    UiText::with("unsaved_document", [path_label.clone()]),
+                ));
+            }
+        }
+
         self.editor_generation += 1;
         let generation = self.editor_generation;
         let preview = preview_dir.join(format!("preview-{generation}.png"));
@@ -1321,6 +1382,7 @@ impl Core {
         height: u32,
         fill: Option<[u8; 3]>,
         fill_alpha: u8,
+        mode: Option<ResizeMode>,
         filter: ResizeFilter,
     ) -> Result<Option<UiText>, ProtocolError> {
         self.editor_preview(
@@ -1329,6 +1391,7 @@ impl Core {
                 height,
                 fill,
                 fill_alpha,
+                mode: ResizeMode::for_payload(mode, fill),
                 filter,
             },
             PreviewKind::Resize,
@@ -3498,6 +3561,152 @@ mod tests {
         );
         assert_eq!(response["ok"], true, "{response}");
         assert!(settle_save(&mut core));
+        remove_tree(&base);
+    }
+
+    /// The Editor's Open pointed at the picture it already shows is not a new
+    /// document. Every `editor_open` used to tear the document down and decode
+    /// the same bytes again, so the canvas blinked and the undo history was
+    /// gone — for asking to see what was already on screen. Edits are kept, not
+    /// refused: the same picture asked for again is the one case where "you
+    /// have unsaved changes" is not a reason to say no.
+    #[test]
+    fn reopening_the_open_document_keeps_its_history() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let mut core = Core::for_test(&base.join("runtime"));
+        let open = format!(
+            r#"{{"type":"editor_open","path":{}}}"#,
+            serde_json::to_string(&photo.to_string_lossy()).unwrap()
+        );
+        dispatch_json(&mut core, "open-1", &open);
+        assert!(settle_editor(&mut core));
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+        let before = core.state.editor.clone().unwrap();
+        let preview = core.editor_preview_path.clone();
+
+        let again = dispatch_json(&mut core, "open-2", &open);
+        assert_eq!(again["ok"], true, "{again}");
+        let after = core.state.editor.clone().unwrap();
+        // Not one pixel re-decoded, not one history entry dropped.
+        assert_eq!(
+            after.history, before.history,
+            "reopening dropped the history"
+        );
+        assert_eq!((after.width, after.height), (20, 40));
+        assert!(!after.saved, "the unsaved edit was silently kept as saved");
+        assert_eq!(
+            core.editor_preview_path, preview,
+            "reopening threw the open document away"
+        );
+        assert_eq!(after.preview_revision, before.preview_revision);
+        remove_tree(&base);
+    }
+
+    /// A different picture must not replace unsaved work without an answer.
+    /// The shell asks and sends `editor_reset` first; a caller that does not ask
+    /// gets this refusal instead of silence.
+    #[test]
+    fn replacing_a_dirty_document_is_refused() {
+        let base = temp_dir();
+        let first = base.join("one.png");
+        let second = base.join("two.png");
+        write_png(&first, 40, 20);
+        write_png(&second, 20, 40);
+        let mut core = Core::for_test(&base.join("runtime"));
+        dispatch_json(
+            &mut core,
+            "open-1",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&first.to_string_lossy()).unwrap()
+            ),
+        );
+        assert!(settle_editor(&mut core));
+        dispatch_json(
+            &mut core,
+            "rotate-1",
+            r#"{"type":"editor_rotate","degrees":90}"#,
+        );
+
+        let response = dispatch_json(
+            &mut core,
+            "open-2",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&second.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "unsaved_document", "{response}");
+        assert_eq!(
+            response["error"]["ui"]["code"], "unsaved_document",
+            "the refusal must be a line the window can translate: {response}"
+        );
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!(editor.save_path, first.to_string_lossy());
+        assert_eq!((editor.width, editor.height), (20, 40), "the edit was lost");
+
+        // Once discarded, the same open succeeds.
+        dispatch_json(&mut core, "reset-1", r#"{"type":"editor_reset"}"#);
+        let response = dispatch_json(
+            &mut core,
+            "open-3",
+            &format!(
+                r#"{{"type":"editor_open","path":{}}}"#,
+                serde_json::to_string(&second.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_editor(&mut core));
+        assert_eq!(
+            core.state.editor.as_ref().unwrap().save_path,
+            second.to_string_lossy()
+        );
+        remove_tree(&base);
+    }
+
+    /// The Viewer's `source` is the path, and a QML `Image` whose source string
+    /// does not change never re-reads the file. Opening the same picture again
+    /// after another program rewrote it showed the old pixels; the published
+    /// mtime and size are what let the window tell the two apart.
+    #[test]
+    fn the_viewer_stamp_follows_the_bytes_on_disk() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let mut core = Core::for_test(&base.join("runtime"));
+        let open = format!(
+            r#"{{"type":"open_file","paths":[{}]}}"#,
+            serde_json::to_string(&photo.to_string_lossy()).unwrap()
+        );
+        dispatch_json(&mut core, "open-1", &open);
+        assert!(settle_scan(&mut core));
+        let first = (core.state.viewer_modified, core.state.viewer_size);
+        assert!(first.0 > 0, "the viewer published no stamp at all");
+        assert!(first.1 > 0);
+
+        // Another program writes new bytes, larger than the first, two seconds
+        // later: the size alone would already differ, and the mtime that the
+        // test then also changes is the half a same-size rewrite relies on.
+        write_png(&photo, 40, 21);
+        let now = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        std::fs::File::options()
+            .write(true)
+            .open(&photo)
+            .unwrap()
+            .set_modified(now)
+            .unwrap();
+
+        dispatch_json(&mut core, "open-2", &open);
+        assert!(settle_scan(&mut core));
+        let second = (core.state.viewer_modified, core.state.viewer_size);
+        assert_ne!(second, first, "the same path kept its old stamp");
         remove_tree(&base);
     }
 

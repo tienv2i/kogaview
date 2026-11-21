@@ -72,7 +72,7 @@ QtObject {
         qsTr("Copy image content"), qsTr("Copy file path"),
         qsTr("Copy to…"), qsTr("Move to…"), qsTr("Move to trash"),
         qsTr("Delete permanently…"),
-        qsTr("Explore here"), qsTr("New folder…"), qsTr("Copy path"),
+        qsTr("New folder…"), qsTr("Copy path"),
         qsTr("Add to quick access"),
         qsTr("Remove from quick access"), qsTr("Move up"), qsTr("Move down"),
         qsTr("Open file…"), qsTr("Open folder…"), qsTr("Switch to light mode"),

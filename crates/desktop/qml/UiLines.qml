@@ -81,6 +81,9 @@ QtObject {
         case "nothing_to_reset": return qsTr("The image has no edits to reset");
         case "reset_done": return qsTr("Reset to the original image");
         case "edit_error": return qsTr("The edit failed: %1").arg(args[0]);
+        case "editor_already_open": return qsTr("The editor is already showing this image");
+        case "unsaved_document":
+            return qsTr("Save or discard the current edits before opening %1").arg(args[0]);
         case "editor_closed": return qsTr("Editor closed");
         case "preview_folder_failed": return qsTr("Could not create the preview folder");
         case "no_decoder": return qsTr("Cannot open %1: no decoder for this format").arg(args[0]);
@@ -140,6 +143,7 @@ QtObject {
         case "crop_too_large": return qsTr("Growing to %1 × %2 is larger than the %3 pixel limit").arg(args[0]).arg(args[1]).arg(args[2]);
         case "resize_size_empty": return qsTr("A resize needs a width and a height");
         case "resize_too_large": return qsTr("Resizing to %1 × %2 is larger than the %3 pixel limit").arg(args[0]).arg(args[1]).arg(args[2]);
+        case "resize_pad_needs_colour": return qsTr("Fit with background needs a background colour");
         case "transform_outside":
             return qsTr("The corner at %1,%2 is outside the %3 × %4 image")
                 .arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]);
@@ -165,6 +169,7 @@ QtObject {
         case "crop_grow": return qsTr("Grow to %1 × %2 · %3 border").arg(args[0]).arg(args[1]).arg(args[2]);
         case "crop_grow_clear": return qsTr("Grow to %1 × %2 · transparent border").arg(args[0]).arg(args[1]);
         case "resize": return qsTr("Resize %1 × %2").arg(args[0]).arg(args[1]);
+        case "resize_cover": return qsTr("Crop to fill %1 × %2").arg(args[0]).arg(args[1]);
         case "resize_pad": return qsTr("Resize %1 × %2 · pad %3").arg(args[0]).arg(args[1]).arg(args[2]);
         case "resize_pad_clear": return qsTr("Resize %1 × %2 · transparent background").arg(args[0]).arg(args[1]);
         case "transform": return qsTr("Straighten the frame");

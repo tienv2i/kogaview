@@ -472,7 +472,15 @@ Item {
                         id: image
                         objectName: "viewerImage"
                         anchors.fill: parent
-                        source: view.currentPath ? "file://" + view.currentPath : ""
+                        // A `source` string that does not change never re-reads
+                        // the file, so opening the same picture again after
+                        // another program rewrote it kept the old pixels. Core
+                        // publishes the bytes' own identity, and the query
+                        // string makes "same path, new bytes" a new source.
+                        source: view.currentPath
+                                ? "file://" + view.currentPath
+                                  + "?v=" + view.state.viewerModified + "-" + view.state.viewerSize
+                                : ""
                         asynchronous: true
                         cache: false
                         fillMode: Image.PreserveAspectFit
@@ -812,7 +820,7 @@ Item {
             onTriggered: view.openWith(view.currentPath)
         }
         MenuItem {
-            text: view.theme.menuEntries[39]
+            text: view.theme.menuEntries[38]
             icon.name: "folder-documents-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.revealPath(view.currentPath)
@@ -901,21 +909,21 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
-            text: view.theme.menuEntries[31]
+            text: view.theme.menuEntries[30]
             icon.name: "zoom-in-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.zoomIn()
             MenuShortcut { text: "+" }
         }
         MenuItem {
-            text: view.theme.menuEntries[32]
+            text: view.theme.menuEntries[31]
             icon.name: "zoom-out-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.zoomOut()
             MenuShortcut { text: "-" }
         }
         MenuItem {
-            text: view.theme.menuEntries[23]
+            text: view.theme.menuEntries[22]
             icon.name: "zoom-original-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.actualSize()
@@ -923,28 +931,28 @@ Item {
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[24]
+            text: view.theme.menuEntries[23]
             icon.name: "object-rotate-left-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.rotateLeft()
             MenuShortcut { text: "Shift+R" }
         }
         MenuItem {
-            text: view.theme.menuEntries[25]
+            text: view.theme.menuEntries[24]
             icon.name: "object-rotate-right-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.rotateRight()
             MenuShortcut { text: "R" }
         }
         MenuItem {
-            text: view.theme.menuEntries[26]
+            text: view.theme.menuEntries[25]
             icon.name: "object-flip-horizontal-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.toggleFlipH()
             MenuShortcut { text: "H" }
         }
         MenuItem {
-            text: view.theme.menuEntries[27]
+            text: view.theme.menuEntries[26]
             icon.name: "object-flip-vertical-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.toggleFlipV()
@@ -952,7 +960,7 @@ Item {
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[33]
+            text: view.theme.menuEntries[32]
             icon.name: "view-list-symbolic"
             checkable: true
             checked: !!view.state.filmstrip
@@ -960,7 +968,7 @@ Item {
             MenuShortcut { text: "T" }
         }
         MenuItem {
-            text: view.theme.menuEntries[40]
+            text: view.theme.menuEntries[39]
             icon.name: "sidebar-show-right-symbolic"
             checkable: true
             checked: !!view.state.rightPanelViewer

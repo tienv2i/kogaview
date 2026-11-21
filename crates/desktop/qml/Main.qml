@@ -394,15 +394,7 @@ ApplicationWindow {
         }
         if (root.choosingForEditor) {
             root.choosingForEditor = false;
-            // Reached from the Editor's own button and from the shell menu, so
-            // the menu's path has to switch workspace first; when the Editor is
-            // already up, only the open command is sent.
-            var commands = [];
-            if (root.state.workspace !== "editor") {
-                commands.push({ type: "set_workspace", workspace: "editor" });
-            }
-            commands.push({ type: "editor_open", path: paths[0] });
-            root.sendSequence(commands);
+            root.requestEditorOpen(paths[0]);
         } else {
             root.send({ type: "open_file", paths: paths });
         }
@@ -412,6 +404,48 @@ ApplicationWindow {
     /// the Editor asks this first.
     readonly property bool editorHasUnsavedChanges:
         !!(root.state.editor && root.state.editor.modified && !root.state.editor.saved)
+
+    /// Open `path` in the Editor, asking about unsaved edits first.
+    ///
+    /// Every entry point goes through here — the Editor's Open button, the
+    /// shell menu's "Open in editor…", the fallback chooser — because Core
+    /// answers `unsaved_document` rather than replacing a document whose edits
+    /// are not on disk. Asking is the shell's job: Core enforces the rule, the
+    /// dialog is how the user answers it.
+    function requestEditorOpen(path, selectFirst) {
+        if (!path) return;
+        // The question is about the *document*, not about the workspace it is
+        // in: edits left behind in the Editor are still unsaved when the user
+        // asks for another picture from the Viewer.
+        if (root.editorHasUnsavedChanges) {
+            root.pendingLeave = { editorOpen: path, select: !!selectFirst };
+            unsavedDialog.open();
+            return;
+        }
+        root.runEditorOpen(path, selectFirst);
+    }
+
+    /// The commands that open `path`, in the order each one needs. A chooser
+    /// answered outside the Editor switches to it first; `sendSequence` keeps
+    /// that order, because each command republishes the state and a workspace
+    /// switch sent later would arrive too late. The prefix is also what the
+    /// unsaved dialog's answers build on, so the save or the reset is sent
+    /// ahead of the exact same open.
+    function editorOpenCommands(path, selectFirst) {
+        var commands = [];
+        if (selectFirst) {
+            commands.push({ type: "select", paths: [path] });
+        }
+        if (root.state.workspace !== "editor") {
+            commands.push({ type: "set_workspace", workspace: "editor" });
+        }
+        commands.push({ type: "editor_open", path: path });
+        return commands;
+    }
+
+    function runEditorOpen(path, selectFirst) {
+        root.sendSequence(root.editorOpenCommands(path, selectFirst));
+    }
 
     /// Save As: the chooser suggests where the document would go now. The
     /// dialog is opened from the Editor's button; the chosen path becomes
@@ -450,13 +484,13 @@ ApplicationWindow {
         root.pendingLeave = null;
         unsavedDialog.close();
         var following = leave === "quit"
-                ? null
-                : (leave && leave.workspace
-                   ? { type: "set_workspace", workspace: leave.workspace }
-                   : { type: "editor_close" });
-        var commands = [{ type: "editor_save" }];
-        if (following) commands.push(following);
-        root.sendSequence(commands);
+                ? []
+                : (leave && leave.editorOpen
+                   ? root.editorOpenCommands(leave.editorOpen, leave.select)
+                   : [ leave && leave.workspace
+                       ? { type: "set_workspace", workspace: leave.workspace }
+                       : { type: "editor_close" } ]);
+        root.sendSequence([{ type: "editor_save" }].concat(following));
         if (leave === "quit") Qt.callLater(function() { root.runLeave("quit"); });
     }
     /// The dialog's Discard answer: drop the edits and go. Dropping them is a
@@ -473,16 +507,19 @@ ApplicationWindow {
             root.runLeave("quit");
             return;
         }
-        var following = leave && leave.workspace
-                ? { type: "set_workspace", workspace: leave.workspace }
-                : (leave && leave.close ? { type: "editor_close" } : null);
+        var following = leave && leave.editorOpen
+                ? root.editorOpenCommands(leave.editorOpen, leave.select)
+                : [ leave && leave.workspace
+                    ? { type: "set_workspace", workspace: leave.workspace }
+                    : (leave && leave.close ? { type: "editor_close" } : null) ];
         // Leaving the Editor for another workspace keeps the document open, so
         // the edits have to be reverted for real. Closing the document drops it
-        // anyway.
-        if (leave && leave.workspace) {
-            root.sendSequence([{ type: "editor_reset" }, following]);
-        } else if (following) {
-            root.send(following);
+        // anyway. An open replaces the document too, but Core refuses to do so
+        // while the document is dirty, so the reset has to come first.
+        if (leave && (leave.workspace || leave.editorOpen)) {
+            root.sendSequence([{ type: "editor_reset" }].concat(following));
+        } else if (following[0]) {
+            root.send(following[0]);
         }
     }
 
@@ -941,11 +978,7 @@ ApplicationWindow {
             onOpenExternal: function(path) { Platform.openExternally(path); }
             onOpenWith: function(path) { Platform.openWith(path); }
             onEditInEditor: function(path) {
-                root.sendSequence([
-                    { type: "select", paths: [path] },
-                    { type: "set_workspace", workspace: "editor" },
-                    { type: "editor_open", path: path }
-                ]);
+                root.requestEditorOpen(path, true);
             }
             onRequestDestination: function(action, paths) {
                 root.chooseDestination(action, paths);
@@ -978,11 +1011,7 @@ ApplicationWindow {
             onCopyText: function(text) { Platform.copyText(text); }
             onOpenWith: function(path) { Platform.openWith(path); }
             onEditInEditor: function(path) {
-                root.sendSequence([
-                    { type: "select", paths: [path] },
-                    { type: "set_workspace", workspace: "editor" },
-                    { type: "editor_open", path: path }
-                ]);
+                root.requestEditorOpen(path, true);
             }
             onRequestDestination: function(action, paths) {
                 root.chooseDestination(action, paths);
@@ -1018,36 +1047,36 @@ ApplicationWindow {
                                           appTheme.menuShortcutWidths)
 
         MenuItem {
-            text: appTheme.menuEntries[16]
+            text: appTheme.menuEntries[15]
             icon.name: "document-open-symbolic"
             onTriggered: root.chooseFiles()
         }
         MenuItem {
-            text: appTheme.menuEntries[17]
+            text: appTheme.menuEntries[16]
             icon.name: "folder-open-symbolic"
             onTriggered: root.chooseFolder()
         }
         MenuItem {
-            text: appTheme.menuEntries[30]
+            text: appTheme.menuEntries[29]
             icon.name: "document-edit-symbolic"
             onTriggered: root.chooseEditorImage()
         }
         MenuSeparator {}
         MenuItem {
-            text: root.state.theme === "dark" ? appTheme.menuEntries[18] : appTheme.menuEntries[19]
+            text: root.state.theme === "dark" ? appTheme.menuEntries[17] : appTheme.menuEntries[18]
             icon.name: root.state.theme === "dark"
                        ? "weather-clear-symbolic"
                        : "weather-clear-night-symbolic"
             onTriggered: root.send({ type: "toggle_theme" })
         }
         MenuItem {
-            text: appTheme.menuEntries[20]
+            text: appTheme.menuEntries[19]
             icon.name: "preferences-system-symbolic"
             onTriggered: root.openSettings()
         }
         MenuSeparator {}
         MenuItem {
-            text: appTheme.menuEntries[21]
+            text: appTheme.menuEntries[20]
             icon.name: "application-exit-symbolic"
             onTriggered: Qt.quit()
         }

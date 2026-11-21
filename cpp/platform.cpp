@@ -658,40 +658,60 @@ void PlatformHelper::openWith(const QString& path)
 void PlatformHelper::revealInFolder(const QString& path)
 {
   const QFileInfo info(path);
-  const QUrl url = QUrl::fromLocalFile(info.absoluteFilePath());
+  // A path that is gone has nothing to select: the folder that held it is the
+  // most useful destination left. A path whose folder is gone too is the one
+  // case where "show in folder" cannot do anything, so it says so instead of
+  // handing the desktop a URI that opens onto nothing.
+  const QString target = info.absoluteFilePath();
+  const QFileInfo folderInfo = info.isDir() ? info : QFileInfo(info.absolutePath());
+  if (target.isEmpty() || (!info.exists() && !folderInfo.exists())) {
+    qWarning() << "KogaView reveal: nothing to reveal for" << path;
+    emit dialogError(tr("That file is no longer there."));
+    return;
+  }
+  const QUrl url = QUrl::fromLocalFile(target);
 
   // The desktop's own "show in folder" is a *selection*, not a new window: a
   // file manager that implements org.freedesktop.FileManager1 selects the file
-  // in the window it is already showing. A sandbox cannot reach the host's
-  // service directly, so the direct call is skipped there and the portal below
-  // is the only path (this GNOME session does not implement the portal, which
-  // is why the default-handler fallback stays).
+  // in the window it is already showing. The call must not be gated on
+  // `isServiceRegistered`: that only answers "is it running right now", so a
+  // desktop that had not started its file manager yet (KDE, where Dolphin is
+  // D-Bus-activatable, is the common case) made the request look unavailable
+  // and fell through to a plain folder open. `call` activates the service by
+  // itself and reports a refusal if there is nothing to activate, which is the
+  // answer this needs. A sandbox cannot reach the host's service directly, so
+  // the direct call is skipped there and the portal is the only path there.
   const bool sandboxed = QFileInfo::exists(QStringLiteral("/.flatpak-info"));
   if (!sandboxed) {
     const QString service = QStringLiteral("org.freedesktop.FileManager1");
     QDBusConnection bus = QDBusConnection::sessionBus();
-    if (bus.interface() != nullptr && bus.interface()->isServiceRegistered(service)) {
-      const QStringList uris{url.toString()};
-      const QString method = info.isDir() ? QStringLiteral("ShowFolders")
-                                          : QStringLiteral("ShowItems");
-      QDBusMessage message = QDBusMessage::createMethodCall(
-          service, QStringLiteral("/org/freedesktop/FileManager1"), service, method);
-      message << uris << QString();
-      const QDBusMessage reply = bus.call(message, QDBus::Block, 2000);
-      if (reply.type() == QDBusMessage::ReplyMessage) {
-        return;
-      }
-      qWarning() << "KogaView reveal: FileManager1 refused" << path
-                 << reply.errorMessage();
+    const QStringList uris{url.toString()};
+    const QString method = info.isDir() ? QStringLiteral("ShowFolders")
+                                        : QStringLiteral("ShowItems");
+    QDBusMessage message = QDBusMessage::createMethodCall(
+        service, QStringLiteral("/org/freedesktop/FileManager1"), service, method);
+    message << uris << QString();
+    const QDBusMessage reply = bus.call(message, QDBus::Block, 5000);
+    if (reply.type() == QDBusMessage::ReplyMessage) {
+      qInfo() << "KogaView reveal:" << method << target << "via org.freedesktop.FileManager1";
+      return;
     }
+    qWarning() << "KogaView reveal: FileManager1 unavailable for" << path << "-"
+               << reply.errorMessage();
+  } else {
+    qInfo() << "KogaView reveal: sandboxed, skipping org.freedesktop.FileManager1";
   }
 
-  const QUrl folder = QUrl::fromLocalFile(info.isDir() ? info.absoluteFilePath()
-                                                       : info.absolutePath());
+  // The portal opens the containing folder, not a selection: it is the best a
+  // sandbox can ask for, and the second choice outside one.
+  const QUrl folder = QUrl::fromLocalFile(folderInfo.absoluteFilePath());
   if (openUriWithPortal(folder, true)) {
+    qInfo() << "KogaView reveal: opened" << folder.toString() << "via the portal";
     return;
   }
-  if (!QDesktopServices::openUrl(folder)) {
-    emit dialogError(tr("Cannot open the containing folder."));
+  if (QDesktopServices::openUrl(folder)) {
+    qInfo() << "KogaView reveal: opened" << folder.toString() << "with the default handler";
+    return;
   }
+  emit dialogError(tr("Cannot open the containing folder."));
 }

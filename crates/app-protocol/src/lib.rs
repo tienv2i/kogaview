@@ -91,6 +91,44 @@ pub enum ResizeFilter {
     Lanczos3,
 }
 
+/// How a resize relates the source's shape to the target's.
+///
+/// A resize answers "make this W × H", not "decide what the new shape keeps";
+/// the second question has three honest answers, so it is asked explicitly
+/// instead of being assumed. `Stretch` is the default because it is the only
+/// one that discards nothing: every source pixel contributes to the result.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeMode {
+    /// Scale the whole frame to the target, even when the aspect changes.
+    #[default]
+    Stretch,
+    /// Keep the source's shape and take a centred rectangle of it that covers
+    /// the target. Pixels outside that rectangle are discarded.
+    Cover,
+    /// Scale the whole frame to fit inside the target and fill the leftover
+    /// with `fill`. Nothing is stretched and nothing is discarded; the result
+    /// is a letterbox or a pillarbox.
+    Pad,
+}
+
+impl ResizeMode {
+    /// The mode a payload means.
+    ///
+    /// An older payload carries no mode. A `fill` meant "fit and pad", and no
+    /// fill meant the centred cover crop — that is the pair the form used to
+    /// offer, and a replayed journal must keep its meaning. A *new* payload
+    /// always names its mode, so the default for anyone else is `Stretch`:
+    /// silently discarding the edges is the bug this enum exists to end.
+    pub fn for_payload(mode: Option<Self>, fill: Option<[u8; 3]>) -> Self {
+        mode.unwrap_or(if fill.is_some() {
+            Self::Pad
+        } else {
+            Self::Stretch
+        })
+    }
+}
+
 /// Interface language. The UI text is translated at runtime from `.ts` files
 /// compiled into the binary; Core only carries the selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,11 +331,15 @@ pub enum Command {
         #[serde(default)]
         max_edge: Option<u32>,
     },
-    /// Scale the working document to exactly `width` × `height`. Without a
-    /// `fill`, the target aspect is covered by a centred crop before scaling,
-    /// so pixels are never stretched. With a `fill`, the whole source is scaled
-    /// to fit inside the target and the leftover is padded with that RGB
-    /// colour, centred; the pad is only square when the target is square.
+    /// Scale the working document to exactly `width` × `height`.
+    ///
+    /// `mode` decides what happens when the target's shape differs from the
+    /// source's: `stretch` (the default) scales the whole frame and loses
+    /// nothing, `cover` keeps the source's shape by discarding a centred
+    /// rectangle of it, and `pad` fits the whole frame inside and fills the
+    /// leftover with `fill`. An older payload that carries only `fill` keeps
+    /// its pad; one that carries no `fill` used to mean `cover` and now means
+    /// `stretch`, because discarding pixels is a choice the caller must make.
     /// Resize is not anchored: where the result sits is a Crop decision, not a
     /// Resize one.
     EditorResize {
@@ -309,6 +351,10 @@ pub enum Command {
         /// form's background dropdown offers. Older payloads are opaque.
         #[serde(default = "opaque_fill_alpha")]
         fill_alpha: u8,
+        /// Absent in a payload from before the three modes existed; see
+        /// [`ResizeMode::for_payload`] for what an absent value means.
+        #[serde(default)]
+        mode: Option<ResizeMode>,
         #[serde(default)]
         filter: ResizeFilter,
     },
@@ -323,6 +369,8 @@ pub enum Command {
         fill: Option<[u8; 3]>,
         #[serde(default = "opaque_fill_alpha")]
         fill_alpha: u8,
+        #[serde(default)]
+        mode: Option<ResizeMode>,
         #[serde(default)]
         filter: ResizeFilter,
     },
@@ -662,6 +710,7 @@ mod tests {
                     height: 600,
                     fill: None,
                     fill_alpha: 255,
+                    mode: Some(ResizeMode::Stretch),
                     filter: ResizeFilter::Auto,
                 },
                 "editor_resize",
@@ -672,6 +721,7 @@ mod tests {
                     height: 600,
                     fill: Some([1, 2, 3]),
                     fill_alpha: 0,
+                    mode: Some(ResizeMode::Pad),
                     filter: ResizeFilter::Bicubic,
                 },
                 "editor_resize_preview",
@@ -793,6 +843,7 @@ mod tests {
             Command::EditorResize {
                 fill,
                 fill_alpha,
+                mode,
                 filter,
                 width,
                 height,
@@ -800,6 +851,15 @@ mod tests {
                 assert_eq!((width, height), (64, 32));
                 assert_eq!(fill, None);
                 assert_eq!(fill_alpha, 255, "an old payload pads opaquely");
+                // No mode and no fill is the old `cover` payload. The protocol
+                // keeps the field absent and lets Core read it, so a client
+                // that knows only the old shape is still understood.
+                assert_eq!(mode, None);
+                assert_eq!(
+                    ResizeMode::for_payload(mode, fill),
+                    ResizeMode::Stretch,
+                    "a payload with no mode and no fill now stretches"
+                );
                 assert_eq!(filter, ResizeFilter::Auto);
             }
             other => panic!("unexpected command {other:?}"),
@@ -812,12 +872,32 @@ mod tests {
             Command::EditorResize {
                 fill,
                 fill_alpha,
+                mode,
                 filter,
                 ..
             } => {
                 assert_eq!(fill, Some([1, 2, 3]));
                 assert_eq!(fill_alpha, 0);
+                assert_eq!(mode, None);
+                assert_eq!(
+                    ResizeMode::for_payload(mode, fill),
+                    ResizeMode::Pad,
+                    "an old payload that carries a fill keeps its pad"
+                );
                 assert_eq!(filter, ResizeFilter::Bspline);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+        // A payload that names its mode keeps it, including `cover` with no
+        // fill: the explicit answer is what the form sends.
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"r","command":{"type":"editor_resize","width":64,"height":32,"mode":"cover"}}"#,
+        )
+        .unwrap();
+        match env.command {
+            Command::EditorResize { mode, fill, .. } => {
+                assert_eq!(mode, Some(ResizeMode::Cover));
+                assert_eq!(ResizeMode::for_payload(mode, fill), ResizeMode::Cover);
             }
             other => panic!("unexpected command {other:?}"),
         }

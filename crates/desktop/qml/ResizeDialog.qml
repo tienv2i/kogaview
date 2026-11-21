@@ -17,11 +17,21 @@ import QtQuick.Layouts
 ///
 /// The form follows a scale tool rather than a ratio table: Width and Height
 /// are two numbers, the chain between them is the only aspect lock, and a
-/// concrete `Size preset` fills both. The background dropdown always shows how
-/// the leftover is handled — `None` is the existing centred cover crop, a colour
-/// fits the whole picture and pads the leftover, and `Transparent` pads with
-/// alpha 0. The filter dropdown travels in the command, so it changes the
-/// resampling kernel instead of only its label.
+/// concrete `Size preset` fills both. The `Fit` row answers the question a
+/// resize cannot avoid when the shape changes — what happens to the source when
+/// the target is not its shape:
+///
+/// - `Stretch to size` scales the whole frame and loses nothing. It is the
+///   default, because the user asked for a size, not for a decision about
+///   which pixels to throw away.
+/// - `Crop to fill` keeps the source's shape and discards a centred rectangle,
+///   which is what every resize used to do without saying so.
+/// - `Fit with background` scales the whole frame inside the target and pads
+///   the leftover with the `Background` colour (or leaves it transparent).
+///
+/// Only the last one has a background to choose, so that row appears with it.
+/// The filter dropdown travels in the command, so it changes the resampling
+/// kernel instead of only its label.
 ///
 /// - **Apply** sends `editor_resize` (through the editor's `command` signal)
 ///   and closes. It is disabled while the pair is the document's own size,
@@ -46,12 +56,20 @@ Dialog {
     property bool constraint: true
     /// The W:H pair the chain keeps. Zero until a valid pair or a preset exists.
     property var lockedRatio: ({ width: 0, height: 0 })
-    /// `none`, `transparent`, `black`, `white`, `gray` or `custom`.
+    /// `stretch`, `cover` or `pad`; `stretch` is the lossless default.
+    property string fitMode: "stretch"
+    /// `none`, `transparent`, `black`, `white`, `gray` or `custom`. Only read
+    /// while `fitMode` is `pad`.
     property string backgroundMode: "none"
     property color customColor: "#808080"
     /// A key from `filters`; `auto` is the fast box average for a downscale.
     property string filter: "auto"
 
+    readonly property var fits: [
+        { key: "stretch", label: qsTr("Stretch to size") },
+        { key: "cover", label: qsTr("Crop to fill") },
+        { key: "pad", label: qsTr("Fit with background") }
+    ]
     readonly property var backgrounds: [
         { key: "none", label: qsTr("None") },
         { key: "transparent", label: qsTr("Transparent") },
@@ -128,11 +146,13 @@ Dialog {
         var height = Math.max(1, Math.round(dialog.documentHeight))
         widthField.setPixels(width)
         heightField.setPixels(height)
+        dialog.fitMode = "stretch"
         dialog.backgroundMode = "none"
         dialog.filter = "auto"
         dialog.lockedRatio = { width: width, height: height }
         dialog.setConstraint(true)
         presetBox.currentIndex = dialog.matchingPreset()
+        fitBox.currentIndex = dialog.fitIndex()
         backgroundBox.currentIndex = dialog.backgroundIndex()
         filterBox.currentIndex = dialog.filterIndex()
     }
@@ -225,6 +245,21 @@ Dialog {
         presetBox.currentIndex = index
     }
 
+    function fitIndex() {
+        for (var index = 0; index < dialog.fits.length; ++index) {
+            if (dialog.fits[index].key === dialog.fitMode) return index
+        }
+        return 0
+    }
+
+    /// Pick how an aspect change is handled. Choosing a pad keeps whatever
+    /// background was already chosen; the other two simply hide that row.
+    function chooseFit(index) {
+        if (index < 0 || index >= dialog.fits.length) return
+        dialog.fitMode = dialog.fits[index].key
+        fitBox.currentIndex = index
+    }
+
     function backgroundIndex() {
         for (var index = 0; index < dialog.backgrounds.length; ++index) {
             if (dialog.backgrounds[index].key === dialog.backgroundMode) return index
@@ -272,7 +307,9 @@ Dialog {
                 Math.round(color.b * 255)]
     }
 
+    /// The colour the command carries, or null when the mode paints nothing.
     function fillForCommand() {
+        if (dialog.fitMode !== "pad") return null
         switch (dialog.backgroundMode) {
         case "none": return null
         case "transparent": return [0, 0, 0]
@@ -292,7 +329,7 @@ Dialog {
         if (!dialog.changed()) return
         dialog.resizeRequested(widthField.pixels(), heightField.pixels(),
                                dialog.fillForCommand(), dialog.fillAlpha(),
-                               dialog.filter)
+                               dialog.filter, dialog.fitMode)
         dialog.close()
     }
 
@@ -522,6 +559,28 @@ Dialog {
                 spacing: 8
 
                 Label {
+                    text: qsTr("Fit")
+                    color: dialog.theme.textMuted
+                }
+                ComboBox {
+                    id: fitBox
+                    objectName: "resizeFit"
+                    Layout.fillWidth: true
+                    model: dialog.fits
+                    textRole: "label"
+                    currentIndex: dialog.fitIndex()
+                    onActivated: dialog.chooseFit(currentIndex)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                // Only a pad paints pixels the source does not have, so it is
+                // the only mode with a background to pick.
+                visible: dialog.fitMode === "pad"
+
+                Label {
                     text: qsTr("Background")
                     color: dialog.theme.textMuted
                 }
@@ -574,7 +633,7 @@ Dialog {
 
             Label {
                 Layout.fillWidth: true
-                visible: dialog.backgroundMode !== "none"
+                visible: dialog.fitMode === "pad"
                 text: dialog.backgroundMode === "transparent"
                       ? qsTr("Fits the whole image inside the target and leaves the leftover transparent.")
                       : qsTr("Fits the whole image inside the target and fills the leftover with this background.")
@@ -642,5 +701,6 @@ Dialog {
     /// Apply: the user chose this size. The editor turns it into one
     /// `editor_resize`; the dialog closes on its own. `fill` is null for the
     /// existing cover crop, and `fillAlpha` is 0 for the transparent pad.
-    signal resizeRequested(int width, int height, var fill, int fillAlpha, string filter)
+    signal resizeRequested(int width, int height, var fill, int fillAlpha, string filter,
+                           string mode)
 }

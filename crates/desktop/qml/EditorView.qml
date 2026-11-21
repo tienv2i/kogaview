@@ -145,6 +145,14 @@ Item {
     /// The tool zone folded to its heading by the user. Arm a tool and it opens
     /// again, so a folded dock never hides a tool the user just chose.
     property bool toolZoneFolded: false
+    /// The reference pages put away, leaving the tab strip alone at the bottom
+    /// of the dock. The armed tool's options take the height that frees, which
+    /// is the other half of the same question the fold above asks.
+    property bool referenceFolded: false
+    /// The height the user dragged the tool zone to, or `0` while it hugs its
+    /// own content. A drag upwards reaches 0, which is how the drag itself can
+    /// put the zone back to hugging; the divider's double-click does the same.
+    property int toolZoneHeight: 0
     /// Which reference tab is open: `info`, `history` or `original`. A pointer
     /// has no tool options, so this is the whole dock in that state.
     property string rightTab: "info"
@@ -2152,33 +2160,33 @@ Item {
                                             view.theme.menuShortcutWidths)
 
         MenuItem {
-            text: view.theme.menuEntries[24]
+            text: view.theme.menuEntries[23]
             enabled: view.documentReady
             onTriggered: view.command({ type: "editor_rotate", degrees: -90 })
         }
         MenuItem {
-            text: view.theme.menuEntries[25]
+            text: view.theme.menuEntries[24]
             enabled: view.documentReady
             onTriggered: view.command({ type: "editor_rotate", degrees: 90 })
         }
         MenuItem {
-            text: view.theme.menuEntries[26]
+            text: view.theme.menuEntries[25]
             enabled: view.documentReady
             onTriggered: view.command({ type: "editor_flip", axis: "horizontal" })
         }
         MenuItem {
-            text: view.theme.menuEntries[27]
+            text: view.theme.menuEntries[26]
             enabled: view.documentReady
             onTriggered: view.command({ type: "editor_flip", axis: "vertical" })
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[28]
+            text: view.theme.menuEntries[27]
             enabled: view.modified
             onTriggered: view.command({ type: "editor_reset" })
         }
         MenuItem {
-            text: view.theme.menuEntries[29]
+            text: view.theme.menuEntries[28]
             enabled: view.documentReady
             onTriggered: view.command({ type: "editor_close" })
         }
@@ -2366,7 +2374,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: view.documentReady
                 ToolTip.visible: hovered
-                ToolTip.text: view.theme.menuEntries[29]
+                ToolTip.text: view.theme.menuEntries[28]
                 onClicked: view.command({ type: "editor_close" })
             }
             ToolbarButton {
@@ -3286,7 +3294,9 @@ Item {
             /// cannot also keep `header + options + actions + 180 px of tabs`.
             /// Only then do they scroll.
             readonly property real optionsCap: Math.max(
-                40, height - 180 - headerHeight - actionRowHeight - 10)
+                40,
+                height - (view.referenceFolded ? 0 : 180)
+                       - headerHeight - actionRowHeight - 10)
             readonly property bool toolOptionsShown:
                 view.tool !== "pointer" && !view.toolZoneFolded
             /// The tool's name for the heading. The sentence is "… options", so
@@ -3312,11 +3322,22 @@ Item {
 
                 // ------------------------------------------ tool zone (top)
                 ColumnLayout {
+                    id: toolZone
                     objectName: "editorToolZone"
                     Layout.fillWidth: true
-                    // The zone is as tall as what it draws; the tabs below get
-                    // the rest of the dock.
-                    Layout.preferredHeight: implicitHeight
+                    // The zone is as tall as what it draws, unless the user
+                    // dragged the divider or folded the pages away. `implicit`
+                    // is the content's own height; a dragged height is what the
+                    // divider writes; a folded reference gives this zone the
+                    // rest of the dock, which is what "the options take the
+                    // freed height" means.
+                    Layout.preferredHeight: view.toolZoneHeight > 0
+                                            ? view.toolZoneHeight : implicitHeight
+                    Layout.fillHeight: view.referenceFolded
+                    Layout.maximumHeight: view.toolZoneHeight > 0
+                                          ? Math.max(40, Math.min(view.toolZoneHeight,
+                                                                  inspector.height - 120))
+                                          : Number.MAX_VALUE
                     spacing: 0
 
                     RowLayout {
@@ -3391,11 +3412,24 @@ Item {
                         // of tabs still fit. The 10 px is the gap under the
                         // last field, which a content layout's own margin does
                         // not add inside a ScrollView.
-                        Layout.preferredHeight: visible
-                                                ? Math.min(toolOptionsColumn.implicitHeight + 10,
-                                                           inspector.optionsCap)
-                                                : 0
-                        Layout.maximumHeight: Layout.preferredHeight
+                        Layout.preferredHeight: {
+                            if (!visible) return 0
+                            if (view.toolZoneHeight > 0) {
+                                // The divider owns the height: everything the
+                                // zone has left after the heading and the
+                                // pinned actions is the options' room.
+                                return Math.max(40, view.toolZoneHeight
+                                                    - inspector.headerHeight
+                                                    - inspector.actionRowHeight)
+                            }
+                            return Math.min(toolOptionsColumn.implicitHeight + 10,
+                                            inspector.optionsCap)
+                        }
+                        // A dragged or folded zone must be able to grow past
+                        // the content it happened to have at that moment.
+                        Layout.maximumHeight: view.toolZoneHeight > 0 || view.referenceFolded
+                                               ? Number.MAX_VALUE : Layout.preferredHeight
+                        Layout.fillHeight: view.referenceFolded
                         clip: true
 
                         ScrollView {
@@ -4053,14 +4087,51 @@ Item {
                     }
                 }
 
+                // The handle between the two halves of the dock. It writes the
+                // height of the tool zone above it, so the split is the user's
+                // answer to "more options or more reference" and not a guess
+                // baked into the layout. Dragged to the top it reports 0, which
+                // is the zone's natural height; a double-click returns to that
+                // same state.
+                PanelSplitter {
+                    objectName: "editorToolZoneDivider"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: implicitHeight
+                    orientation: Qt.Vertical
+                    // Nothing to divide against when the options are folded or
+                    // there are no options at all.
+                    visible: view.tool !== "pointer" && !view.toolZoneFolded
+                             && !view.referenceFolded
+                    value: view.toolZoneHeight > 0 ? view.toolZoneHeight
+                                                   : toolZone.implicitHeight
+                    defaultValue: 0
+                    direction: 1
+                    minimum: 0
+                    maximum: Math.max(inspector.headerHeight + 40,
+                                      inspector.height - 160)
+                    onMoved: function(height) { view.toolZoneHeight = Math.round(height) }
+                }
+
                 // -------------------------------------- reference zone (tabs)
                 // The shared dock: a strip and one page at a time. The tool
                 // zone above it hugs its own content, so these tabs start
                 // right under the action row (or under the heading, for the
                 // pointer) and take whatever height is left.
                 RightDock {
+                    id: referenceDock
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    // Folded, the pages are away and only the strip is left:
+                    // it drops to the bottom of the dock, and the tool zone
+                    // above it fills (hence `fillHeight` follows the same
+                    // flag).
+                    Layout.fillHeight: !view.referenceFolded
+                    Layout.preferredHeight: view.referenceFolded
+                                            ? referenceDock.stripHeight : -1
+                    folded: view.referenceFolded
+                    foldTooltip: view.referenceFolded
+                                 ? qsTr("Expand the reference panels")
+                                 : qsTr("Collapse the reference panels")
+                    onFoldRequested: view.referenceFolded = !view.referenceFolded
                     theme: view.theme
                     backgroundColor: "transparent"
                     borderColor: "transparent"
@@ -4156,13 +4227,14 @@ Item {
         documentHeight: view.documentHeight
         documentReady: view.documentReady
         presets: view.sizePresets
-        onResizeRequested: function(width, height, fill, fillAlpha, filter) {
+        onResizeRequested: function(width, height, fill, fillAlpha, filter, mode) {
             view.command({
                 type: "editor_resize",
                 width: width,
                 height: height,
                 fill: fill,
                 fill_alpha: fillAlpha,
+                mode: mode,
                 filter: filter
             })
         }
@@ -4194,55 +4266,55 @@ Item {
                                             view.theme.menuShortcutWidths)
 
         MenuItem {
-            text: view.theme.menuEntries[32]
+            text: view.theme.menuEntries[31]
             icon.name: "zoom-out-symbolic"
             enabled: view.documentReady
             onTriggered: view.zoomOut()
             MenuShortcut { text: "-" }
         }
         MenuItem {
-            text: view.theme.menuEntries[31]
+            text: view.theme.menuEntries[30]
             icon.name: "zoom-in-symbolic"
             enabled: view.documentReady
             onTriggered: view.zoomIn()
             MenuShortcut { text: "+" }
         }
         MenuItem {
-            text: view.theme.menuEntries[22]
+            text: view.theme.menuEntries[21]
             icon.name: "zoom-fit-best-symbolic"
             enabled: view.documentReady
             onTriggered: view.fit()
         }
         MenuItem {
-            text: view.theme.menuEntries[23]
+            text: view.theme.menuEntries[22]
             icon.name: "zoom-original-symbolic"
             enabled: view.documentReady
             onTriggered: view.actualSize()
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[36]
+            text: view.theme.menuEntries[35]
             icon.name: "document-save-as-symbolic"
             enabled: view.documentReady && !view.saving
             onTriggered: view.requestSaveAs()
             MenuShortcut { text: "Ctrl+Shift+S" }
         }
         MenuItem {
-            text: view.theme.menuEntries[37]
+            text: view.theme.menuEntries[36]
             icon.name: "document-send-symbolic"
             enabled: view.documentReady && !view.saving
             onTriggered: view.openExportDialog()
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[38]
+            text: view.theme.menuEntries[37]
             icon.name: "document-revert-symbolic"
             enabled: view.modified
             onTriggered: view.command({ type: "editor_reset" })
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[41]
+            text: view.theme.menuEntries[40]
             icon.name: "sidebar-show-right-symbolic"
             checkable: true
             checked: !!view.state.rightPanelEditor

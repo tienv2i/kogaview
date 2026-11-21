@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, ImageReader, RgbaImage};
-use kogaview_protocol::{FlipAxis, ResizeFilter};
+use kogaview_protocol::{FlipAxis, ResizeFilter, ResizeMode};
 use serde::Serialize;
 
 use crate::state::UiText;
@@ -66,12 +66,15 @@ pub enum EditOperation {
         width: u32,
         height: u32,
         /// When present, scale the whole source to fit inside the target and
-        /// fill the leftover with this RGB colour. Without it the target aspect
-        /// is filled by a centred crop instead.
+        /// fill the leftover with this RGB colour. Only `mode: Pad` reads it.
         fill: Option<[u8; 3]>,
         /// The alpha of that fill: 0 leaves the leftover transparent, 255 is
         /// the opaque pads the form offers.
         fill_alpha: u8,
+        /// What happens to the source's shape: stretch it to the target (lose
+        /// nothing), cover the target by cropping (lose the edges) or fit it
+        /// inside with a pad (lose neither, gain a border).
+        mode: ResizeMode,
         filter: ResizeFilter,
     },
     /// A perspective correction: `corners` are the four points of the
@@ -146,20 +149,34 @@ impl EditOperation {
                 height,
                 fill,
                 fill_alpha,
+                mode,
                 ..
-            } => match fill {
-                Some([_, _, _]) if *fill_alpha == 0 => {
-                    UiText::with("resize_pad_clear", [width.to_string(), height.to_string()])
+            } => match mode {
+                // A stretch is the plain scale it says it is; a cover is the
+                // one that throws pixels away, and the history says so.
+                ResizeMode::Stretch => {
+                    UiText::with("resize", [width.to_string(), height.to_string()])
                 }
-                Some([r, g, b]) => UiText::with(
-                    "resize_pad",
-                    [
-                        width.to_string(),
-                        height.to_string(),
-                        format!("#{r:02x}{g:02x}{b:02x}"),
-                    ],
-                ),
-                None => UiText::with("resize", [width.to_string(), height.to_string()]),
+                ResizeMode::Cover => {
+                    UiText::with("resize_cover", [width.to_string(), height.to_string()])
+                }
+                ResizeMode::Pad => match fill {
+                    Some([_, _, _]) if *fill_alpha == 0 => {
+                        UiText::with("resize_pad_clear", [width.to_string(), height.to_string()])
+                    }
+                    Some([r, g, b]) => UiText::with(
+                        "resize_pad",
+                        [
+                            width.to_string(),
+                            height.to_string(),
+                            format!("#{r:02x}{g:02x}{b:02x}"),
+                        ],
+                    ),
+                    // Validation refuses this before it can be labelled, so
+                    // the fallback only keeps the sentence shaped like a
+                    // resize.
+                    None => UiText::with("resize", [width.to_string(), height.to_string()]),
+                },
             },
             Self::Transform { .. } => UiText::new("transform"),
             Self::Paint { erase, .. } => {
@@ -801,12 +818,15 @@ impl EditorDocument {
             EditOperation::Resize {
                 width: w,
                 height: h,
+                fill,
+                mode,
                 ..
             } => {
                 validate_resize(*w, *h)?;
+                validate_resize_mode(*mode, *fill)?;
                 // Same dimensions are the only no-op: a pad colour on the same
                 // target would fit the whole source exactly, so nothing is
-                // added.
+                // added, and a stretch of the same size is the identity.
                 Ok(*w == width && *h == height)
             }
             EditOperation::Transform { corners } => {
@@ -1019,7 +1039,16 @@ fn validate_resize(width: u32, height: u32) -> Result<(), UiText> {
     Ok(())
 }
 
-/// The tolerance an identity quad is recognised with, in document pixels. A
+/// The mode and the payload must agree: `Pad` is the only mode that paints
+/// pixels the source does not have, so it is the only one that needs a colour.
+/// A stretch or a cover with a stray `fill` ignores it rather than refusing,
+/// because the mode is the answer the caller gave.
+fn validate_resize_mode(mode: ResizeMode, fill: Option<[u8; 3]>) -> Result<(), UiText> {
+    if mode == ResizeMode::Pad && fill.is_none() {
+        return Err(UiText::new("resize_pad_needs_colour"));
+    }
+    Ok(())
+}
 /// hand on a zoomed-out canvas cannot place a corner closer than a fraction of
 /// a pixel, and a warp that moves a corner by less than that is not an edit.
 const IDENTITY_EPSILON: f64 = 1e-6;
@@ -1479,6 +1508,16 @@ fn cover_rect(
     } else {
         (source_width, source_height)
     };
+    // A locked ratio produces integer sides that miss the shape by a fraction
+    // of a pixel. Cropping a single row or column for that difference is the
+    // "resize shaved 1–2 px" defect: when the rectangle would lose at most one
+    // pixel on one axis, keep the whole picture and let the resample absorb the
+    // rounding instead.
+    if source_width.saturating_sub(crop_width) <= 1
+        && source_height.saturating_sub(crop_height) <= 1
+    {
+        return (0, 0, source_width, source_height);
+    }
     (
         (source_width - crop_width) / 2,
         (source_height - crop_height) / 2,
@@ -1520,25 +1559,38 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
             height: h,
             fill,
             fill_alpha,
+            mode,
             filter,
         } => {
             validate_resize(*w, *h)?;
-            // With a fill, fit the whole source inside the target and pad the
-            // leftover: no pixels are stretched or thrown away. Without one,
-            // cover the target by cropping around the centre and scale.
-            if let Some([r, g, b]) = fill {
-                return Ok(fit_with_padding(
-                    image,
-                    *w,
-                    *h,
-                    [*r, *g, *b],
-                    *fill_alpha,
-                    *filter,
-                ));
+            validate_resize_mode(*mode, *fill)?;
+            match mode {
+                // The whole frame, scaled to the target: the only mode that
+                // keeps every pixel, and the default because the user asked
+                // for a size, not for a decision about what to lose.
+                ResizeMode::Stretch => Ok(resample(image, *w, *h, *filter)),
+                // Keep the source's shape and take the centred rectangle that
+                // covers the target. `cover_rect` snaps a rounding difference
+                // of a pixel, so a locked ratio cannot shave an edge.
+                ResizeMode::Cover => {
+                    let rect = cover_rect(width, height, *w, *h);
+                    let cropped =
+                        imageops::crop_imm(image, rect.0, rect.1, rect.2, rect.3).to_image();
+                    Ok(resample(&cropped, *w, *h, *filter))
+                }
+                // Fit inside and pad the leftover: no stretch, no crop.
+                ResizeMode::Pad => {
+                    let [r, g, b] = fill.unwrap_or([0, 0, 0]);
+                    Ok(fit_with_padding(
+                        image,
+                        *w,
+                        *h,
+                        [r, g, b],
+                        *fill_alpha,
+                        *filter,
+                    ))
+                }
             }
-            let rect = cover_rect(width, height, *w, *h);
-            let cropped = imageops::crop_imm(image, rect.0, rect.1, rect.2, rect.3).to_image();
-            Ok(resample(&cropped, *w, *h, *filter))
         }
         EditOperation::Transform { corners } => {
             validate_transform(corners, width, height)?;
@@ -2176,6 +2228,7 @@ mod tests {
                 height: 6,
                 fill: None,
                 fill_alpha: 255,
+                mode: ResizeMode::Stretch,
                 filter: ResizeFilter::Auto,
             })
             .unwrap());
@@ -2305,6 +2358,7 @@ mod tests {
                 height: 32,
                 fill: None,
                 fill_alpha: 255,
+                mode: ResizeMode::Stretch,
                 filter: ResizeFilter::Auto,
             })
             .unwrap());
@@ -2501,6 +2555,7 @@ mod tests {
                 height: 16,
                 fill: None,
                 fill_alpha: 255,
+                mode: ResizeMode::Stretch,
                 filter: ResizeFilter::Auto,
             })
             .unwrap());
@@ -2757,6 +2812,7 @@ mod tests {
                 height: 8,
                 fill: Some([255, 0, 0]),
                 fill_alpha: 255,
+                mode: ResizeMode::Pad,
                 filter: ResizeFilter::Auto,
             })
             .unwrap());
@@ -2789,6 +2845,7 @@ mod tests {
                 height: 8,
                 fill: Some([255, 0, 0]),
                 fill_alpha: 0,
+                mode: ResizeMode::Pad,
                 filter: ResizeFilter::Auto,
             })
             .unwrap());
@@ -2802,6 +2859,130 @@ mod tests {
             document.history(),
             vec![UiText::with("resize_pad_clear", ["8", "8"])]
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A resize answers "make it this big". Changing the shape must not
+    /// silently throw the edges away, which is what the old cover-by-default
+    /// path did: a 64 × 32 picture resized to a square lost a quarter of its
+    /// width with nothing on screen saying so.
+    #[test]
+    fn a_stretch_resize_keeps_every_column() {
+        let dir = temp_dir();
+        let mut document = open(&dir); // 64 × 32 pattern
+        assert!(document
+            .apply(EditOperation::Resize {
+                width: 32,
+                height: 32,
+                fill: None,
+                fill_alpha: 255,
+                mode: ResizeMode::Stretch,
+                filter: ResizeFilter::Nearest,
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (32, 32));
+        // The pattern's red channel is x * 8, so a 64-wide source starts at 0
+        // and ends at 63 * 8 mod 256 = 248. `Nearest` samples half a pixel in,
+        // which is why the first column is 8 rather than 0; the point is that
+        // both *ends* of the source are present, where the old cover crop
+        // would have handed back 128 and 120.
+        let first = document.pixels().get_pixel(0, 0)[0];
+        let last = document.pixels().get_pixel(31, 0)[0];
+        assert!(
+            first < 40,
+            "the stretch started at {first}, not near the source's left edge"
+        );
+        assert!(
+            last > 200,
+            "the stretch ended at {last}, not near the source's right edge"
+        );
+        assert_eq!(
+            document.history(),
+            vec![UiText::with("resize", ["32", "32"])],
+            "a stretch is a resize, not a crop"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `Cover` is the old behaviour, now a choice: the centred rectangle that
+    /// matches the target's shape, then a scale.
+    #[test]
+    fn a_cover_resize_crops_the_centre_and_says_so() {
+        let dir = temp_dir();
+        let mut document = open(&dir); // 64 × 32, red = x * 8
+        assert!(document
+            .apply(EditOperation::Resize {
+                width: 32,
+                height: 32,
+                fill: None,
+                fill_alpha: 255,
+                mode: ResizeMode::Cover,
+                filter: ResizeFilter::Nearest,
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (32, 32));
+        // The cover rectangle starts at x = 16, so the first column is 128.
+        assert_eq!(document.pixels().get_pixel(0, 0)[0], 128);
+        assert_eq!(document.pixels().get_pixel(31, 0)[0], 120);
+        assert_eq!(
+            document.history(),
+            vec![UiText::with("resize_cover", ["32", "32"])],
+            "the history must say which resize discarded the edges"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A locked ratio produces integer sides that miss the shape by a fraction
+    /// of a pixel. Covering must not lose the row that difference is worth.
+    #[test]
+    fn a_rounded_ratio_does_not_shave_a_pixel() {
+        let dir = temp_dir();
+        let mut image = pattern(200, 134);
+        for x in 0..200 {
+            image.put_pixel(x, 133, image::Rgba([1, 2, 3, 255]));
+        }
+        let mut document = EditorDocument::from_image(dir.join("photo.png"), image);
+        // 200 × 134 → 200 × 133 is the rounding a 200 × 133.0 target produces.
+        // Cover would crop one row; the snap keeps the whole frame instead.
+        assert!(document
+            .apply(EditOperation::Resize {
+                width: 200,
+                height: 133,
+                fill: None,
+                fill_alpha: 255,
+                mode: ResizeMode::Cover,
+                filter: ResizeFilter::Nearest,
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (200, 133));
+        assert_eq!(
+            document.pixels().get_pixel(0, 132),
+            &image::Rgba([1, 2, 3, 255]),
+            "the last row was shaved by the rounding"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `Pad` is the only mode that paints pixels the source does not have, so
+    /// it is the only one that needs a colour; asking for it without one is a
+    /// refusal, not a silent black border.
+    #[test]
+    fn a_pad_without_a_colour_is_refused() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let error = document
+            .apply(EditOperation::Resize {
+                width: 32,
+                height: 32,
+                fill: None,
+                fill_alpha: 255,
+                mode: ResizeMode::Pad,
+                filter: ResizeFilter::Auto,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "resize_pad_needs_colour");
+        assert_eq!(document.dimensions(), (64, 32));
+        assert!(!document.can_undo(), "a refused resize is not recorded");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2960,6 +3141,7 @@ mod tests {
                 height: 5,
                 fill: None,
                 fill_alpha: 255,
+                mode: ResizeMode::Stretch,
                 filter: ResizeFilter::Auto,
             })
             .unwrap());
@@ -3015,6 +3197,7 @@ mod tests {
                 height: 512,
                 fill: None,
                 fill_alpha: 255,
+                mode: ResizeMode::Stretch,
                 filter: ResizeFilter::Auto
             }
             .label(),
@@ -3027,6 +3210,7 @@ mod tests {
                 height: 512,
                 fill: Some([255, 0, 0]),
                 fill_alpha: 255,
+                mode: ResizeMode::Pad,
                 filter: ResizeFilter::Auto
             }
             .label(),
@@ -3040,6 +3224,7 @@ mod tests {
                 height: 4,
                 fill: Some([1, 2, 3]),
                 fill_alpha: 255,
+                mode: ResizeMode::Pad,
                 filter: ResizeFilter::Auto,
             },
         ] {

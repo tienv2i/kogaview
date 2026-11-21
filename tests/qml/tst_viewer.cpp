@@ -984,6 +984,39 @@ private slots:
     QCoreApplication::processEvents();
   }
 
+  /// The window draws the bytes Core published, not just the path.
+  ///
+  /// A QML `Image` whose `source` string does not change never re-reads the
+  /// file, so opening the same picture again after another program rewrote it
+  /// kept the old pixels on screen. Core publishes the bytes' mtime and size;
+  /// the query string is what turns "same path, new bytes" into a new source.
+  void theSourceCarriesTheStampSoARewrittenFileIsReadAgain()
+  {
+    QQuickItem* image = item("viewerImage");
+    QVERIFY(image != nullptr);
+
+    QVariantMap state = m_viewer->property("state").toMap();
+    state.insert(QStringLiteral("viewerModified"), 11);
+    state.insert(QStringLiteral("viewerSize"), 22);
+    m_viewer->setProperty("state", state);
+    QTRY_COMPARE(image->property("source").toUrl().query(), QStringLiteral("v=11-22"));
+    // The stamp is only a query: the window still names the one file.
+    QCOMPARE(image->property("source").toUrl().toLocalFile(), m_landscape);
+
+    // New bytes on disk, the same path: another stamp, another source.
+    state.insert(QStringLiteral("viewerModified"), 33);
+    state.insert(QStringLiteral("viewerSize"), 44);
+    m_viewer->setProperty("state", state);
+    QTRY_COMPARE(image->property("source").toUrl().query(), QStringLiteral("v=33-44"));
+    QCOMPARE(image->property("source").toUrl().toLocalFile(), m_landscape);
+
+    // The same bytes asked for again are the same source, so a redundant open
+    // does not make Qt decode the file a second time.
+    m_viewer->setProperty("state", state);
+    QTest::qWait(20);
+    QCOMPARE(image->property("source").toUrl().query(), QStringLiteral("v=33-44"));
+  }
+
   // -------------------------------------------------------------- canvas menu
   // Helpers, not test slots: the class's test methods all live under
   // `private slots:`, so the section is closed and reopened around them.

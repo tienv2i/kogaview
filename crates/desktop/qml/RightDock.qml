@@ -25,6 +25,12 @@ Item {
     property string currentKey: ""
     /// Fold the labels away when the dock is too narrow for them.
     property bool compact: false
+    /// Put the pages away and keep only the strip. The Editor uses it to give
+    /// the armed tool's options the whole dock; the chevron in the strip is the
+    /// way back, so this is never a state without an exit.
+    property bool folded: false
+    /// The chevron's sentence; the dock draws no translation of its own.
+    property string foldTooltip: ""
     /// Room around the strip and around the pages.
     property int stripMargin: 8
     property int pageMargin: 12
@@ -38,8 +44,12 @@ Item {
     default property alias pages: stack.data
 
     signal activated(string key)
+    signal foldRequested()
 
     readonly property bool stripShown: dock.tabs.length > 1
+    /// What a folded dock keeps: the strip and the margins around it, and none
+    /// of the pages. A view that folds the pages uses this as its height.
+    readonly property int stripHeight: strip.implicitHeight + dock.stripMargin * 2 + 2
     /// The stack's index for `currentKey`; an unknown key falls back to the
     /// first tab instead of leaving the pages without a current index.
     readonly property int currentIndex: {
@@ -61,6 +71,7 @@ Item {
         spacing: 0
 
         PanelTabs {
+            id: strip
             objectName: dock.stripObjectName
             Layout.fillWidth: true
             Layout.leftMargin: dock.stripMargin
@@ -74,7 +85,10 @@ Item {
             tabs: dock.tabs
             currentKey: dock.currentKey
             compact: dock.compact
+            folded: dock.folded
+            foldTooltip: dock.foldTooltip
             onActivated: function(key) { dock.activated(key) }
+            onFoldRequested: dock.foldRequested()
         }
 
         StackLayout {
@@ -84,6 +98,10 @@ Item {
             Layout.fillHeight: true
             Layout.margins: dock.pageMargin
             currentIndex: dock.currentIndex
+            // A folded dock keeps the strip and drops the pages. They stay
+            // instantiated (their state is the view's), so unfolding is one
+            // property write and no reload.
+            visible: !dock.folded
         }
     }
 }

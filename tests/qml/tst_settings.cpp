@@ -64,6 +64,7 @@ private slots:
   void theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen();
   void theShellBindsTheCopyKeysItsMenusName();
   void theDiscardAnswerResetsTheDocumentBeforeLeaving();
+  void theShellAsksBeforeReplacingAnUnsavedDocument();
   void theShellSharesOneDockWidthAndRevealsThroughThePlatform();
 
 private:
@@ -571,14 +572,59 @@ void TestSettings::theDiscardAnswerResetsTheDocumentBeforeLeaving()
   const int reset = body.indexOf(QStringLiteral("editor_reset"));
   QVERIFY2(reset >= 0, "Discard leaves the document modified");
   // Order inside one `sendSequence` call, which is what the gateway preserves:
-  // the reset is the first command, the workspace change the second.
+  // the reset is the first command, the leave or the open the next.
   QVERIFY2(body.contains(QStringLiteral(
-               "sendSequence([{ type: \"editor_reset\" }, following])")),
+               "sendSequence([{ type: \"editor_reset\" }].concat(following))")),
            "Discard did not send the reset before the workspace change");
+  // An Open replaces the document too, and Core refuses to replace one that is
+  // dirty, so Discard builds the same reset-then-open sequence for it.
+  QVERIFY2(body.contains(QStringLiteral("leave.editorOpen")),
+           "Discard does not restart the open it was asked during");
   // Quitting is the exception: the document does not survive the window, and
   // reverting it first would write a preview for a process that is leaving.
   const int quit = body.indexOf(QStringLiteral("runLeave(\"quit\")"));
   QVERIFY2(quit >= 0 && quit < reset, "the quit path resets the document first");
+}
+
+/// Opening a second picture used to replace the working document with no
+/// question, losing every unsaved edit; opening the *same* picture used to
+/// tear it down and decode it again, losing the undo history. Core now refuses
+/// to replace a dirty document and treats a reopening as a no-op, so the shell
+/// is where the question is asked and every entry point has to go through it.
+void TestSettings::theShellAsksBeforeReplacingAnUnsavedDocument()
+{
+  QFile main(qmlDir() + QStringLiteral("/Main.qml"));
+  QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+  const QString source = QString::fromUtf8(main.readAll());
+
+  const int guardStart = source.indexOf(QStringLiteral("function requestEditorOpen("));
+  QVERIFY2(guardStart >= 0, "Main.qml has no requestEditorOpen");
+  const int guardEnd = source.indexOf(QStringLiteral("\n    }"), guardStart);
+  QVERIFY2(guardEnd > guardStart, "requestEditorOpen never closes");
+  const QString guard = source.mid(guardStart, guardEnd - guardStart);
+  QVERIFY2(guard.contains(QStringLiteral("editorHasUnsavedChanges")),
+           "the open does not look at unsaved edits");
+  QVERIFY2(guard.contains(QStringLiteral("unsavedDialog.open()")),
+           "the open replaces a dirty document without asking");
+  QVERIFY2(guard.contains(QStringLiteral("pendingLeave")),
+           "the answer has nowhere to be remembered");
+  QVERIFY2(guard.contains(QStringLiteral("runEditorOpen(")),
+           "the clean path never reaches the open itself");
+
+  // Every way in goes through the guard: the chooser's answer, the two view
+  // menus, and the Editor's own Open button (which is the chooser).
+  const int handle = source.indexOf(QStringLiteral("root.requestEditorOpen(paths[0])"));
+  QVERIFY2(handle >= 0, "the chooser's answer bypasses the guard");
+  const int menus = source.count(QStringLiteral("root.requestEditorOpen(path, true)"));
+  QVERIFY2(menus == 2,
+           qPrintable(QStringLiteral("%1 view menus open the editor without asking")
+                          .arg(2 - menus)));
+  // The view menus and the chooser are the only three places; a direct
+  // `editor_open` outside `editorOpenCommands` would be a fourth, unguarded one.
+  const int direct = source.count(QStringLiteral("{ type: \"editor_open\""));
+  QVERIFY2(direct == 1,
+           qPrintable(QStringLiteral("%1 places build an editor_open command")
+                          .arg(direct)));
 }
 
 /// `Main.qml` owns the two things the three workspaces share about their right

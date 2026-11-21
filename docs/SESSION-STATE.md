@@ -124,10 +124,41 @@ default handler. On the real window the Original tab first drew black, because
 it handed the thumbnail cache where a `ThumbnailBook` was expected and the
 `TypeError` left `edge` at 0; the binding and its test were fixed.
 
+This session (rows 99–103) was a correctness pass on five things the user
+named. Resize no longer changes a picture's shape by silently throwing the ends
+away: `Stretch to size` is the default and the whole frame is scaled, `Cover` is
+the old centred crop under its own name, `Pad` keeps fit-and-fill and is the
+only mode with a colour, and a locked ratio that rounds by a pixel no longer
+shaves a strip off two sides (row 99). The Editor's dock can now put its three
+reference pages away — only the 34 px tab strip stays at the bottom and the
+options take the height — and a vertical divider between options and reference
+is back, because a fold and a split answer different questions (row 100). "Show
+in folder" no longer asks whether a file manager is *running*: the call goes out
+and the bus activates one, which on a nested session started Dolphin with
+`--select` on the file (row 101). Reopening a file is now defined: the Viewer's
+source carries the file's mtime and size, so a picture another program rewrote
+is re-read, while the Editor treats the same path as the same document — no
+re-decode, no lost history — and a *different* picture asked for over unsaved
+edits is refused in Core and questioned by the shell (row 102). The duplicate
+"Explore here" menu entry is gone (row 103).
+
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
+- Branch `main`. Rows 99–103 are one commit on top of `346d65c`,
+  `feat: an honest resize, a foldable dock and a defined reopen` (its hash is
+  the one `git log -1` prints; this file is inside that commit, so it cannot
+  name itself without going stale): the protocol's `ResizeMode`/`for_payload`, Core's three render
+  branches, `validate_resize_mode` and the `cover_rect` snap, the Resize form's
+  `Fit` row, the dock's fold (`PanelTabs`/`RightDock`) and vertical
+  `PanelSplitter`, `EditorView`'s `referenceFolded`/`toolZoneHeight`,
+  `PlatformHelper::revealInFolder`, `viewer_modified`/`viewer_size` with the
+  Viewer's `?v=` source, `open_editor`'s reopen guard, `Main.qml`'s
+  `requestEditorOpen`, the "Explore here" removal, the harness's `_ARG6`
+  (`editor-resize`) and `_ARG5`/`_ARG6` (`editor-dock`), the tests, ADR 0012 and
+  0020 revisions, the new ADR 0021, the report rows and the nine screenshots.
+  Not pushed: `origin` refuses (`No anonymous write access`).
 - Branch `main`. The previous session's three changes (rows 77, 78, 79) are one
   commit, `ca9a6d6 feat(editor): typed lines, export and a fast first preview`,
   on top of the build fix `1b4e940` and the pad/stepper follow-up `9d4dab4`.
@@ -410,6 +441,14 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 93 | The advertised formats and Core's decoders disagreed: `.avif` was listed everywhere but the Editor failed with `The image format Avif is not supported` (the `avif` feature is an encoder), `has_decoder` answered `true` from a guessed name, and `.jpe` was invisible in the Browser and, separately, in the fallback chooser | `crates/app-core/Cargo.toml` (`avif-native` beside `avif`), `CMakeLists.txt` (`PkgConfig::DAV1D`; the staticlib alone leaves `dav1d_*` undefined), `editor.rs` (`has_decoder` builds the decoder; `an_advertised_avif_is_really_decoded`, `a_file_with_no_decoder_is_reported_as_such`), `core.rs` (`editor_open` refuses before a worker with the translatable `no_decoder` line), `app-protocol`'s `jpe`, `ops.rs`, `cpp/platform.cpp` (the chooser's second list gains `.jpe`), `scripts/check_packaging.py` (compares the two spellings), `scripts/dev.py` (doctor's libdav1d line), `docs/BUILD.md`, ADR 0005 revision | `just test`: translations 332 / 106 C++ / 332 drawn, packaging 19 MIME, cargo **88 + 4**, all eight QML suites; `cargo fmt --check` clean; **real window** (this session's Wayland, isolated `XDG_*`, Vietnamese): AVIF opens in the Editor at 64 × 48 with the tools live (`M1-editor-avif-fixed.png`), the chooser filter logs `*.jpe` where it stopped at `*.jpeg`, `b.jpe` is listed with a thumbnail (`M1-browser-jpe.png`) and opens at 64 × 48 (`M1-editor-jpe-vi.png`), the folder reads 17 items · **16 images**, and a HEIC is refused with `ok:false` `no_decoder` and an unchanged revision in the journal, the toast reading `Không mở được …/a.heic: không có bộ giải mã cho định dạng này` (`M1-heic-rejected-vi.png`); 6 mutations caught, and the C++ link failure recorded before the CMake line was added |
 | 94 | The Editor's left column was a 220 px text sidebar repeating the toolbar, and no size field could be read as a fraction of the picture | twelve SVGs in `crates/desktop/qml/icons/` registered by the new `crates/desktop/icons.qrc`; `ToolRailButton.qml` (34 px, icon-only, tooltip + accessible name) with its own `IconImage` content item because Breeze replaces a file icon with a generic document glyph, now wrapped so the 20 × 20 drawing (`iconDrawing`) keeps its own size instead of being stretched to the square; `UnitField.qml` (`px`/`%` beside the field in a `RowLayout`, `pixels()`/`setPixels`, `unitReference`, `inputField`/`nextField`/`previousField`, a forwarded `accepted`, `unitsVisible`, two decimals in the `C` locale); `EditorView.qml`'s rail (`toolColumns`, `toolRailWidth`, `editorToolGrid`, `editorEditGrid`, `toolRailColumns`, heading hidden at one column, left splitter removed), Crop's Width/Height with a selector and X/Y as pixel-only fields, the whole-picture 45 % dim with no frame (`cropShadeEmpty`), the button reading `Apply`, the Back button moved to the first toolbar slot, and a whole-pixel canvas position; `ResizeDialog.qml`'s two `UnitField`s with keyboard focus and Tab through `inputField`; `tst_editor`'s three cases plus `tst_toolbar`'s back-button order case; ADR 0018 (two revisions) and ADR 0011's no-frame note | `just test editor` 61 passed and `just test toolbar` 18; translations 334 strings / 106 C++ / 334 drawn / 4 by context after retiring `Apply crop (Enter)`; `just build` and `cargo fmt --check` clean; **real window** (Wayland, isolated `XDG_*`, dev commands, no hand): the 88 px two-column rail with all twelve drawings and, while Crop is armed frameless, the whole picture dimmed, X/Y bare, `px` beside Width/Height and the button reading `Apply` (`M1-editor-crop-unframed.png`), the same panel with a 512 × 384 frame kept bright (`M1-editor-tool-rail.png`), the Resize form's `px` pair beside its fields with the chain on (`M1-editor-resize-units.png`); two runs measured the same muted drawings (resize 14 × 16, transform 15 × 18, brush 19 × 18, eraser 15 × 16) before and after a tool click. The first grab was a column of identical document glyphs — that is how the Breeze behaviour was found; the first grab of the follow-up clipped `px` to one letter in a 42 px selector, which is why it is 56 px wide |
 | 95 | The Editor's right column was one thing at a time: with the pointer it showed the document's identity, history and thumbnail, and arming Crop, Transform or Brush replaced all of that with the tool's fields — the reference disappeared exactly when a crop needed it, and the pointer column had no room for tool options | `PanelTabs.qml` (self-drawn strip, one button per tab, `editorTab_<key>`/`editorTabIcon_<key>`/`editorTabLabel_<key>`, labels folded under 240 px), `PanelDivider.qml` (scene-coordinate drag, clamped, double-click restores 440), four new SVGs, `EditorView.qml`'s two-zone inspector (`rightToolZoneHeight` 440 clamped to `header+40 … height-180`, `toolZoneFolded`, `rightTab`/`rightTabIndex`, `toolOptionsScroll`, a `GridLayout` action row whose `cropActionsStack` measures the three labels, the divider, the tabs, a `StackLayout` keeping `imageName`/`historyList`/`pointerThumbnail`), `onToolChanged` unfolding, `cpp/main.cpp`'s `editor-dock`, `tst_editor`'s `theInspectorSplitsToolsFromThreeReferenceTabs` plus `selectRightTab` and `scrollOptionsIntoView`, four Vietnamese sentences, ADR 0019 | `just test` 337 strings / 106 C++ / 337 drawn / 4 by context, cargo 88 + 4, editor **62** (viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · language 7 · toolbar 18); `cargo fmt --check` clean; **real window** (Wayland, isolated `XDG_*`, `editor-dock`, no hand): Info with no tool zone (`M1-editor-dock-info.png`), Crop over History (`M1-editor-dock-history-crop.png`), Brush over Preview (`M1-editor-dock-preview.png`), the folded zone (`M1-editor-dock-folded.png`), the 260 px Vietnamese dock with `Bỏ khung` whole (`M1-editor-dock-vi-260.png`), and the 220 px dock with icon tabs and Apply on its own line (`M1-editor-dock-compact.png`) — the old three-column row squeezed the three 80 px buttons to 74.6 px at the default 236 px row, so the column count is measured; 9 mutations, each caught |
+| 96 | The three workspaces had three different right-hand columns, the Viewer had none, and the Editor's `Preview` tab drew the working render rather than the file on disk | one `RightDock.qml` with an optional `PanelTabs` strip (`stripShown: tabs.length > 1`), the shared `InfoPanel`/`PreviewPanel`/`HistoryPanel` pages, a per-workspace `right_panel*` flag in `Config`/`UiState`/`toggle_right_panel`, one session `rightPanelWidth` in `Main.qml`, and `Original` drawing `editor.save_path` with `file_identity` (mtime, size) | `just test` green; real window: the six dock grabs of rows 95–97, the `Original` tab over `saved-one.png`, and the black frame it first drew when handed the cache instead of the `ThumbnailBook` (the binding and its test were fixed) |
+| 97 | The Editor's tool zone was a fixed 440 px split with a divider, so Brush's 300 px of options left a hole and a long Crop column needed a scroll | the divider and `rightToolZoneHeight` removed, `toolOptionsScroll` inside `toolOptionsHost` (a `Layout.maximumHeight` on a `ScrollView` is ignored), `optionsCap = height - 180 - headerHeight - actionRowHeight - 10`, and the pinned action row measured by `cropActionsStack` | `just test` green; real window: `docs/evidence/M1-editor-crop-hug-vi.png` (fields at their own height, verbs directly under them); the 700 px short-window case is QML-only |
+| 98 | No menu could show a picture's folder in the desktop's file manager | `PlatformHelper::revealInFolder`, `Main.qml`'s `revealPath`, the Browser's three menus and the Viewer's canvas menu, `Theme.menuEntryLabels[39]` | `just test` green; real window: the Vietnamese entry (`docs/evidence/M1-file-menu-reveal-vi.png`); no file manager was running then, so nothing was selected — row 101 later ran it against a real Dolphin |
+| 99 | Resize silently cropped on an aspect change, a rounded ratio shaved a pixel, and `Pad` without a colour meant black | `ResizeMode { Stretch, Cover, Pad }` and `for_payload` in the protocol, `validate_resize_mode`, three render branches and the ≤ 1 px `cover_rect` snap in Core, the form's `Fit` row (background only for `pad`), the pad refusal line | `just test` green (cargo 98 + 5, editor 69); real window: `Fit: Stretch to size` with no background row, and 600 × 800 stretches all six stripes (`resize 600 800`, rev 4) while `Cover` cuts the ends (`resize cover 600 800`), `docs/evidence/M1-resize-fit-stretch.png`, `-stretch-applied.png`, `-cover-applied.png`; 2 mutations caught |
+| 100 | The reference pages could not be folded away and the tool options could not be given more room | `PanelSplitter.orientation`, `PanelTabs`'s chevron (`folded`/`foldRequested`), `RightDock`'s `folded`/`stripHeight`, `EditorView`'s `referenceFolded`/`toolZoneHeight` and its vertical divider | real window: the fold leaves only the strip with the options filling the dock (`docs/evidence/M1-dock-folded.png`), a 320 px divider measured at scene y 370 with the strip at 385 (`-dock-divider-320.png`); 3 mutations caught |
+| 101 | `Show in folder` was gated on the file manager already running, which a D-Bus-activated desktop never satisfies before the first click | `revealInFolder` sends the call with a 5 s timeout and lets the bus activate the service; a missing path is answered with a line; sandbox skip kept; each branch logs | in a fresh `dbus-run-session` the call activated `/usr/bin/dolphin --new-window --select /tmp/opencode/ws5/pics/wide.png` (pid 185577); on this session Dolphin already owned the name, so the old gate happened to be true here — which is why the bug was invisible |
+| 102 | The Viewer never re-read a file it had already shown, and the Editor tore its document down when asked for the same path | `viewer_modified`/`viewer_size` + `set_viewer_path`, the Viewer's `?v=` source, `open_editor`'s four-way guard (`editor_already_open`, reload-on-rewrite, `unsaved_document`), `Main.qml`'s `requestEditorOpen` queue | real window: a red 800 × 600 file rewritten to blue 640 × 480 was redrawn at 640 × 480 after a second `open_file` (`M1-viewer-before-rewrite.png` / `-rewritten.png`), and a rotated document kept its `Rotate right 90°` history across a second `editor_open` (`M1-editor-reopen-same.png`, `-history.png`, rev 6); 4 mutations caught |
+| 103 | "Explore here" duplicated Open folder and Show in folder without doing either reliably | the label dropped from `Theme.menuEntryLabels` and every menu entry at index ≥ 10 renumbered; the vanished string removed | `tst_browser::theFolderMenusDoNotRepeatTheOpenAction`; `just test` green |
 
 ## Test gate
 
@@ -417,10 +456,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 344 strings in kogaview_vi.ts, 106 of them compiled into C++, 344 drawn by the QML, 4 looked up by context
+translations: 353 strings in kogaview_vi.ts, 105 of them compiled into C++, 353 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 91 passed (kogaview-core) + 5 passed (kogaview-protocol)
-viewer 42 · browser 50 · cache 15 · state 7 · settings 18 · editor 67 · language 7 · toolbar 18
+cargo: 98 passed (kogaview-core) + 5 passed (kogaview-protocol)
+viewer 43 · browser 51 · cache 15 · state 7 · settings 19 · editor 69 · language 7 · toolbar 18
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -1610,7 +1649,93 @@ the defect exactly. Each restored, then `just test` green.
   mirrored in each overflow menu, which keeps the 580 px floor and the mini
   counts unchanged (Viewer 13, Editor 14).
 
+## Design decisions, resize modes, a foldable dock and reopening (rows 99–103)
+
+- **A resize mode is named, not inferred, unless the payload is old.** `Stretch`,
+  `Cover` and `Pad` travel as `editor_resize`'s `mode`. `ResizeMode::for_payload`
+  keeps a replayable meaning for a payload that has none — a `fill` was `Pad`,
+  no fill was `Cover` — so an old journal still crops what it cropped. A payload
+  from this build always names its mode, and the enum's own default is `Stretch`:
+  losing edges must be asked for, not inherited.
+- **Stretch is the default because the old default threw pixels away.** With the
+  chain locked, a 1200 × 800 picture asked for 600 × 800 used to lose its left and
+  right quarters without a word. The three answers now sit in one `Fit` row above
+  the filter, and `Background` is drawn only for `Pad`, because a colour is only
+  meaningful when something is left to fill.
+- **The one-pixel snap is about rounding, not about content.** `cover_rect` is the
+  centred cover rectangle; when it would lose no more than one pixel on each axis
+  it returns the whole frame instead, because a 3:2 lock whose target rounded by
+  a pixel used to shave a strip off two sides for nothing.
+- **`Pad` without a colour is refused.** `resize_pad_needs_colour` is a line the
+  window can draw; painting black by default was the alternative and it looked
+  like a result.
+- **The fold and the split are two objects because they answer two questions.**
+  `PanelTabs`'s chevron puts the pages away and leaves the 34 px strip at the
+  bottom (the three tabs stay visible and switchable); `PanelSplitter` with
+  `orientation: Qt.Vertical` divides options from reference while both are open.
+  Neither sends a command: a drag or a fold is presentation state, and the
+  journal stays silent, which is the expected evidence.
+- **The fold gives its height to the options.** `referenceFolded` is a layout
+  input, not a cosmetic hide: the options host takes the height the pages gave
+  up, so folding is a way to see more of a long form, not a way to leave a hole.
+  The QML case fails if the host is left to the layout's own preference.
+- **The test asserts the drawn height, not the property.** `toolZoneHeight` is
+  what the divider writes, but the zone had to prove it is drawn there: the case
+  writes 300 and compares `zone->height()`. The window run measured the same
+  thing in scene coordinates (zone top 50, height 320, divider 370, strip 385),
+  which is what corrected an earlier reading of the grab as a ~390 px zone.
+- **A reveal must let the bus activate the service.** `isServiceRegistered` asks
+  "is it running now", which is exactly the wrong question for a D-Bus-activated
+  file manager: the answer was false until the first click that would have
+  started it. The helper sends `ShowItems`/`ShowFolders` with a 5 s timeout and
+  lets activation happen; on a desktop with no `FileManager1` the call fails and
+  the portal, then the default handler, still answer.
+- **The Viewer's identity lives in the source string.** A QML `Image` whose
+  `source` does not change never reloads, so `?v=<mtime>-<size>` is appended. Qt
+  strips the query when it reads the file, so the path is untouched and the
+  string changes exactly when the bytes do.
+- **The Editor's reopen is a four-way answer.** Same path + unsaved edits → no-op
+  with `editor_already_open` (asking for the picture in front of you is not a
+  reason to be refused); same path + clean + unchanged → no-op that keeps the
+  preview and the history; same path + clean + rewritten → decode again, because
+  the document on screen is stale; different path + unsaved edits → refused with
+  `unsaved_document`.
+- **The shell asks; Core refuses.** `requestEditorOpen` runs the unsaved-changes
+  dialog before any entry point opens a picture, and Save/Discard then send their
+  command followed by the exact open in one `sendSequence`. The refusal is what
+  protects a CLI or IPC caller; the question is what a person gets.
+
 ## Known gaps, in the words they were last measured with
+
+- **Rows 99–103's window runs are driven, not clicked.** No hand typed a size,
+  picked a fit, pressed the dock chevron, dragged the divider, answered the
+  unsaved-changes question or reopened a file; `KOGAVIEW_DEV_COMMANDS` and the
+  `editor-resize`/`editor-dock` requests call the same helpers and buttons the
+  controls call, and every grab is a window grab of that state. The Viewer's
+  before/after pair is two separate launches, because the rewrite has to happen
+  between them. The divider was first read off the picture as a ~390 px zone; the
+  harness now maps the zone, divider and strip to the scene, and 370 − 50 = 320
+  is the measured answer — the earlier reading was wrong, not the layout.
+- **"Show in folder" reached a real file manager, but no window was
+  photographed.** In a fresh `dbus-run-session` the click activated
+  `/usr/bin/dolphin --new-window --select /tmp/opencode/ws5/pics/wide.png`
+  (`ps` at 02:48:49, pid 185577, and a second from the 02:49:44 run), which is
+  the call arriving at a file manager that was not registered beforehand. The
+  file being *selected* in an already-open window was not seen: this compositor
+  supports no screen capture, and a window grab only reaches KogaView. On the
+  real session bus Dolphin already owned `org.freedesktop.FileManager1`, so the
+  old gate was true here — the bug is real for a desktop that has not started
+  its file manager, and this session could only reproduce it inside a nested
+  bus. Two stray Dolphin windows were left behind by those nested runs.
+- **The Editor's reload-on-rewrite branch has no window run.** `open_editor`
+  falls through to a decode when the same path's bytes changed, and Core covers
+  both sides of the comparison, but the window evidence is the *unchanged* file
+  (history kept, rev 6) and the Viewer's rewrite, not an Editor document whose
+  file was rewritten under it.
+- **The unsaved-changes question was not answered by a hand.** `Main.qml` needs
+  the bridge, so `theShellAsksBeforeReplacingAnUnsavedDocument` reads its source
+  and Core's tests walk the command order; no window run pressed Save or Discard
+  from that dialog for an Editor open.
 
 - **Rows 96–98's window runs are synthetic too.** No hand selected a tab,
   dragged a dock splitter or opened a menu; `KOGAVIEW_DEV_UI_REQUEST=editor-dock`
@@ -2083,3 +2208,28 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     the reveal path needs this session's file manager (or a Flatpak portal run)
     to be watched selecting a file. `Original` also only follows one save — a
     save-over-the-same-path thumbnail refresh would be worth photographing.
+
+14. **Resize's three modes are one picture deep.** `Stretch` is proven to keep
+    every column on a striped fixture, `Cover` to cut the centre, and `Pad` to
+    leave the leftover transparent; no photograph or metric shows which mode
+    looks right on a real JPEG with a face or text in it, and the filter's
+    quality is unchanged by rows 99–103. Whether `Stretch` should be the default
+    for a *locked* ratio at all — a lock usually means "keep the shape" — is a
+    wording question the form now answers by making the row visible, not a
+    measured preference.
+15. **The dock remembers nothing.** `referenceFolded`, `toolZoneHeight` and each
+    view's `rightTab` are view state, so the next launch opens unfolded and split
+    at its default; panel *visibility* is Core's (three `config.json` flags) and
+    the dock *width* is one session value. Persisting the fold or the split would
+    be a settings field and a protocol decision.
+16. **"Show in folder" needs a desktop that has a file manager to prove the
+    selection.** The nested-bus run proved activation (`dolphin --new-window
+    --select <path>`), which is the branch that was broken; selecting inside an
+    already-open window, the portal branch, the default-handler fallback and the
+    sandbox skip are code order. A KDE session with Dolphin already running is
+    the missing run.
+17. **Reopening has one branch with no window evidence.** An Editor document
+    whose file is rewritten under it is meant to decode again; only Core's
+    comparison covers it. The same is true of the shell's unsaved-changes
+    question for an Editor open: it is a source guard plus Core's command order,
+    not a dialog somebody answered.

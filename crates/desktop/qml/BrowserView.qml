@@ -1101,7 +1101,7 @@ Item {
             onTriggered: view.openWith(view.menuPath)
         }
         MenuItem {
-            text: view.theme.menuEntries[39]
+            text: view.theme.menuEntries[38]
             icon.name: "folder-documents-symbolic"
             onTriggered: view.revealPath(view.menuPath)
         }
@@ -1154,17 +1154,12 @@ Item {
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
         }
         MenuItem {
-            text: qsTr("Explore here")
-            icon.name: "folder-symbolic"
-            onTriggered: view.command({ type: "open_folder", path: view.menuPath })
-        }
-        MenuItem {
             text: qsTr("New folder…")
             icon.name: "folder-new-symbolic"
             onTriggered: view.promptNewFolder(view.menuPath)
         }
         MenuItem {
-            text: view.theme.menuEntries[39]
+            text: view.theme.menuEntries[38]
             icon.name: "folder-documents-symbolic"
             onTriggered: view.revealPath(view.menuPath)
         }
@@ -1220,12 +1215,7 @@ Item {
             onTriggered: view.command({ type: "open_folder", path: view.menuPath })
         }
         MenuItem {
-            text: qsTr("Explore here")
-            icon.name: "folder-symbolic"
-            onTriggered: view.command({ type: "open_folder", path: view.menuPath })
-        }
-        MenuItem {
-            text: view.theme.menuEntries[39]
+            text: view.theme.menuEntries[38]
             icon.name: "folder-documents-symbolic"
             onTriggered: view.revealPath(view.menuPath)
         }
@@ -1268,20 +1258,20 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
-            text: view.theme.menuEntries[10]
+            text: view.theme.menuEntries[9]
             icon.name: "folder-new-symbolic"
             onTriggered: view.promptNewFolder(view.state.currentFolder)
         }
         MenuSeparator {}
         MenuItem {
-            text: view.theme.menuEntries[34]
+            text: view.theme.menuEntries[33]
             icon.name: "sidebar-show-symbolic"
             checkable: true
             checked: !!view.state.leftPanel
             onTriggered: view.command({ type: "toggle_left_panel" })
         }
         MenuItem {
-            text: view.theme.menuEntries[35]
+            text: view.theme.menuEntries[34]
             icon.name: "sidebar-show-right-symbolic"
             checkable: true
             checked: !!view.state.rightPanel

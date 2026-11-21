@@ -1767,6 +1767,55 @@ private slots:
     QCOMPARE(labels.at(2), QStringLiteral("Open in editor…"));
   }
 
+  /// A folder's context menu used to offer `Open` and `Explore here`, two
+  /// entries that sent the same `open_folder` command. A menu may repeat a
+  /// *verb* only when the two rows do different things; one action per row is
+  /// the rule this case pins, and the duplicate label would fail it.
+  void theFolderMenusDoNotRepeatTheOpenAction()
+  {
+    const auto labelsOf = [this](const QString& menuName) {
+      QStringList labels;
+      QObject* menu = findPopup(menuName);
+      if (menu == nullptr) {
+        return labels;
+      }
+      QMetaObject::invokeMethod(menu, "popup");
+      const int count = menu->property("count").toInt();
+      for (int index = 0; index < count; ++index) {
+        QQuickItem* entry = nullptr;
+        QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem*, entry),
+                                  Q_ARG(int, index));
+        if (entry == nullptr) {
+          continue;
+        }
+        const QString text = entry->property("text").toString();
+        if (!text.isEmpty()) {
+          labels.append(text);
+        }
+      }
+      return labels;
+    };
+
+    for (const QString& name : {QStringLiteral("folderMenu"), QStringLiteral("quickMenu"),
+                                QStringLiteral("fileMenu")}) {
+      const QStringList labels = labelsOf(name);
+      QVERIFY2(!labels.isEmpty(), qPrintable(name + QStringLiteral(" has no entries")));
+      for (int left = 0; left < labels.size(); ++left) {
+        for (int right = left + 1; right < labels.size(); ++right) {
+          QVERIFY2(labels.at(left) != labels.at(right),
+                   qPrintable(QStringLiteral("%1 repeats \"%2\"")
+                                  .arg(name, labels.at(left))));
+        }
+      }
+      QCOMPARE(labels.count(QStringLiteral("Open")), 1);
+      QVERIFY2(!labels.contains(QStringLiteral("Explore here")),
+               qPrintable(name + QStringLiteral(" still offers the duplicate entry")));
+      QObject* menu = findPopup(name);
+      QVERIFY(menu != nullptr);
+      QMetaObject::invokeMethod(menu, "close");
+    }
+  }
+
   /// A menu follows a label that is longer than the style's fixed 200 px.
   ///
   /// Every real label fits the theme's 168 px floor at this font, so the

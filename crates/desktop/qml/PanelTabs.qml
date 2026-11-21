@@ -23,8 +23,16 @@ Item {
     /// and its tooltip still say which tab it is.
     property bool compact: false
     property int tabHeight: 30
+    /// The pages under this strip are put away: only the strip is left, and the
+    /// chevron points back down.
+    property bool folded: false
+    /// The chevron's sentence, supplied by the view because this file owns no
+    /// translation (the tab labels are the view's words too).
+    property string foldTooltip: ""
 
     signal activated(string key)
+    /// The chevron was pressed: the view flips its own flag and sends nothing.
+    signal foldRequested()
 
     implicitHeight: tabHeight
 
@@ -99,6 +107,50 @@ Item {
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
+                }
+            }
+        }
+
+        // The strip is also the way to put the pages away. It has to live here
+        // rather than in the dock: the strip is one row, and a chevron added
+        // outside it would be a second row that a folded dock would still have
+        // to draw.
+        AbstractButton {
+            id: foldButton
+            objectName: "stripFoldToggle"
+            visible: root.tabs.length > 1
+            // Smaller than the tabs it sits beside: it is a fold, not a mode.
+            Layout.preferredWidth: 24
+            Layout.fillHeight: true
+            padding: 0
+            focusPolicy: Qt.NoFocus
+            activeFocusOnTab: false
+            hoverEnabled: true
+
+            Accessible.role: Accessible.Button
+            Accessible.name: root.foldTooltip
+            ToolTip.visible: hovered && root.foldTooltip.length > 0
+            ToolTip.text: root.foldTooltip
+
+            onClicked: root.foldRequested()
+
+            background: Rectangle {
+                radius: root.theme.radius
+                color: foldButton.hovered ? root.theme.hover : "transparent"
+            }
+
+            contentItem: Item {
+                IconImage {
+                    objectName: "stripFoldIcon"
+                    source: "icons/chevron.svg"
+                    sourceSize: Qt.size(32, 32)
+                    width: 14
+                    height: 14
+                    anchors.centerIn: parent
+                    fillMode: Image.PreserveAspectFit
+                    color: foldButton.hovered ? root.theme.text : root.theme.textMuted
+                    // Down while the pages are open, up when they are away.
+                    rotation: root.folded ? 180 : 0
                 }
             }
         }

@@ -237,3 +237,43 @@ overflow menus, so the 580 px floor and the mini counts do not change.
 - ADR 0019 is superseded in two places: the divider and its fixed 440 px zone
   are gone, and the third tab is `Original`. Its self-drawn `PanelTabs` strip
   and its measured action row are unchanged and still current.
+
+## Revision — the split is back, as a divider between two halves (2026-11-22)
+
+Removing the 440 px divider fixed the hole under a short tool, but it also took
+away the only way to say "more options, less reference". The dock now has both
+answers, and they are different objects:
+
+- **A `PanelSplitter` with `orientation: Qt.Vertical`** sits between the tool
+  zone and the tab strip. It writes `toolZoneHeight` (`0` means "hug the
+  options"), clamped so 160 px of reference stays; a double-click returns to
+  hugging. It is drawn only while a tool with options is armed and neither half
+  is folded.
+- **The strip's chevron** (`PanelTabs.foldRequested`) puts the pages away,
+  leaving the 34 px strip at the bottom of the dock. The tool zone then fills
+  the freed height (`referenceFolded`) — the fold the user asked for: the three
+  tabs stay visible and switchable, only their pages go.
+
+Neither sends a command. A split or a fold is presentation state like a tab
+click; the journal stays silent, which is the expected evidence.
+
+`RightDock` grew `folded`/`foldTooltip` and `stripHeight`; the pages stay
+instantiated behind `visible: !folded`, so unfolding is one property write.
+`PanelSplitter` gained an orientation so the same component resizes a width or a
+height. `tst_editor` has one case per half
+(`theReferenceTabsFoldToTheirStrip`, `theDividerSetsTheToolZoneHeight`), and the
+fold case also asserts that a tab still switches while its page is hidden.
+
+## Revision — "Show in folder" asks the bus instead of inspecting it (2026-11-22)
+
+The first version gated on `QDBusConnection::sessionBus().interface()
+->isServiceRegistered("org.freedesktop.FileManager1")`. On a desktop whose file
+manager is D-Bus-activated and not yet running, that is false at the moment of
+the click, so the request fell through to the portal or the default handler even
+though `FileManager1` was exactly what would have selected the file.
+
+The helper now skips the gate and sends the call with a 5 s reply timeout: if no
+file manager is running, the bus activates it. A missing file or folder is
+answered with `That file is no longer there.` before any request; a sandbox
+still skips the direct bus call; `FileManager1` → portal → `QDesktopServices` is
+the unchanged order, and each branch logs which one answered.

@@ -153,6 +153,13 @@ pub struct UiState {
     pub viewer_images: Vec<String>,
     pub viewer_index: Option<usize>,
     pub viewer_path: Option<String>,
+    /// The identity of the bytes the Viewer is showing: modification time in
+    /// milliseconds and size in bytes. The path alone cannot tell "the same
+    /// picture again" from "the same path with new bytes on disk", and a QML
+    /// `Image` whose `source` string does not change never reloads, so an
+    /// externally edited file kept its old pixels. `(0, 0)` means no file.
+    pub viewer_modified: u64,
+    pub viewer_size: u64,
     /// The Editor's working document, or `None` when nothing is open. Pixels
     /// live in Core's `EditorDocument`; this is the published description.
     pub editor: Option<EditorState>,
@@ -204,6 +211,8 @@ impl UiState {
             viewer_images: Vec::new(),
             viewer_index: None,
             viewer_path: None,
+            viewer_modified: 0,
+            viewer_size: 0,
             editor: None,
             busy: false,
             status: UiText::new("ready"),
@@ -248,6 +257,8 @@ impl UiState {
             background_thumbnails: self.background_thumbnails,
             viewer_index: self.viewer_index,
             viewer_path: &self.viewer_path,
+            viewer_modified: self.viewer_modified,
+            viewer_size: self.viewer_size,
             editor: &self.editor,
             busy: self.busy,
             status: &self.status,
@@ -299,6 +310,9 @@ pub struct StateMeta<'a> {
     pub background_thumbnails: bool,
     pub viewer_index: Option<usize>,
     pub viewer_path: &'a Option<String>,
+    /// The bytes behind `viewer_path`; see `UiState::viewer_modified`.
+    pub viewer_modified: u64,
+    pub viewer_size: u64,
     pub editor: &'a Option<EditorState>,
     pub busy: bool,
     pub status: &'a UiText,

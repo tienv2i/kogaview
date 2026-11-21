@@ -122,6 +122,8 @@ private slots:
   void thePaletteSelectsTheToolsOptions();
   void theInspectorSplitsToolsFromThreeReferenceTabs();
   void theToolOptionsHugTheActionRow();
+  void theReferenceTabsFoldToTheirStrip();
+  void theDividerSetsTheToolZoneHeight();
   void thePointerSaysItHasNoOptions();
   void theReferenceZoneKeepsRoomWhenTheWindowIsShort();
   void theResizeFormReturnsToThePointer();
@@ -274,9 +276,10 @@ void TestEditor::init()
     }
     QTRY_VERIFY_WITH_TIMEOUT(!dialog->property("visible").toBool(), 2000);
     if (qstrcmp(name, "resizeDialog") == 0) {
-      // The form owns customColor/backgroundMode/filter now; a case that chose
-      // a background must not decide what the next one opens on.
+      // The form owns fitMode/backgroundMode/filter now; a case that chose a
+      // mode must not decide what the next one opens on.
       dialog->setProperty("customColor", QColor(QStringLiteral("#808080")));
+      dialog->setProperty("fitMode", QStringLiteral("stretch"));
       dialog->setProperty("backgroundMode", QStringLiteral("none"));
       dialog->setProperty("filter", QStringLiteral("auto"));
       dialog->setProperty("constraint", true);
@@ -332,7 +335,9 @@ void TestEditor::init()
   // The right dock's split, open tab and fold are view state, like the rail's
   // columns: a case must not decide what the next one opens on.
   m_editor->setProperty("rightPanelWidth", 260);
-    m_editor->setProperty("toolZoneFolded", false);
+  m_editor->setProperty("toolZoneFolded", false);
+  m_editor->setProperty("referenceFolded", false);
+  m_editor->setProperty("toolZoneHeight", 0);
   m_editor->setProperty("rightTab", QStringLiteral("info"));
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
   // Zoom, pan and fit are presentation state that survives a case. Two cases
@@ -634,15 +639,20 @@ void TestEditor::theResizeDialogStartsFromTheDocumentSize()
   // That pair is Core's no-op, so Apply says so before it is pressed.
   QVERIFY(!expectItem("resizeApply")->property("enabled").toBool());
 
-  // The chain starts locked to the document's shape, the background starts on
-  // the existing cover crop, and the filter starts on Auto: the three answers
-  // the form offers are described before anything is typed.
+  // The chain starts locked to the document's shape, the fit starts on the
+  // lossless stretch, and the filter starts on Auto: the three answers the form
+  // offers are described before anything is typed.
   QQuickItem* chain = expectItem("resizeConstraint");
   QVERIFY(chain->isVisible());
   QVERIFY(chain->property("checked").toBool());
-  QCOMPARE(expectItem("resizeBackground")->property("currentIndex").toInt(), 0);
-  QCOMPARE(expectItem("resizeBackground")->property("currentText").toString(),
-           QStringLiteral("None"));
+  QQuickItem* fit = expectItem("resizeFit");
+  QVERIFY(fit->isVisible());
+  QCOMPARE(fit->property("count").toInt(), 3);
+  QCOMPARE(fit->property("currentIndex").toInt(), 0);
+  QCOMPARE(fit->property("currentText").toString(), QStringLiteral("Stretch to size"));
+  // Only a pad paints the leftover, so the background row is not on screen
+  // until that mode is chosen.
+  QVERIFY(!expectItem("resizeBackground")->isVisible());
   QCOMPARE(expectItem("resizeFilter")->property("currentIndex").toInt(), 0);
   QCOMPARE(expectItem("resizeFilter")->property("currentText").toString(),
            QStringLiteral("Auto"));
@@ -1167,9 +1177,10 @@ void TestEditor::theConstraintButtonLocksTheTwoSides()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The background and filter travel with the typed command; the anchor does not
-/// exist any more. Fitting the whole image and centring the leftover is Core's
-/// job, not the view's.
+/// The fit mode says what an aspect change does, and only the pad carries a
+/// background. What travels in the command is the mode, the colour the pad
+/// paints (if any) and the kernel; the anchor does not exist any more, and
+/// neither does a silent centre crop that Core alone decides.
 void TestEditor::resizeCarriesThePadFill()
 {
   setState(documentState());
@@ -1182,15 +1193,54 @@ void TestEditor::resizeCarriesThePadFill()
   QVERIFY(findObject(QStringLiteral("anchor_top_left")) == nullptr);
   QVERIFY(findObject(QStringLiteral("halfSize")) == nullptr);
 
-  // The background is always visible, not a checkbox that reveals a row.
+  // Three modes, in the order the form shows them, and the lossless one first.
+  QQuickItem* fit = expectItem("resizeFit");
+  QCOMPARE(fit->property("count").toInt(), 3);
+  QCOMPARE(fit->property("currentText").toString(), QStringLiteral("Stretch to size"));
+  // `Stretch to size` has no background to pick.
+  QVERIFY(!expectItem("resizeBackground")->isVisible());
+
+  // The default command is a stretch with no fill: the size is the whole
+  // request, and Core must not decide to discard the edges.
+  expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
+  expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
+  QTest::qWait(20);
+  clickItem(expectItem("resizeApply"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap stretch = m_commands->at(0).at(0).toMap();
+  QCOMPARE(stretch.value("type").toString(), QStringLiteral("editor_resize"));
+  QCOMPARE(stretch.value("mode").toString(), QStringLiteral("stretch"));
+  QCOMPARE(stretch.value("fill").toList().size(), 0);
+  QVERIFY(!stretch.contains(QStringLiteral("anchor")));
+
+  // `Crop to fill` is the old behaviour, now asked for on purpose. It still
+  // carries no fill, because it paints nothing.
+  QTRY_VERIFY(!dialog->property("opened").toBool());
+  openResizeDialog();
+  dialog->setProperty("fitMode", QStringLiteral("cover"));
+  expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
+  expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
+  QTest::qWait(20);
+  QVERIFY(!expectItem("resizeBackground")->isVisible());
+  clickItem(expectItem("resizeApply"));
+  QCOMPARE(m_commands->count(), 2);
+  const QVariantMap cover = m_commands->at(1).at(0).toMap();
+  QCOMPARE(cover.value("mode").toString(), QStringLiteral("cover"));
+  QCOMPARE(cover.value("fill").toList().size(), 0);
+
+  // `Fit with background` is the only mode with a colour, and choosing it is
+  // what puts the background row on screen.
+  QTRY_VERIFY(!dialog->property("opened").toBool());
+  openResizeDialog();
+  dialog->setProperty("fitMode", QStringLiteral("pad"));
+  QTRY_VERIFY(expectItem("resizeBackground")->isVisible());
   QQuickItem* background = expectItem("resizeBackground");
-  QVERIFY(background->isVisible());
   QVERIFY(!expectItem("resizeBackgroundSwatch")->isVisible());
   QCOMPARE(background->property("count").toInt(), 6);
   QCOMPARE(background->property("currentText").toString(), QStringLiteral("None"));
 
-  // A custom colour is the same command shape as the old pad fill: three RGB
-  // bytes, an opaque alpha and the chosen filter.
+  // A custom colour is the same command shape as before: three RGB bytes, an
+  // opaque alpha, the chosen filter and now the mode that reads them.
   dialog->setProperty("backgroundMode", QStringLiteral("custom"));
   dialog->setProperty("customColor", QColor(255, 0, 0));
   dialog->setProperty("filter", QStringLiteral("bicubic"));
@@ -1200,10 +1250,10 @@ void TestEditor::resizeCarriesThePadFill()
   QTest::qWait(20);
   clickItem(expectItem("resizeApply"));
 
-  QCOMPARE(m_commands->count(), 1);
-  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(m_commands->count(), 3);
+  const QVariantMap command = m_commands->at(2).at(0).toMap();
   QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
-  QVERIFY(!command.contains(QStringLiteral("anchor")));
+  QCOMPARE(command.value("mode").toString(), QStringLiteral("pad"));
   const QVariantList fill = command.value("fill").toList();
   QCOMPARE(fill.size(), 3);
   QCOMPARE(fill.at(0).toInt(), 255);
@@ -1216,13 +1266,15 @@ void TestEditor::resizeCarriesThePadFill()
   // clear instead of painting a colour there.
   QTRY_VERIFY(!dialog->property("opened").toBool());
   openResizeDialog();
+  dialog->setProperty("fitMode", QStringLiteral("pad"));
   dialog->setProperty("backgroundMode", QStringLiteral("transparent"));
   expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
   expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
   QTest::qWait(20);
   clickItem(expectItem("resizeApply"));
-  QCOMPARE(m_commands->count(), 2);
-  const QVariantMap clear = m_commands->at(1).at(0).toMap();
+  QCOMPARE(m_commands->count(), 4);
+  const QVariantMap clear = m_commands->at(3).at(0).toMap();
+  QCOMPARE(clear.value("mode").toString(), QStringLiteral("pad"));
   QCOMPARE(clear.value("fill_alpha").toInt(), 0);
 }
 
@@ -2668,7 +2720,7 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   openResizeDialog();
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
   for (const char* option : {"resizeWidth", "resizeHeight", "resizeApply", "resizeReset",
-                             "resizeSizePreset", "resizeConstraint", "resizeBackground",
+                             "resizeSizePreset", "resizeConstraint", "resizeFit",
                              "resizeFilter"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(item->isVisible(), qPrintable(QStringLiteral("%1 is not visible")
@@ -2856,6 +2908,109 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
 /// options, then its action row. A tall window must not stretch the zone and
 /// leave a band of nothing between the last field and Apply; the reference
 /// tabs take the leftover height instead.
+/// The dock's other half: the reference pages can be put away, leaving the tab
+/// strip alone at the bottom and giving the armed tool's options the height.
+/// Two folds, one dock — "less of this, more of that" — and neither is a
+/// command, because both are presentation state.
+void TestEditor::theReferenceTabsFoldToTheirStrip()
+{
+  setState(documentState());
+  selectTool("crop");
+  QQuickItem* zone = expectItem("editorToolZone");
+  QQuickItem* pages = expectItem("editorReferencePages");
+  QQuickItem* strip = expectItem("editorRightTabs");
+  QQuickItem* toggle = expectItem("stripFoldToggle");
+  QQuickItem* inspector = expectItem("editorInspector");
+  QVERIFY(toggle->isVisible());
+  QVERIFY(pages->isVisible());
+  QVERIFY(strip->isVisible());
+  const qreal openZone = zone->height();
+  const qreal openOptions = expectItem("toolOptionsHost")->height();
+  QVERIFY(openZone > 200.0);
+
+  clickItem(toggle);
+  QTRY_VERIFY(!pages->isVisible());
+  QVERIFY(m_editor->property("referenceFolded").toBool());
+  // The options took the room: the zone and the options column both grew.
+  QTRY_VERIFY2(zone->height() > openZone + 40.0,
+               qPrintable(QStringLiteral("the folded tool zone is %1 px, was %2")
+                            .arg(zone->height()).arg(openZone)));
+  QVERIFY2(expectItem("toolOptionsHost")->height() > openOptions + 40.0,
+           "the options did not take the height the pages gave up");
+  // The strip is what is left, and it sits at the bottom of the dock.
+  QVERIFY(strip->isVisible());
+  const qreal inspectorBottom = inspector->mapToScene(QPointF(0, inspector->height())).y();
+  const qreal stripBottom = strip->mapToScene(QPointF(0, strip->height())).y();
+  QVERIFY2(inspectorBottom - stripBottom >= 0.0 && inspectorBottom - stripBottom <= 24.0,
+           qPrintable(QStringLiteral("the folded strip is %1 px from the dock's bottom")
+                        .arg(inspectorBottom - stripBottom)));
+  const qreal zoneBottom = zone->mapToScene(QPointF(0, zone->height())).y();
+  QVERIFY2(zoneBottom <= strip->mapToScene(QPointF(0, 0)).y() + 0.5,
+           "the tool zone overlaps the strip");
+  // No divider to drag when there is only one half.
+  QVERIFY(!expectItem("editorToolZoneDivider")->isVisible());
+
+  // A tab still switches while folded — the strip is the strip either way,
+  // and its pages are only hidden by the fold.
+  selectRightTab("history");
+  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("history"));
+
+  // And the chevron is the way back: the same page is waiting.
+  clickItem(toggle);
+  QTRY_VERIFY(pages->isVisible());
+  QTRY_VERIFY(expectItem("historyPanel")->isVisible());
+  QVERIFY(!m_editor->property("referenceFolded").toBool());
+  QTRY_VERIFY(expectItem("editorToolZoneDivider")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The split between the tool options and the reference pages is the user's:
+/// the divider's value is a height, a drag writes it, and dragging it all the
+/// way up hands the zone back to its own content instead of leaving it at a
+/// pixel.
+void TestEditor::theDividerSetsTheToolZoneHeight()
+{
+  setState(documentState());
+  selectTool("crop");
+  QQuickItem* zone = expectItem("editorToolZone");
+  QQuickItem* divider = expectItem("editorToolZoneDivider");
+  QQuickItem* strip = expectItem("editorRightTabs");
+  QTRY_VERIFY(divider->isVisible());
+  QCOMPARE(m_editor->property("toolZoneHeight").toInt(), 0);
+  const qreal hugHeight = zone->height();
+  const qreal stripTop = strip->mapToScene(QPointF(0, 0)).y();
+
+  // Drag the handle up: the zone shrinks and the reference pages grow.
+  const QPointF from(divider->mapToScene(QPointF(divider->width() / 2,
+                                                 divider->height() / 2)));
+  dragScene(from, from - QPointF(0, 90));
+  QTRY_VERIFY2(m_editor->property("toolZoneHeight").toInt() > 0,
+               "the divider drag never wrote a height");
+  QVERIFY2(zone->height() < hugHeight - 40.0,
+           qPrintable(QStringLiteral("the tool zone is still %1 px tall").arg(zone->height())));
+  QVERIFY2(strip->mapToScene(QPointF(0, 0)).y() < stripTop - 40.0,
+           "the reference pages did not grow");
+  // The pinned action row stays inside the zone it was given.
+  const qreal zoneBottom = zone->mapToScene(QPointF(0, zone->height())).y();
+  const qreal actionsBottom =
+    expectItem("cropActions")->mapToScene(QPointF(0, expectItem("cropActions")->height())).y();
+  QVERIFY2(actionsBottom <= zoneBottom + 0.5 && actionsBottom >= zoneBottom - 12.0,
+           qPrintable(QStringLiteral("the actions end %1 px from the zone's bottom")
+                        .arg(zoneBottom - actionsBottom)));
+
+  // A double-click on the handle puts the zone back on its content.
+  const QPointF handle(divider->mapToScene(QPointF(divider->width() / 2,
+                                                   divider->height() / 2)));
+  QTest::mouseDClick(m_view, Qt::LeftButton, Qt::NoModifier, handle.toPoint());
+  QTRY_COMPARE(m_editor->property("toolZoneHeight").toInt(), 0);
+  QTRY_VERIFY(qAbs(zone->height() - hugHeight) <= 1.0);
+  // The height the handle reports is the height the zone is drawn at, not just
+  // a number the handle writes into its own property.
+  m_editor->setProperty("toolZoneHeight", 300);
+  QTRY_COMPARE(qRound(zone->height()), 300);
+  QCOMPARE(m_commands->count(), 0);
+}
+
 void TestEditor::theToolOptionsHugTheActionRow()
 {
   setState(documentState());

@@ -403,8 +403,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     the dialog
   //   KOGAVIEW_DEV_UI_REQUEST=editor-resize     -> open the Resize dialog from
   //     the palette button, fill its fields from a preset (or a typed pair),
-  //     unlock the chain, choose a background and a filter, then optionally
-  //     press Apply
+  //     unlock the chain, choose how an aspect change is handled, a background
+  //     and a filter, then optionally press Apply
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
   //     one of the nine anchor buttons; `_ARG` is a preset size, `unframed` to
   //     stop with no frame, `full` for the click-made whole-image frame, or
@@ -427,9 +427,11 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
   //   KOGAVIEW_DEV_UI_REQUEST=editor-dock       -> choose a reference tab
   //     (`_ARG` = `info`, `history`, `original`), fold the tool options
-  //     (`_ARG2=fold`), set the dock width (`_ARG3`) and optionally arm a tool
-  //     (`_ARG4` = `crop`, `brush`, `eraser`, `transform`) by clicking its rail
-  //     button — the tab, fold and width are view state and send no command
+  //     (`_ARG2=fold`), set the dock width (`_ARG3`), arm a tool (`_ARG4` =
+  //     `crop`, `brush`, `eraser`, `transform`) by clicking its rail button,
+  //     fold the reference pages with `_ARG5=fold-reference`, or drag the
+  //     divider to a height with `_ARG6` — the tab, both folds, the width and
+  //     the split are view state and send no command
   //   The five editor requests exist because this session's compositor does not
   //   deliver synthetic pointer moves to the window; each one calls the handler
   //   the real control calls, and none of them invents a command of its own.
@@ -589,7 +591,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // matches; `_ARG2=free` unlocks the chain; `_ARG3` names a background
         // (`transparent`, `black`, `white`, `gray`) or is `#rrggbb` for a custom
         // one; `_ARG4` names a filter (`auto`, `nearest`, `bilinear`, `bicubic`,
-        // `bspline`, `lanczos3`).
+        // `bspline`, `lanczos3`); `_ARG6` is the fit (`stretch`, `cover`,
+        // `pad`) — the question the form now asks before any background.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
@@ -692,6 +695,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           qInfo() << "KogaView dev ui request: background" << backgroundArg
                   << dialog->property("backgroundMode");
         }
+        const QString fitArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
+        if (!fitArg.isEmpty()) {
+          const QVariantList fits = dialog->property("fits").toList();
+          for (int i = 0; i < fits.size(); ++i) {
+            if (fits.at(i).toMap().value(QStringLiteral("key")).toString() == fitArg) {
+              QMetaObject::invokeMethod(dialog, "chooseFit", Q_ARG(QVariant, QVariant(i)));
+              break;
+            }
+          }
+        }
         if (!filterArg.isEmpty()) {
           dialog->setProperty("filter", filterArg);
           const QVariantList filters = dialog->property("filters").toList();
@@ -706,7 +719,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         qInfo().noquote() << "KogaView dev ui request editor-resize" << size
                           << "preset" << index << "constraint"
-                          << dialog->property("constraint") << "background"
+                          << dialog->property("constraint") << "fit"
+                          << dialog->property("fitMode") << "background"
                           << dialog->property("backgroundMode") << "filter"
                           << dialog->property("filter") << "tool"
                           << editor->property("tool");
@@ -1073,10 +1087,12 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       } else if (uiRequest == QLatin1String("editor-dock")) {
         // The right dock without a pointer: `_ARG` is the reference tab
         // (`info`, `history` or `original`), `_ARG2` the literal `fold` to fold
-        // the tool options away, `_ARG3` the dock's width in pixels and `_ARG4`
-        // a tool to arm (`crop`, `brush`, `eraser`, `transform`) by clicking
-        // its real rail button. It writes the same properties the tabs, the
-        // fold button and the splitter write, and sends no command.
+        // the tool options away, `_ARG3` the dock's width in pixels, `_ARG4` a
+        // tool to arm (`crop`, `brush`, `eraser`, `transform`) by clicking its
+        // real rail button, `_ARG5=fold-reference` to put the pages away with
+        // the strip's chevron, and `_ARG6` a tool-zone height in pixels sent
+        // through the divider's own `moved`. It writes the same state the tabs,
+        // the two folds and the splitters write, and sends no command.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
@@ -1105,9 +1121,54 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         if (!width.isEmpty()) {
           editor->setProperty("rightPanelWidth", width.toInt());
         }
+        const QString foldReference =
+          qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5");
+        if (foldReference == QLatin1String("fold-reference")) {
+          // The strip's chevron handler is the same write; `foldRequested` is
+          // what a press sends, so send that through the real control.
+          QObject* toggle = editor->findChild<QObject*>(QStringLiteral("stripFoldToggle"));
+          if (toggle == nullptr) {
+            qWarning() << "KogaView dev ui request: reference fold button missing";
+            return;
+          }
+          QMetaObject::invokeMethod(toggle, "click");
+        }
+        const QString dividerArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
+        if (!dividerArg.isEmpty()) {
+          // The handle is a `PanelSplitter`: emitting its `moved` runs the same
+          // handler a drag does, and the argument is the height it reports.
+          QObject* divider = editor->findChild<QObject*>(QStringLiteral("editorToolZoneDivider"));
+          if (divider == nullptr) {
+            qWarning() << "KogaView dev ui request: dock divider missing";
+            return;
+          }
+          QMetaObject::invokeMethod(divider, "moved",
+                                    Q_ARG(qreal, dividerArg.toDouble()));
+          if (QObject* zone = editor->findChild<QObject*>(QStringLiteral("editorToolZone"))) {
+            // The layout settles a frame after the tool is armed, so measure
+            // what the window actually drew, not the pre-layout zero.
+            QObject* dividerProbe = divider;
+            QObject* stripProbe = editor->findChild<QObject*>(QStringLiteral("editorRightTabs"));
+            QTimer::singleShot(1200, zone, [zone, dividerProbe, stripProbe]() {
+              auto sceneTop = [](QObject* item) {
+                QQmlExpression expression(QQmlEngine::contextForObject(item), item,
+                                          QStringLiteral("mapToItem(null, 0, 0).y"));
+                return expression.evaluate().toDouble();
+              };
+              qInfo() << "KogaView dev ui request: tool zone height"
+                      << zone->property("height") << "implicit"
+                      << zone->property("implicitHeight") << "top" << sceneTop(zone)
+                      << "bottom" << sceneTop(zone) + zone->property("height").toDouble()
+                      << "divider" << (dividerProbe ? sceneTop(dividerProbe) : -1.0)
+                      << "strip" << (stripProbe ? sceneTop(stripProbe) : -1.0);
+            });
+          }
+        }
         qInfo().noquote() << "KogaView dev ui request editor-dock" << "tab"
                           << editor->property("rightTab") << "folded"
-                          << editor->property("toolZoneFolded") << "width"
+                          << editor->property("toolZoneFolded") << "reference"
+                          << editor->property("referenceFolded") << "split"
+                          << editor->property("toolZoneHeight") << "width"
                           << editor->property("rightPanelWidth") << "tool"
                           << editor->property("tool") << "index"
                           << editor->property("rightTabIndex");
