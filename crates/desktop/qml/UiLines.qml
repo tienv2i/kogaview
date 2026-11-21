@@ -134,6 +134,10 @@ QtObject {
         case "crop_does_not_fit":
             return qsTr("A %1 × %2 crop at %3,%4 does not fit the %5 × %6 image")
                 .arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]).arg(args[4]).arg(args[5]);
+        case "crop_outside_document":
+            return qsTr("A %1 × %2 crop at %3,%4 would not include the image; grow it over the picture")
+                .arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]);
+        case "crop_too_large": return qsTr("Growing to %1 × %2 is larger than the %3 pixel limit").arg(args[0]).arg(args[1]).arg(args[2]);
         case "resize_size_empty": return qsTr("A resize needs a width and a height");
         case "resize_too_large": return qsTr("Resizing to %1 × %2 is larger than the %3 pixel limit").arg(args[0]).arg(args[1]).arg(args[2]);
         case "transform_outside":
@@ -158,8 +162,11 @@ QtObject {
         case "flip_horizontal": return qsTr("Flip horizontal");
         case "flip_vertical": return qsTr("Flip vertical");
         case "crop": return qsTr("Crop %1 × %2 at %3,%4").arg(args[0]).arg(args[1]).arg(args[2]).arg(args[3]);
+        case "crop_grow": return qsTr("Grow to %1 × %2 · %3 border").arg(args[0]).arg(args[1]).arg(args[2]);
+        case "crop_grow_clear": return qsTr("Grow to %1 × %2 · transparent border").arg(args[0]).arg(args[1]);
         case "resize": return qsTr("Resize %1 × %2").arg(args[0]).arg(args[1]);
         case "resize_pad": return qsTr("Resize %1 × %2 · pad %3").arg(args[0]).arg(args[1]).arg(args[2]);
+        case "resize_pad_clear": return qsTr("Resize %1 × %2 · transparent background").arg(args[0]).arg(args[1]);
         case "transform": return qsTr("Straighten the frame");
         case "brush_stroke": return qsTr("Brush stroke");
         case "eraser_stroke": return qsTr("Eraser stroke");

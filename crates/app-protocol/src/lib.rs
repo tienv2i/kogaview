@@ -8,6 +8,12 @@ use serde::{Deserialize, Serialize};
 /// Wire protocol version. Independent from the application semantic version.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// A resize payload from before the transparent pad carried no alpha; its fill
+/// was always opaque. Serde uses this when the field is absent.
+fn opaque_fill_alpha() -> u8 {
+    255
+}
+
 /// Extensions the browser treats as images and the Editor decodes.
 ///
 /// Kept here rather than in Core so every front end (the Qt file dialog now,
@@ -65,6 +71,22 @@ pub enum FlipAxis {
     Horizontal,
     /// Mirror top/bottom (a horizontal mirror line).
     Vertical,
+}
+
+/// The resampling filter a resize asks for. `Auto` is the fast box average when
+/// the target is smaller and Lanczos3 when it is larger; the named filters are
+/// the `image` crate's kernels, so the view's dropdown changes real pixels
+/// rather than only its label.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeFilter {
+    #[default]
+    Auto,
+    Nearest,
+    Bilinear,
+    Bicubic,
+    Bspline,
+    Lanczos3,
 }
 
 /// Interface language. The UI text is translated at runtime from `.ts` files
@@ -271,6 +293,12 @@ pub enum Command {
         height: u32,
         #[serde(default)]
         fill: Option<[u8; 3]>,
+        /// Alpha for `fill`: 255 is an opaque pad, 0 the transparent one the
+        /// form's background dropdown offers. Older payloads are opaque.
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+        #[serde(default)]
+        filter: ResizeFilter,
     },
     /// Render the resize in the canvas without changing the document: the
     /// pixels, the history and the save target stay as they are until
@@ -281,23 +309,45 @@ pub enum Command {
         height: u32,
         #[serde(default)]
         fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+        #[serde(default)]
+        filter: ResizeFilter,
     },
     /// Cut the working document to the given rectangle, in document pixels.
+    ///
+    /// Without a `fill` the rectangle must lie inside the picture: that is the
+    /// ordinary crop, and a larger rectangle is refused. With a `fill` the
+    /// canvas may **grow** — `x`/`y` go negative and the rectangle may reach
+    /// past the picture's right and bottom edges — and every pixel outside the
+    /// picture is painted with that RGB colour at `fill_alpha`. The rectangle
+    /// must still overlap the picture, so a grow is a border around the photo
+    /// and never an empty coloured page.
     EditorCrop {
-        x: u32,
-        y: u32,
+        x: i32,
+        y: i32,
         width: u32,
         height: u32,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        /// Alpha for `fill`: 255 is an opaque grow border, 0 the transparent
+        /// one. Older payloads are opaque, and `None` never reads it.
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
     },
     /// Render the crop in the canvas without cutting the document: the pixels,
     /// the history and the save target stay as they are until `EditorCrop` is
     /// applied. The draft is published as `editor.previewDraft` with
     /// `kind: "crop"`.
     EditorCropPreview {
-        x: u32,
-        y: u32,
+        x: i32,
+        y: i32,
         width: u32,
         height: u32,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
     },
     /// Straighten the frame: the four corners of the quadrilateral inside the
     /// working document that should become the whole output. `corners` are in
@@ -572,6 +622,8 @@ mod tests {
                     width: 800,
                     height: 600,
                     fill: None,
+                    fill_alpha: 255,
+                    filter: ResizeFilter::Auto,
                 },
                 "editor_resize",
             ),
@@ -580,6 +632,8 @@ mod tests {
                     width: 800,
                     height: 600,
                     fill: Some([1, 2, 3]),
+                    fill_alpha: 0,
+                    filter: ResizeFilter::Bicubic,
                 },
                 "editor_resize_preview",
             ),
@@ -589,15 +643,19 @@ mod tests {
                     y: 20,
                     width: 300,
                     height: 400,
+                    fill: None,
+                    fill_alpha: 255,
                 },
                 "editor_crop",
             ),
             (
                 Command::EditorCropPreview {
-                    x: 10,
-                    y: 20,
+                    x: -10,
+                    y: -20,
                     width: 300,
                     height: 400,
+                    fill: Some([9, 8, 7]),
+                    fill_alpha: 0,
                 },
                 "editor_crop_preview",
             ),
@@ -695,21 +753,32 @@ mod tests {
         match env.command {
             Command::EditorResize {
                 fill,
+                fill_alpha,
+                filter,
                 width,
                 height,
             } => {
                 assert_eq!((width, height), (64, 32));
                 assert_eq!(fill, None);
+                assert_eq!(fill_alpha, 255, "an old payload pads opaquely");
+                assert_eq!(filter, ResizeFilter::Auto);
             }
             other => panic!("unexpected command {other:?}"),
         }
         let env: Envelope = serde_json::from_str(
-            r#"{"id":"r","command":{"type":"editor_resize","width":64,"height":32,"anchor":"bottom_right","fill":[1,2,3]}}"#,
+            r#"{"id":"r","command":{"type":"editor_resize","width":64,"height":32,"anchor":"bottom_right","fill":[1,2,3],"fill_alpha":0,"filter":"bspline"}}"#,
         )
         .unwrap();
         match env.command {
-            Command::EditorResize { fill, .. } => {
+            Command::EditorResize {
+                fill,
+                fill_alpha,
+                filter,
+                ..
+            } => {
                 assert_eq!(fill, Some([1, 2, 3]));
+                assert_eq!(fill_alpha, 0);
+                assert_eq!(filter, ResizeFilter::Bspline);
             }
             other => panic!("unexpected command {other:?}"),
         }
@@ -736,7 +805,8 @@ mod tests {
         }
 
         // A crop preview is the same rectangle as the applied crop and has its
-        // own name, so a journal line can never read as a cut.
+        // own name, so a journal line can never read as a cut. A payload from
+        // before the grow mode is an inside crop with no fill.
         let env: Envelope = serde_json::from_str(
             r#"{"id":"r","command":{"type":"editor_crop_preview","x":4,"y":2,"width":10,"height":8}}"#,
         )
@@ -747,7 +817,34 @@ mod tests {
                 y,
                 width,
                 height,
-            } => assert_eq!((x, y, width, height), (4, 2, 10, 8)),
+                fill,
+                fill_alpha,
+            } => {
+                assert_eq!((x, y, width, height), (4, 2, 10, 8));
+                assert_eq!(fill, None);
+                assert_eq!(fill_alpha, 255);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+
+        // A grow crop can start outside the picture; the negative origin is
+        // part of the typed command, not a view-only number.
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"g","command":{"type":"editor_crop","x":-12,"y":-8,"width":120,"height":90,"fill":[255,255,255],"fill_alpha":0}}"#,
+        )
+        .unwrap();
+        match env.command {
+            Command::EditorCrop {
+                x,
+                y,
+                fill,
+                fill_alpha,
+                ..
+            } => {
+                assert_eq!((x, y), (-12, -8));
+                assert_eq!(fill, Some([255, 255, 255]));
+                assert_eq!(fill_alpha, 0);
+            }
             other => panic!("unexpected command {other:?}"),
         }
     }

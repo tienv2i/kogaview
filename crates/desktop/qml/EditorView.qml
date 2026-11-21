@@ -47,6 +47,67 @@ Item {
     UiLines {
         id: uiLines
     }
+
+    /// The lock beside Width, Height and Ratio. A padlock drawn on a Canvas
+    /// rather than a glyph or a themed icon: the emoji padlock was blank in this
+    /// session's font, and an icon theme is not loaded under the offscreen
+    /// platform. `checked` is the locked state, so the button is checkable and
+    /// the view keeps the three `cropLock*` properties as the truth.
+    component CropLockButton: Button {
+        id: lockButton
+        property color lockedColor: "#3f7fd6"
+        property color unlockedColor: "#8b929c"
+        implicitWidth: 26
+        implicitHeight: 26
+        padding: 0
+        checkable: true
+        focusPolicy: Qt.NoFocus
+
+        contentItem: Item {
+            implicitWidth: 16
+            implicitHeight: 18
+
+            Canvas {
+                id: lockGlyph
+                anchors.centerIn: parent
+                width: 16
+                height: 18
+                onPaint: {
+                    var ctx = getContext("2d")
+                    ctx.reset()
+                    var colour = lockButton.checked
+                            ? lockButton.lockedColor : lockButton.unlockedColor
+                    ctx.strokeStyle = colour
+                    ctx.fillStyle = colour
+                    ctx.lineWidth = 1.6
+                    // Shackle: a half circle over the body.
+                    ctx.beginPath()
+                    ctx.arc(8, 7, 4, Math.PI, 0, false)
+                    ctx.stroke()
+                    // Body.
+                    ctx.beginPath()
+                    ctx.rect(2, 8, 12, 8)
+                    ctx.fill()
+                    // Keyhole, in the surface behind the button.
+                    ctx.fillStyle = "#ffffff"
+                    ctx.beginPath()
+                    ctx.arc(8, 11, 1.1, 0, Math.PI * 2)
+                    ctx.fill()
+                    ctx.fillRect(7.45, 11, 1.1, 2.4)
+                }
+            }
+        }
+
+        background: Rectangle {
+            radius: 3
+            color: lockButton.checked ? lockButton.lockedColor : "transparent"
+            border.width: 1
+            border.color: lockButton.checked ? lockButton.lockedColor
+                                             : lockButton.palette.mid
+        }
+
+        onCheckedChanged: lockGlyph.requestPaint()
+    }
     property int leftPanelWidth: 220
     property int rightPanelWidth: 260
     /// Which tool is armed on the canvas: `pointer` (no tool), `crop` or
@@ -55,26 +116,52 @@ Item {
     /// tool: it is a dialog (`ResizeDialog.qml`), because choosing a size is a
     /// question with a beginning and an end rather than a mode to stay in.
     property string tool: "pointer"
-    /// Crop links Width and Height through this ratio, so the two fields can
-    /// never describe a different shape than the one the user picked. `free` is
-    /// the only unlinked choice; `original` follows the document's own aspect
-    /// and `current` the pair the user had on screen when it was picked. Crop
-    /// starts free, the way a crop tool does when nothing constrains it: a
-    /// frame dragged on the picture keeps the shape the user drew, and picking
-    /// a ratio is an explicit lock. Resize's dialog keeps its own default
-    /// (`original`), because scaling a picture usually keeps its shape.
+    /// Crop's shape, as typed: a ratio such as `3:2`, or `free` when the two
+    /// sides are independent. A text field rather than a table, so any shape
+    /// the user needs is reachable; the presets below still write a concrete
+    /// pixel size and its ratio.
     property string cropRatio: "free"
-    /// The pair captured when "Keep current ratio" was picked. Zero means "not
-    /// captured yet": the document's aspect is the fallback. Resize keeps its
-    /// own snapshot inside its dialog, so a crop choice cannot reach it.
-    property var cropCurrentRatio: ({ width: 0, height: 0 })
     /// Where the crop rectangle sits when its size changes: the anchor names the
     /// document corner, edge or centre the rectangle keeps. Typing X/Y by hand
     /// leaves it alone — the anchor is a placement shortcut, not a lock.
     property string cropAnchor: "center"
-    /// The same draft idea for Crop: the canvas shows the rectangle Core would
-    /// cut, while the document, its history and its save target stay put.
-    property bool cropLivePreview: false
+    /// The three locks. A locked field keeps its value: Width and Height pin
+    /// that axis, and Ratio pins the shape. Two locks decide what the third
+    /// field does: W+H makes the ratio a consequence (so the ratio field is
+    /// disabled), W+ratio makes Height the derived side (disabled), and H+ratio
+    /// makes Width the derived side. Without locks the ratio links the sides;
+    /// without a ratio the sides are independent.
+    property bool cropLockWidth: false
+    property bool cropLockHeight: false
+    property bool cropLockRatio: false
+    /// A field is editable unless it is locked, or unless it is the side the
+    /// other locked side and the locked ratio derive. W+H locks the shape
+    /// outright, so the ratio stops being an input at all.
+    readonly property bool cropWidthEditable:
+        !view.cropLockWidth && !(view.cropLockHeight && view.cropLockRatio)
+    readonly property bool cropHeightEditable:
+        !view.cropLockHeight && !(view.cropLockWidth && view.cropLockRatio)
+    readonly property bool cropRatioEditable:
+        !view.cropLockRatio && !(view.cropLockWidth && view.cropLockHeight)
+    /// A frame can only be reshaped while at least one of its three values is
+    /// free. Two locks fix the shape; moving the frame is still allowed.
+    readonly property bool cropResizable:
+        !(view.cropLockWidth && view.cropLockHeight)
+        && !(view.cropLockRatio && (view.cropLockWidth || view.cropLockHeight))
+    /// The size the last Apply is expected to produce. Core publishes the cut
+    /// document before the command returns on the real gateway, and the QML
+    /// suite delivers it a turn later; either way the size is what tells the
+    /// view that the cut landed, so the fresh frame can cover all of it.
+    property var pendingCropResult: null
+    /// What a crop may do to the canvas. `center` keeps the rectangle entirely
+    /// inside the picture, which is the ordinary cut. `grow` lets it reach past
+    /// the edges — `x`/`y` become negative — and paints the new border with
+    /// `cropFill`, so a picture can gain a margin without being resized first.
+    property string cropMode: "center"
+    /// How a grown border is painted: `transparent`, `black`, `white`, `gray`
+    /// or `custom` (`cropFillColor`). Only read in `grow` mode.
+    property string cropFill: "transparent"
+    property color cropFillColor: "#808080"
     /// And for Transform: the canvas shows the straightened frame before Apply.
     property bool transformLivePreview: false
     /// The transform quad in document pixels, clockwise from the top left:
@@ -508,46 +595,378 @@ Item {
                 Math.round(color.b * 255)]
     }
 
-    /// The factor for a crop ratio key, or null when the sides are not linked.
-    /// Resize's dialog carries the same idea in its own file: each surface owns
-    /// the snapshot of the pair it froze, so a 1:1 crop cannot reshape a resize.
-    function ratioFactor(key) {
-        for (var index = 0; index < view.sizeRatios.length; ++index) {
-            var entry = view.sizeRatios[index]
-            if (entry.key !== key) continue
-            if (entry.key === "free") return null
-            if (entry.key === "current") {
-                var captured = view.cropCurrentRatio
-                if (captured && captured.width > 0 && captured.height > 0) return captured
-                if (!view.hasDocument) return null
-                return { width: view.documentWidth, height: view.documentHeight }
-            }
-            if (entry.key === "original") {
-                if (!view.hasDocument) return null
-                return { width: view.editor.width, height: view.editor.height }
-            }
-            return entry
-        }
-        return null
+    /// Crop's two answers to "may the frame leave the picture?": `center` is
+    /// the ordinary cut, `grow` a new canvas around the photo.
+    readonly property var cropModes: [
+        { key: "center", label: qsTr("Center") },
+        { key: "grow", label: qsTr("Grow") }
+    ]
+    /// The colours a grown border can take. `None` is absent on purpose: a grow
+    /// always paints *something*, and the transparent choice is how it paints
+    /// nothing the eye can see.
+    readonly property var cropBackdrops: [
+        { key: "transparent", label: qsTr("Transparent") },
+        { key: "black", label: qsTr("Black") },
+        { key: "white", label: qsTr("White") },
+        { key: "gray", label: qsTr("Gray") },
+        { key: "custom", label: qsTr("Custom color…") }
+    ]
+
+    function cropGrow() {
+        return view.cropMode === "grow"
     }
 
-    /// Index of a ratio key in the dropdown, so a combo can be synced without
-    /// binding its `currentIndex` (which the control writes itself).
-    function ratioIndexFor(key) {
-        for (var index = 0; index < view.sizeRatios.length; ++index) {
-            if (view.sizeRatios[index].key === key) return index
+    function cropModeIndex() {
+        for (var index = 0; index < view.cropModes.length; ++index) {
+            if (view.cropModes[index].key === view.cropMode) return index
         }
-        return -1
+        return 0
     }
 
-    readonly property int cropRatioIndex: view.ratioIndexFor(view.cropRatio)
+    function cropFillIndex() {
+        for (var index = 0; index < view.cropBackdrops.length; ++index) {
+            if (view.cropBackdrops[index].key === view.cropFill) return index
+        }
+        return 0
+    }
+
+    /// Switch between an inside crop and a growing one. Turning Grow off must
+    /// pull a rectangle that reached outside back into the picture, or Apply
+    /// would stay disabled with no visible reason.
+    function setCropMode(mode) {
+        view.cropMode = mode
+        cropModeBox.currentIndex = view.cropModeIndex()
+        if (view.cropGrow()) {
+            if (view.cropHasRect()) view.revealCropGrowth()
+        } else if (view.cropHasRect()) {
+            var rect = view.cropRect
+            view.setCropRect(rect.x, rect.y, rect.width, rect.height)
+        }
+        // The preset list itself depends on the mode (Center only offers sizes
+        // the picture can hold), so the mirror is re-read after the switch.
+        cropPreset.currentIndex = view.matchingCropPreset()
+        draftDebounce.restart()
+    }
+
+    /// Grow needs room outside the picture, and the canvas host clips at its
+    /// own edge: a fitted picture keeps only 32 px of margin, so a frame handle
+    /// could not be dragged outward at all. Step the view back once when Grow
+    /// is picked — enough for a border on every side — and leave a view that
+    /// already has that room (a hand-chosen zoom) alone.
+    function revealCropGrowth() {
+        if (!view.hasDocument || !view.hostReady) return
+        var hostWidth = canvasHost.width
+        var hostHeight = canvasHost.height
+        if (hostWidth <= 1 || hostHeight <= 1) return
+        var shownWidth = view.displayedWidth * view.zoom
+        var shownHeight = view.displayedHeight * view.zoom
+        if ((hostWidth - shownWidth) / 2 >= hostWidth * 0.12
+                && (hostHeight - shownHeight) / 2 >= hostHeight * 0.12) return
+        view.fit()
+        view.zoom = Math.max(0.02, view.zoom * 0.72)
+        view.autoFit = false
+        view.offsetX = 0
+        view.offsetY = 0
+    }
+
+    /// Pick a border colour; `Custom color…` opens the chooser, and a cancelled
+    /// chooser leaves the previous choice on screen.
+    function chooseCropFill(index) {
+        if (index < 0 || index >= view.cropBackdrops.length) return
+        var key = view.cropBackdrops[index].key
+        if (key === "custom") {
+            cropFillColorDialog.open()
+            return
+        }
+        view.cropFill = key
+        cropFillBox.currentIndex = index
+        draftDebounce.restart()
+    }
+
+    /// The swatch beside the fill dropdown. Transparent has no colour to show,
+    /// so it borrows the panel's alternate surface and says "0" instead.
+    function cropFillPreviewColor() {
+        switch (view.cropFill) {
+        case "black": return "#000000"
+        case "white": return "#ffffff"
+        case "gray": return "#808080"
+        case "custom": return view.cropFillColor
+        default: return view.theme.surfaceAlt
+        }
+    }
+
+    /// The border colour the command carries, or `null` for an inside crop.
+    /// Core reads a present colour as "the canvas may grow". A Grow rectangle
+    /// that still lies inside the picture has no border to paint, so it travels
+    /// as an ordinary crop and its history line says Crop, not Grow.
+    function cropFillForCommand() {
+        if (!view.cropGrow()) return null
+        var rect = view.cropRect
+        if (rect.x >= 0 && rect.y >= 0
+                && rect.x + rect.width <= view.documentWidth
+                && rect.y + rect.height <= view.documentHeight) return null
+        switch (view.cropFill) {
+        case "black": return [0, 0, 0]
+        case "white": return [255, 255, 255]
+        case "gray": return [128, 128, 128]
+        case "custom": return view.colorRgb(view.cropFillColor)
+        default: return [0, 0, 0]
+        }
+    }
+
+    function cropFillAlpha() {
+        return view.cropFill === "transparent" ? 0 : 255
+    }
+
+    /// The ratio the crop fields are held to, as a pair, or null when the
+    /// sides are independent. The field carries text, so any shape is possible;
+    /// the presets and the swap button still use the short named list.
+    function cropRatioPair() {
+        if (view.cropRatio === "free") return null
+        return view.parseRatio(view.cropRatio)
+    }
+
+    function gcd(a, b) {
+        a = Math.abs(Math.round(a))
+        b = Math.abs(Math.round(b))
+        while (b) {
+            var next = a % b
+            a = b
+            b = next
+        }
+        return a > 0 ? a : 1
+    }
+
+    /// A pair written the way a person writes it: reduced by its greatest
+    /// common divisor, so 1024 × 768 shows as `4:3` rather than `1024:768`.
+    function reducedRatio(width, height) {
+        width = Math.round(width)
+        height = Math.round(height)
+        if (!(width > 0) || !(height > 0)) return "free"
+        var divisor = view.gcd(width, height)
+        return (width / divisor) + ":" + (height / divisor)
+    }
+
+    /// `3:2`, `3/2`, `3x2` and a bare `2` (meaning 2:1) all parse; anything
+    /// else, including an empty string, is not a ratio.
+    function parseRatio(text) {
+        if (text === undefined || text === null) return null
+        var cleaned = String(text).trim()
+        if (cleaned === "") return null
+        var match = /^(\d+)\s*[:/xX]\s*(\d+)$/.exec(cleaned)
+        if (!match) {
+            if (/^\d+$/.test(cleaned)) {
+                var single = parseInt(cleaned)
+                return single > 0 ? { width: single, height: 1 } : null
+            }
+            return null
+        }
+        var width = parseInt(match[1])
+        var height = parseInt(match[2])
+        if (!(width > 0) || !(height > 0)) return null
+        return { width: width, height: height }
+    }
+
+    /// The ratio the rectangle is currently held to, as width / height, or 0
+    /// when the sides are free.
+    function cropRatioAspect() {
+        var pair = view.cropRatioPair()
+        return pair ? pair.width / pair.height : 0
+    }
+
+    function cropMaxWidth() {
+        return view.cropGrow() ? 20000 : view.documentWidth
+    }
+
+    function cropMaxHeight() {
+        return view.cropGrow() ? 20000 : view.documentHeight
+    }
+
+    /// Round a pair to whole pixels and keep it legal. A linked pair is scaled
+    /// as one shape, so fitting it never breaks the ratio; independent sides are
+    /// clamped one at a time.
+    function clampCropPair(width, height, linked) {
+        width = Math.max(1, Math.min(20000, Math.round(width)))
+        height = Math.max(1, Math.min(20000, Math.round(height)))
+        var maxWidth = view.cropMaxWidth()
+        var maxHeight = view.cropMaxHeight()
+        if (linked) {
+            var scale = Math.min(1, maxWidth / width, maxHeight / height)
+            width = Math.max(1, Math.round(width * scale))
+            height = Math.max(1, Math.round(height * scale))
+        } else {
+            width = Math.max(1, Math.min(maxWidth, width))
+            height = Math.max(1, Math.min(maxHeight, height))
+        }
+        return { width: width, height: height }
+    }
+
+    /// The ratio field owns its text while it has focus. Every other path that
+    /// changes `cropRatio` (a preset, Reset, a locked-side derivation) writes
+    /// the field through this, so a typo is never overwritten mid-keystroke.
+    function syncCropRatioField() {
+        if (typeof cropRatioField === "undefined" || cropRatioField === null) return
+        if (cropRatioField.activeFocus) return
+        cropRatioField.text = view.cropRatio === "free" ? "" : view.cropRatio
+    }
+
+    /// Keep the ratio text honest when an unlocked ratio follows a pair that a
+    /// locked side just changed. A locked ratio is never rewritten.
+    function setCropRatioFromPair(width, height) {
+        if (view.cropLockRatio) return
+        if (!(width > 0) || !(height > 0)) return
+        view.cropRatio = view.reducedRatio(width, height)
+        view.syncCropRatioField()
+    }
+
+    /// Pick a ratio from text. An empty field is Free; an unreadable one puts
+    /// the previous value back rather than silently changing the shape.
+    function setCropRatio(text) {
+        if (view.cropLockWidth && view.cropLockHeight) {
+            view.syncCropRatioField()
+            return
+        }
+        var cleaned = String(text === undefined || text === null ? "" : text).trim()
+        if (cleaned === "" || cleaned.toLowerCase() === "free") {
+            view.cropRatio = "free"
+            view.syncCropRatioField()
+            return
+        }
+        var pair = view.parseRatio(cleaned)
+        if (!pair) {
+            view.syncCropRatioField()
+            return
+        }
+        view.cropRatio = view.reducedRatio(pair.width, pair.height)
+        view.syncCropRatioField()
+        view.applyCropRatio()
+    }
+
+    /// Apply the current ratio to the fields. The locked side wins when one is
+    /// pinned; otherwise Width is the starting side (Height when Width is
+    /// empty). Clamping happens once, on the shape, so a ratio never survives
+    /// as a pair the document cannot hold.
+    function applyCropRatio() {
+        var pair = view.cropRatioPair()
+        if (!pair) {
+            view.applyCropAnchor()
+            cropPreset.currentIndex = view.matchingCropPreset()
+            return
+        }
+        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
+        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+        if (view.cropLockWidth && width > 0) {
+            height = width * pair.height / pair.width
+        } else if (view.cropLockHeight && height > 0) {
+            width = height * pair.width / pair.height
+        } else if (width > 0) {
+            height = width * pair.height / pair.width
+        } else if (height > 0) {
+            width = height * pair.width / pair.height
+        } else {
+            return
+        }
+        var clamped = view.clampCropPair(width, height, true)
+        cropWidthField.text = String(clamped.width)
+        cropHeightField.text = String(clamped.height)
+        view.applyCropAnchor()
+        cropPreset.currentIndex = view.matchingCropPreset()
+        draftDebounce.restart()
+    }
+
+    /// Read the ratio field. Called while typing (once the text is a complete
+    /// ratio) and when editing finishes (so a bad entry is put back).
+    function applyCropRatioText() {
+        if (typeof cropRatioField === "undefined" || cropRatioField === null) return
+        if (view.cropLockWidth && view.cropLockHeight) {
+            view.syncCropRatioField()
+            return
+        }
+        var cleaned = cropRatioField.text.trim()
+        if (cleaned === "") {
+            view.cropRatio = "free"
+            return
+        }
+        if (!view.parseRatio(cleaned)) return
+        view.setCropRatio(cleaned)
+    }
+
+    /// Flip one lock and let the other two settle. A third lock is never
+    /// allowed to join a pair: W+H makes Ratio a consequence, and Ratio plus a
+    /// side makes the other side derived.
+    function setCropLock(which, locked) {
+        if (which === "width") {
+            if (view.cropLockWidth === locked) return
+            if (locked && view.cropLockHeight && view.cropLockRatio) return
+            view.cropLockWidth = locked
+            if (locked && !cropWidthField.acceptableInput && view.hasDocument) {
+                cropWidthField.text = String(Math.round(view.documentWidth))
+            }
+        } else if (which === "height") {
+            if (view.cropLockHeight === locked) return
+            if (locked && view.cropLockWidth && view.cropLockRatio) return
+            view.cropLockHeight = locked
+            if (locked && !cropHeightField.acceptableInput && view.hasDocument) {
+                cropHeightField.text = String(Math.round(view.documentHeight))
+            }
+        } else if (which === "ratio") {
+            if (view.cropLockRatio === locked) return
+            if (locked && view.cropLockWidth && view.cropLockHeight) return
+            view.cropLockRatio = locked
+            if (locked && view.cropRatio === "free") {
+                // Locking a free shape freezes the one on screen; with no frame
+                // yet, the document's own shape is the honest starting point.
+                if (view.cropHasRect()) {
+                    view.cropRatio = view.reducedRatio(
+                                parseInt(cropWidthField.text),
+                                parseInt(cropHeightField.text))
+                } else if (view.hasDocument) {
+                    view.cropRatio = view.reducedRatio(view.documentWidth,
+                                                       view.documentHeight)
+                }
+                view.syncCropRatioField()
+            }
+        } else {
+            return
+        }
+        if (view.cropLockWidth && view.cropLockHeight) {
+            // Two pinned sides fix the shape: the ratio becomes a consequence
+            // and stops being an input, so its field is disabled and its text
+            // follows the pair.
+            view.cropLockRatio = false
+            if (cropWidthField.acceptableInput && cropHeightField.acceptableInput) {
+                view.setCropRatioFromPair(parseInt(cropWidthField.text),
+                                          parseInt(cropHeightField.text))
+            }
+        }
+        // A side locked together with the ratio is the only combination where
+        // one field is a consequence rather than an input.
+        if (view.cropLockRatio && (view.cropLockWidth || view.cropLockHeight)) {
+            view.applyCropRatio()
+        }
+        view.syncCropLockButtons()
+        view.syncCropRatioField()
+    }
+
+    /// Reset the three toggle buttons from the properties. The controls write
+    /// `checked` themselves, so a programmatic Reset cannot rely on a binding.
+    function syncCropLockButtons() {
+        if (typeof cropLockWidthButton !== "undefined" && cropLockWidthButton !== null)
+            cropLockWidthButton.checked = view.cropLockWidth
+        if (typeof cropHeightButton !== "undefined" && cropHeightButton !== null)
+            cropHeightButton.checked = view.cropLockHeight
+        if (typeof cropRatioButton !== "undefined" && cropRatioButton !== null)
+            cropRatioButton.checked = view.cropLockRatio
+    }
 
     /// Crop presets are the concrete sizes that fit inside the document. A
     /// preset the document cannot hold is not offered, so picking one always
     /// describes a legal rectangle; a tiny document simply has a shorter list.
+    /// A growing crop may hold anything, so it keeps the whole list.
     readonly property var cropPresets: {
+        if (!view.hasDocument) return []
+        if (view.cropGrow()) return view.sizePresets
         var fits = []
-        if (!view.hasDocument) return fits
         for (var index = 0; index < view.sizePresets.length; ++index) {
             var preset = view.sizePresets[index]
             if (preset.width <= view.documentWidth && preset.height <= view.documentHeight) {
@@ -586,14 +1005,47 @@ Item {
                 break
             }
         }
-        cropX.text = String(Math.max(0, Math.round((view.documentWidth - width) * anchor.column / 2)))
-        cropY.text = String(Math.max(0, Math.round((view.documentHeight - height) * anchor.row / 2)))
+        cropX.text = String(view.cropGrow()
+                            ? Math.round((view.documentWidth - width) * anchor.column / 2)
+                            : Math.max(0, Math.round((view.documentWidth - width) * anchor.column / 2)))
+        cropY.text = String(view.cropGrow()
+                            ? Math.round((view.documentHeight - height) * anchor.row / 2)
+                            : Math.max(0, Math.round((view.documentHeight - height) * anchor.row / 2)))
     }
 
-    /// Select an anchor and move the rectangle to it.
+    /// Select an anchor. With no frame yet, this is also a way to create one:
+    /// the typed sides (or the document's own shape when nothing is typed) are
+    /// placed at the named corner, edge or centre.
     function setCropAnchor(key) {
         view.cropAnchor = key
+        view.ensureCropFrame()
         view.applyCropAnchor()
+        draftDebounce.restart()
+    }
+
+    /// Build a rectangle from what the panel already says, without a drag.
+    /// Width then Height is the order fields are normally filled; a missing
+    /// side follows the ratio, or the document's shape when the ratio is free.
+    function ensureCropFrame() {
+        if (view.cropHasRect() || !view.hasDocument) return
+        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
+        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+        var pair = view.cropRatioPair()
+        if (!(width > 0) && !(height > 0)) {
+            width = view.documentWidth
+            height = view.documentHeight
+        } else if (!(width > 0)) {
+            width = pair ? height * pair.width / pair.height
+                        : height * view.documentWidth / view.documentHeight
+        } else if (!(height > 0)) {
+            height = pair ? width * pair.height / pair.width
+                         : width * view.documentHeight / view.documentWidth
+        }
+        var clamped = view.clampCropPair(width, height, pair !== null)
+        cropWidthField.text = String(clamped.width)
+        cropHeightField.text = String(clamped.height)
+        view.applyCropAnchor()
+        cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
     }
 
@@ -602,99 +1054,122 @@ Item {
     /// A crop is re-placed through its anchor even when the ratio is free: the
     /// anchor is about where the rectangle sits, not about linking the sides.
     function linkHeightFromWidth() {
+        if (!view.cropWidthEditable) return
         if (!cropWidthField.acceptableInput) return
         var width = parseInt(cropWidthField.text)
         if (!(width > 0)) return
-        var factor = view.ratioFactor(view.cropRatio)
-        if (factor) {
-            cropHeightField.text = String(Math.max(1, Math.min(20000,
-                    Math.round(width * factor.height / factor.width))))
+        var pair = view.cropRatioPair()
+        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
+        if (pair) {
+            if (view.cropLockHeight) {
+                // The locked side stays; the unlocked ratio follows the pair.
+                if (height > 0) view.setCropRatioFromPair(width, height)
+                var held = view.clampCropPair(width, height, false)
+                width = held.width
+                height = held.height
+            } else {
+                height = width * pair.height / pair.width
+                var linked = view.clampCropPair(width, height, true)
+                width = linked.width
+                height = linked.height
+            }
+        } else {
+            if (!(height > 0)) height = width * view.documentHeight / view.documentWidth
+            var free = view.clampCropPair(width, height, false)
+            width = free.width
+            height = free.height
         }
+        cropWidthField.text = String(width)
+        cropHeightField.text = String(height)
         view.applyCropAnchor()
         cropPreset.currentIndex = view.matchingCropPreset()
+        draftDebounce.restart()
     }
 
     function linkWidthFromHeight() {
+        if (!view.cropHeightEditable) return
         if (!cropHeightField.acceptableInput) return
         var height = parseInt(cropHeightField.text)
         if (!(height > 0)) return
-        var factor = view.ratioFactor(view.cropRatio)
-        if (factor) {
-            cropWidthField.text = String(Math.max(1, Math.min(20000,
-                    Math.round(height * factor.width / factor.height))))
+        var pair = view.cropRatioPair()
+        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
+        if (pair) {
+            if (view.cropLockWidth) {
+                // The locked side stays; the unlocked ratio follows the pair.
+                if (width > 0) view.setCropRatioFromPair(width, height)
+                var held = view.clampCropPair(width, height, false)
+                width = held.width
+                height = held.height
+            } else {
+                width = height * pair.width / pair.height
+                var linked = view.clampCropPair(width, height, true)
+                width = linked.width
+                height = linked.height
+            }
+        } else {
+            if (!(width > 0)) width = height * view.documentWidth / view.documentHeight
+            var free = view.clampCropPair(width, height, false)
+            width = free.width
+            height = free.height
         }
+        cropWidthField.text = String(width)
+        cropHeightField.text = String(height)
         view.applyCropAnchor()
         cropPreset.currentIndex = view.matchingCropPreset()
-    }
-
-    /// Keep the fields on the selected ratio when the ratio itself is picked:
-    /// a 16:9 choice with 1024 × 1024 typed must not leave a square pair on a
-    /// 16:9 label. The first typed side wins, width first.
-    function relinkFields() {
-        if (cropWidthField.acceptableInput && parseInt(cropWidthField.text) > 0) {
-            view.linkHeightFromWidth()
-        } else if (cropHeightField.acceptableInput && parseInt(cropHeightField.text) > 0) {
-            view.linkWidthFromHeight()
-        }
-    }
-
-    /// Freeze the pair on screen as the "Keep current ratio" shape. Both fields must
-    /// hold a usable number; otherwise the document's own aspect is the honest
-    /// fallback, because that is what the empty placeholders show.
-    function captureCurrentRatio() {
-        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
-        var height = cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
-        if (!(width > 0) || !(height > 0)) {
-            if (!view.hasDocument) return
-            width = view.documentWidth
-            height = view.documentHeight
-        }
-        view.cropCurrentRatio = { width: width, height: height }
-    }
-
-    /// Select Crop's ratio and mirror it in its dropdown. The dropdown index is
-    /// written imperatively because ComboBox owns `currentIndex` itself. Picking
-    /// "Keep current ratio" snapshots the pair before relinking, so the fields
-    /// the user is looking at become the locked shape.
-    function setRatio(key) {
-        if (key === "current") view.captureCurrentRatio()
-        view.cropRatio = key
-        cropRatioBox.currentIndex = view.cropRatioIndex
-    }
-
-    /// One click of a crop field's +/- stepper. An empty or invalid field starts
-    /// from the size its placeholder shows, so the first nudge moves the
-    /// document's own dimension rather than jumping to 1. The other side
-    /// follows the selected ratio exactly as typing it would, clamped to the
-    /// same 1–20000 range the fields accept.
-    function stepCropField(field, delta, isWidth) {
-        var current = field.acceptableInput ? parseInt(field.text) : 0
-        if (!(current > 0)) {
-            current = Math.round(isWidth ? view.documentWidth : view.documentHeight)
-        }
-        if (!(current > 0)) return
-        field.text = String(Math.max(1, Math.min(20000, current + delta)))
-        if (isWidth) {
-            view.linkHeightFromWidth()
-        } else {
-            view.linkWidthFromHeight()
-        }
         draftDebounce.restart()
+    }
+
+    /// Keep the fields on the selected ratio when the ratio itself is picked.
+    function relinkFields() {
+        if (view.cropRatio === "free") {
+            view.applyCropAnchor()
+            return
+        }
+        view.applyCropRatio()
+    }
+
+    /// Select Crop's ratio by name. The text field is the real owner; this is
+    /// the programmatic entry point the presets, the swap button and the
+    /// harness use. `original`/`current` are compatibility spellings for the
+    /// document's own shape.
+    function setRatio(key) {
+        if (key === "original" || key === "current") {
+            if (!view.hasDocument) return
+            view.setCropRatio(view.reducedRatio(view.documentWidth,
+                                               view.documentHeight))
+            return
+        }
+        view.setCropRatio(key)
     }
 
     /// Apply one of the concrete sizes from Crop's dropdown. `onActivated` calls
     /// this for a real pick; a programmatic `currentIndex` change (the field/link
-    /// code mirrors a matching size) must not re-apply it. The list is filtered
-    /// by the document, so with `onCurrentIndexChanged` its first fitting preset
-    /// applied itself when a document arrived and overwrote the fields.
+    /// code mirrors a matching size) must not re-apply it. A locked side keeps
+    /// its value: the other side and the shape follow the preset.
     function chooseCropPreset(index) {
         if (index < 0 || index >= view.cropPresets.length) return
+        if (!view.cropResizable) return
         var preset = view.cropPresets[index]
-        cropWidthField.text = String(preset.width)
-        cropHeightField.text = String(preset.height)
-        view.setRatio(preset.ratio)
-        cropPreset.currentIndex = index
+        view.cropRatio = preset.ratio
+        view.syncCropRatioField()
+        var width = view.cropLockWidth
+                ? (cropWidthField.acceptableInput ? parseInt(cropWidthField.text)
+                                                  : preset.width)
+                : preset.width
+        var height = view.cropLockHeight
+                ? (cropHeightField.acceptableInput ? parseInt(cropHeightField.text)
+                                                   : preset.height)
+                : preset.height
+        if (view.cropLockWidth && !view.cropLockHeight) {
+            height = width * preset.height / preset.width
+        } else if (view.cropLockHeight && !view.cropLockWidth) {
+            width = height * preset.width / preset.height
+        }
+        var clamped = view.clampCropPair(width, height, true)
+        cropWidthField.text = String(clamped.width)
+        cropHeightField.text = String(clamped.height)
         view.applyCropAnchor()
+        cropPreset.currentIndex = index
         draftDebounce.restart()
     }
 
@@ -707,6 +1182,13 @@ Item {
         if (!(width > 0) || !(height > 0)) return false
         var x = parseInt(cropX.text)
         var y = parseInt(cropY.text)
+        if (view.cropGrow()) {
+            // Core's grow rule: the canvas may reach outside, but the rectangle
+            // must still cover part of the picture — a border, not a blank page.
+            return x + width > 0 && y + height > 0
+                    && x < view.documentWidth && y < view.documentHeight
+                    && width <= 20000 && height <= 20000
+        }
         return x >= 0 && y >= 0
                 && x + width <= view.documentWidth
                 && y + height <= view.documentHeight
@@ -722,13 +1204,6 @@ Item {
             width: cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0,
             height: cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
         }
-    }
-
-    /// The chosen ratio as width / height, or 0 when the sides are free.
-    function cropRatioAspect() {
-        var factor = view.ratioFactor(view.cropRatio)
-        if (!factor || !(factor.width > 0) || !(factor.height > 0)) return 0
-        return factor.width / factor.height
     }
 
     function cropHasRect() {
@@ -750,79 +1225,41 @@ Item {
         return view.cropFieldsValid() && view.cropChanged()
     }
 
-    /// Reshape the rectangle to the newly chosen ratio, keeping the current
-    /// width as the starting point and shrinking both sides if the document
-    /// cannot hold that shape. A fixed 16:9 picked on a portrait document
-    /// therefore lands as the largest 16:9 rectangle that fits, not as a
-    /// rectangle Core would reject.
+    /// Reshape the rectangle to the chosen ratio, keeping the current width as
+    /// the starting point and shrinking both sides if the document cannot hold
+    /// that shape. A fixed 16:9 picked on a portrait document therefore lands as
+    /// the largest 16:9 rectangle that fits, not as a rectangle Core would
+    /// reject. With a locked side, that side is what the shape is fitted to.
     function reshapeCropToRatio() {
         if (!view.hasDocument) return
-        var factor = view.ratioFactor(view.cropRatio)
-        if (!factor) {
-            view.applyCropAnchor()
-            cropPreset.currentIndex = view.matchingCropPreset()
-            return
-        }
-        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
-        if (!(width > 0)) width = view.documentWidth
-        var height = width * factor.height / factor.width
-        var scale = Math.min(1, view.documentWidth / width,
-                             view.documentHeight / height)
-        width = Math.max(1, Math.round(width * scale))
-        height = Math.max(1, Math.round(width * factor.height / factor.width))
-        if (height > view.documentHeight) {
-            height = view.documentHeight
-            width = Math.max(1, Math.round(height * factor.width / factor.height))
-        }
-        if (width > view.documentWidth) {
-            width = view.documentWidth
-            height = Math.max(1, Math.round(width * factor.height / factor.width))
-        }
-        cropWidthField.text = String(width)
-        cropHeightField.text = String(height)
-        view.applyCropAnchor()
-        cropPreset.currentIndex = view.matchingCropPreset()
-        draftDebounce.restart()
-    }
-
-    /// The other orientation of a named ratio; an empty answer means the shape
-    /// has no named counterpart in the short list and is kept as "current".
-    function swappedRatioKey(key) {
-        if (key === "1:1") return "1:1"
-        if (key === "4:3") return "3:4"
-        if (key === "3:4") return "4:3"
-        if (key === "16:9") return "9:16"
-        if (key === "9:16") return "16:9"
-        return ""
+        view.applyCropRatio()
     }
 
     /// Turn the rectangle through 90° around its own centre — the crop-tool
     /// "swap orientation" every common editor offers, useful for a portrait
     /// cut out of a landscape frame and back. The pair stays inside the
-    /// document; a named ratio moves to its counterpart, and a free, original
-    /// or captured shape becomes "Keep current ratio" for the new pair.
+    /// document; a chosen ratio turns with it. A lock on either axis or on the
+    /// ratio would be changed by the turn, so swap is refused then.
     function swapCropOrientation() {
         if (!view.documentReady || !view.cropHasRect()) return
+        if (view.cropLockWidth || view.cropLockHeight || view.cropLockRatio) return
         var rect = view.cropRect
         var centreX = rect.x + rect.width / 2
         var centreY = rect.y + rect.height / 2
         var width = Math.max(1, rect.height)
         var height = Math.max(1, rect.width)
-        var scale = Math.min(1, view.documentWidth / width,
-                             view.documentHeight / height)
+        var scale = view.cropGrow()
+                ? Math.min(1, 20000 / width, 20000 / height)
+                : Math.min(1, view.documentWidth / width, view.documentHeight / height)
         width = Math.max(1, Math.round(width * scale))
         height = Math.max(1, Math.round(height * scale))
         view.setCropRect(Math.round(centreX - width / 2),
                          Math.round(centreY - height / 2), width, height)
-        if (view.cropRatio === "free") return
-        var swapped = view.swappedRatioKey(view.cropRatio)
-        if (swapped) {
-            view.cropRatio = swapped
-        } else {
-            view.cropCurrentRatio = { width: width, height: height }
-            view.cropRatio = "current"
+        var pair = view.cropRatioPair()
+        if (pair) {
+            view.cropRatio = view.reducedRatio(pair.height, pair.width)
+            view.syncCropRatioField()
         }
-        cropRatioBox.currentIndex = view.cropRatioIndex
         cropPreset.currentIndex = view.matchingCropPreset()
     }
 
@@ -836,24 +1273,36 @@ Item {
 
     /// Alt+arrow resize keeps the centre and, with a ratio chosen, the shape:
     /// a width step derives the height (and the other way round), then both
-    /// shrink together if the document cannot hold them.
+    /// shrink together if the document cannot hold them. A locked side takes
+    /// the other axis instead; two locks make the shape fixed, so the step is
+    /// refused.
     function resizeCropBy(deltaWidth, deltaHeight) {
-        if (!view.cropHasRect()) return
+        if (!view.cropHasRect() || !view.cropResizable) return
         var rect = view.cropRect
-        var width = Math.max(1, rect.width + deltaWidth)
-        var height = Math.max(1, rect.height + deltaHeight)
         var aspect = view.cropRatioAspect()
-        if (aspect > 0) {
-            if (deltaWidth !== 0) height = Math.max(1, Math.round(width / aspect))
-            else if (deltaHeight !== 0) width = Math.max(1, Math.round(height * aspect))
+        var width = rect.width
+        var height = rect.height
+        if (view.cropLockWidth) {
+            height = Math.max(1, height + deltaHeight)
+        } else if (view.cropLockHeight) {
+            width = Math.max(1, width + deltaWidth)
+        } else {
+            width = Math.max(1, width + deltaWidth)
+            height = Math.max(1, height + deltaHeight)
+            if (aspect > 0) {
+                if (deltaWidth !== 0) height = Math.max(1, Math.round(width / aspect))
+                else if (deltaHeight !== 0) width = Math.max(1, Math.round(height * aspect))
+            }
         }
-        var scale = Math.min(1, view.documentWidth / width,
-                             view.documentHeight / height)
-        width = Math.max(1, Math.round(width * scale))
-        height = Math.max(1, Math.round(height * scale))
+        var clamped = view.clampCropPair(width, height, aspect > 0)
+        width = clamped.width
+        height = clamped.height
         var centreX = rect.x + rect.width / 2
         var centreY = rect.y + rect.height / 2
         view.setCropRect(centreX - width / 2, centreY - height / 2, width, height)
+        if (aspect > 0 && !view.cropLockRatio && (view.cropLockWidth || view.cropLockHeight)) {
+            view.setCropRatioFromPair(width, height)
+        }
     }
 
     function clearCropFields() {
@@ -864,36 +1313,99 @@ Item {
         cropPreset.currentIndex = -1
     }
 
-    /// Apply is the only place a crop reaches Core. The tool stays armed and
-    /// the next document size seeds a fresh frame; live preview is put down so
-    /// the frame, not a draft of the whole result, is what returns.
+    /// Opening Crop never shows a frame: the rectangle is the user's answer,
+    /// drawn on the picture, clicked into place, or typed in the panel. Options
+    /// that are not about the rectangle (ratio, mode, fill, anchor) survive a
+    /// tool switch, so returning to Crop does not lose a colour or a mode.
+    function enterCropTool() {
+        view.clearCropFields()
+        view.releaseCropLocks()
+        view.syncCropRatioField()
+    }
+
+    /// A new rectangle is a new answer, not an edit of the old one, so drawing
+    /// or clicking one releases the three locks: they described a shape that
+    /// no longer exists. Clear and a landed Apply do the same.
+    function releaseCropLocks() {
+        view.cropLockWidth = false
+        view.cropLockHeight = false
+        view.cropLockRatio = false
+        view.syncCropLockButtons()
+    }
+
+    /// A click with no drag is not a zero-size crop: it asks for the whole
+    /// picture, which is the one rectangle a frame can always start from.
+    function createFullCropFrame() {
+        if (!view.documentReady) return
+        view.releaseCropLocks()
+        view.setCropRect(0, 0, view.documentWidth, view.documentHeight)
+    }
+
+    /// Clear puts the frame down and returns to the state Crop opens in. The
+    /// locks go with it, because they were about the rectangle; the mode, the
+    /// border colour, the ratio and the anchor stay.
+    function clearCropFrame() {
+        view.clearCropFields()
+        view.releaseCropLocks()
+        view.syncCropRatioField()
+    }
+
+    /// Reset puts the panel's options back to their defaults and leaves the
+    /// rectangle where it is. The preset goes back to Custom even when the pair
+    /// still matches a preset, because Reset is a statement about the panel,
+    /// not about the size.
+    function resetCropOptions() {
+        view.cropRatio = "free"
+        view.cropAnchor = "center"
+        view.cropMode = "center"
+        view.cropFill = "transparent"
+        view.cropFillColor = "#808080"
+        view.cropLockWidth = false
+        view.cropLockHeight = false
+        view.cropLockRatio = false
+        cropModeBox.currentIndex = view.cropModeIndex()
+        cropFillBox.currentIndex = view.cropFillIndex()
+        cropPreset.currentIndex = -1
+        view.syncCropLockButtons()
+        view.syncCropRatioField()
+    }
+
+    /// Apply is the only place a crop reaches Core. The result's own size is
+    /// recorded first, so the view can tell a landed cut from a refused one:
+    /// the fresh frame covers the whole result, and the next crop starts from
+    /// what the user can see rather than from pixels that are gone.
     function applyCrop() {
         if (!view.cropCanApply()) return
         var rect = view.cropRect
-        // Put the fields down *before* the command, not after: the gateway
-        // publishes the cropped document before `command()` returns, and the
-        // document-size handlers seed a fresh frame only while the fields are
-        // empty. Clearing afterwards left the tool armed with no frame at all.
-        view.cropLivePreview = false
-        view.clearCropFields()
+        var fill = view.cropFillForCommand()
+        view.pendingCropResult = { width: rect.width, height: rect.height }
         view.command({
             type: "editor_crop",
             x: rect.x,
             y: rect.y,
             width: rect.width,
-            height: rect.height
+            height: rect.height,
+            fill: fill,
+            fill_alpha: fill === null ? 255 : view.cropFillAlpha()
         })
+        // The real gateway publishes the new document before `command()`
+        // returns; the QML suite delivers it on its next state publish, which
+        // calls this again from the size handler.
+        view.settleAppliedCrop()
     }
 
-    /// Reset is the starting rectangle again — the default free ratio's frame
-    /// at four fifths of the picture, centred — not an empty form: a crop tool
-    /// always has a frame to drag.
-    function resetCrop() {
-        view.cropRatio = "free"
-        view.cropAnchor = "center"
-        cropRatioBox.currentIndex = view.cropRatioIndex
-        view.clearCropFields()
-        view.seedCropFrame(true)
+    /// Turn the landed cut into a frame over the whole new picture. A cut that
+    /// was refused leaves the old size, so the recorded result never matches
+    /// and nothing moves. The three locks described the rectangle that is now
+    /// gone, so they are released with it.
+    function settleAppliedCrop() {
+        if (!view.pendingCropResult) return false
+        if (view.documentWidth !== view.pendingCropResult.width
+                || view.documentHeight !== view.pendingCropResult.height) return false
+        view.pendingCropResult = null
+        view.releaseCropLocks()
+        view.setCropRect(0, 0, view.documentWidth, view.documentHeight)
+        return true
     }
 
     /// A drag on the empty canvas builds a rectangle from the press to the
@@ -903,21 +1415,35 @@ Item {
         if (!view.documentReady) return
         var documentWidth = view.documentWidth
         var documentHeight = view.documentHeight
-        var startX = Math.max(0, Math.min(documentWidth, view.hostToDocX(startHostX)))
-        var startY = Math.max(0, Math.min(documentHeight, view.hostToDocY(startHostY)))
-        var endX = Math.max(0, Math.min(documentWidth, view.hostToDocX(hostX)))
-        var endY = Math.max(0, Math.min(documentHeight, view.hostToDocY(hostY)))
+        var startX = view.hostToDocX(startHostX)
+        var startY = view.hostToDocY(startHostY)
+        var endX = view.hostToDocX(hostX)
+        var endY = view.hostToDocY(hostY)
+        if (!view.cropGrow()) {
+            startX = Math.max(0, Math.min(documentWidth, startX))
+            startY = Math.max(0, Math.min(documentHeight, startY))
+            endX = Math.max(0, Math.min(documentWidth, endX))
+            endY = Math.max(0, Math.min(documentHeight, endY))
+        }
         var width = Math.max(1, Math.abs(endX - startX))
         var height = Math.max(1, Math.abs(endY - startY))
         var aspect = view.cropRatioAspect()
         if (aspect > 0) {
             if (width / height > aspect) width = height * aspect
             else height = width / aspect
-            var maxWidth = endX >= startX ? documentWidth - startX : startX
-            var maxHeight = endY >= startY ? documentHeight - startY : startY
-            var scale = Math.min(1, maxWidth / width, maxHeight / height)
-            width *= scale
-            height *= scale
+            if (view.cropGrow()) {
+                // The canvas can grow, so only the protocol's own size ceiling
+                // constrains a ratio-locked create-drag.
+                var cap = Math.min(1, 20000 / width, 20000 / height)
+                width *= cap
+                height *= cap
+            } else {
+                var maxWidth = endX >= startX ? documentWidth - startX : startX
+                var maxHeight = endY >= startY ? documentHeight - startY : startY
+                var scale = Math.min(1, maxWidth / width, maxHeight / height)
+                width *= scale
+                height *= scale
+            }
         }
         var x = endX >= startX ? startX : startX - width
         var y = endY >= startY ? startY : startY - height
@@ -956,41 +1482,25 @@ Item {
         { key: "bottom_right", column: 2, row: 2 }
     ]
 
-    /// Place the starting frame when Crop is picked: the largest rectangle of
-    /// the chosen ratio inside the picture, at four fifths of that size so the
-    /// picture stays visible around it and a new rectangle can be drawn inside.
-    /// It writes the same four fields the command is built from; an existing
-    /// rectangle (typed, a preset, an anchor) is never overwritten unless
-    /// `force` is set by Reset.
-    function seedCropFrame(force) {
-        if (!view.documentReady) return false
-        if (!force && cropWidthField.acceptableInput
-                && parseInt(cropWidthField.text) > 0) return false
-        var width = view.documentWidth
-        var height = view.documentHeight
-        var factor = view.ratioFactor(view.cropRatio)
-        if (factor && factor.width > 0 && factor.height > 0) {
-            var aspect = factor.width / factor.height
-            if (width / height > aspect) width = height * aspect
-            else height = width / aspect
-        }
-        width = Math.max(1, Math.round(width * 0.8))
-        height = Math.max(1, Math.round(height * 0.8))
-        view.setCropRect(Math.round((view.documentWidth - width) / 2),
-                         Math.round((view.documentHeight - height) / 2),
-                         width, height)
-        return true
-    }
-
     /// Write the four fields from a rectangle in document pixels, rounded and
-    /// clamped so it always describes a legal, at-least-one-pixel crop.
+    /// clamped so it always describes a legal, at-least-one-pixel crop. In
+    /// `grow` mode the rectangle may reach outside the picture on every side,
+    /// so only the 1 px overlap with the picture is enforced there.
     function setCropRect(x, y, width, height) {
-        var maxWidth = view.documentWidth
-        var maxHeight = view.documentHeight
+        var grow = view.cropGrow()
+        var maxWidth = grow ? 20000 : view.documentWidth
+        var maxHeight = grow ? 20000 : view.documentHeight
         width = Math.max(1, Math.min(maxWidth, Math.round(width)))
         height = Math.max(1, Math.min(maxHeight, Math.round(height)))
-        x = Math.max(0, Math.min(maxWidth - width, Math.round(x)))
-        y = Math.max(0, Math.min(maxHeight - height, Math.round(y)))
+        if (grow) {
+            x = Math.min(view.documentWidth - 1,
+                         Math.max(1 - width, Math.round(x)))
+            y = Math.min(view.documentHeight - 1,
+                         Math.max(1 - height, Math.round(y)))
+        } else {
+            x = Math.max(0, Math.min(view.documentWidth - width, Math.round(x)))
+            y = Math.max(0, Math.min(view.documentHeight - height, Math.round(y)))
+        }
         cropX.text = String(x)
         cropY.text = String(y)
         cropWidthField.text = String(width)
@@ -1007,16 +1517,65 @@ Item {
     /// around the rectangle's centre — the shape is never broken by a drag.
     function dragCropHandle(column, row, hostX, hostY) {
         if (!view.cropFrameShown) return
+        if (!view.cropResizable) return
         var rect = view.cropRect
         var documentWidth = view.documentWidth
         var documentHeight = view.documentHeight
+        var grow = view.cropGrow()
         var x = rect.x
         var y = rect.y
         var width = rect.width
         var height = rect.height
-        var pointerX = Math.max(0, Math.min(documentWidth, view.hostToDocX(hostX)))
-        var pointerY = Math.max(0, Math.min(documentHeight, view.hostToDocY(hostY)))
+        var pointerX = view.hostToDocX(hostX)
+        var pointerY = view.hostToDocY(hostY)
+        if (!grow) {
+            pointerX = Math.max(0, Math.min(documentWidth, pointerX))
+            pointerY = Math.max(0, Math.min(documentHeight, pointerY))
+        }
+        // One locked axis leaves the other handle free: a left/right side is
+        // pinned with Width, and a top/bottom side is pinned with Height. The
+        // corners follow whichever axis is still free.
+        if (view.cropLockWidth || view.cropLockHeight) {
+            if (view.cropLockWidth) {
+                if (row === 1) return
+                if (row === 0) {
+                    var top = grow
+                            ? Math.min(y + height - 1, pointerY)
+                            : Math.max(0, Math.min(y + height - 1, pointerY))
+                    height = y + height - top
+                    y = top
+                } else {
+                    var bottom = grow
+                            ? Math.max(y + 1, pointerY)
+                            : Math.max(y + 1, Math.min(documentHeight, pointerY))
+                    height = bottom - y
+                }
+            } else {
+                if (column === 1) return
+                if (column === 0) {
+                    var left = grow
+                            ? Math.min(x + width - 1, pointerX)
+                            : Math.max(0, Math.min(x + width - 1, pointerX))
+                    width = x + width - left
+                    x = left
+                } else {
+                    var right = grow
+                            ? Math.max(x + 1, pointerX)
+                            : Math.max(x + 1, Math.min(documentWidth, pointerX))
+                    width = right - x
+                }
+            }
+            view.setCropRect(x, y, width, height)
+            if (view.cropRatio !== "free") {
+                view.setCropRatioFromPair(parseInt(cropWidthField.text),
+                                          parseInt(cropHeightField.text))
+            }
+            return
+        }
         var aspect = view.cropRatioAspect()
+        // A growing rectangle has no picture edge to stop at; only the
+        // protocol's own ceiling constrains it.
+        var sideLimit = 20000
 
         if (aspect > 0) {
             if (column !== 1 && row !== 1) {
@@ -1027,8 +1586,12 @@ Item {
                 var rawHeight = Math.max(1, Math.abs(pointerY - fixedY))
                 if (rawWidth / rawHeight > aspect) rawWidth = rawHeight * aspect
                 else rawHeight = rawWidth / aspect
-                var limitWidth = column === 0 ? fixedX : documentWidth - fixedX
-                var limitHeight = row === 0 ? fixedY : documentHeight - fixedY
+                var limitWidth = grow
+                        ? sideLimit
+                        : (column === 0 ? fixedX : documentWidth - fixedX)
+                var limitHeight = grow
+                        ? sideLimit
+                        : (row === 0 ? fixedY : documentHeight - fixedY)
                 var scale = Math.min(1, limitWidth / rawWidth, limitHeight / rawHeight)
                 width = Math.max(1, Math.round(rawWidth * scale))
                 height = Math.max(1, Math.round(rawHeight * scale))
@@ -1041,14 +1604,18 @@ Item {
                 var centreY = y + height / 2
                 var edgeWidth = Math.max(1, Math.abs(pointerX - fixedXSide))
                 var edgeHeight = edgeWidth / aspect
-                var edgeLimitWidth = column === 0 ? fixedXSide : documentWidth - fixedXSide
+                var edgeLimitWidth = grow
+                        ? sideLimit
+                        : (column === 0 ? fixedXSide : documentWidth - fixedXSide)
                 var edgeScale = Math.min(1, edgeLimitWidth / edgeWidth,
-                                         documentHeight / edgeHeight)
+                                         (grow ? sideLimit : documentHeight) / edgeHeight)
                 width = Math.max(1, Math.round(edgeWidth * edgeScale))
                 height = Math.max(1, Math.round(edgeHeight * edgeScale))
                 x = column === 0 ? Math.round(fixedXSide - width) : Math.round(fixedXSide)
-                y = Math.round(Math.max(0, Math.min(documentHeight - height,
-                                                    centreY - height / 2)))
+                y = grow
+                        ? Math.round(centreY - height / 2)
+                        : Math.round(Math.max(0, Math.min(documentHeight - height,
+                                                            centreY - height / 2)))
             } else {
                 // Top or bottom side: the opposite side stays, the width grows
                 // around the rectangle's horizontal centre.
@@ -1056,33 +1623,45 @@ Item {
                 var centreX = x + width / 2
                 var edgeHeightSide = Math.max(1, Math.abs(pointerY - fixedYSide))
                 var edgeWidthSide = edgeHeightSide * aspect
-                var edgeLimitHeight = row === 0 ? fixedYSide : documentHeight - fixedYSide
+                var edgeLimitHeight = grow
+                        ? sideLimit
+                        : (row === 0 ? fixedYSide : documentHeight - fixedYSide)
                 var edgeScaleSide = Math.min(1, edgeLimitHeight / edgeHeightSide,
-                                             documentWidth / edgeWidthSide)
+                                             (grow ? sideLimit : documentWidth) / edgeWidthSide)
                 height = Math.max(1, Math.round(edgeHeightSide * edgeScaleSide))
                 width = Math.max(1, Math.round(edgeWidthSide * edgeScaleSide))
                 y = row === 0 ? Math.round(fixedYSide - height) : Math.round(fixedYSide)
-                x = Math.round(Math.max(0, Math.min(documentWidth - width,
-                                                    centreX - width / 2)))
+                x = grow
+                        ? Math.round(centreX - width / 2)
+                        : Math.round(Math.max(0, Math.min(documentWidth - width,
+                                                            centreX - width / 2)))
             }
             view.setCropRect(x, y, width, height)
             return
         }
 
         if (column === 0) {
-            var left = Math.max(0, Math.min(x + width - 1, pointerX))
+            var left = grow
+                    ? Math.min(x + width - 1, pointerX)
+                    : Math.max(0, Math.min(x + width - 1, pointerX))
             width = x + width - left
             x = left
         } else if (column === 2) {
-            var right = Math.max(x + 1, Math.min(documentWidth, pointerX))
+            var right = grow
+                    ? Math.max(x + 1, pointerX)
+                    : Math.max(x + 1, Math.min(documentWidth, pointerX))
             width = right - x
         }
         if (row === 0) {
-            var top = Math.max(0, Math.min(y + height - 1, pointerY))
+            var top = grow
+                    ? Math.min(y + height - 1, pointerY)
+                    : Math.max(0, Math.min(y + height - 1, pointerY))
             height = y + height - top
             y = top
         } else if (row === 2) {
-            var bottom = Math.max(y + 1, Math.min(documentHeight, pointerY))
+            var bottom = grow
+                    ? Math.max(y + 1, pointerY)
+                    : Math.max(y + 1, Math.min(documentHeight, pointerY))
             height = bottom - y
         }
         view.setCropRect(x, y, width, height)
@@ -1090,22 +1669,14 @@ Item {
 
     /// Ask Core to render the selected tool's draft without applying it. The
     /// debounce keeps a typed width from spawning a render per key: the previous
-    /// draft stays on screen until the newest one lands. The draft carries its
-    /// tool, so a switch cannot paint the other tool's result. Resize's draft is
-    /// asked for by its dialog, which is the surface that owns those fields.
+    /// draft stays on screen until the newest one lands. Crop no longer has a
+    /// draft: its panel is the rectangle, and the canvas draws that rectangle
+    /// directly. Transform still previews the straightened frame before Apply.
     function requestDraft() {
         draftDebounce.stop()
         if (!view.hasDocument) return
-        if (view.tool === "crop" && view.cropLivePreview && view.cropFieldsValid()) {
-            view.command({
-                type: "editor_crop_preview",
-                x: parseInt(cropX.text),
-                y: parseInt(cropY.text),
-                width: parseInt(cropWidthField.text),
-                height: parseInt(cropHeightField.text)
-            })
-        } else if (view.tool === "transform" && view.transformLivePreview
-                   && view.transformUsable() && view.transformChanged()) {
+        if (view.tool === "transform" && view.transformLivePreview
+                && view.transformUsable() && view.transformChanged()) {
             view.command({
                 type: "editor_transform_preview",
                 corners: view.transformCorners
@@ -1266,7 +1837,6 @@ Item {
     readonly property var previewDraft: {
         if (!editor || !editor.previewDraft) return null
         var draft = editor.previewDraft
-        if (tool === "crop" && cropLivePreview && draft.kind === "crop") return draft
         if (tool === "transform" && transformLivePreview
                 && draft.kind === "transform") return draft
         return null
@@ -1414,6 +1984,8 @@ Item {
         view.zoom = 1
         view.offsetX = 0
         view.offsetY = 0
+        // A different document is not the result of the crop that was pending.
+        view.pendingCropResult = null
         if (view.hostReady) {
             view.fit()
         }
@@ -1424,50 +1996,57 @@ Item {
     // hand-chosen zoom alone (only re-clamping it to the new edges).
     onDisplayedWidthChanged: view.refitOrClamp()
     onDisplayedHeightChanged: view.refitOrClamp()
-    // A tool switch keeps one live preview per tool: the newly selected tool's
-    // toggle decides whether Core is asked for a draft of its own. Arming
-    // Transform starts from the document's own frame, so opening the tool never
-    // carries a quad from a document that is no longer there. Arming Crop always
-    // starts from a frame — the typed rectangle if one is already there, the
-    // current ratio's fit otherwise — because a crop tool with no frame is a
-    // dead panel and a dead canvas.
+    // A tool switch keeps one live preview per tool. Arming Transform starts
+    // from the document's own frame, so opening the tool never carries a quad
+    // from a document that is no longer there. Arming Crop puts the rectangle
+    // down: the user draws one, clicks the picture, or types a size — a crop
+    // tool does not guess which part of the picture is wanted.
     onToolChanged: {
         draftDebounce.restart()
         if (view.tool === "transform") view.resetTransformCorners()
-        if (view.tool === "crop") view.seedCropFrame()
+        if (view.tool === "crop") view.enterCropTool()
     }
+    onCropRatioChanged: view.syncCropRatioField()
     // The document changing size (another edit, a new file, an applied crop)
     // invalidates a quad expressed in its pixels, and makes the old crop
-    // rectangle describe pixels that are gone. A frame is re-seeded only when
-    // the fields are empty: typing must never be overwritten by a late edit.
-    // A state publish changes width and height in one write but QML emits one
-    // signal at a time, so the seed waits one event-loop turn: fitting the
-    // frame from the width change alone would use the previous height.
+    // rectangle describe pixels that are gone. A frame that no longer fits is
+    // pulled inside; with no frame there is nothing to pull, and the view stays
+    // in the draw-new state. A state publish changes width and height in one
+    // write but QML emits one signal at a time, so the refit waits one
+    // event-loop turn: fitting from the width change alone would use the
+    // previous height.
     onDocumentWidthChanged: {
         if (view.tool === "transform") view.resetTransformCorners()
-        if (view.tool === "crop") cropSeedDebounce.restart()
+        if (view.tool === "crop") cropFitDebounce.restart()
     }
     onDocumentHeightChanged: {
         if (view.tool === "transform") view.resetTransformCorners()
-        if (view.tool === "crop") cropSeedDebounce.restart()
+        if (view.tool === "crop") cropFitDebounce.restart()
     }
 
     Timer {
-        id: cropSeedDebounce
+        id: cropFitDebounce
         interval: 0
         onTriggered: if (view.tool === "crop") view.refitCropAfterDocumentChange()
     }
 
     /// After another edit changed the document's size, a rectangle that no
-    /// longer fits names pixels that are gone. Clamping its sides one by one
-    /// would break a chosen ratio, so an unusable rectangle is replaced by the
-    /// starting frame (the chosen ratio at 80 % of the new picture); a rectangle
-    /// that still fits, and anything the user is typing, is left as it is.
+    /// longer fits names pixels that are gone. Pull it inside in one move, so a
+    /// chosen ratio is not broken side by side; a rectangle that still fits is
+    /// left where the user put it. No frame means the draw-new state stays.
     function refitCropAfterDocumentChange() {
-        if (!view.documentReady) return
-        if (!view.cropHasRect() || !view.cropFieldsValid()) {
-            view.seedCropFrame(true)
-        }
+        // A landed cut is not a rectangle to pull inside: the frame covers the
+        // whole result.
+        if (view.settleAppliedCrop()) return
+        if (!view.documentReady || !view.cropHasRect()) return
+        if (view.cropFieldsValid()) return
+        var rect = view.cropRect
+        var pair = view.clampCropPair(rect.width, rect.height,
+                                      view.cropRatio !== "free")
+        view.setCropRect(Math.max(0, Math.min(rect.x, view.documentWidth - pair.width)),
+                         Math.max(0, Math.min(rect.y, view.documentHeight - pair.height)),
+                         pair.width, pair.height)
+        if (view.cropRatio !== "free") view.applyCropRatio()
     }
 
     /// The debounce behind the live preview: typing a width must not render the
@@ -2079,17 +2658,86 @@ Item {
                             color: "#000000"
                             opacity: 0.45
                         }
+
+                        // Grow: the part of the frame that is not the picture,
+                        // painted with the colour the new margin will have. It
+                        // is the fill's own preview, so a black border looks
+                        // black before Apply and a transparent one reads as an
+                        // empty strip rather than a solid swatch.
+                        readonly property real growOpacity:
+                            view.cropFill === "transparent" ? 0.5 : 0.9
+                        readonly property real innerTop:
+                            Math.max(cropShade.frameTop, cropShade.pictureY)
+                        readonly property real innerBottom:
+                            Math.min(cropShade.frameBottom,
+                                     cropShade.pictureY + cropShade.pictureHeight)
+                        readonly property real innerLeft:
+                            Math.max(cropShade.frameLeft, cropShade.pictureX)
+                        readonly property real innerRight:
+                            Math.min(cropShade.frameRight,
+                                     cropShade.pictureX + cropShade.pictureWidth)
+
+                        Rectangle {
+                            objectName: "cropGrowTop"
+                            visible: view.cropGrow()
+                            x: cropShade.frameLeft
+                            y: cropShade.frameTop
+                            width: Math.max(0, cropShade.frameRight - cropShade.frameLeft)
+                            height: Math.max(0, Math.min(cropShade.frameBottom,
+                                                        cropShade.pictureY)
+                                                - cropShade.frameTop)
+                            color: view.cropFillPreviewColor()
+                            opacity: cropShade.growOpacity
+                        }
+                        Rectangle {
+                            objectName: "cropGrowBottom"
+                            visible: view.cropGrow()
+                            x: cropShade.frameLeft
+                            y: Math.max(cropShade.frameTop, cropShade.pictureY
+                                                          + cropShade.pictureHeight)
+                            width: Math.max(0, cropShade.frameRight - cropShade.frameLeft)
+                            height: Math.max(0, cropShade.frameBottom
+                                                - Math.max(cropShade.frameTop,
+                                                           cropShade.pictureY
+                                                           + cropShade.pictureHeight))
+                            color: view.cropFillPreviewColor()
+                            opacity: cropShade.growOpacity
+                        }
+                        Rectangle {
+                            objectName: "cropGrowLeft"
+                            visible: view.cropGrow()
+                            x: cropShade.frameLeft
+                            y: cropShade.innerTop
+                            width: Math.max(0, cropShade.innerLeft - cropShade.frameLeft)
+                            height: Math.max(0, cropShade.innerBottom - cropShade.innerTop)
+                            color: view.cropFillPreviewColor()
+                            opacity: cropShade.growOpacity
+                        }
+                        Rectangle {
+                            objectName: "cropGrowRight"
+                            visible: view.cropGrow()
+                            x: cropShade.innerRight
+                            y: cropShade.innerTop
+                            width: Math.max(0, cropShade.frameRight - cropShade.innerRight)
+                            height: Math.max(0, cropShade.innerBottom - cropShade.innerTop)
+                            color: view.cropFillPreviewColor()
+                            opacity: cropShade.growOpacity
+                        }
                     }
 
-                    // Drawing a new rectangle starts on the empty canvas. The
-                    // frame itself is declared after this area, so a press on
-                    // the frame moves it instead of starting a new one.
+                    // Drawing a new rectangle is the no-frame state: a drag
+                    // builds one from the press to the pointer, a click (a
+                    // press with no travel) asks for the whole picture. The
+                    // frame itself is declared after this area, so once it
+                    // exists a press inside it moves it; a press outside does
+                    // nothing until Clear puts the frame down again.
                     MouseArea {
                         id: cropCreateArea
                         objectName: "cropCreateArea"
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton
                         cursorShape: Qt.CrossCursor
+                        enabled: !view.cropHasRect()
                         property real startHostX: 0
                         property real startHostY: 0
                         property bool dragging: false
@@ -2100,6 +2748,9 @@ Item {
                             startHostY = mouse.y
                             dragging = true
                             moved = false
+                            // The new frame is a new answer; the locks that
+                            // described the old one go with it.
+                            view.releaseCropLocks()
                         }
                         onPositionChanged: function(mouse) {
                             if (!dragging) return
@@ -2112,7 +2763,10 @@ Item {
                             view.dragCropCreate(startHostX, startHostY,
                                                 mouse.x, mouse.y)
                         }
-                        onReleased: dragging = false
+                        onReleased: {
+                            if (dragging && !moved) view.createFullCropFrame()
+                            dragging = false
+                        }
                     }
 
                     Rectangle {
@@ -2864,10 +3518,11 @@ Item {
                     }
 
                     // ------------------------------- crop/transform: tool options
-                    // Crop's rectangle has a size and a place; Resize asked the
-                    // same two-number question but as a dialog, because a size
-                    // is a decision, not a mode. Reset clears the fields without
-                    // sending anything.
+                    // Crop's rectangle is the user's answer: four numbers, a
+                    // shape and a place. Width, Height and Ratio each carry a
+                    // lock; the locks decide which of the three is an input and
+                    // which is derived from the other two. Resize is a dialog
+                    // of its own, because a size is a decision, not a mode.
                     ColumnLayout {
                         Layout.fillWidth: true
                         visible: view.tool === "crop" || view.tool === "transform"
@@ -2882,38 +3537,42 @@ Item {
 
                             Label {
                                 text: qsTr("X")
-                                visible: view.tool === "crop"
                                 color: view.theme.textMuted
                             }
                             TextField {
                                 id: cropX
                                 objectName: "cropX"
                                 Layout.fillWidth: true
-                                visible: view.tool === "crop"
                                 font.pixelSize: 12
                                 text: "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator { bottom: 0; top: 20000 }
+                                validator: IntValidator {
+                                    bottom: view.cropGrow() ? -20000 : 0
+                                    top: 20000
+                                }
                             }
-                            // X/Y have no steppers; the cell keeps the three
-                            // columns aligned without leaving a gap.
-                            Item { visible: view.tool === "crop" }
+                            // A place has no lock: the locks are about the
+                            // shape, not about where it sits.
+                            Item {}
+
                             Label {
                                 text: qsTr("Y")
-                                visible: view.tool === "crop"
                                 color: view.theme.textMuted
                             }
                             TextField {
                                 id: cropY
                                 objectName: "cropY"
                                 Layout.fillWidth: true
-                                visible: view.tool === "crop"
                                 font.pixelSize: 12
                                 text: "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
-                                validator: IntValidator { bottom: 0; top: 20000 }
+                                validator: IntValidator {
+                                    bottom: view.cropGrow() ? -20000 : 0
+                                    top: 20000
+                                }
                             }
-                            Item { visible: view.tool === "crop" }
+                            Item {}
+
                             Label {
                                 text: qsTr("Width")
                                 color: view.theme.textMuted
@@ -2926,55 +3585,20 @@ Item {
                                 placeholderText: view.hasDocument ? String(view.editor.width) : "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
-                                onTextEdited: {
-                                    view.linkHeightFromWidth()
-                                    draftDebounce.restart()
-                                }
+                                enabled: view.cropWidthEditable
+                                onTextEdited: view.linkHeightFromWidth()
                             }
-                            // The steppers are the small +/- pair every size
-                            // field has: one pixel per press, auto-repeat for a
-                            // held button, and the linked side follows because
-                            // this is the same path as typing. A single column
-                            // keeps them inside the 260 px panel next to a
-                            // full-width field.
-                            Column {
-                                spacing: 0
+                            CropLockButton {
+                                id: cropLockWidthButton
+                                objectName: "cropLockWidth"
+                                checked: view.cropLockWidth
+                                enabled: view.documentReady
+                                Accessible.name: qsTr("Lock width")
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Lock width")
+                                onToggled: view.setCropLock("width", checked)
+                            }
 
-                                Button {
-                                    objectName: "cropWidthStepUp"
-                                    implicitWidth: 24
-                                    implicitHeight: 16
-                                    padding: 0
-                                    font.pixelSize: 9
-                                    text: "\u25b2"
-                                    enabled: view.documentReady
-                                    focusPolicy: Qt.NoFocus
-                                    autoRepeat: true
-                                    autoRepeatDelay: 350
-                                    autoRepeatInterval: 60
-                                    Accessible.name: qsTr("Increase width")
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: qsTr("Increase width")
-                                    onClicked: view.stepCropField(cropWidthField, 1, true)
-                                }
-                                Button {
-                                    objectName: "cropWidthStepDown"
-                                    implicitWidth: 24
-                                    implicitHeight: 16
-                                    padding: 0
-                                    font.pixelSize: 9
-                                    text: "\u25bc"
-                                    enabled: view.documentReady
-                                    focusPolicy: Qt.NoFocus
-                                    autoRepeat: true
-                                    autoRepeatDelay: 350
-                                    autoRepeatInterval: 60
-                                    Accessible.name: qsTr("Decrease width")
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: qsTr("Decrease width")
-                                    onClicked: view.stepCropField(cropWidthField, -1, true)
-                                }
-                            }
                             Label {
                                 text: qsTr("Height")
                                 color: view.theme.textMuted
@@ -2987,91 +3611,118 @@ Item {
                                 placeholderText: view.hasDocument ? String(view.editor.height) : "0"
                                 inputMethodHints: Qt.ImhDigitsOnly
                                 validator: IntValidator { bottom: 1; top: 20000 }
-                                onTextEdited: {
-                                    view.linkWidthFromHeight()
-                                    draftDebounce.restart()
-                                }
+                                enabled: view.cropHeightEditable
+                                onTextEdited: view.linkWidthFromHeight()
                             }
-                            Column {
-                                spacing: 0
+                            CropLockButton {
+                                id: cropHeightButton
+                                objectName: "cropLockHeight"
+                                checked: view.cropLockHeight
+                                enabled: view.documentReady
+                                Accessible.name: qsTr("Lock height")
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Lock height")
+                                onToggled: view.setCropLock("height", checked)
+                            }
 
-                                Button {
-                                    objectName: "cropHeightStepUp"
-                                    implicitWidth: 24
-                                    implicitHeight: 16
-                                    padding: 0
-                                    font.pixelSize: 9
-                                    text: "\u25b2"
-                                    enabled: view.documentReady
-                                    focusPolicy: Qt.NoFocus
-                                    autoRepeat: true
-                                    autoRepeatDelay: 350
-                                    autoRepeatInterval: 60
-                                    Accessible.name: qsTr("Increase height")
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: qsTr("Increase height")
-                                    onClicked: view.stepCropField(cropHeightField, 1, false)
-                                }
-                                Button {
-                                    objectName: "cropHeightStepDown"
-                                    implicitWidth: 24
-                                    implicitHeight: 16
-                                    padding: 0
-                                    font.pixelSize: 9
-                                    text: "\u25bc"
-                                    enabled: view.documentReady
-                                    focusPolicy: Qt.NoFocus
-                                    autoRepeat: true
-                                    autoRepeatDelay: 350
-                                    autoRepeatInterval: 60
-                                    Accessible.name: qsTr("Decrease height")
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: qsTr("Decrease height")
-                                    onClicked: view.stepCropField(cropHeightField, -1, false)
-                                }
+                            Label {
+                                text: qsTr("Ratio")
+                                color: view.theme.textMuted
+                            }
+                            TextField {
+                                id: cropRatioField
+                                objectName: "cropRatio"
+                                Layout.fillWidth: true
+                                font.pixelSize: 12
+                                placeholderText: qsTr("Free")
+                                enabled: view.cropRatioEditable
+                                onTextEdited: view.applyCropRatioText()
+                                onEditingFinished: view.setCropRatio(cropRatioField.text)
+                            }
+                            CropLockButton {
+                                id: cropRatioButton
+                                objectName: "cropLockRatio"
+                                checked: view.cropLockRatio
+                                enabled: view.documentReady
+                                Accessible.name: qsTr("Lock ratio")
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Lock ratio")
+                                onToggled: view.setCropLock("ratio", checked)
                             }
                         }
 
-                        // Crop: the same linked sides, but the rectangle has a
-                        // place as well as a size. The preset list only offers
-                        // sizes the document can hold, and the anchor pad moves
-                        // the rectangle to a document corner, edge or centre.
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 1
+                            visible: view.tool === "crop"
+                            color: view.theme.border
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             visible: view.tool === "crop"
                             spacing: 8
 
                             Label {
-                                text: qsTr("Ratio")
+                                text: qsTr("Crop mode")
                                 color: view.theme.textMuted
                             }
                             ComboBox {
-                                id: cropRatioBox
-                                objectName: "cropRatio"
+                                id: cropModeBox
+                                objectName: "cropMode"
                                 Layout.fillWidth: true
-                                model: view.sizeRatios
+                                model: view.cropModes
                                 textRole: "label"
-                                currentIndex: view.cropRatioIndex
-                                Component.onCompleted: currentIndex = view.cropRatioIndex
-                                onActivated: {
-                                    view.setRatio(view.sizeRatios[currentIndex].key)
-                                    view.reshapeCropToRatio()
+                                currentIndex: view.cropModeIndex()
+                                onActivated: view.setCropMode(view.cropModes[currentIndex].key)
+                            }
+                        }
+
+                        // A growing crop needs a colour for the new margin.
+                        // Only shown in Grow: in Center there is no leftover to
+                        // paint, and an unused control would ask a question the
+                        // user cannot answer.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: view.tool === "crop" && view.cropGrow()
+                            spacing: 8
+
+                            Label {
+                                text: qsTr("Grow fill color")
+                                color: view.theme.textMuted
+                            }
+                            ComboBox {
+                                id: cropFillBox
+                                objectName: "cropBackground"
+                                Layout.fillWidth: true
+                                model: view.cropBackdrops
+                                textRole: "label"
+                                currentIndex: view.cropFillIndex()
+                                onActivated: view.chooseCropFill(currentIndex)
+                            }
+                            Rectangle {
+                                objectName: "cropBackgroundSwatch"
+                                Layout.preferredWidth: 24
+                                Layout.preferredHeight: 24
+                                radius: 4
+                                color: view.cropFillPreviewColor()
+                                border.width: 1
+                                border.color: view.theme.border
+                                Label {
+                                    anchors.centerIn: parent
+                                    visible: view.cropFill === "transparent"
+                                    text: "0"
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 10
                                 }
                             }
-                            Button {
-                                objectName: "swapCropOrientation"
-                                implicitWidth: 28
-                                implicitHeight: 28
-                                padding: 0
-                                font.pixelSize: 14
-                                text: "\u21bb"
-                                enabled: view.documentReady
-                                focusPolicy: Qt.NoFocus
-                                Accessible.name: qsTr("Swap crop orientation")
-                                ToolTip.visible: hovered
-                                ToolTip.text: qsTr("Swap crop orientation")
-                                onClicked: view.swapCropOrientation()
-                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 1
+                            visible: view.tool === "crop"
+                            color: view.theme.border
                         }
 
                         ColumnLayout {
@@ -3141,21 +3792,11 @@ Item {
                             Item { Layout.fillWidth: true }
                         }
 
-                        Button {
-                            objectName: "cropLivePreviewButton"
+                        Rectangle {
                             Layout.fillWidth: true
+                            Layout.preferredHeight: 1
                             visible: view.tool === "crop"
-                            enabled: view.documentReady
-                            text: qsTr("Live preview")
-                            checkable: true
-                            checked: view.cropLivePreview
-                            highlighted: checked
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Show the cropped image before applying it")
-                            onToggled: {
-                                view.cropLivePreview = checked
-                                draftDebounce.restart()
-                            }
+                            color: view.theme.border
                         }
 
                         // Transform: the quad is the command, so there is
@@ -3211,24 +3852,6 @@ Item {
                             }
                         }
 
-                        Label {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            text: qsTr("Drag on the picture to draw the frame, then move it or drag a handle. Arrow keys nudge it; Shift moves 10 px, Alt resizes.")
-                            color: view.theme.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop" && view.previewDraft !== null
-                            text: qsTr("Turn Live preview off to adjust the frame on the picture.")
-                            color: view.theme.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
@@ -3241,6 +3864,22 @@ Item {
                                 focusPolicy: Qt.NoFocus
                                 enabled: view.cropCanApply()
                                 onClicked: view.applyCrop()
+                            }
+                            Button {
+                                objectName: "resetCropOptions"
+                                text: qsTr("Reset")
+                                visible: view.tool === "crop"
+                                focusPolicy: Qt.NoFocus
+                                enabled: view.documentReady
+                                onClicked: view.resetCropOptions()
+                            }
+                            Button {
+                                objectName: "clearCrop"
+                                text: qsTr("Clear")
+                                visible: view.tool === "crop"
+                                focusPolicy: Qt.NoFocus
+                                enabled: view.documentReady
+                                onClicked: view.clearCropFrame()
                             }
                             Button {
                                 objectName: "applyTransform"
@@ -3259,27 +3898,13 @@ Item {
                                 }
                             }
                             Button {
-                                objectName: "resetToolFields"
+                                objectName: "resetTransformFields"
                                 text: qsTr("Reset")
+                                visible: view.tool === "transform"
                                 focusPolicy: Qt.NoFocus
                                 enabled: view.documentReady
-                                onClicked: {
-                                    if (view.tool === "crop") {
-                                        view.resetCrop()
-                                    } else {
-                                        view.resetTransformCorners()
-                                    }
-                                }
+                                onClicked: view.resetTransformCorners()
                             }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            text: qsTr("The anchor keeps the chosen corner, edge or centre of the document.")
-                            color: view.theme.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
                         }
                     }
 
@@ -3301,16 +3926,33 @@ Item {
         documentWidth: view.documentWidth
         documentHeight: view.documentHeight
         documentReady: view.documentReady
-        ratios: view.sizeRatios
         presets: view.sizePresets
-        onResizeRequested: function(width, height, fill) {
+        onResizeRequested: function(width, height, fill, fillAlpha, filter) {
             view.command({
                 type: "editor_resize",
                 width: width,
                 height: height,
-                fill: fill
+                fill: fill,
+                fill_alpha: fillAlpha,
+                filter: filter
             })
         }
+    }
+
+    /// The colour chooser for a grown crop border. A cancelled chooser leaves
+    /// the previous choice selected rather than pretending a colour was picked.
+    ColorDialog {
+        id: cropFillColorDialog
+        objectName: "cropFillColorDialog"
+        title: qsTr("Border color")
+        selectedColor: view.cropFillColor
+        onAccepted: {
+            view.cropFillColor = selectedColor
+            view.cropFill = "custom"
+            cropFillBox.currentIndex = view.cropFillIndex()
+            draftDebounce.restart()
+        }
+        onRejected: cropFillBox.currentIndex = view.cropFillIndex()
     }
 
     /// The actions the mini toolbar cannot show. Same actions, labels and keys

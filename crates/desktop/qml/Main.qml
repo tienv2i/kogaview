@@ -765,6 +765,17 @@ ApplicationWindow {
         enabled: !root.modalDialogOpen
         onActivated: root.copySelectedPaths()
     }
+    // The Editor's size form is a question, not a mode, so its key belongs to
+    // the window: it opens from anywhere in the Editor and the form itself
+    // selects the Width field. A shell modal still owns the keyboard first.
+    Shortcut {
+        sequence: "Ctrl+Alt+I"
+        enabled: !root.modalDialogOpen && root.state.workspace === "editor"
+        onActivated: {
+            var editor = workspaceLoader.item
+            if (editor && editor.openResizeDialog) editor.openResizeDialog()
+        }
+    }
 
     header: ToolBar {
         id: headerBar

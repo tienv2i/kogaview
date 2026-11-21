@@ -403,11 +403,14 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     the dialog
   //   KOGAVIEW_DEV_UI_REQUEST=editor-resize     -> open the Resize dialog from
   //     the palette button, fill its fields from a preset (or a typed pair),
-  //     optionally arm the pad and the steppers, then click Live preview
+  //     unlock the chain, choose a background and a filter, then optionally
+  //     press Apply
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
   //     one of the nine anchor buttons (`_ARG3=plain` leaves Live preview off,
   //     which is when the canvas frame is drawn; `_ARG=seed` keeps the frame
-  //     arming the tool places; `_ARG4=swap` turns it; `_ARG5=apply` presses it)
+  //     arming the tool places; `_ARG4=swap` turns it; `_ARG5=apply` presses it;
+  //     `_ARG6=center|grow` picks the mode; `_ARG7` names the grow fill
+  //     (`transparent`, `black`, `white`, `gray` or `#rrggbb`))
   //   KOGAVIEW_DEV_UI_REQUEST=editor-transform  -> click the Transform tool and
   //     move one corner (`_ARG` = `X,Y` in document pixels, `_ARG2` = the corner
   //     index or `e0`–`e3` for an edge), optionally arming Live preview and
@@ -571,23 +574,23 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         qInfo().noquote() << "KogaView dev ui request leave-guard"
                           << (emitted ? "handled" : "not found");
       } else if (uiRequest == QLatin1String("editor-resize")) {
-        // The Resize dialog without a pointer: the palette button and the live
-        // preview toggle are `click()`ed (the same handler a press runs), and
-        // the size dropdown is written the way its own selection writes it.
-        // `_ARG` is WIDTHxHEIGHT of a preset (default 1024x1024), or a custom
-        // pair when no preset matches; `_ARG2` optionally names a ratio key
-        // (e.g. `current`) to select after the pair is in place; `_ARG3` is a
-        // fill colour that also arms Pad to fit; `_ARG4` is stepper taps such
-        // as `w+3,h-2`, clicked through the same buttons a hand uses.
+        // The Resize dialog without a pointer: the palette button is
+        // `click()`ed (the same handler a press runs), and the size dropdown is
+        // written the way its own selection writes it. `_ARG` is WIDTHxHEIGHT
+        // of a preset (default 1024x1024), or a custom pair when no preset
+        // matches; `_ARG2=free` unlocks the chain; `_ARG3` names a background
+        // (`transparent`, `black`, `white`, `gray`) or is `#rrggbb` for a custom
+        // one; `_ARG4` names a filter (`auto`, `nearest`, `bilinear`, `bicubic`,
+        // `bspline`, `lanczos3`).
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
           return;
         }
         const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
-        const QString ratioKey = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
-        const QString fillArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
-        const QString stepArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
+        const QString constraintArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        const QString backgroundArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        const QString filterArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
         const QStringList parts = size.split(QLatin1Char('x'));
         const int wantedWidth = parts.value(0).toInt();
         const int wantedHeight = parts.value(1).toInt();
@@ -634,8 +637,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           QMetaObject::invokeMethod(dialog, "choosePreset",
                                     Q_ARG(QVariant, QVariant(index)));
         } else {
-          // A custom pair: write the fields the way typing does, so a ratio
-          // such as `current` can snapshot it.
+          // A custom pair: write the fields the way a typed pair lands. The
+          // chain is not stepped here, so `_ARG2=free` still decides the lock.
           auto setField = [dialog](const char* name, int value) {
             QObject* field = dialog->findChild<QObject*>(QString::fromLatin1(name));
             if (field != nullptr) {
@@ -646,50 +649,58 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           setField("resizeHeight", wantedHeight);
           qInfo() << "KogaView dev ui request: custom size" << size << "(no preset)";
         }
-        if (!ratioKey.isEmpty()) {
-          QMetaObject::invokeMethod(dialog, "setRatio",
-                                    Q_ARG(QVariant, QVariant(ratioKey)));
-          QMetaObject::invokeMethod(dialog, "relinkFields");
+        if (constraintArg == QLatin1String("free")) {
+          QMetaObject::invokeMethod(dialog, "setConstraint", Q_ARG(QVariant, false));
         }
-        if (!fillArg.isEmpty()) {
-          QObject* pad = dialog->findChild<QObject*>(QStringLiteral("resizePadToFit"));
-          if (pad != nullptr && !pad->property("checked").toBool()) {
-            QMetaObject::invokeMethod(pad, "click");
-          }
-          const QString color = fillArg.startsWith(QLatin1Char('#'))
-                                  ? fillArg
-                                  : QLatin1Char('#') + fillArg;
-          dialog->setProperty("fillColor", QColor(color));
-          qInfo() << "KogaView dev ui request: pad fill" << color << "armed"
-                  << dialog->property("padFit");
-        }
-        if (!stepArg.isEmpty()) {
-          auto clickSteps = [dialog](const QString& tap) {
-            if (tap.size() < 3) return;
-            const bool width = tap.at(0) == QLatin1Char('w');
-            const bool up = tap.at(1) == QLatin1Char('+');
-            const int count = tap.mid(2).toInt();
-            const char* name = width ? (up ? "resizeWidthStepUp" : "resizeWidthStepDown")
-                                     : (up ? "resizeHeightStepUp" : "resizeHeightStepDown");
-            QObject* button = dialog->findChild<QObject*>(QString::fromLatin1(name));
-            if (button == nullptr) return;
-            for (int i = 0; i < count; ++i) {
-              QMetaObject::invokeMethod(button, "click");
+        if (!backgroundArg.isEmpty()) {
+          // Go through the dropdown's own chooser, so the row and the swatch
+          // cannot end up describing different backgrounds. A custom colour
+          // cannot use the chooser — it opens the platform colour dialog — so
+          // it writes the same two properties the accepted chooser writes.
+          QObject* background = dialog->findChild<QObject*>(QStringLiteral("resizeBackground"));
+          const QVariantList backgrounds = dialog->property("backgrounds").toList();
+          int backgroundIndex = -1;
+          const QString backgroundKey =
+            backgroundArg.startsWith(QLatin1Char('#')) ? QStringLiteral("custom") : backgroundArg;
+          for (int i = 0; i < backgrounds.size(); ++i) {
+            if (backgrounds.at(i).toMap().value(QStringLiteral("key")).toString()
+                == backgroundKey) {
+              backgroundIndex = i;
+              break;
             }
-          };
-          for (const QString& tap : stepArg.split(QLatin1Char(','))) {
-            clickSteps(tap.trimmed());
           }
-          auto fieldText = [dialog](const char* name) {
-            QObject* field = dialog->findChild<QObject*>(QString::fromLatin1(name));
-            return field != nullptr ? field->property("text") : QVariant();
-          };
-          qInfo() << "KogaView dev ui request: stepped" << stepArg << "to"
-                  << fieldText("resizeWidth") << "×" << fieldText("resizeHeight");
+          if (backgroundArg.startsWith(QLatin1Char('#'))) {
+            dialog->setProperty("customColor", QColor(backgroundArg));
+            dialog->setProperty("backgroundMode", QStringLiteral("custom"));
+            if (background != nullptr && backgroundIndex >= 0) {
+              background->setProperty("currentIndex", backgroundIndex);
+            }
+          } else if (backgroundIndex >= 0) {
+            QMetaObject::invokeMethod(dialog, "chooseBackground",
+                                      Q_ARG(QVariant, QVariant(backgroundIndex)));
+          } else {
+            qWarning() << "KogaView dev ui request: no resize background" << backgroundArg;
+          }
+          qInfo() << "KogaView dev ui request: background" << backgroundArg
+                  << dialog->property("backgroundMode");
+        }
+        if (!filterArg.isEmpty()) {
+          dialog->setProperty("filter", filterArg);
+          const QVariantList filters = dialog->property("filters").toList();
+          for (int i = 0; i < filters.size(); ++i) {
+            if (filters.at(i).toMap().value(QStringLiteral("key")).toString() == filterArg) {
+              if (QObject* filter = dialog->findChild<QObject*>(QStringLiteral("resizeFilter"))) {
+                filter->setProperty("currentIndex", i);
+              }
+              break;
+            }
+          }
         }
         qInfo().noquote() << "KogaView dev ui request editor-resize" << size
-                          << "preset" << index << "ratio"
-                          << dialog->property("ratio") << "tool"
+                          << "preset" << index << "constraint"
+                          << dialog->property("constraint") << "background"
+                          << dialog->property("backgroundMode") << "filter"
+                          << dialog->property("filter") << "tool"
                           << editor->property("tool");
         // `_ARG5=apply` presses the dialog's own Apply after the form is filled,
         // so the real `editor_resize` reaches Core and the document changes.
@@ -730,6 +741,15 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // Same toggle as Resize: only click while Crop is not already selected.
         if (!tool->property("highlighted").toBool()) {
           QMetaObject::invokeMethod(tool, "click");
+        }
+        // The mode decides which preset list is legal (a growing crop may hold
+        // a size the picture cannot), so it is chosen before the preset. The
+        // same helper the mode dropdown calls also steps the view back to give
+        // the new border somewhere to be dragged.
+        const QString modeArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
+        if (modeArg == QLatin1String("grow") || modeArg == QLatin1String("center")) {
+          QMetaObject::invokeMethod(editor, "setCropMode",
+                                    Q_ARG(QVariant, QVariant(modeArg)));
         }
         const QVariantList presets =
           seedOnly ? QVariantList() : editor->property("cropPresets").toList();
@@ -773,6 +793,33 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             qWarning() << "KogaView dev ui request: no crop anchor" << anchorKey;
           }
         }
+        // `_ARG7` names the border colour of a growing crop. A named entry goes
+        // through the dropdown's own chooser; a `#rrggbb` writes the custom
+        // swatch, because the real chooser is a portal dialog a harness run
+        // cannot answer.
+        const QString fillArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG7");
+        if (!fillArg.isEmpty()) {
+          if (fillArg.startsWith(QLatin1Char('#'))) {
+            editor->setProperty("cropFillColor", QColor(fillArg));
+            editor->setProperty("cropFill", QStringLiteral("custom"));
+          } else {
+            const QVariantList backdrops = editor->property("cropBackdrops").toList();
+            int fillIndex = -1;
+            for (int i = 0; i < backdrops.size(); ++i) {
+              const QVariantMap entry = backdrops.at(i).toMap();
+              if (entry.value(QStringLiteral("key")).toString() == fillArg) {
+                fillIndex = i;
+                break;
+              }
+            }
+            if (fillIndex >= 0) {
+              QMetaObject::invokeMethod(editor, "chooseCropFill",
+                                        Q_ARG(QVariant, QVariant(fillIndex)));
+            } else {
+              qWarning() << "KogaView dev ui request: no crop fill" << fillArg;
+            }
+          }
+        }
         QObject* live = editor->findChild<QObject*>(QStringLiteral("cropLivePreviewButton"));
         // `_ARG3=plain` leaves the preview off, which is the state the canvas
         // frame (and its eight handles) is drawn in. A seed shot never arms it.
@@ -803,7 +850,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         };
         qInfo().noquote() << "KogaView dev ui request editor-crop" << size << "preset"
                           << index << "anchor" << editor->property("cropAnchor")
-                          << "ratio" << ratioBeforeSwap << "->"
+                          << "mode" << editor->property("cropMode") << "fill"
+                          << editor->property("cropFill") << "ratio"
+                          << ratioBeforeSwap << "->"
                           << editor->property("cropRatio") << "tool"
                           << editor->property("tool") << "live"
                           << editor->property("cropLivePreview") << "frame"

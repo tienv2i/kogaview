@@ -83,3 +83,29 @@ draft path:
 - `editor_resize_preview` stays in the protocol and in Core — a front end may
   still ask for one — but the window emits it nowhere. Removing the command is a
   separate protocol decision, not part of this UI change.
+
+## Revision — a scale form, not a ratio table (2026-11-21)
+
+The form now follows a scale tool: two numbers, a chain, a concrete preset, a
+background and a filter. The +/- steppers and the Ratio combo are gone; the
+chain button is the only aspect lock and captures the pair on screen when it is
+switched on. `Background` is always visible — `None` keeps the existing centred
+cover crop, a colour fits the whole picture and pads the leftover, and
+`Transparent` pads with alpha 0 — so the former `Pad to fit` checkbox and its
+hidden colour row no longer exist.
+
+The filter is a real command field, not a label: `editor_resize` now carries
+`fill_alpha` and `filter`. `Auto` keeps the fast box average for a downscale and
+uses Lanczos3 when enlarging; the named kernels map to the `image` crate's
+filters. A payload from an older client is opaque (`fill_alpha = 255`) and `Auto`,
+so the wire change is backward compatible.
+
+The keyboard route is part of the form: `Ctrl+Alt+I` opens it from the Editor,
+the Width field is focused with its number selected, `Tab` moves to Height, and
+`Enter` in either field applies. The shell shortcut is gated by its modal state;
+the form's own focus path is what `tst_editor` drives.
+
+The chain is drawn on a `Canvas`, not set as text. An emoji link glyph rendered
+blank in this session's font, and a themed `Icon` would depend on the desktop
+shipping an `insert-link` icon; two capsule links on a diagonal follow the
+theme's own colours and show the lock's state through the accent colour.

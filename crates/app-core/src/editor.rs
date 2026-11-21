@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, ImageReader, RgbaImage};
-use kogaview_protocol::FlipAxis;
+use kogaview_protocol::{FlipAxis, ResizeFilter};
 use serde::Serialize;
 
 use crate::state::UiText;
@@ -52,10 +52,15 @@ pub enum EditOperation {
         axis: FlipAxis,
     },
     Crop {
-        x: u32,
-        y: u32,
+        x: i32,
+        y: i32,
         width: u32,
         height: u32,
+        /// When present the canvas may grow: pixels outside the picture are
+        /// painted with this RGB colour at `fill_alpha`. Without it the
+        /// rectangle must lie inside the picture.
+        fill: Option<[u8; 3]>,
+        fill_alpha: u8,
     },
     Resize {
         width: u32,
@@ -64,6 +69,10 @@ pub enum EditOperation {
         /// fill the leftover with this RGB colour. Without it the target aspect
         /// is filled by a centred crop instead.
         fill: Option<[u8; 3]>,
+        /// The alpha of that fill: 0 leaves the leftover transparent, 255 is
+        /// the opaque pads the form offers.
+        fill_alpha: u8,
+        filter: ResizeFilter,
     },
     /// A perspective correction: `corners` are the four points of the
     /// quadrilateral, in document pixels and clockwise from the top-left
@@ -108,20 +117,40 @@ impl EditOperation {
                 y,
                 width,
                 height,
-            } => UiText::with(
-                "crop",
-                [
-                    width.to_string(),
-                    height.to_string(),
-                    x.to_string(),
-                    y.to_string(),
-                ],
-            ),
+                fill,
+                fill_alpha,
+            } => match fill {
+                Some([_, _, _]) if *fill_alpha == 0 => {
+                    UiText::with("crop_grow_clear", [width.to_string(), height.to_string()])
+                }
+                Some([r, g, b]) => UiText::with(
+                    "crop_grow",
+                    [
+                        width.to_string(),
+                        height.to_string(),
+                        format!("#{r:02x}{g:02x}{b:02x}"),
+                    ],
+                ),
+                None => UiText::with(
+                    "crop",
+                    [
+                        width.to_string(),
+                        height.to_string(),
+                        x.to_string(),
+                        y.to_string(),
+                    ],
+                ),
+            },
             Self::Resize {
                 width,
                 height,
                 fill,
+                fill_alpha,
+                ..
             } => match fill {
+                Some([_, _, _]) if *fill_alpha == 0 => {
+                    UiText::with("resize_pad_clear", [width.to_string(), height.to_string()])
+                }
                 Some([r, g, b]) => UiText::with(
                     "resize_pad",
                     [
@@ -763,8 +792,10 @@ impl EditorDocument {
                 y,
                 width: w,
                 height: h,
+                fill,
+                fill_alpha,
             } => {
-                validate_crop(*x, *y, *w, *h, width, height)?;
+                validate_crop_mode(*x, *y, *w, *h, width, height, *fill, *fill_alpha)?;
                 Ok(*x == 0 && *y == 0 && *w == width && *h == height)
             }
             EditOperation::Resize {
@@ -841,8 +872,8 @@ impl EditorDocument {
 }
 
 fn validate_crop(
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     width: u32,
     height: u32,
     doc_w: u32,
@@ -851,10 +882,12 @@ fn validate_crop(
     if width == 0 || height == 0 {
         return Err(UiText::new("crop_size_empty"));
     }
-    if x >= doc_w
-        || y >= doc_h
-        || x.saturating_add(width) > doc_w
-        || y.saturating_add(height) > doc_h
+    if x < 0
+        || y < 0
+        || (x as i64) >= i64::from(doc_w)
+        || (y as i64) >= i64::from(doc_h)
+        || (x as i64) + i64::from(width) > i64::from(doc_w)
+        || (y as i64) + i64::from(height) > i64::from(doc_h)
     {
         return Err(UiText::with(
             "crop_does_not_fit",
@@ -869,6 +902,104 @@ fn validate_crop(
         ));
     }
     Ok(())
+}
+
+/// Validate any crop, inside or growing, and decide which one it is: a crop
+/// without a fill must fit the picture, a crop with one may reach outside it.
+fn validate_crop_mode(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    doc_w: u32,
+    doc_h: u32,
+    fill: Option<[u8; 3]>,
+    _fill_alpha: u8,
+) -> Result<(), UiText> {
+    if fill.is_none() {
+        return validate_crop(x, y, width, height, doc_w, doc_h);
+    }
+    if width == 0 || height == 0 {
+        return Err(UiText::new("crop_size_empty"));
+    }
+    if u64::from(width) * u64::from(height) > MAX_DOCUMENT_PIXELS {
+        return Err(UiText::with(
+            "crop_too_large",
+            [
+                width.to_string(),
+                height.to_string(),
+                MAX_DOCUMENT_PIXELS.to_string(),
+            ],
+        ));
+    }
+    // The canvas may grow past the picture, but a rectangle that misses it
+    // would only produce a coloured page: the user asked for a border, not for
+    // the photo to disappear.
+    let right = i64::from(x) + i64::from(width);
+    let bottom = i64::from(y) + i64::from(height);
+    if right <= 0
+        || bottom <= 0
+        || i64::from(x) >= i64::from(doc_w)
+        || i64::from(y) >= i64::from(doc_h)
+    {
+        return Err(UiText::with(
+            "crop_outside_document",
+            [
+                width.to_string(),
+                height.to_string(),
+                x.to_string(),
+                y.to_string(),
+            ],
+        ));
+    }
+    Ok(())
+}
+
+/// A crop whose canvas grows past the picture: start from the fill colour and
+/// copy the part of the picture the rectangle keeps onto it. The rectangle is
+/// in the new canvas' coordinates, so a negative origin means the picture
+/// starts inside the canvas rather than at its top-left corner.
+fn grow_crop(
+    image: &RgbaImage,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let mut canvas = RgbaImage::from_pixel(
+        width,
+        height,
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha]),
+    );
+    let (doc_w, doc_h) = image.dimensions();
+    // The part of the picture the rectangle keeps, in picture coordinates.
+    let source_left = x.max(0).min(doc_w as i32);
+    let source_top = y.max(0).min(doc_h as i32);
+    let source_right = (i64::from(x) + i64::from(width))
+        .min(i64::from(doc_w))
+        .max(0) as i32;
+    let source_bottom = (i64::from(y) + i64::from(height))
+        .min(i64::from(doc_h))
+        .max(0) as i32;
+    if source_right > source_left && source_bottom > source_top {
+        let cropped = imageops::crop_imm(
+            image,
+            source_left as u32,
+            source_top as u32,
+            (source_right - source_left) as u32,
+            (source_bottom - source_top) as u32,
+        )
+        .to_image();
+        imageops::replace(
+            &mut canvas,
+            &cropped,
+            i64::from(source_left - x),
+            i64::from(source_top - y),
+        );
+    }
+    canvas
 }
 
 fn validate_resize(width: u32, height: u32) -> Result<(), UiText> {
@@ -1239,6 +1370,46 @@ fn sample_bilinear(image: &RgbaImage, x: f64, y: f64) -> image::Rgba<u8> {
     image::Rgba(out)
 }
 
+/// Resample one image with the filter the form asked for.
+///
+/// `Auto` is a box average for a downscale — fast and right for shrinking a
+/// photo to a delivery size — and Lanczos3 when the target is larger, where a
+/// box average would leave a hard-edged enlargement. The named choices map to
+/// the `image` crate's kernels: `Bilinear` to its triangle, `Bicubic` to
+/// Catmull-Rom, `Bspline` to its Gaussian approximation.
+fn resample(
+    image: &RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    filter: ResizeFilter,
+) -> RgbaImage {
+    match filter {
+        ResizeFilter::Nearest => {
+            imageops::resize(image, target_width, target_height, FilterType::Nearest)
+        }
+        ResizeFilter::Bilinear => {
+            imageops::resize(image, target_width, target_height, FilterType::Triangle)
+        }
+        ResizeFilter::Bicubic => {
+            imageops::resize(image, target_width, target_height, FilterType::CatmullRom)
+        }
+        ResizeFilter::Bspline => {
+            imageops::resize(image, target_width, target_height, FilterType::Gaussian)
+        }
+        ResizeFilter::Lanczos3 => {
+            imageops::resize(image, target_width, target_height, FilterType::Lanczos3)
+        }
+        ResizeFilter::Auto => {
+            let (width, height) = image.dimensions();
+            if target_width < width && target_height < height {
+                imageops::thumbnail(image, target_width, target_height)
+            } else {
+                imageops::resize(image, target_width, target_height, FilterType::Lanczos3)
+            }
+        }
+    }
+}
+
 /// Scale the whole source down (or up) to the largest box of the source's own
 /// shape that fits inside `target_width` × `target_height`, then centre it on a
 /// target-sized canvas of `color`. Nothing is stretched and nothing is cut: the
@@ -1250,6 +1421,8 @@ fn fit_with_padding(
     target_width: u32,
     target_height: u32,
     color: [u8; 3],
+    alpha: u8,
+    filter: ResizeFilter,
 ) -> RgbaImage {
     let (source_width, source_height) = image.dimensions();
     let source_width_64 = u64::from(source_width);
@@ -1270,11 +1443,11 @@ fn fit_with_padding(
         (width.clamp(1, target_width_64) as u32, target_height)
     };
 
-    let content = imageops::resize(image, content_width, content_height, FilterType::Lanczos3);
+    let content = resample(image, content_width, content_height, filter);
     let mut canvas = RgbaImage::from_pixel(
         target_width,
         target_height,
-        image::Rgba([color[0], color[1], color[2], 255]),
+        image::Rgba([color[0], color[1], color[2], alpha]),
     );
     let x = (target_width - content_width) / 2;
     let y = (target_height - content_height) / 2;
@@ -1333,25 +1506,39 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
             y,
             width: w,
             height: h,
+            fill,
+            fill_alpha,
         } => {
-            validate_crop(*x, *y, *w, *h, width, height)?;
-            Ok(imageops::crop_imm(image, *x, *y, *w, *h).to_image())
+            validate_crop_mode(*x, *y, *w, *h, width, height, *fill, *fill_alpha)?;
+            match fill {
+                Some([r, g, b]) => Ok(grow_crop(image, *x, *y, *w, *h, [*r, *g, *b], *fill_alpha)),
+                None => Ok(imageops::crop_imm(image, *x as u32, *y as u32, *w, *h).to_image()),
+            }
         }
         EditOperation::Resize {
             width: w,
             height: h,
             fill,
+            fill_alpha,
+            filter,
         } => {
             validate_resize(*w, *h)?;
             // With a fill, fit the whole source inside the target and pad the
             // leftover: no pixels are stretched or thrown away. Without one,
             // cover the target by cropping around the centre and scale.
             if let Some([r, g, b]) = fill {
-                return Ok(fit_with_padding(image, *w, *h, [*r, *g, *b]));
+                return Ok(fit_with_padding(
+                    image,
+                    *w,
+                    *h,
+                    [*r, *g, *b],
+                    *fill_alpha,
+                    *filter,
+                ));
             }
             let rect = cover_rect(width, height, *w, *h);
             let cropped = imageops::crop_imm(image, rect.0, rect.1, rect.2, rect.3).to_image();
-            Ok(imageops::resize(&cropped, *w, *h, FilterType::Lanczos3))
+            Ok(resample(&cropped, *w, *h, *filter))
         }
         EditOperation::Transform { corners } => {
             validate_transform(corners, width, height)?;
@@ -1921,6 +2108,8 @@ mod tests {
                 y: 4,
                 width: 16,
                 height: 12,
+                fill: None,
+                fill_alpha: 255,
             })
             .unwrap());
         assert_eq!(document.dimensions(), (16, 12));
@@ -1934,6 +2123,8 @@ mod tests {
                 width: 8,
                 height: 6,
                 fill: None,
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto,
             })
             .unwrap());
         assert_eq!(document.dimensions(), (8, 6));
@@ -1950,6 +2141,8 @@ mod tests {
                 y: 0,
                 width: 10,
                 height: 10,
+                fill: None,
+                fill_alpha: 255,
             })
             .unwrap_err();
         // The rejected request is a line, not a sentence: the code names the
@@ -1957,6 +2150,86 @@ mod tests {
         assert_eq!(error.code, "crop_does_not_fit");
         assert_eq!(error.args, ["10", "10", "60", "0", "64", "32"]);
         assert!(!document.can_undo(), "a rejected crop must not be recorded");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_crop_with_a_fill_can_grow_the_canvas_past_the_picture() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let original = document.pixels();
+        // Four pixels of border on the left and top, eight on the right and
+        // six below: the rectangle reaches outside the picture on every side.
+        assert!(document
+            .apply(EditOperation::Crop {
+                x: -4,
+                y: -3,
+                width: 76,
+                height: 41,
+                fill: Some([10, 20, 30]),
+                fill_alpha: 255,
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (76, 41));
+        // The grown border carries the chosen colour…
+        assert_eq!(
+            document.pixels().get_pixel(0, 0),
+            &image::Rgba([10, 20, 30, 255])
+        );
+        assert_eq!(
+            document.pixels().get_pixel(75, 40),
+            &image::Rgba([10, 20, 30, 255])
+        );
+        // …and the picture sits inside it at the rectangle's origin.
+        assert_eq!(
+            document.pixels().get_pixel(4, 3),
+            original.get_pixel(0, 0),
+            "the picture did not move to the grown canvas' origin"
+        );
+        assert_eq!(
+            document.pixels().get_pixel(67, 34),
+            original.get_pixel(63, 31),
+            "the picture's last pixel must land at its rectangle offset"
+        );
+        assert_eq!(
+            document.history(),
+            vec![UiText::with("crop_grow", ["76", "41", "#0a141e"])]
+        );
+
+        // A transparent grow keeps the picture and leaves the border clear.
+        assert!(document
+            .apply(EditOperation::Crop {
+                x: -2,
+                y: -2,
+                width: 80,
+                height: 45,
+                fill: Some([0, 0, 0]),
+                fill_alpha: 0,
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (80, 45));
+        assert_eq!(
+            document.pixels().get_pixel(0, 0),
+            &image::Rgba([0, 0, 0, 0])
+        );
+        assert_eq!(
+            document.pixels().get_pixel(2, 2),
+            &image::Rgba([10, 20, 30, 255])
+        );
+
+        // A "grow" that misses the picture is only a coloured page, so it is
+        // refused rather than silently replacing the photo with a swatch.
+        let error = document
+            .apply(EditOperation::Crop {
+                x: 200,
+                y: 0,
+                width: 20,
+                height: 20,
+                fill: Some([255, 255, 255]),
+                fill_alpha: 255,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "crop_outside_document");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1970,6 +2243,8 @@ mod tests {
                 y: 0,
                 width: 64,
                 height: 32,
+                fill: None,
+                fill_alpha: 255,
             })
             .unwrap());
         assert!(!document
@@ -1977,6 +2252,8 @@ mod tests {
                 width: 64,
                 height: 32,
                 fill: None,
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto,
             })
             .unwrap());
         assert!(!document.can_undo());
@@ -2171,6 +2448,8 @@ mod tests {
                 width: 32,
                 height: 16,
                 fill: None,
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto,
             })
             .unwrap());
         assert!(!document.can_redo());
@@ -2324,6 +2603,34 @@ mod tests {
     }
 
     #[test]
+    fn the_resize_filter_changes_the_pixels() {
+        // A step of two values, enlarged. Nearest may only copy the two source
+        // values; a smooth kernel has to interpolate the step it crosses, so the
+        // dropdown is a real control rather than a second label.
+        let mut image = RgbaImage::new(4, 1);
+        for x in 0..4u32 {
+            let value = if x < 2 { 0 } else { 255 };
+            image.put_pixel(x, 0, image::Rgba([value, value, value, 255]));
+        }
+        let nearest = resample(&image, 18, 5, ResizeFilter::Nearest);
+        let bilinear = resample(&image, 18, 5, ResizeFilter::Bilinear);
+        let lanczos = resample(&image, 18, 5, ResizeFilter::Lanczos3);
+        assert_eq!(nearest.dimensions(), (18, 5));
+        assert!(nearest
+            .pixels()
+            .all(|pixel| pixel[0] == 0 || pixel[0] == 255));
+        assert!(bilinear
+            .pixels()
+            .any(|pixel| pixel[0] > 0 && pixel[0] < 255));
+        assert!(lanczos.pixels().any(|pixel| pixel[0] > 0 && pixel[0] < 255));
+        assert_ne!(nearest.as_raw(), bilinear.as_raw());
+        assert_ne!(bilinear.as_raw(), lanczos.as_raw());
+        // `Auto` enlarges with Lanczos3, so it cannot equal Nearest here.
+        let automatic = resample(&image, 18, 5, ResizeFilter::Auto);
+        assert_ne!(automatic.as_raw(), nearest.as_raw());
+    }
+
+    #[test]
     fn cover_rect_keeps_the_centre() {
         // A 2:1 source resized to 1:1 keeps the full height and takes a square
         // width from the middle: Resize has no anchor, so nothing else can
@@ -2342,7 +2649,7 @@ mod tests {
     #[test]
     fn fit_padding_centres_the_source_in_a_square_target() {
         let image = RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]));
-        let fitted = fit_with_padding(&image, 4, 4, [1, 2, 3]);
+        let fitted = fit_with_padding(&image, 4, 4, [1, 2, 3], 255, ResizeFilter::Auto);
         assert_eq!(fitted.dimensions(), (4, 4));
         // One row of fill above and below the centred source, never all on one
         // side.
@@ -2352,7 +2659,7 @@ mod tests {
         assert_eq!(fitted.get_pixel(3, 3), &image::Rgba([1, 2, 3, 255]));
         // A tall source is padded left and right instead.
         let tall = RgbaImage::from_pixel(2, 4, image::Rgba([10, 20, 30, 255]));
-        let fitted = fit_with_padding(&tall, 4, 4, [9, 8, 7]);
+        let fitted = fit_with_padding(&tall, 4, 4, [9, 8, 7], 255, ResizeFilter::Auto);
         assert_eq!(fitted.get_pixel(0, 0), &image::Rgba([9, 8, 7, 255]));
         assert_eq!(fitted.get_pixel(1, 0), &image::Rgba([10, 20, 30, 255]));
         assert_eq!(fitted.get_pixel(2, 3), &image::Rgba([10, 20, 30, 255]));
@@ -2364,13 +2671,13 @@ mod tests {
         let image = RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]));
         // An 8 × 4 target has the source's 2:1 shape: the whole frame is the
         // image and the colour is never used.
-        let exact = fit_with_padding(&image, 8, 4, [1, 2, 3]);
+        let exact = fit_with_padding(&image, 8, 4, [1, 2, 3], 255, ResizeFilter::Auto);
         assert_eq!(exact.dimensions(), (8, 4));
         assert_eq!(exact.get_pixel(0, 0), &image::Rgba([10, 20, 30, 255]));
         assert_eq!(exact.get_pixel(7, 3), &image::Rgba([10, 20, 30, 255]));
         // An 8 × 6 target is taller than the source: a 1 px band on top and
         // bottom, not a square.
-        let wide = fit_with_padding(&image, 8, 6, [1, 2, 3]);
+        let wide = fit_with_padding(&image, 8, 6, [1, 2, 3], 255, ResizeFilter::Auto);
         assert_eq!(wide.dimensions(), (8, 6));
         assert_eq!(wide.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
         assert_eq!(wide.get_pixel(0, 1), &image::Rgba([10, 20, 30, 255]));
@@ -2378,7 +2685,7 @@ mod tests {
         assert_eq!(wide.get_pixel(7, 5), &image::Rgba([1, 2, 3, 255]));
         // A portrait source in an 8 × 4 frame is pillarboxed, not squared.
         let tall = RgbaImage::from_pixel(2, 4, image::Rgba([10, 20, 30, 255]));
-        let pillarboxed = fit_with_padding(&tall, 8, 4, [4, 5, 6]);
+        let pillarboxed = fit_with_padding(&tall, 8, 4, [4, 5, 6], 255, ResizeFilter::Auto);
         assert_eq!(pillarboxed.dimensions(), (8, 4));
         assert_eq!(pillarboxed.get_pixel(0, 0), &image::Rgba([4, 5, 6, 255]));
         assert_eq!(pillarboxed.get_pixel(3, 0), &image::Rgba([10, 20, 30, 255]));
@@ -2397,6 +2704,8 @@ mod tests {
                 width: 8,
                 height: 8,
                 fill: Some([255, 0, 0]),
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto,
             })
             .unwrap());
         assert_eq!(document.dimensions(), (8, 8));
@@ -2418,6 +2727,33 @@ mod tests {
     }
 
     #[test]
+    fn resize_can_leave_the_leftover_transparent() {
+        let dir = temp_dir();
+        let path = source_file(&dir, "photo.png", 8, 4);
+        let mut document = open_document(&path).unwrap();
+        assert!(document
+            .apply(EditOperation::Resize {
+                width: 8,
+                height: 8,
+                fill: Some([255, 0, 0]),
+                fill_alpha: 0,
+                filter: ResizeFilter::Auto,
+            })
+            .unwrap());
+        assert_eq!(document.dimensions(), (8, 8));
+        assert_eq!(
+            document.pixels().get_pixel(0, 7),
+            &image::Rgba([255, 0, 0, 0]),
+            "the leftover band kept the chosen colour but not an opaque alpha"
+        );
+        assert_eq!(
+            document.history(),
+            vec![UiText::with("resize_pad_clear", ["8", "8"])]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn reset_returns_to_the_original_pixels_and_clears_history() {
         let dir = temp_dir();
         let mut document = open(&dir);
@@ -2428,6 +2764,8 @@ mod tests {
                 y: 2,
                 width: 10,
                 height: 10,
+                fill: None,
+                fill_alpha: 255,
             })
             .unwrap());
         assert!(document.reset());
@@ -2569,6 +2907,8 @@ mod tests {
                 width: 10,
                 height: 5,
                 fill: None,
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto,
             })
             .unwrap());
         save_pixels(&source, &document.pixels(), &source).unwrap();
@@ -2610,7 +2950,9 @@ mod tests {
                 x: 1,
                 y: 2,
                 width: 3,
-                height: 4
+                height: 4,
+                fill: None,
+                fill_alpha: 255
             }
             .label(),
             UiText::with("crop", ["3", "4", "1", "2"])
@@ -2619,7 +2961,9 @@ mod tests {
             EditOperation::Resize {
                 width: 512,
                 height: 512,
-                fill: None
+                fill: None,
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto
             }
             .label(),
             UiText::with("resize", ["512", "512"])
@@ -2629,7 +2973,9 @@ mod tests {
             EditOperation::Resize {
                 width: 512,
                 height: 512,
-                fill: Some([255, 0, 0])
+                fill: Some([255, 0, 0]),
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto
             }
             .label(),
             UiText::with("resize_pad", ["512", "512", "#ff0000"])
@@ -2641,6 +2987,8 @@ mod tests {
                 width: 3,
                 height: 4,
                 fill: Some([1, 2, 3]),
+                fill_alpha: 255,
+                filter: ResizeFilter::Auto,
             },
         ] {
             let label = operation.label();

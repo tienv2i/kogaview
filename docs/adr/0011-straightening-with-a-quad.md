@@ -132,3 +132,40 @@ left open; the protocol and Core do not change.
   shade, swapped orientation and keyboard all write those four numbers.
 - The transform is one quad: no rotation of the quad, no lens/barrel model, no
   multi-point mesh. Those are different features with different guarantees.
+
+## Revision — Crop grows the canvas (2026-11-21)
+
+The crop rectangle can now answer a second question: should the result be the
+picture (Center), or the picture with a new border (Grow)? This one does change
+the protocol and Core, because a rectangle outside the document needs signed
+coordinates and a colour the pixels outside the picture are painted with.
+
+- **The fill colour is the mode.** `editor_crop` carries
+  `fill: Option<[u8; 3]>` and `fill_alpha: u8`. Without a fill the rectangle must
+  stay inside the picture — the ordinary cut, exactly as before. With a fill it
+  may start at a negative `x`/`y` and reach past the right and bottom edges: the
+  result is the rectangle's canvas, the picture is copied into the part of that
+  canvas it occupies, and every other pixel is the fill at the requested alpha.
+  `fill_alpha = 0` is the transparent grow. Older payloads default to no fill
+  and opaque, so a client that does not know Grow keeps the Center rule.
+- **A grow must still be a border.** A rectangle that misses the picture entirely
+  would only produce a coloured page, so `crop_outside_document` refuses it: at
+  least one pixel of the picture must be inside. The same `MAX_DOCUMENT_PIXELS`
+  ceiling as a resize applies, reported as `crop_too_large`.
+- **The canvas is the preview.** In Grow the inspector shows the fill row
+  (Transparent, Black, White, Gray, Custom color…) and the canvas paints the part
+  of the frame that is not the picture with that colour, so the border is seen
+  before Apply. Picking Grow also steps the fitted view back once
+  (`revealCropGrowth`), because the canvas host clips at its own edge and a
+  fitted picture leaves too little margin for a handle to be dragged outward; a
+  view that already has that room is left alone.
+- **The frame and the fields stay one rectangle.** Grow relaxes the same four
+  fields, the same eight handles and the same drag code; negative X/Y are typed
+  and dragged, and `setCropRect` only enforces the one-pixel overlap in Grow.
+  Switching back to Center pulls any outside rectangle into the picture again so
+  Apply cannot stay armed on a rectangle Core would reject.
+- **A grown crop is a snapshot, like every crop.** The pixels outside the old
+  picture do not exist in the source, so the operation cannot be inverted by a
+  second crop; it records a snapshot and uses the same undo budget. A history
+  line says `Grow to W × H · #rrggbb border` (or `transparent border`), while a
+  crop without a fill keeps `Crop W × H at X,Y`.

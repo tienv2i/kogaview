@@ -15,19 +15,18 @@ import QtQuick.Layouts
 /// dialog "loading" before it settled. The document itself does not move until
 /// Apply.
 ///
-/// The two answers mirror the old panel exactly, so nothing about the edit
-/// changed, only where it is typed:
+/// The form follows a scale tool rather than a ratio table: Width and Height
+/// are two numbers, the chain between them is the only aspect lock, and a
+/// concrete `Size preset` fills both. The background dropdown always shows how
+/// the leftover is handled — `None` is the existing centred cover crop, a colour
+/// fits the whole picture and pads the leftover, and `Transparent` pads with
+/// alpha 0. The filter dropdown travels in the command, so it changes the
+/// resampling kernel instead of only its label.
 ///
 /// - **Apply** sends `editor_resize` (through the editor's `command` signal)
 ///   and closes. It is disabled while the pair is the document's own size,
 ///   because Core would answer a no-op.
 /// - **Cancel**, the × or Escape close without sending anything.
-///
-/// Width and Height are one shape: the ratio combo decides what typing one side
-/// does to the other, `Free` is the only unlinked choice, and the "Keep current
-/// ratio" snapshot freezes whatever pair is on screen. The presets are concrete
-/// 64-divisible sizes, and the +/- steppers are the same edit path as typing, so
-/// they can never disagree with it.
 Dialog {
     id: dialog
     property Theme theme: Theme {}
@@ -37,17 +36,38 @@ Dialog {
     property real documentWidth: 0
     property real documentHeight: 0
     property bool documentReady: false
-    /// The ratio table and the concrete sizes, from the Editor. Handed in
-    /// rather than duplicated so the two size tools offer one list.
-    property var ratios: []
+    /// The concrete sizes, from the Editor. Handed in rather than duplicated so
+    /// the two size tools offer one list.
     property var presets: []
 
     // ------------------------------------------------------------- form state
-    property string ratio: "original"
-    /// The pair "Keep current ratio" froze, zero until it is picked.
-    property var currentRatio: ({ width: 0, height: 0 })
-    property bool padFit: false
-    property color fillColor: "#ffffff"
+    /// The chain is the aspect lock. On open it follows the document's shape;
+    /// picking a preset moves it to that preset's shape.
+    property bool constraint: true
+    /// The W:H pair the chain keeps. Zero until a valid pair or a preset exists.
+    property var lockedRatio: ({ width: 0, height: 0 })
+    /// `none`, `transparent`, `black`, `white`, `gray` or `custom`.
+    property string backgroundMode: "none"
+    property color customColor: "#808080"
+    /// A key from `filters`; `auto` is the fast box average for a downscale.
+    property string filter: "auto"
+
+    readonly property var backgrounds: [
+        { key: "none", label: qsTr("None") },
+        { key: "transparent", label: qsTr("Transparent") },
+        { key: "black", label: qsTr("Black") },
+        { key: "white", label: qsTr("White") },
+        { key: "gray", label: qsTr("Gray") },
+        { key: "custom", label: qsTr("Custom color…") }
+    ]
+    readonly property var filters: [
+        { key: "auto", label: qsTr("Auto") },
+        { key: "bilinear", label: qsTr("Bilinear") },
+        { key: "bicubic", label: qsTr("Bicubic") },
+        { key: "bspline", label: qsTr("BSpline") },
+        { key: "lanczos3", label: qsTr("Lanczos3") },
+        { key: "nearest", label: qsTr("Nearest") }
+    ]
 
     title: qsTr("Resize image")
     modal: true
@@ -74,23 +94,67 @@ Dialog {
     onWidthChanged: if (!moved) centerInParent()
     onHeightChanged: if (!moved) centerInParent()
 
+    /// Start the chain from the pair on screen, or from the document when a
+    /// side is empty. This is the only place the lock is captured.
+    function captureRatio() {
+        var width = widthField.acceptableInput ? parseInt(widthField.text) : 0
+        var height = heightField.acceptableInput ? parseInt(heightField.text) : 0
+        if (!(width > 0) || !(height > 0)) {
+            if (!dialog.documentReady) return
+            width = Math.max(1, Math.round(dialog.documentWidth))
+            height = Math.max(1, Math.round(dialog.documentHeight))
+        }
+        dialog.lockedRatio = { width: width, height: height }
+    }
+
+    /// Turn the chain on or off. Enabling it captures the shape it must keep,
+    /// so switching the lock on after typing a pair keeps that pair's shape.
+    function setConstraint(enabled) {
+        dialog.constraint = enabled
+        constraintButton.checked = enabled
+        if (enabled) dialog.captureRatio()
+    }
+
     /// The size the fields start on: the document's own, so the form describes
-    /// what is on screen before anything is typed, and the steppers start from
-    /// a real number. `Reset` and every open go through here.
+    /// what is on screen before anything is typed. `Reset` and every open go
+    /// through here; the background and filter start at their defaults.
     function fillFromDocument() {
-        dialog.ratio = "original"
-        dialog.currentRatio = ({ width: 0, height: 0 })
-        dialog.padFit = false
         var width = Math.max(1, Math.round(dialog.documentWidth))
         var height = Math.max(1, Math.round(dialog.documentHeight))
         widthField.text = String(width)
         heightField.text = String(height)
-        ratioBox.currentIndex = dialog.ratioIndex()
+        dialog.backgroundMode = "none"
+        dialog.filter = "auto"
+        dialog.lockedRatio = { width: width, height: height }
+        dialog.setConstraint(true)
         presetBox.currentIndex = dialog.matchingPreset()
+        backgroundBox.currentIndex = dialog.backgroundIndex()
+        filterBox.currentIndex = dialog.filterIndex()
+    }
+
+    /// A pending focus request, so `onOpened` cannot steal focus back after a
+    /// fast user already tabbed to Height or started typing.
+    property bool focusPending: false
+    function requestWidthFocus() {
+        dialog.focusPending = true
+        Qt.callLater(dialog.focusWidth)
+    }
+
+    /// Focus the first field and select the number the form opened on, so a
+    /// keyboard visitor can type the new width immediately. `Tab` then lands on
+    /// Height (bound on the field) and Enter applies from either one.
+    function focusWidth() {
+        if (!dialog.focusPending) return
+        widthField.forceActiveFocus()
+        widthField.selectAll()
+        // Keep the request alive until the field really owns the keyboard:
+        // before the popup is visible `forceActiveFocus` can do nothing, and
+        // `opened` gets one more try.
+        if (widthField.activeFocus) dialog.focusPending = false
     }
 
     /// Whether Apply would do something. Core's own rule: the same width and
-    /// height is a no-op, pad colour or not, because fitting the whole source
+    /// height is a no-op, background or not, because fitting the whole source
     /// into its own size adds nothing.
     function changed() {
         if (!dialog.fieldsValid()) return false
@@ -102,34 +166,6 @@ Dialog {
         return !!dialog.documentReady
                 && widthField.acceptableInput && heightField.acceptableInput
                 && parseInt(widthField.text) > 0 && parseInt(heightField.text) > 0
-    }
-
-    /// The factor for a ratio key, or null when the sides are not linked.
-    function factor(key) {
-        for (var index = 0; index < dialog.ratios.length; ++index) {
-            var entry = dialog.ratios[index]
-            if (entry.key !== key) continue
-            if (entry.key === "free") return null
-            if (entry.key === "current") {
-                if (dialog.currentRatio && dialog.currentRatio.width > 0
-                        && dialog.currentRatio.height > 0) return dialog.currentRatio
-                if (!dialog.documentReady) return null
-                return { width: dialog.documentWidth, height: dialog.documentHeight }
-            }
-            if (entry.key === "original") {
-                if (!dialog.documentReady) return null
-                return { width: dialog.documentWidth, height: dialog.documentHeight }
-            }
-            return entry
-        }
-        return null
-    }
-
-    function ratioIndex() {
-        for (var index = 0; index < dialog.ratios.length; ++index) {
-            if (dialog.ratios[index].key === dialog.ratio) return index
-        }
-        return -1
     }
 
     /// Index of the preset that matches both fields, or -1 for `Custom`.
@@ -144,15 +180,15 @@ Dialog {
         return -1
     }
 
-    /// Typing one side keeps the other on the chosen ratio. Programmatic writes
+    /// Typing one side keeps the other on the locked shape. Programmatic writes
     /// (a preset, Reset, the linked side) do not come through `textEdited`, so
     /// they never feed back on themselves.
     function linkHeightFromWidth() {
-        if (!widthField.acceptableInput) return
+        if (!dialog.constraint || !widthField.acceptableInput) return
         var width = parseInt(widthField.text)
         if (!(width > 0)) return
-        var factor = dialog.factor(dialog.ratio)
-        if (factor) {
+        var factor = dialog.lockedRatio
+        if (factor && factor.width > 0 && factor.height > 0) {
             heightField.text = String(Math.max(1, Math.min(20000,
                     Math.round(width * factor.height / factor.width))))
         }
@@ -160,90 +196,98 @@ Dialog {
     }
 
     function linkWidthFromHeight() {
-        if (!heightField.acceptableInput) return
+        if (!dialog.constraint || !heightField.acceptableInput) return
         var height = parseInt(heightField.text)
         if (!(height > 0)) return
-        var factor = dialog.factor(dialog.ratio)
-        if (factor) {
+        var factor = dialog.lockedRatio
+        if (factor && factor.width > 0 && factor.height > 0) {
             widthField.text = String(Math.max(1, Math.min(20000,
                     Math.round(height * factor.width / factor.height))))
         }
         presetBox.currentIndex = dialog.matchingPreset()
     }
 
-    /// Keep the fields on the selected ratio when the ratio is picked: a 16:9
-    /// choice with 1024 × 1024 typed must not leave a square pair on a 16:9
-    /// label. The first typed side wins, width first.
-    function relinkFields() {
-        if (widthField.acceptableInput && parseInt(widthField.text) > 0) {
-            dialog.linkHeightFromWidth()
-        } else if (heightField.acceptableInput && parseInt(heightField.text) > 0) {
-            dialog.linkWidthFromHeight()
-        }
-    }
-
-    /// Freeze the pair on screen as the "Keep current ratio" shape; the
-    /// document's aspect is the honest fallback when a side is empty.
-    function captureCurrentRatio() {
-        var width = widthField.acceptableInput ? parseInt(widthField.text) : 0
-        var height = heightField.acceptableInput ? parseInt(heightField.text) : 0
-        if (!(width > 0) || !(height > 0)) {
-            if (!dialog.documentReady) return
-            width = dialog.documentWidth
-            height = dialog.documentHeight
-        }
-        dialog.currentRatio = { width: width, height: height }
-    }
-
-    /// Select a ratio. The combo index is written imperatively because the
-    /// control owns `currentIndex`; picking "Keep current ratio" snapshots the
-    /// pair before relinking, so the fields on screen become the locked shape.
-    function setRatio(key) {
-        if (key === "current") dialog.captureCurrentRatio()
-        dialog.ratio = key
-        ratioBox.currentIndex = dialog.ratioIndex()
-    }
-
-    /// One click of a field's +/- stepper. An empty or invalid field starts
-    /// from the document's own dimension, so the first nudge moves 4000 to 4001
-    /// rather than jumping from 1, and the linked side follows exactly as
-    /// typing it would.
-    function stepField(field, delta, isWidth) {
-        var current = field.acceptableInput ? parseInt(field.text) : 0
-        if (!(current > 0)) {
-            current = Math.round(isWidth ? dialog.documentWidth : dialog.documentHeight)
-        }
-        if (!(current > 0)) return
-        field.text = String(Math.max(1, Math.min(20000, current + delta)))
-        if (isWidth) {
-            dialog.linkHeightFromWidth()
-        } else {
-            dialog.linkWidthFromHeight()
-        }
-    }
-
     /// Apply a concrete size. `onActivated` calls this for a real pick; a
     /// programmatic `currentIndex` write (the link code mirrors a matching
-    /// size) must not re-apply it.
+    /// size) must not re-apply it. A preset also becomes the shape the chain
+    /// keeps, so typing one side after picking 16:9 stays 16:9.
     function choosePreset(index) {
         if (index < 0 || index >= dialog.presets.length) return
         var preset = dialog.presets[index]
         widthField.text = String(preset.width)
         heightField.text = String(preset.height)
-        dialog.setRatio(preset.ratio)
+        dialog.lockedRatio = { width: preset.width, height: preset.height }
         presetBox.currentIndex = index
     }
 
-    /// The three bytes the typed command carries.
+    function backgroundIndex() {
+        for (var index = 0; index < dialog.backgrounds.length; ++index) {
+            if (dialog.backgrounds[index].key === dialog.backgroundMode) return index
+        }
+        return 0
+    }
+
+    /// Pick a background. `Custom color…` opens the colour chooser; a cancelled
+    /// chooser leaves the previous choice on screen rather than pretending a
+    /// colour was picked.
+    function chooseBackground(index) {
+        if (index < 0 || index >= dialog.backgrounds.length) return
+        var key = dialog.backgrounds[index].key
+        if (key === "custom") {
+            fillColorDialog.open()
+            return
+        }
+        dialog.backgroundMode = key
+        backgroundBox.currentIndex = index
+    }
+
+    function filterIndex() {
+        for (var index = 0; index < dialog.filters.length; ++index) {
+            if (dialog.filters[index].key === dialog.filter) return index
+        }
+        return 0
+    }
+
+    /// The swatch the dropdown shows next to its label. `None` has no colour to
+    /// show, and transparent is drawn as the form's own surface with a zero.
+    function backgroundColor() {
+        switch (dialog.backgroundMode) {
+        case "transparent": return dialog.theme.surfaceAlt
+        case "black": return "#000000"
+        case "white": return "#ffffff"
+        case "gray": return "#808080"
+        case "custom": return dialog.customColor
+        default: return "transparent"
+        }
+    }
+
+    /// The three bytes the typed command carries, or null for no padding.
     function rgb(color) {
         return [Math.round(color.r * 255), Math.round(color.g * 255),
                 Math.round(color.b * 255)]
     }
 
+    function fillForCommand() {
+        switch (dialog.backgroundMode) {
+        case "none": return null
+        case "transparent": return [0, 0, 0]
+        case "black": return [0, 0, 0]
+        case "white": return [255, 255, 255]
+        case "gray": return [128, 128, 128]
+        case "custom": return dialog.rgb(dialog.customColor)
+        default: return null
+        }
+    }
+
+    function fillAlpha() {
+        return dialog.backgroundMode === "transparent" ? 0 : 255
+    }
+
     function apply() {
         if (!dialog.changed()) return
         dialog.resizeRequested(parseInt(widthField.text), parseInt(heightField.text),
-                               dialog.padFit ? dialog.rgb(dialog.fillColor) : null)
+                               dialog.fillForCommand(), dialog.fillAlpha(),
+                               dialog.filter)
         dialog.close()
     }
 
@@ -256,7 +300,12 @@ Dialog {
         moved = false
         centerInParent()
         dialog.fillFromDocument()
+        // The field does not accept focus until the popup is visible; one turn
+        // of the event loop is enough, and the fade does not delay it. If it
+        // still did not take, `opened` gets one more try.
+        dialog.requestWidthFocus()
     }
+    onOpened: if (dialog.focusPending) Qt.callLater(dialog.focusWidth)
 
     background: Rectangle {
         color: dialog.theme.surface
@@ -313,8 +362,7 @@ Dialog {
         objectName: "resizeContent"
         clip: true
         contentHeight: resizeColumn.implicitHeight + 40
-        // Pad to fit adds a colour row and a sentence of explanation. On a
-        // short window the whole form may no longer fit; the dialog caps its
+        // On a short window the whole form may not fit; the dialog caps its
         // height at the window, so the bar is how a clipped form says so.
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -345,49 +393,76 @@ Dialog {
                                      ? String(Math.round(dialog.documentWidth)) : "0"
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 1; top: 20000 }
-                    onTextEdited: {
-                        dialog.linkHeightFromWidth()
-                    }
+                    // The keyboard path this form is built around: opening
+                    // selects the width, Tab goes to Height, Enter applies.
+                    KeyNavigation.tab: heightField
+                    onTextEdited: dialog.linkHeightFromWidth()
+                    onAccepted: dialog.apply()
                 }
-                // The small +/- pair every size field has: one pixel per press,
-                // auto-repeat while held, and the linked side follows because
-                // this is the same path as typing.
-                Column {
-                    spacing: 0
+                ToolButton {
+                    id: constraintButton
+                    objectName: "resizeConstraint"
+                    Layout.rowSpan: 2
+                    Layout.alignment: Qt.AlignVCenter
+                    implicitWidth: 32
+                    implicitHeight: 32
+                    checkable: true
+                    checked: dialog.constraint
+                    enabled: dialog.documentReady
+                    focusPolicy: Qt.NoFocus
+                    Accessible.name: qsTr("Constrain proportions")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Constrain proportions")
+                    onToggled: dialog.setConstraint(checked)
 
-                    Button {
-                        objectName: "resizeWidthStepUp"
-                        implicitWidth: 24
-                        implicitHeight: 16
-                        padding: 0
-                        font.pixelSize: 9
-                        text: "\u25b2"
-                        enabled: dialog.documentReady
-                        focusPolicy: Qt.NoFocus
-                        autoRepeat: true
-                        autoRepeatDelay: 350
-                        autoRepeatInterval: 60
-                        Accessible.name: qsTr("Increase width")
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Increase width")
-                        onClicked: dialog.stepField(widthField, 1, true)
-                    }
-                    Button {
-                        objectName: "resizeWidthStepDown"
-                        implicitWidth: 24
-                        implicitHeight: 16
-                        padding: 0
-                        font.pixelSize: 9
-                        text: "\u25bc"
-                        enabled: dialog.documentReady
-                        focusPolicy: Qt.NoFocus
-                        autoRepeat: true
-                        autoRepeatDelay: 350
-                        autoRepeatInterval: 60
-                        Accessible.name: qsTr("Decrease width")
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Decrease width")
-                        onClicked: dialog.stepField(widthField, -1, true)
+                    // The chain is drawn, not typed: an emoji glyph was blank
+                    // on this session's font, and a themed `Icon` would depend
+                    // on the desktop having an `insert-link` icon. Two capsule
+                    // links on a 45° diagonal read as a chain at 18 px and
+                    // follow the theme's own colours, including the accent
+                    // when the lock is on.
+                    contentItem: Canvas {
+                        id: chainCanvas
+                        implicitWidth: 20
+                        implicitHeight: 20
+                        Component.onCompleted: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onHeightChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = !constraintButton.enabled
+                                    ? dialog.theme.textMuted
+                                    : (constraintButton.checked ? dialog.theme.accent
+                                                                : dialog.theme.text)
+                            ctx.lineWidth = 1.5
+                            ctx.lineCap = "round"
+                            ctx.translate(width / 2, height / 2)
+                            ctx.rotate(-Math.PI / 4)
+                            drawLink(ctx, -3.7)
+                            drawLink(ctx, 3.7)
+                        }
+                        /// One rounded link outline centred on `cx`.
+                        function drawLink(ctx, cx) {
+                            var span = 9
+                            var thick = 6
+                            var radius = thick / 2
+                            ctx.beginPath()
+                            ctx.moveTo(cx - span / 2 + radius, -radius)
+                            ctx.lineTo(cx + span / 2 - radius, -radius)
+                            ctx.arc(cx + span / 2 - radius, 0, radius,
+                                    -Math.PI / 2, Math.PI / 2)
+                            ctx.lineTo(cx - span / 2 + radius, radius)
+                            ctx.arc(cx - span / 2 + radius, 0, radius,
+                                    Math.PI / 2, -Math.PI / 2)
+                            ctx.closePath()
+                            ctx.stroke()
+                        }
+                        Connections {
+                            target: constraintButton
+                            function onCheckedChanged() { chainCanvas.requestPaint() }
+                            function onEnabledChanged() { chainCanvas.requestPaint() }
+                        }
                     }
                 }
                 Label {
@@ -403,73 +478,9 @@ Dialog {
                                      ? String(Math.round(dialog.documentHeight)) : "0"
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 1; top: 20000 }
-                    onTextEdited: {
-                        dialog.linkWidthFromHeight()
-                    }
-                }
-                Column {
-                    spacing: 0
-
-                    Button {
-                        objectName: "resizeHeightStepUp"
-                        implicitWidth: 24
-                        implicitHeight: 16
-                        padding: 0
-                        font.pixelSize: 9
-                        text: "\u25b2"
-                        enabled: dialog.documentReady
-                        focusPolicy: Qt.NoFocus
-                        autoRepeat: true
-                        autoRepeatDelay: 350
-                        autoRepeatInterval: 60
-                        Accessible.name: qsTr("Increase height")
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Increase height")
-                        onClicked: dialog.stepField(heightField, 1, false)
-                    }
-                    Button {
-                        objectName: "resizeHeightStepDown"
-                        implicitWidth: 24
-                        implicitHeight: 16
-                        padding: 0
-                        font.pixelSize: 9
-                        text: "\u25bc"
-                        enabled: dialog.documentReady
-                        focusPolicy: Qt.NoFocus
-                        autoRepeat: true
-                        autoRepeatDelay: 350
-                        autoRepeatInterval: 60
-                        Accessible.name: qsTr("Decrease height")
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Decrease height")
-                        onClicked: dialog.stepField(heightField, -1, false)
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Label {
-                    text: qsTr("Ratio")
-                    color: dialog.theme.textMuted
-                }
-                ComboBox {
-                    id: ratioBox
-                    objectName: "resizeRatio"
-                    Layout.fillWidth: true
-                    model: dialog.ratios
-                    textRole: "label"
-                    // Set imperatively: ComboBox owns currentIndex, so a binding
-                    // here would break on the first pick. `setRatio` keeps them
-                    // in step.
-                    currentIndex: dialog.ratioIndex()
-                    Component.onCompleted: currentIndex = dialog.ratioIndex()
-                    onActivated: {
-                        dialog.setRatio(dialog.ratios[currentIndex].key)
-                        dialog.relinkFields()
-                    }
+                    KeyNavigation.backtab: widthField
+                    onTextEdited: dialog.linkWidthFromHeight()
+                    onAccepted: dialog.apply()
                 }
             }
 
@@ -497,68 +508,67 @@ Dialog {
                 }
             }
 
-            CheckBox {
-                id: padCheck
-                objectName: "resizePadToFit"
+            RowLayout {
                 Layout.fillWidth: true
-                text: qsTr("Pad to fit")
-                checked: dialog.padFit
-                enabled: dialog.documentReady
-                // A Popup built inside the workspace's Loader resolves the
-                // platform (light) palette, and this Qt build ignores a QML
-                // `palette` write on the control, so the style's own label came
-                // out dark-on-dark. The label is spelled out here in the app's
-                // own colour instead; the indicator stays the style's.
-                contentItem: Text {
-                    leftPadding: padCheck.indicator && !padCheck.mirrored
-                                 ? padCheck.indicator.width + padCheck.spacing : 0
-                    rightPadding: padCheck.indicator && padCheck.mirrored
-                                  ? padCheck.indicator.width + padCheck.spacing : 0
-                    text: padCheck.text
-                    font: padCheck.font
-                    color: padCheck.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
+                spacing: 8
+
+                Label {
+                    text: qsTr("Background")
+                    color: dialog.theme.textMuted
                 }
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Keep the whole image in shape and fill the leftover with the fill color")
-                onToggled: {
-                    dialog.padFit = checked
+                ComboBox {
+                    id: backgroundBox
+                    objectName: "resizeBackground"
+                    Layout.fillWidth: true
+                    model: dialog.backgrounds
+                    textRole: "label"
+                    currentIndex: dialog.backgroundIndex()
+                    onActivated: dialog.chooseBackground(currentIndex)
+                }
+                Rectangle {
+                    objectName: "resizeBackgroundSwatch"
+                    Layout.preferredWidth: 24
+                    Layout.preferredHeight: 24
+                    radius: 4
+                    color: dialog.backgroundColor()
+                    border.width: 1
+                    border.color: dialog.theme.border
+                    visible: dialog.backgroundMode !== "none"
+                    Label {
+                        anchors.centerIn: parent
+                        visible: dialog.backgroundMode === "transparent"
+                        text: "0"
+                        color: dialog.theme.textMuted
+                        font.pixelSize: 10
+                    }
                 }
             }
 
             RowLayout {
                 Layout.fillWidth: true
-                visible: dialog.padFit
-                spacing: 6
+                spacing: 8
 
-                Rectangle {
-                    objectName: "resizeFillColorSwatch"
-                    Layout.preferredWidth: 24
-                    Layout.preferredHeight: 24
-                    radius: 4
-                    color: dialog.fillColor
-                    border.width: 1
-                    border.color: dialog.theme.border
-                }
-                Button {
-                    objectName: "resizeFillColorButton"
-                    text: qsTr("Fill color")
-                    onClicked: fillColorDialog.open()
-                }
                 Label {
-                    Layout.fillWidth: true
-                    text: dialog.fillColor.toString()
+                    text: qsTr("Filter")
                     color: dialog.theme.textMuted
-                    font.pixelSize: 11
-                    elide: Text.ElideRight
+                }
+                ComboBox {
+                    id: filterBox
+                    objectName: "resizeFilter"
+                    Layout.fillWidth: true
+                    model: dialog.filters
+                    textRole: "label"
+                    currentIndex: dialog.filterIndex()
+                    onActivated: dialog.filter = dialog.filters[currentIndex].key
                 }
             }
 
             Label {
                 Layout.fillWidth: true
-                visible: dialog.padFit
-                text: qsTr("Scales the whole image to fit and fills the leftover with this color.")
+                visible: dialog.backgroundMode !== "none"
+                text: dialog.backgroundMode === "transparent"
+                      ? qsTr("Fits the whole image inside the target and leaves the leftover transparent.")
+                      : qsTr("Fits the whole image inside the target and fills the leftover with this background.")
                 color: dialog.theme.textMuted
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
@@ -584,7 +594,10 @@ Dialog {
             Button {
                 objectName: "resizeReset"
                 text: qsTr("Reset")
-                onClicked: dialog.fillFromDocument()
+                onClicked: {
+                    dialog.fillFromDocument()
+                    dialog.requestWidthFocus()
+                }
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -607,14 +620,18 @@ Dialog {
     ColorDialog {
         id: fillColorDialog
         objectName: "resizeFillColorDialog"
-        title: qsTr("Fill color")
-        selectedColor: dialog.fillColor
+        title: qsTr("Background color")
+        selectedColor: dialog.customColor
         onAccepted: {
-            dialog.fillColor = selectedColor
+            dialog.customColor = selectedColor
+            dialog.backgroundMode = "custom"
+            backgroundBox.currentIndex = dialog.backgroundIndex()
         }
+        onRejected: backgroundBox.currentIndex = dialog.backgroundIndex()
     }
 
     /// Apply: the user chose this size. The editor turns it into one
-    /// `editor_resize`; the dialog closes on its own.
-    signal resizeRequested(int width, int height, var fill)
+    /// `editor_resize`; the dialog closes on its own. `fill` is null for the
+    /// existing cover crop, and `fillAlpha` is 0 for the transparent pad.
+    signal resizeRequested(int width, int height, var fill, int fillAlpha, string filter)
 }

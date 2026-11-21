@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 
-use kogaview_protocol::{Command, Envelope, MoveDirection, ProtocolError, Query, Theme, Workspace};
+use kogaview_protocol::{
+    Command, Envelope, MoveDirection, ProtocolError, Query, ResizeFilter, Theme, Workspace,
+};
 use serde_json::{json, Value};
 
 use crate::config::Config;
@@ -707,33 +709,45 @@ impl Core {
                 width,
                 height,
                 fill,
+                fill_alpha,
+                filter,
             } => self.editor_apply(EditOperation::Resize {
                 width,
                 height,
                 fill,
+                fill_alpha,
+                filter,
             }),
             Command::EditorResizePreview {
                 width,
                 height,
                 fill,
-            } => self.editor_resize_preview(width, height, fill),
+                fill_alpha,
+                filter,
+            } => self.editor_resize_preview(width, height, fill, fill_alpha, filter),
             Command::EditorCrop {
                 x,
                 y,
                 width,
                 height,
+                fill,
+                fill_alpha,
             } => self.editor_apply(EditOperation::Crop {
                 x,
                 y,
                 width,
                 height,
+                fill,
+                fill_alpha,
             }),
             Command::EditorCropPreview {
                 x,
                 y,
                 width,
                 height,
-            } => self.editor_crop_preview(x, y, width, height),
+                fill,
+                fill_alpha,
+            } => self.editor_crop_preview(x, y, width, height, fill, fill_alpha),
             Command::EditorTransform { corners } => {
                 self.editor_apply(EditOperation::Transform { corners })
             }
@@ -1249,12 +1263,16 @@ impl Core {
         width: u32,
         height: u32,
         fill: Option<[u8; 3]>,
+        fill_alpha: u8,
+        filter: ResizeFilter,
     ) -> Result<Option<UiText>, ProtocolError> {
         self.editor_preview(
             EditOperation::Resize {
                 width,
                 height,
                 fill,
+                fill_alpha,
+                filter,
             },
             PreviewKind::Resize,
         )
@@ -1262,10 +1280,12 @@ impl Core {
 
     fn editor_crop_preview(
         &mut self,
-        x: u32,
-        y: u32,
+        x: i32,
+        y: i32,
         width: u32,
         height: u32,
+        fill: Option<[u8; 3]>,
+        fill_alpha: u8,
     ) -> Result<Option<UiText>, ProtocolError> {
         self.editor_preview(
             EditOperation::Crop {
@@ -1273,6 +1293,8 @@ impl Core {
                 y,
                 width,
                 height,
+                fill,
+                fill_alpha,
             },
             PreviewKind::Crop,
         )

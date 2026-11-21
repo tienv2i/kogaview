@@ -88,8 +88,9 @@ private slots:
   void theResizePresetsAreMultiplesOf64();
   void typingOneSideKeepsTheChosenRatio();
   void theCurrentRatioLocksTheTypedPair();
-  void theSizeSteppersNudgeBothSides();
+  void theConstraintButtonLocksTheTwoSides();
   void resizeCarriesThePadFill();
+  void theResizeKeyboardReachesWidthHeightAndApply();
   void theResizeDialogHasNoPreviewSurfaces();
   void thePaintToolSendsOneStrokeOnRelease();
   void theEraserStrokeCarriesItsModeAndBrush();
@@ -99,6 +100,7 @@ private slots:
   void thePointerThumbnailCarriesThePreviewIdentity();
   void cropApplyEmitsTheTypedRectangle();
   void theCropPresetsFitInsideTheDocument();
+  void aGrowingCropReachesOutsideThePicture();
   void theCropRatioLinksTheSides();
   void theCropAnchorPlacesTheRectangle();
   void theLiveCropShowsOnlyItsOwnDraft();
@@ -250,7 +252,12 @@ void TestEditor::init()
     }
     QTRY_VERIFY_WITH_TIMEOUT(!dialog->property("visible").toBool(), 2000);
     if (qstrcmp(name, "resizeDialog") == 0) {
-      dialog->setProperty("fillColor", QColor(QStringLiteral("#ffffff")));
+      // The form owns customColor/backgroundMode/filter now; a case that chose
+      // a background must not decide what the next one opens on.
+      dialog->setProperty("customColor", QColor(QStringLiteral("#808080")));
+      dialog->setProperty("backgroundMode", QStringLiteral("none"));
+      dialog->setProperty("filter", QStringLiteral("auto"));
+      dialog->setProperty("constraint", true);
     }
   }
   for (const char* name : {"cropWidth", "cropHeight"}) {
@@ -269,6 +276,15 @@ void TestEditor::init()
   m_editor->setProperty("cropRatio", QStringLiteral("free"));
   m_editor->setProperty("cropAnchor", QStringLiteral("center"));
   m_editor->setProperty("cropLivePreview", false);
+  m_editor->setProperty("cropMode", QStringLiteral("center"));
+  m_editor->setProperty("cropFill", QStringLiteral("transparent"));
+  m_editor->setProperty("cropFillColor", QColor(QStringLiteral("#808080")));
+  if (QQuickItem* box = visualItem(QStringLiteral("cropMode"))) {
+    box->setProperty("currentIndex", 0);
+  }
+  if (QQuickItem* box = visualItem(QStringLiteral("cropBackground"))) {
+    box->setProperty("currentIndex", 0);
+  }
   m_editor->setProperty("cropCurrentRatio",
                         QVariantMap{{QStringLiteral("width"), 0},
                                     {QStringLiteral("height"), 0}});
@@ -481,17 +497,26 @@ void TestEditor::theResizeDialogStartsFromTheDocumentSize()
   QCOMPARE(preset->property("currentIndex").toInt(), -1);
   QCOMPARE(preset->property("displayText").toString(), QStringLiteral("Custom"));
 
+  // The keyboard path: the form opens with the width focused and selected, so
+  // Ctrl+Alt+I then typing replaces the number instead of appending to it.
+  QTRY_VERIFY(width->hasActiveFocus());
+  QTRY_COMPARE(width->property("selectedText").toString(), QStringLiteral("4000"));
+
   // That pair is Core's no-op, so Apply says so before it is pressed.
   QVERIFY(!expectItem("resizeApply")->property("enabled").toBool());
 
-  // The switch sits on the dialog's own dark surface. Its label comes from the
-  // theme, not from the platform palette: a Popup built inside the workspace's
-  // Loader resolves the platform's light palette, and the first screenshot of
-  // this form showed the label dark-on-dark.
-  const QColor themeText = readQml(m_editor, "theme.text").value<QColor>();
-  QQuickItem* box = expectItem("resizePadToFit");
-  QCOMPARE(readQml(box, "contentItem.color").value<QColor>(), themeText);
-  QVERIFY(box->property("contentItem").value<QObject*>() != nullptr);
+  // The chain starts locked to the document's shape, the background starts on
+  // the existing cover crop, and the filter starts on Auto: the three answers
+  // the form offers are described before anything is typed.
+  QQuickItem* chain = expectItem("resizeConstraint");
+  QVERIFY(chain->isVisible());
+  QVERIFY(chain->property("checked").toBool());
+  QCOMPARE(expectItem("resizeBackground")->property("currentIndex").toInt(), 0);
+  QCOMPARE(expectItem("resizeBackground")->property("currentText").toString(),
+           QStringLiteral("None"));
+  QCOMPARE(expectItem("resizeFilter")->property("currentIndex").toInt(), 0);
+  QCOMPARE(expectItem("resizeFilter")->property("currentText").toString(),
+           QStringLiteral("Auto"));
 
   // The whole form fits the dialog at the test host's size. `isVisible` does
   // not notice clipping by the Flickable, so this is the measurement that
@@ -784,13 +809,17 @@ void TestEditor::resizeApplyEmitsTheTypedSize()
   // Resize has no anchor: where the result sits is a Crop decision.
   QVERIFY(!command.contains(QStringLiteral("anchor")));
   QVERIFY(command.value("fill").isNull());
+  QCOMPARE(command.value("fill_alpha").toInt(), 255);
+  QCOMPARE(command.value("filter").toString(), QStringLiteral("auto"));
   // Apply ends the question: the form is gone once the size has been asked.
   QTRY_VERIFY(!resizeDialogObject()->property("opened").toBool());
 }
 
 /// The dropdown offers concrete sizes for every ratio, whose sides are exact
 /// multiples of 64, so a preset never produces fractional pixels at any scale.
-/// Choosing one fills both fields and selects the ratio that goes with them.
+/// Choosing one fills both fields and becomes the shape the chain keeps; the
+/// shared ratio table is Crop's now, so this case checks it is still the short
+/// common list the two tools were given.
 void TestEditor::theResizePresetsAreMultiplesOf64()
 {
   setState(documentState());
@@ -865,17 +894,20 @@ void TestEditor::theResizePresetsAreMultiplesOf64()
   QTRY_COMPARE(height->property("text").toString(), QStringLiteral("1024"));
   QCOMPARE(dropdown->property("displayText").toString(),
            QStringLiteral("1:1 · 1024 × 1024"));
-  QCOMPARE(resizeDialogObject()->property("ratio").toString(), QStringLiteral("1:1"));
+  // The preset also becomes the shape the chain keeps, without a ratio combo.
+  const QVariantMap locked = resizeDialogObject()->property("lockedRatio").toMap();
+  QCOMPARE(locked.value("width").toInt(), 1024);
+  QCOMPARE(locked.value("height").toInt(), 1024);
 }
 
-/// Resize lines the two sides up through the chosen ratio: typing one side
-/// recalculates the other, so a field pair can never describe a shape the user
-/// did not pick. "Free" is the only unlinked choice.
+/// The chain is the whole aspect lock: on, typing one side recalculates the
+/// other from the shape the form captured; off, the pair is two independent
+/// numbers. There is no ratio list to disagree with it.
 void TestEditor::typingOneSideKeepsTheChosenRatio()
 {
   setState(documentState());  // 4000 × 3000
   openResizeDialog();
-  QCOMPARE(resizeDialogObject()->property("ratio").toString(), QStringLiteral("original"));
+  QCOMPARE(resizeDialogObject()->property("constraint").toBool(), true);
 
   QQuickItem* width = expectItem("resizeWidth");
   QQuickItem* height = expectItem("resizeHeight");
@@ -888,31 +920,24 @@ void TestEditor::typingOneSideKeepsTheChosenRatio()
   QCOMPARE(width->property("text").toString(), QStringLiteral("1600"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("1200"));
 
-  // A square ratio keeps both sides equal.
-  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("1:1")))));
-  QCOMPARE(resizeDialogObject()->property("ratio").toString(), QStringLiteral("1:1"));
-  typeInto(width, QStringLiteral("512"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("512"));
-
-  // A 16:9 ratio is exact on both sides.
-  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("16:9")))));
-  typeInto(width, QStringLiteral("1024"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
-
-  // Free stops linking: the other side stays where it was.
-  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  // Unlocking stops the link: the other side stays where it was.
+  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setConstraint",
+                                    Q_ARG(QVariant, false)));
   typeInto(width, QStringLiteral("300"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("300"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("576"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1200"));
+
+  // Locking again captures the pair on screen — 300:1200 — not the document's
+  // 4:3, which is what makes "constrain" useful after a custom pair is typed.
+  QVERIFY(QMetaObject::invokeMethod(resizeDialogObject(), "setConstraint",
+                                    Q_ARG(QVariant, true)));
+  typeInto(width, QStringLiteral("600"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("2400"));
 }
 
-/// "Keep current ratio" freezes the W:H pair on screen and keeps later edits at
-/// that shape. It belongs to the form that used it: the Resize dialog's lock
-/// does not reach Crop, and a fresh visit asks the question again from the
-/// document's size rather than resuming the last answer.
+/// The lock is a snapshot of the pair on screen, and it belongs to this form:
+/// Crop's ratio table is untouched, and a fresh visit asks the question again
+/// from the document's size rather than resuming the previous answer.
 void TestEditor::theCurrentRatioLocksTheTypedPair()
 {
   setState(documentState());  // 4000 × 3000
@@ -921,18 +946,17 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
 
   QQuickItem* width = expectItem("resizeWidth");
   QQuickItem* height = expectItem("resizeHeight");
-  QVERIFY(QMetaObject::invokeMethod(dialog, "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
+  QVERIFY(QMetaObject::invokeMethod(dialog, "setConstraint",
+                                    Q_ARG(QVariant, false)));
   typeInto(width, QStringLiteral("1000"));
   typeInto(height, QStringLiteral("700"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("700"));
 
-  // Picking it snapshots what the two fields hold, not the document's 4:3.
-  QVERIFY(QMetaObject::invokeMethod(dialog, "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("current")))));
-  QCOMPARE(dialog->property("ratio").toString(), QStringLiteral("current"));
-  const QVariantMap captured = dialog->property("currentRatio").toMap();
+  // Enabling the chain snapshots what the two fields hold, not the document.
+  QVERIFY(QMetaObject::invokeMethod(dialog, "setConstraint",
+                                    Q_ARG(QVariant, true)));
+  const QVariantMap captured = dialog->property("lockedRatio").toMap();
   QCOMPARE(captured.value("width").toInt(), 1000);
   QCOMPARE(captured.value("height").toInt(), 700);
 
@@ -941,7 +965,7 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
   typeInto(height, QStringLiteral("700"));
   QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
 
-  // Crop has its own snapshot: a 3:2 crop must not change the 10:7 resize.
+  // Crop has its own ratio table: a 3:2 crop must not change the resize lock.
   closeResizeDialog(expectItem("resizeCancel"));
   QTRY_VERIFY(!dialog->property("opened").toBool());
   selectTool("crop");
@@ -960,81 +984,52 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
   openResizeDialog();
   QCOMPARE(expectItem("resizeWidth")->property("text").toString(), QStringLiteral("4000"));
   QCOMPARE(expectItem("resizeHeight")->property("text").toString(), QStringLiteral("3000"));
-  QCOMPARE(dialog->property("ratio").toString(), QStringLiteral("original"));
+  QCOMPARE(dialog->property("constraint").toBool(), true);
+  const QVariantMap fresh = dialog->property("lockedRatio").toMap();
+  QCOMPARE(fresh.value("width").toInt(), 4000);
+  QCOMPARE(fresh.value("height").toInt(), 3000);
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// Width and Height carry a small +/- pair. An empty field starts from the size
-/// its placeholder shows, and a step takes the same link path as typing; Free
-/// leaves the other side alone.
-void TestEditor::theSizeSteppersNudgeBothSides()
+/// The chain button is the lock. Pressing it off leaves the two fields
+/// independent; pressing it on captures the pair and links them again. The old
+/// +/- steppers are gone, so this is the only view-owned way to change the
+/// shape without typing.
+void TestEditor::theConstraintButtonLocksTheTwoSides()
 {
   setState(documentState());  // 4000 × 3000
   openResizeDialog();
   QObject* dialog = resizeDialogObject();
 
+  QQuickItem* chain = expectItem("resizeConstraint");
+  QVERIFY(chain->isVisible());
+  QVERIFY(chain->property("checked").toBool());
   QQuickItem* width = expectItem("resizeWidth");
   QQuickItem* height = expectItem("resizeHeight");
-  for (const char* name : {"resizeWidthStepUp", "resizeWidthStepDown",
-                           "resizeHeightStepUp", "resizeHeightStepDown"}) {
-    QVERIFY2(expectItem(name)->isVisible(), name);
-  }
 
-  // An empty field shows 4000 as its placeholder; + starts there, not at 1.
-  width->setProperty("text", QString());
-  clickItem(expectItem("resizeWidthStepUp"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("3001"));
-  clickItem(expectItem("resizeWidthStepDown"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
+  // Pressing the chain off leaves Height alone.
+  clickItem(chain);
+  QVERIFY(!dialog->property("constraint").toBool());
+  width->setProperty("text", QStringLiteral("1000"));
+  QMetaObject::invokeMethod(width, "textEdited");
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
   QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
 
-  clickItem(expectItem("resizeHeightStepUp"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("3001"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
-  clickItem(expectItem("resizeHeightStepDown"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
-
-  // Three presses in a row keep moving both linked sides.
-  for (int press = 1; press <= 3; ++press) {
-    clickItem(expectItem("resizeWidthStepUp"));
-    QCOMPARE(width->property("text").toString(), QString::number(4000 + press));
-  }
-  QCOMPARE(height->property("text").toString(), QStringLiteral("3002"));
-  for (int press = 1; press <= 3; ++press) {
-    clickItem(expectItem("resizeWidthStepDown"));
-  }
-  QCOMPARE(width->property("text").toString(), QStringLiteral("4000"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
-
-  // Both ends stay inside the validators instead of making the linked field
-  // invalid and disabling Apply.
-  width->setProperty("text", QStringLiteral("20000"));
-  height->setProperty("text", QStringLiteral("20000"));
-  clickItem(expectItem("resizeWidthStepUp"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("20000"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("15000"));
-  width->setProperty("text", QStringLiteral("1"));
-  height->setProperty("text", QStringLiteral("1"));
-  clickItem(expectItem("resizeWidthStepDown"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("1"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("1"));
-
-  // Free is the unlinked choice: nudging one side leaves the other.
-  QVERIFY(QMetaObject::invokeMethod(dialog, "setRatio",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("free")))));
-  width->setProperty("text", QStringLiteral("4000"));
-  height->setProperty("text", QStringLiteral("3000"));
-  clickItem(expectItem("resizeWidthStepUp"));
-  QCOMPARE(width->property("text").toString(), QStringLiteral("4001"));
-  QCOMPARE(height->property("text").toString(), QStringLiteral("3000"));
+  // Pressing it on locks the 1000 × 3000 pair on screen.
+  clickItem(chain);
+  QVERIFY(dialog->property("constraint").toBool());
+  const QVariantMap locked = dialog->property("lockedRatio").toMap();
+  QCOMPARE(locked.value("width").toInt(), 1000);
+  QCOMPARE(locked.value("height").toInt(), 3000);
+  width->setProperty("text", QStringLiteral("500"));
+  QMetaObject::invokeMethod(width, "textEdited");
+  QCOMPARE(height->property("text").toString(), QStringLiteral("1500"));
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The pad colour travels with the typed command; the anchor does not exist any
-/// more. Fitting the whole image and centring the leftover is Core's job, not
-/// the view's.
+/// The background and filter travel with the typed command; the anchor does not
+/// exist any more. Fitting the whole image and centring the leftover is Core's
+/// job, not the view's.
 void TestEditor::resizeCarriesThePadFill()
 {
   setState(documentState());
@@ -1047,24 +1042,19 @@ void TestEditor::resizeCarriesThePadFill()
   QVERIFY(findObject(QStringLiteral("anchor_top_left")) == nullptr);
   QVERIFY(findObject(QStringLiteral("halfSize")) == nullptr);
 
-  QQuickItem* pad = expectItem("resizePadToFit");
-  clickItem(pad);
-  QTRY_VERIFY(dialog->property("padFit").toBool());
-  QVERIFY(expectItem("resizeFillColorButton")->isVisible());
+  // The background is always visible, not a checkbox that reveals a row.
+  QQuickItem* background = expectItem("resizeBackground");
+  QVERIFY(background->isVisible());
+  QVERIFY(!expectItem("resizeBackgroundSwatch")->isVisible());
+  QCOMPARE(background->property("count").toInt(), 6);
+  QCOMPARE(background->property("currentText").toString(), QStringLiteral("None"));
 
-  // Pad to fit adds the colour row and its explanation, which is the tallest
-  // the form gets. A short window scrolls it (this dialog caps its height at
-  // the window), so the viewport has to be tall enough for everything at the
-  // size this suite runs at — `isVisible` would not notice the Flickable's
-  // clipping, and an early screenshot showed exactly that.
-  QQuickItem* content = expectItem("resizeContent");
-  QQuickItem* column = expectItem("resizeColumn");
-  QVERIFY2(column->implicitHeight() + 40 <= content->height(),
-           qPrintable(QStringLiteral("the padded form is %1 px tall in a %2 px viewport")
-                          .arg(column->implicitHeight() + 40)
-                          .arg(content->height())));
-
-  dialog->setProperty("fillColor", QColor(255, 0, 0));
+  // A custom colour is the same command shape as the old pad fill: three RGB
+  // bytes, an opaque alpha and the chosen filter.
+  dialog->setProperty("backgroundMode", QStringLiteral("custom"));
+  dialog->setProperty("customColor", QColor(255, 0, 0));
+  dialog->setProperty("filter", QStringLiteral("bicubic"));
+  QVERIFY(expectItem("resizeBackgroundSwatch")->isVisible());
   expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
   expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
   QTest::qWait(20);
@@ -1079,6 +1069,58 @@ void TestEditor::resizeCarriesThePadFill()
   QCOMPARE(fill.at(0).toInt(), 255);
   QCOMPARE(fill.at(1).toInt(), 0);
   QCOMPARE(fill.at(2).toInt(), 0);
+  QCOMPARE(command.value("fill_alpha").toInt(), 255);
+  QCOMPARE(command.value("filter").toString(), QStringLiteral("bicubic"));
+
+  // `Transparent` is the same pad with alpha 0, so Core can leave the leftover
+  // clear instead of painting a colour there.
+  QTRY_VERIFY(!dialog->property("opened").toBool());
+  openResizeDialog();
+  dialog->setProperty("backgroundMode", QStringLiteral("transparent"));
+  expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
+  expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
+  QTest::qWait(20);
+  clickItem(expectItem("resizeApply"));
+  QCOMPARE(m_commands->count(), 2);
+  const QVariantMap clear = m_commands->at(1).at(0).toMap();
+  QCOMPARE(clear.value("fill_alpha").toInt(), 0);
+}
+
+/// Ctrl+Alt+I opens the form through the window shortcut; inside it the
+/// keyboard route is Width (selected) → Tab → Height → Enter → Apply. This case
+/// drives the form's own focus path (the window shortcut is a source guard in
+/// `tst_settings`): open on the palette, type a width, Tab, type a height, Enter.
+void TestEditor::theResizeKeyboardReachesWidthHeightAndApply()
+{
+  setState(documentState());
+  openResizeDialog();
+  QObject* dialog = resizeDialogObject();
+
+  QQuickItem* width = expectItem("resizeWidth");
+  QQuickItem* height = expectItem("resizeHeight");
+  QTRY_VERIFY(width->hasActiveFocus());
+  QTRY_COMPARE(width->property("selectedText").toString(), QStringLiteral("4000"));
+
+  // Typing replaces the selected document width.
+  typeInto(width, QStringLiteral("800"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("800"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("600"));
+
+  // Tab lands on Height, and typing there keeps the chain's shape.
+  QTest::keyClick(m_view, Qt::Key_Tab);
+  QTRY_VERIFY(height->hasActiveFocus());
+  typeInto(height, QStringLiteral("900"));
+  QCOMPARE(height->property("text").toString(), QStringLiteral("900"));
+  QCOMPARE(width->property("text").toString(), QStringLiteral("1200"));
+
+  // Enter is Apply, not the default button of some other control.
+  QTest::keyClick(m_view, Qt::Key_Return);
+  QTRY_COMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
+  QCOMPARE(command.value("width").toInt(), 1200);
+  QCOMPARE(command.value("height").toInt(), 900);
+  QTRY_VERIFY(!dialog->property("opened").toBool());
 }
 
 /// The Resize form is fields and buttons, nothing else. It used to carry a
@@ -1229,6 +1271,122 @@ void TestEditor::theCropPresetsFitInsideTheDocument()
   QCOMPARE(expectItem("cropX")->property("text").toString(), QStringLiteral("1488"));
   QCOMPARE(expectItem("cropY")->property("text").toString(), QStringLiteral("988"));
   QCOMPARE(m_commands->count(), 0);
+}
+
+/// Crop's second answer to "may the frame leave the picture?": Grow lets the
+/// rectangle start outside the picture and carries a fill colour for the new
+/// border, while Center keeps the old inside-only rule.
+void TestEditor::aGrowingCropReachesOutsideThePicture()
+{
+  setState(documentState());  // 4000 × 3000
+  selectTool("crop");
+
+  // Center is the ordinary cut; Grow adds the fill row and the wider range.
+  QQuickItem* mode = expectItem("cropMode");
+  QVERIFY(mode->isVisible());
+  QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("center"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("grow")))));
+  QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("grow"));
+  QVERIFY(expectItem("cropBackground")->isVisible());
+  QVERIFY(expectItem("cropBackgroundSwatch")->isVisible());
+
+  const QVariantList fills = m_editor->property("cropBackdrops").toList();
+  int black = -1;
+  int transparent = -1;
+  for (int index = 0; index < fills.size(); ++index) {
+    const QString key = fills.at(index).toMap().value("key").toString();
+    if (key == QStringLiteral("black")) black = index;
+    if (key == QStringLiteral("transparent")) transparent = index;
+  }
+  QVERIFY2(black >= 0, "the grow border offers an opaque colour");
+  QVERIFY2(transparent >= 0, "the grow border offers transparency");
+
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
+                                    Q_ARG(QVariant, QVariant(black))));
+  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("black"));
+
+  // A negative origin is part of the typed command: the new canvas begins
+  // before the picture, and the rectangle reaches past both far edges. The
+  // size is typed first because changing a side re-places the rectangle through
+  // its anchor; the origin is the user's own placement and is typed last.
+  QQuickItem* cropX = expectItem("cropX");
+  QQuickItem* cropY = expectItem("cropY");
+  QQuickItem* cropWidth = expectItem("cropWidth");
+  QQuickItem* cropHeight = expectItem("cropHeight");
+  typeInto(cropWidth, QStringLiteral("4200"));
+  typeInto(cropHeight, QStringLiteral("3100"));
+  typeInto(cropX, QStringLiteral("-100"));
+  typeInto(cropY, QStringLiteral("-50"));
+  QTest::qWait(20);
+  QCOMPARE(cropX->property("text").toString(), QStringLiteral("-100"));
+  QCOMPARE(cropY->property("text").toString(), QStringLiteral("-50"));
+
+  // The border the command paints is previewed on the canvas before Apply.
+  QQuickItem* growTop = expectItem("cropGrowTop");
+  QVERIFY(growTop->isVisible());
+  QVERIFY2(growTop->width() > 0 && growTop->height() > 0,
+           "the grown border was not drawn above the picture");
+
+  QQuickItem* apply = expectItem("applyCrop");
+  QVERIFY(apply->property("enabled").toBool());
+  clickItem(apply);
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_crop"));
+  QCOMPARE(command.value("x").toInt(), -100);
+  QCOMPARE(command.value("y").toInt(), -50);
+  QCOMPARE(command.value("width").toInt(), 4200);
+  QCOMPARE(command.value("height").toInt(), 3100);
+  QCOMPARE(command.value("fill").toList(), QVariantList({0, 0, 0}));
+  QCOMPARE(command.value("fill_alpha").toInt(), 255);
+
+  // Transparent is the same grow with alpha 0: the border exists, but it is
+  // clear rather than black.
+  m_commands->clear();
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
+                                    Q_ARG(QVariant, QVariant(transparent))));
+  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("transparent"));
+  typeInto(cropWidth, QStringLiteral("4020"));
+  typeInto(cropHeight, QStringLiteral("3020"));
+  typeInto(cropX, QStringLiteral("-10"));
+  typeInto(cropY, QStringLiteral("-10"));
+  QTest::qWait(20);
+  QVERIFY(apply->property("enabled").toBool());
+  clickItem(apply);
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap clear = m_commands->at(0).at(0).toMap();
+  QCOMPARE(clear.value("fill").toList(), QVariantList({0, 0, 0}));
+  QCOMPARE(clear.value("fill_alpha").toInt(), 0);
+
+  // A Grow rectangle that fits inside the picture has no border to paint, so it
+  // travels as the ordinary cut: a present fill would invite Core to grow the
+  // canvas it is already the size of.
+  m_commands->clear();
+  typeInto(cropWidth, QStringLiteral("800"));
+  typeInto(cropHeight, QStringLiteral("600"));
+  typeInto(cropX, QStringLiteral("100"));
+  typeInto(cropY, QStringLiteral("100"));
+  QTest::qWait(20);
+  QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("grow"));
+  QVERIFY(apply->property("enabled").toBool());
+  clickItem(apply);
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap inside = m_commands->at(0).at(0).toMap();
+  QCOMPARE(inside.value("x").toInt(), 100);
+  QCOMPARE(inside.value("y").toInt(), 100);
+  QVERIFY2(inside.value("fill").isNull(),
+           "an inside Grow rectangle must not carry a fill");
+
+  // Back in Center the same field values are pulled inside the picture again,
+  // so Apply cannot stay armed on a rectangle Core would reject.
+  m_commands->clear();
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("center")))));
+  QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("center"));
+  QVERIFY(cropX->property("text").toInt() >= 0);
+  QVERIFY(cropY->property("text").toInt() >= 0);
+  QVERIFY(!expectItem("cropBackground")->isVisible());
 }
 
 /// Crop links Width and Height the same way Resize does, and each size change
@@ -2120,7 +2278,8 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
   openResizeDialog();
   QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("pointer"));
   for (const char* option : {"resizeWidth", "resizeHeight", "resizeApply", "resizeReset",
-                             "resizeSizePreset", "resizeRatio", "resizePadToFit"}) {
+                             "resizeSizePreset", "resizeConstraint", "resizeBackground",
+                             "resizeFilter"}) {
     QQuickItem* item = expectItem(option);
     QVERIFY2(item->isVisible(), qPrintable(QStringLiteral("%1 is not visible")
                                                .arg(QString::fromLatin1(option))));
@@ -2156,7 +2315,7 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(!resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
   QVERIFY(!expectItem("resizeSizePreset")->isVisible());
-  QVERIFY(!expectItem("resizePadToFit")->isVisible());
+  QVERIFY(!expectItem("resizeBackground")->isVisible());
   QVERIFY(!expectItem("cropX")->isVisible());
   QVERIFY(!expectItem("cropY")->isVisible());
   QVERIFY(!dialog->property("opened").toBool());
@@ -2169,7 +2328,7 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("cropY")->isVisible());
   QVERIFY(!expectItem("resizeSizePreset")->isVisible());
-  QVERIFY(!expectItem("resizePadToFit")->isVisible());
+  QVERIFY(!expectItem("resizeBackground")->isVisible());
   QVERIFY(!resizeApply->isVisible());
   QCOMPARE(m_commands->count(), 0);
 

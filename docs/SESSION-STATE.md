@@ -69,7 +69,12 @@ survives handle and create-drags, the discarded picture is dimmed outside the
 frame and split by rule-of-thirds guides, the rectangle turns through 90° with
 one button, arrows/Shift/Alt nudge and resize it, Enter applies and Escape puts
 the tool down, Apply refuses the whole document, and an applied crop leaves a
-fresh frame on the cropped result.
+fresh frame on the cropped result. The current pass (row 91) turns Resize into a
+scale form: two numbers with one drawn chain, a concrete size preset, an
+always-visible background and a real resampling filter, opened with
+`Ctrl+Alt+I` with Width selected; Crop gains a Center/Grow choice, where Grow
+lets the rectangle leave the picture and paint the new border in a chosen
+colour.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -131,6 +136,21 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `editor-crop`'s `seed`/`swap`/`apply` arguments and its ratio/document log;
   the reworded hint, Apply label and swap tooltip in the `.ts`; the stale
   `Apply crop` C++ row removed; ADR 0011's revision; four screenshots.
+  The current scale-form/crop-grow pass (row 91) is **uncommitted**:
+  `ResizeDialog.qml` (`constraint`/`lockedRatio`, `backgroundMode`/`customColor`,
+  `filter`, the drawn chain, the `resizeRequested` signal), `EditorView.qml`
+  (the resize command's `fill_alpha`/`filter`, Crop's `cropMode`,
+  `cropFill`/`cropFillColor`, the grow border, `revealCropGrowth`), `Main.qml`
+  (the `Ctrl+Alt+I` shortcut), `crates/app-protocol/src/lib.rs`
+  (`ResizeFilter`, `fill_alpha`, signed crop fields and the optional fill),
+  `crates/app-core/src/core.rs` + `editor.rs` (`validate_crop_mode`, `grow_crop`,
+  `resample` per kernel, `fit_with_padding` with alpha), `UiLines.qml` (the grow
+  history and refusal lines), `cpp/main.cpp` (both harness requests and the
+  skill reference), `tests/qml/tst_editor.cpp` (the scale-form cases,
+  `aGrowingCropReachesOutsideThePicture`, the init resets), `i18n/kogaview_vi.ts`
+  (19 new sentences), ADR 0012 and ADR 0011 revisions, and four screenshots
+  under `docs/evidence/`. Nothing is committed yet, so `git status` is the
+  authority for this pass.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -276,6 +296,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 88 | The header had only two states and its floor *was* the icon-only row (~798 px), so a window could not be narrower than the widest workspace toolbar | `ToolbarMetrics.qml` (`*MiniButtons`, `miniToolbarWidth`, `minimumWindowWidth = max(miniToolbarWidth, 260 + 320)`), `Main.qml` (`toolbarMini`), the three views (`visible: !view.miniToolbar` plus one `⋮` overflow menu each, Editor zoom hidden), `Theme.menuEntries` 31–38 appended, the mini fixture and `theFloorIsTheMiniToolbar`, three view cases, ADR 0015 and a revision note in ADR 0010 | toolbar 12, viewer 40, browser 48, editor 49; **real window** at 700 × 620 and at the 580 px floor: Browser 4 buttons, Viewer 5 + counter, Editor 7 with no zoom, each ending in `⋮`; overflow menus open with their folded actions; 2 mutations, each caught |
 | 89 | The three tiers were chosen from the widest workspace, so the Browser folded at ~782 px although it needs 438 and showed labels only at the Editor's ~1000 px; the switcher's three buttons were counted only in that global maximum | per-workspace `*CompactRowWidth`/`*MiniRowWidth`/`*LabelledRowWidth` and `modeFor(workspace,width)` in `ToolbarMetrics.qml`, `Main.qml`'s single `toolbarMode` binding, the per-workspace fixture and six row measurements, `theTierFollowsTheOpenWorkspace`, ADR 0017 + ADR 0015 revision | toolbar 17; real window at 600/700 px: Browser all six icons / labels while Viewer and Editor fold (`M1-toolbar-tier-*.png`); 3 mutations, each caught |
 | 90 | Crop still asked to be typed into: no frame on a fresh document, a chosen ratio broken by every drag, nothing dimmed outside the frame and no thirds, no one-button turn, no keyboard, Reset emptied the form, Apply accepted the whole document (`edit_noop`), and an applied crop left the tool with no frame | `EditorView.qml` (`cropRatio: "free"`, `seedCropFrame`, `cropSeedDebounce` + `refitCropAfterDocumentChange`, ratio-aware `dragCropHandle`/`dragCropCreate`, `cropShade` + four thirds lines, `swapCropOrientation`, arrow/Shift/Alt/Enter/Escape, `cropCanApply`, `applyCrop` order), `cpp/main.cpp` (`editor-crop` `seed`/`swap`/`apply` + ratio/document log), `tst_editor` (six new cases, `resetRestoresTheStartingCropFrame`, free-default assertion), `.ts` (hint, “Apply crop (Enter)”, swap tooltip), ADR 0011 revision | editor 55; real window (Vietnamese, isolated `XDG_*`): seeded 1003 × 1003 frame with shade/thirds (`M1-crop-seed-vi.png`), 4:3 → 3:4 swap to 384 × 512 at (435,371) (`M1-crop-swap-vi.png`, `M1-crop-ratio-locked-en.png`), apply `512 384 742 870` then a fresh 410 × 307 frame on the 512 × 384 document (`M1-crop-applied-vi.png`); 11 mutations caught, one equivalent reordering recorded |
+| 91 | Resize asked for its shape through a ratio table and a `Pad to fit` checkbox, so the form had a stepper, a hidden fill row and no way to say how the pixels are resampled; the lock's icon had also gone blank. Crop could only cut inside the picture, so a photo could never gain a border | `crates/desktop/qml/ResizeDialog.qml` (the +/- steppers and the Ratio combo removed; `constraint` + `lockedRatio` as the only aspect lock, captured when switched on; `Size preset` kept; an always-visible `Background` dropdown — `None` cover-crops, a colour fits and pads, `Transparent` pads at alpha 0 — with its swatch; a `Filter` dropdown; the chain drawn by a `Canvas` because an emoji glyph was blank and a themed icon would depend on the desktop; Width focused and selected on open, `Tab` to Height, `Enter` applies), `crates/desktop/qml/Main.qml` (`Ctrl+Alt+I` opens the form in the Editor), `crates/desktop/qml/EditorView.qml` (the resize command carries `fill_alpha`/`filter`; Crop gains `cropMode` (`center`/`grow`), `cropFill`/`cropFillColor`, signed X/Y, a grow border drawn on the canvas, `revealCropGrowth` zooming out when the fitted view leaves no room, the `cropFillForCommand` rule that an inside Grow rectangle travels as an ordinary crop), `crates/app-protocol/src/lib.rs` (`ResizeFilter` with `auto`/`nearest`/`bilinear`/`bicubic`/`bspline`/`lanczos3`; `fill_alpha` on resize and crop; `EditorCrop`/`EditorCropPreview` take signed `x`/`y` and an optional fill), `crates/app-core/src/editor.rs` (`resample` per kernel, `fit_with_padding` with alpha, `validate_crop_mode`, `grow_crop`, the grow history lines), `core.rs` (dispatch and draft signatures), `UiLines.qml` + `i18n/kogaview_vi.ts` (grow and refusal sentences; 28 new sources, 4 retired with the steppers and the pad), `cpp/main.cpp` (`editor-resize` background/filter/chain arguments; `editor-crop` `_ARG6`/`_ARG7`), `tests/qml/tst_editor.cpp` (the scale-form cases and `aGrowingCropReachesOutsideThePicture`), ADR 0012 and ADR 0011 revisions | `just test` translations 341/109 C++/338 drawn, cargo 85+4, viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 57 · language 7 · toolbar 17; `just build` and `cargo fmt --check` clean, `qmllint` only the pre-existing unqualified-access warnings; **real window** (window grabs, isolated `XDG_*`, Vietnamese): the scale form with the chain drawn in the accent colour at the checked state, `Nền` reading `Đen` and `Bộ lọc` `Bicubic` (`M1-resize-scale-form-vi.png`); `Ctrl+Alt+I` logged `declared 1 allowed 1` and opened the form with `1200` selected in Width (`M1-resize-shortcut-vi.png`); Crop in `Mở rộng` with X `-336`, Y `-224`, 1536 × 1024 and the black border drawn around the 1200 × 800 picture (`M1-crop-grow-border-vi.png`), then Apply sent `editor_crop` (`crop grow 1536 1024 #000000`, `ok:true` rev 4), the document became 1536 × 1024 with its border and a fresh frame was seeded on it (`M1-crop-grow-applied-vi.png`). No hand touched the form: the fields/buttons were driven by the harness and `QShortcutEvent` injection; the filter's visible effect, a real `Ctrl+Alt+I` press and a hand-dragged grow frame are not verified |
 
 ## Test gate
 
@@ -283,18 +304,18 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 317 strings in kogaview_vi.ts, 109 of them compiled into C++, 314 drawn by the QML, 4 looked up by context
+translations: 341 strings in kogaview_vi.ts, 109 of them compiled into C++, 338 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 82 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 55 · language 7 · toolbar 17
+cargo: 85 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 57 · language 7 · toolbar 17
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84, 85, 86, 87, 88 and 89
-add no new warning (the protocol's `Anchor` and the anchored Core helpers are still gone).
+`field_reassign_with_default`, `needless_return`); row 91 adds no new warning (the
+protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
 
@@ -592,14 +613,70 @@ add no new warning (the protocol's `Anchor` and the anchored Core helpers are st
   `edit_noop`, so `cropCanApply()` requires a valid *and* changed rectangle.
   `applyCrop()` puts the form down before the command; the debounce then seeds
   the cropped result's fresh frame.
-- **No new protocol or Core code.** A crop is still `{x, y, width, height}`;
-  the ratio, guides, shade, swap and keyboard all write those four numbers.
+- **No new protocol or Core code at the time.** A crop was still
+  `{x, y, width, height}`; the ratio, guides, shade, swap and keyboard all wrote
+  those four numbers. Row 91's Grow mode later signed the same command's `x`/`y`
+  and gave it an optional fill, so this describes row 90, not the tree today.
+
+## Design decisions, scale form and a growing crop (row 91, ADR 0012 and ADR 0011 revisions)
+
+- **The chain replaces the ratio table.** Resize has one lock, like a scale
+  dialog: switching it on captures the pair currently in the fields (or the
+  document when a field is empty), switching it off leaves the two sides
+  independent, and a preset becomes the locked shape. The Ratio combo and the
+  +/- steppers are gone; `Size preset` stays because a concrete size is a
+  faster answer than two numbers.
+- **Background is a description, not an option to reveal.** `None` is the
+  existing centred cover crop, any colour scales the whole picture to fit and
+  pads the leftover with it, and `Transparent` is that same pad at alpha 0.
+  Because it is always on screen, the old `Pad to fit` checkbox and its hidden
+  colour row have no job; `fill_alpha` on the command is what lets
+  `Transparent` be a colour with alpha 0 rather than a special mode.
+- **The filter is real pixels.** `ResizeFilter` travels in `editor_resize` and
+  becomes an `image` kernel in Core. `Auto` keeps the fast `thumbnail` path on a
+  downscale and Lanczos3 when enlarging, so the default does not regress the
+  large-JPEG path row 79 measured. A filter that changed only its label would
+  have been a menu, not a control.
+- **The chain is drawn on a Canvas.** An emoji link glyph was blank in this
+  session's font and a themed `Icon` would depend on the desktop's icon set, so
+  two capsule outlines on a diagonal are painted in the theme's colours; the
+  accent is the "locked" state. This is also why the first version of the
+  control looked empty.
+- **Keyboard: the form is reachable without a pointer.** `Ctrl+Alt+I` opens it
+  from the Editor (gated by the shell's modal state), Width receives focus with
+  its number selected, `Tab` moves to Height, and Enter in either field applies.
+  `focusPending` keeps retrying until the field really owns the keyboard,
+  because `forceActiveFocus` before the popup is visible does nothing.
+- **Crop's fill is its mode.** `center` keeps the row-90 inside-only rule;
+  `grow` allows a negative origin and a rectangle past the right/bottom edges,
+  and the command carries `fill` + `fill_alpha`. A present fill means Core may
+  create the larger canvas; an absent one keeps the ordinary cut, which is why
+  a Grow rectangle that still lies inside the picture travels as a normal crop.
+  Core still refuses a rectangle that misses the picture entirely
+  (`crop_outside_document`) and a growth past `MAX_DOCUMENT_PIXELS`
+  (`crop_too_large`), so Grow is a border, never a blank coloured page.
+- **Grow has to be visible before Apply.** The canvas paints the part of the
+  frame outside the picture in the chosen fill, so the border is a preview, not
+  a surprise. Choosing Grow also steps the fitted view back once
+  (`revealCropGrowth`) when the fit leaves less than 12 % margin, because the
+  canvas host clips at its edge and there would be nowhere to drag the frame
+  outward; a view with enough room is left alone.
+- **The four fields stay the one rectangle.** Grow relaxes the same typed
+  fields, the same eight handles and the same drag code; typing `-336`/`-224`
+  and dragging a handle write the same numbers. Switching back to Center pulls
+  the rectangle into the picture again, so Apply is never armed for a rectangle
+  Core would reject.
+- **Core's grow is a copy, then a fill.** `grow_crop` allocates the requested
+  canvas, paints it with the fill at the requested alpha, and copies the
+  intersection of the picture and the rectangle into its place. That is why a
+  grow is a snapshot for undo, and why its history line says
+  `Grow to W × H · #rrggbb border` (or `transparent border`).
 
 ## Design decisions, resize-dialog session (rows 83, ADR 0012 and 0013)
 
 - **A size is a question, not a mode.** `ResizeDialog.qml` owns the form, its
-  fields, its ratio and preset lists, its pad and its Live preview toggle, and
-  resets them from the document every time it opens. The palette's `Resize…`
+  fields, its preset list and — since row 91 — its chain, background and filter,
+  and resets them from the document every time it opens. The palette's `Resize…`
   opens it and keeps `view.tool` on `pointer`; the button stays highlighted
   while the dialog is up, so the palette still says where the question came
   from. Crop and Transform stay inspector tools because their answers are drawn
@@ -634,7 +711,9 @@ add no new warning (the protocol's `Anchor` and the anchored Core helpers are st
 - **The size form has no picture (row 84).** The framed preview and its
   `Live preview` switch were removed: the asynchronous image made the dialog
   read as loading before it settled, and the picture behind the modal already
-  shows the document. The form is fields, ratio, preset, pad and footer; the
+  shows the document. The concept the row-83 form had (draft inside the form)
+  is gone entirely; row 91 then removed the ratio list and the pad too. The
+  form is two numbers, a chain, a preset, a background and a filter; the
   content column takes its width from `dialog.width - 40` so the first layout
   does not use the popup's pre-open width, and a QML case asserts the height
   does not move after the first layout. `editor_resize_preview` still exists in
@@ -1062,6 +1141,39 @@ for clarity, and is not claimed to fix anything.
   `crates/desktop/build.rs` so they never ship.
 
 ## Known gaps, in the words they were last measured with
+
+- **No hand pressed the chain, the dropdowns, or `Ctrl+Alt+I`.** Row 91's window
+  runs filled the form through `KOGAVIEW_DEV_UI_REQUEST=editor-resize` (which now
+  calls the background chooser and writes the filter through the same
+  properties a pick does) and pressed Apply from the hook; the shortcut case
+  used `KOGAVIEW_DEV_KEY`, which hands the `Shortcut` the `QShortcutEvent` its
+  handler consumes. The screenshot shows the chain in its checked accent and
+  `1200` selected in Width, but no compositor delivered a physical key, and no
+  click landed on the swatch, the filter row or the chain.
+- **The filter is proven different, not proven better.** Core's
+  `the_resize_filter_changes_the_pixels` asserts Nearest keeps only source
+  values while Bilinear, Lanczos3 and `Auto` interpolate and differ from it.
+  The visual quality of each kernel was not compared on a photograph, and the
+  `Auto` path's timing on a 27 MP JPEG was not re-measured after the change;
+  `Auto` still uses `imageops::thumbnail` for a downscale, which is row 79's
+  path unchanged.
+- **The grow border was photographed opaque, not transparent.** The window runs
+  grew a 1200 × 800 picture to 1536 × 1024 with a black border
+  (`M1-crop-grow-border-vi.png`, `M1-crop-grow-applied-vi.png`) and the journal
+  recorded `crop grow 1536 1024 #000000`; `fill_alpha = 0` is covered by Core's
+  test and the QML command case only. Choosing Grow zoomed the view from 63 % to
+  45 %, which is `revealCropGrowth` doing its one step, but the 12 % margin rule
+  was not measured at its boundary, and no hand dragged a frame past the
+  picture.
+- **A Grow rectangle that stays inside the picture is sent as an ordinary
+  crop** (`cropFillForCommand`), so its history line says Crop rather than Grow.
+  That rule follows from "a fill means the canvas may grow"; the QML case now
+  asserts the inside-Grow command carries no fill, but no user asked for the
+  behaviour and no window run exercised it.
+- **The Resize form still draws the platform's light fields** inside a dark
+  window, exactly as the row-83 form did. `Background`'s swatch follows the
+  theme, but the combo boxes and text fields are the style's own boxes; that
+  contrast was not changed in this pass.
 
 - **No physical key reaches the copy bindings either.** Row 87's
   `KOGAVIEW_DEV_KEY` hands each `Shortcut` the `QShortcutEvent` its handler
