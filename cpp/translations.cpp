@@ -79,7 +79,6 @@ static const Entry kEntries_vi[] = {
   { "Height", "Cao" },
   { "Apply", "Áp dụng" },
   { "Crop", "Cắt" },
-  { "Apply crop", "Áp dụng cắt" },
   // context: Main
   { "Open images", "Mở ảnh" },
   { "Open an image for editing", "Mở ảnh để chỉnh sửa" },

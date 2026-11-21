@@ -58,8 +58,12 @@ Item {
     /// Crop links Width and Height through this ratio, so the two fields can
     /// never describe a different shape than the one the user picked. `free` is
     /// the only unlinked choice; `original` follows the document's own aspect
-    /// and `current` the pair the user had on screen when it was picked.
-    property string cropRatio: "original"
+    /// and `current` the pair the user had on screen when it was picked. Crop
+    /// starts free, the way a crop tool does when nothing constrains it: a
+    /// frame dragged on the picture keeps the shape the user drew, and picking
+    /// a ratio is an explicit lock. Resize's dialog keeps its own default
+    /// (`original`), because scaling a picture usually keeps its shape.
+    property string cropRatio: "free"
     /// The pair captured when "Keep current ratio" was picked. Zero means "not
     /// captured yet": the document's aspect is the fallback. Resize keeps its
     /// own snapshot inside its dialog, so a crop choice cannot reach it.
@@ -232,6 +236,37 @@ Item {
         var control = (event.modifiers & Qt.ControlModifier) !== 0
         var alt = (event.modifiers & Qt.AltModifier) !== 0
         var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+        // Crop owns the arrow keys while it is armed: they nudge the rectangle,
+        // Shift steps 10 px and Alt grows or shrinks it. Enter applies and
+        // Escape puts the tool down, which is what every crop tool's keyboard
+        // does. A focused text field still consumes these first, because this
+        // handler runs on the view only while the view has focus.
+        if (!control && view.tool === "crop" && view.documentReady) {
+            var cropStep = shift ? 10 : 1
+            if (event.key === Qt.Key_Escape) {
+                view.tool = "pointer"
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (view.cropCanApply()) view.applyCrop()
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Left || event.key === Qt.Key_Right
+                    || event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                if (view.cropHasRect()) {
+                    var dx = event.key === Qt.Key_Left ? -cropStep
+                             : event.key === Qt.Key_Right ? cropStep : 0
+                    var dy = event.key === Qt.Key_Up ? -cropStep
+                             : event.key === Qt.Key_Down ? cropStep : 0
+                    if (alt) view.resizeCropBy(dx, dy)
+                    else view.moveCropBy(dx, dy)
+                }
+                event.accepted = true
+                return
+            }
+        }
         if (control || alt) {
             if (control && !alt && (event.key === Qt.Key_Z || event.key === Qt.Key_Y)) {
                 var redo = event.key === Qt.Key_Y || shift
@@ -688,6 +723,207 @@ Item {
             height: cropHeightField.acceptableInput ? parseInt(cropHeightField.text) : 0
         }
     }
+
+    /// The chosen ratio as width / height, or 0 when the sides are free.
+    function cropRatioAspect() {
+        var factor = view.ratioFactor(view.cropRatio)
+        if (!factor || !(factor.width > 0) || !(factor.height > 0)) return 0
+        return factor.width / factor.height
+    }
+
+    function cropHasRect() {
+        var rect = view.cropRect
+        return rect.width > 0 && rect.height > 0
+    }
+
+    /// A crop that keeps every pixel is not an edit: Core would only answer
+    /// `edit_noop`, and the Apply button should say so instead of sending it.
+    function cropChanged() {
+        if (!view.cropHasRect()) return false
+        var rect = view.cropRect
+        return !(rect.x === 0 && rect.y === 0
+                 && rect.width === view.documentWidth
+                 && rect.height === view.documentHeight)
+    }
+
+    function cropCanApply() {
+        return view.cropFieldsValid() && view.cropChanged()
+    }
+
+    /// Reshape the rectangle to the newly chosen ratio, keeping the current
+    /// width as the starting point and shrinking both sides if the document
+    /// cannot hold that shape. A fixed 16:9 picked on a portrait document
+    /// therefore lands as the largest 16:9 rectangle that fits, not as a
+    /// rectangle Core would reject.
+    function reshapeCropToRatio() {
+        if (!view.hasDocument) return
+        var factor = view.ratioFactor(view.cropRatio)
+        if (!factor) {
+            view.applyCropAnchor()
+            cropPreset.currentIndex = view.matchingCropPreset()
+            return
+        }
+        var width = cropWidthField.acceptableInput ? parseInt(cropWidthField.text) : 0
+        if (!(width > 0)) width = view.documentWidth
+        var height = width * factor.height / factor.width
+        var scale = Math.min(1, view.documentWidth / width,
+                             view.documentHeight / height)
+        width = Math.max(1, Math.round(width * scale))
+        height = Math.max(1, Math.round(width * factor.height / factor.width))
+        if (height > view.documentHeight) {
+            height = view.documentHeight
+            width = Math.max(1, Math.round(height * factor.width / factor.height))
+        }
+        if (width > view.documentWidth) {
+            width = view.documentWidth
+            height = Math.max(1, Math.round(width * factor.height / factor.width))
+        }
+        cropWidthField.text = String(width)
+        cropHeightField.text = String(height)
+        view.applyCropAnchor()
+        cropPreset.currentIndex = view.matchingCropPreset()
+        draftDebounce.restart()
+    }
+
+    /// The other orientation of a named ratio; an empty answer means the shape
+    /// has no named counterpart in the short list and is kept as "current".
+    function swappedRatioKey(key) {
+        if (key === "1:1") return "1:1"
+        if (key === "4:3") return "3:4"
+        if (key === "3:4") return "4:3"
+        if (key === "16:9") return "9:16"
+        if (key === "9:16") return "16:9"
+        return ""
+    }
+
+    /// Turn the rectangle through 90° around its own centre — the crop-tool
+    /// "swap orientation" every common editor offers, useful for a portrait
+    /// cut out of a landscape frame and back. The pair stays inside the
+    /// document; a named ratio moves to its counterpart, and a free, original
+    /// or captured shape becomes "Keep current ratio" for the new pair.
+    function swapCropOrientation() {
+        if (!view.documentReady || !view.cropHasRect()) return
+        var rect = view.cropRect
+        var centreX = rect.x + rect.width / 2
+        var centreY = rect.y + rect.height / 2
+        var width = Math.max(1, rect.height)
+        var height = Math.max(1, rect.width)
+        var scale = Math.min(1, view.documentWidth / width,
+                             view.documentHeight / height)
+        width = Math.max(1, Math.round(width * scale))
+        height = Math.max(1, Math.round(height * scale))
+        view.setCropRect(Math.round(centreX - width / 2),
+                         Math.round(centreY - height / 2), width, height)
+        if (view.cropRatio === "free") return
+        var swapped = view.swappedRatioKey(view.cropRatio)
+        if (swapped) {
+            view.cropRatio = swapped
+        } else {
+            view.cropCurrentRatio = { width: width, height: height }
+            view.cropRatio = "current"
+        }
+        cropRatioBox.currentIndex = view.cropRatioIndex
+        cropPreset.currentIndex = view.matchingCropPreset()
+    }
+
+    /// Arrow-key nudges. The rectangle is clamped by `setCropRect`, so holding
+    /// a key at an edge stops there instead of walking out of the document.
+    function moveCropBy(deltaX, deltaY) {
+        if (!view.cropHasRect()) return
+        var rect = view.cropRect
+        view.setCropRect(rect.x + deltaX, rect.y + deltaY, rect.width, rect.height)
+    }
+
+    /// Alt+arrow resize keeps the centre and, with a ratio chosen, the shape:
+    /// a width step derives the height (and the other way round), then both
+    /// shrink together if the document cannot hold them.
+    function resizeCropBy(deltaWidth, deltaHeight) {
+        if (!view.cropHasRect()) return
+        var rect = view.cropRect
+        var width = Math.max(1, rect.width + deltaWidth)
+        var height = Math.max(1, rect.height + deltaHeight)
+        var aspect = view.cropRatioAspect()
+        if (aspect > 0) {
+            if (deltaWidth !== 0) height = Math.max(1, Math.round(width / aspect))
+            else if (deltaHeight !== 0) width = Math.max(1, Math.round(height * aspect))
+        }
+        var scale = Math.min(1, view.documentWidth / width,
+                             view.documentHeight / height)
+        width = Math.max(1, Math.round(width * scale))
+        height = Math.max(1, Math.round(height * scale))
+        var centreX = rect.x + rect.width / 2
+        var centreY = rect.y + rect.height / 2
+        view.setCropRect(centreX - width / 2, centreY - height / 2, width, height)
+    }
+
+    function clearCropFields() {
+        cropWidthField.text = ""
+        cropHeightField.text = ""
+        cropX.text = "0"
+        cropY.text = "0"
+        cropPreset.currentIndex = -1
+    }
+
+    /// Apply is the only place a crop reaches Core. The tool stays armed and
+    /// the next document size seeds a fresh frame; live preview is put down so
+    /// the frame, not a draft of the whole result, is what returns.
+    function applyCrop() {
+        if (!view.cropCanApply()) return
+        var rect = view.cropRect
+        // Put the fields down *before* the command, not after: the gateway
+        // publishes the cropped document before `command()` returns, and the
+        // document-size handlers seed a fresh frame only while the fields are
+        // empty. Clearing afterwards left the tool armed with no frame at all.
+        view.cropLivePreview = false
+        view.clearCropFields()
+        view.command({
+            type: "editor_crop",
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height
+        })
+    }
+
+    /// Reset is the starting rectangle again — the default free ratio's frame
+    /// at four fifths of the picture, centred — not an empty form: a crop tool
+    /// always has a frame to drag.
+    function resetCrop() {
+        view.cropRatio = "free"
+        view.cropAnchor = "center"
+        cropRatioBox.currentIndex = view.cropRatioIndex
+        view.clearCropFields()
+        view.seedCropFrame(true)
+    }
+
+    /// A drag on the empty canvas builds a rectangle from the press to the
+    /// pointer. With a ratio chosen, the shape is fitted to that ratio before
+    /// it is clamped to the document, so a square drag draws a square.
+    function dragCropCreate(startHostX, startHostY, hostX, hostY) {
+        if (!view.documentReady) return
+        var documentWidth = view.documentWidth
+        var documentHeight = view.documentHeight
+        var startX = Math.max(0, Math.min(documentWidth, view.hostToDocX(startHostX)))
+        var startY = Math.max(0, Math.min(documentHeight, view.hostToDocY(startHostY)))
+        var endX = Math.max(0, Math.min(documentWidth, view.hostToDocX(hostX)))
+        var endY = Math.max(0, Math.min(documentHeight, view.hostToDocY(hostY)))
+        var width = Math.max(1, Math.abs(endX - startX))
+        var height = Math.max(1, Math.abs(endY - startY))
+        var aspect = view.cropRatioAspect()
+        if (aspect > 0) {
+            if (width / height > aspect) width = height * aspect
+            else height = width / aspect
+            var maxWidth = endX >= startX ? documentWidth - startX : startX
+            var maxHeight = endY >= startY ? documentHeight - startY : startY
+            var scale = Math.min(1, maxWidth / width, maxHeight / height)
+            width *= scale
+            height *= scale
+        }
+        var x = endX >= startX ? startX : startX - width
+        var y = endY >= startY ? startY : startY - height
+        view.setCropRect(x, y, width, height)
+    }
+
     /// The quad is drawn on the source picture. A transform draft is the
     /// straightened result and fills the canvas, so the corners would describe
     /// pixels that are no longer on screen — the same reason the crop frame
@@ -720,20 +956,30 @@ Item {
         { key: "bottom_right", column: 2, row: 2 }
     ]
 
-    /// Place a default frame when Crop is picked with nothing typed: four
-    /// tenths of the document in from every side, which leaves room to see the
-    /// picture around it and to drag a new one outside. It writes the fields,
-    /// so the frame and the command are still the same numbers; an existing
-    /// rectangle (typed, a preset, an anchor) is never overwritten.
-    function seedCropFrame() {
-        if (!view.documentReady) return
-        if (cropWidthField.acceptableInput && parseInt(cropWidthField.text) > 0) return
-        var width = Math.max(1, Math.round(view.documentWidth * 0.8))
-        var height = Math.max(1, Math.round(view.documentHeight * 0.8))
-        cropX.text = String(Math.round((view.documentWidth - width) / 2))
-        cropY.text = String(Math.round((view.documentHeight - height) / 2))
-        cropWidthField.text = String(width)
-        cropHeightField.text = String(height)
+    /// Place the starting frame when Crop is picked: the largest rectangle of
+    /// the chosen ratio inside the picture, at four fifths of that size so the
+    /// picture stays visible around it and a new rectangle can be drawn inside.
+    /// It writes the same four fields the command is built from; an existing
+    /// rectangle (typed, a preset, an anchor) is never overwritten unless
+    /// `force` is set by Reset.
+    function seedCropFrame(force) {
+        if (!view.documentReady) return false
+        if (!force && cropWidthField.acceptableInput
+                && parseInt(cropWidthField.text) > 0) return false
+        var width = view.documentWidth
+        var height = view.documentHeight
+        var factor = view.ratioFactor(view.cropRatio)
+        if (factor && factor.width > 0 && factor.height > 0) {
+            var aspect = factor.width / factor.height
+            if (width / height > aspect) width = height * aspect
+            else height = width / aspect
+        }
+        width = Math.max(1, Math.round(width * 0.8))
+        height = Math.max(1, Math.round(height * 0.8))
+        view.setCropRect(Math.round((view.documentWidth - width) / 2),
+                         Math.round((view.documentHeight - height) / 2),
+                         width, height)
+        return true
     }
 
     /// Write the four fields from a rectangle in document pixels, rounded and
@@ -756,28 +1002,87 @@ Item {
 
     /// Drag one frame handle. The side the handle owns follows the pointer and
     /// the opposite side stays put, so a corner drag never also moves the
-    /// rectangle.
+    /// rectangle. With a ratio chosen, a corner keeps the opposite corner fixed
+    /// and a side keeps the opposite side fixed while the other axis grows
+    /// around the rectangle's centre — the shape is never broken by a drag.
     function dragCropHandle(column, row, hostX, hostY) {
         if (!view.cropFrameShown) return
         var rect = view.cropRect
+        var documentWidth = view.documentWidth
+        var documentHeight = view.documentHeight
         var x = rect.x
         var y = rect.y
         var width = rect.width
         var height = rect.height
+        var pointerX = Math.max(0, Math.min(documentWidth, view.hostToDocX(hostX)))
+        var pointerY = Math.max(0, Math.min(documentHeight, view.hostToDocY(hostY)))
+        var aspect = view.cropRatioAspect()
+
+        if (aspect > 0) {
+            if (column !== 1 && row !== 1) {
+                // Corner: the opposite corner is the anchor.
+                var fixedX = column === 0 ? x + width : x
+                var fixedY = row === 0 ? y + height : y
+                var rawWidth = Math.max(1, Math.abs(pointerX - fixedX))
+                var rawHeight = Math.max(1, Math.abs(pointerY - fixedY))
+                if (rawWidth / rawHeight > aspect) rawWidth = rawHeight * aspect
+                else rawHeight = rawWidth / aspect
+                var limitWidth = column === 0 ? fixedX : documentWidth - fixedX
+                var limitHeight = row === 0 ? fixedY : documentHeight - fixedY
+                var scale = Math.min(1, limitWidth / rawWidth, limitHeight / rawHeight)
+                width = Math.max(1, Math.round(rawWidth * scale))
+                height = Math.max(1, Math.round(rawHeight * scale))
+                x = column === 0 ? Math.round(fixedX - width) : Math.round(fixedX)
+                y = row === 0 ? Math.round(fixedY - height) : Math.round(fixedY)
+            } else if (column !== 1) {
+                // Left or right side: the opposite side stays, the height grows
+                // around the rectangle's vertical centre.
+                var fixedXSide = column === 0 ? x + width : x
+                var centreY = y + height / 2
+                var edgeWidth = Math.max(1, Math.abs(pointerX - fixedXSide))
+                var edgeHeight = edgeWidth / aspect
+                var edgeLimitWidth = column === 0 ? fixedXSide : documentWidth - fixedXSide
+                var edgeScale = Math.min(1, edgeLimitWidth / edgeWidth,
+                                         documentHeight / edgeHeight)
+                width = Math.max(1, Math.round(edgeWidth * edgeScale))
+                height = Math.max(1, Math.round(edgeHeight * edgeScale))
+                x = column === 0 ? Math.round(fixedXSide - width) : Math.round(fixedXSide)
+                y = Math.round(Math.max(0, Math.min(documentHeight - height,
+                                                    centreY - height / 2)))
+            } else {
+                // Top or bottom side: the opposite side stays, the width grows
+                // around the rectangle's horizontal centre.
+                var fixedYSide = row === 0 ? y + height : y
+                var centreX = x + width / 2
+                var edgeHeightSide = Math.max(1, Math.abs(pointerY - fixedYSide))
+                var edgeWidthSide = edgeHeightSide * aspect
+                var edgeLimitHeight = row === 0 ? fixedYSide : documentHeight - fixedYSide
+                var edgeScaleSide = Math.min(1, edgeLimitHeight / edgeHeightSide,
+                                             documentWidth / edgeWidthSide)
+                height = Math.max(1, Math.round(edgeHeightSide * edgeScaleSide))
+                width = Math.max(1, Math.round(edgeWidthSide * edgeScaleSide))
+                y = row === 0 ? Math.round(fixedYSide - height) : Math.round(fixedYSide)
+                x = Math.round(Math.max(0, Math.min(documentWidth - width,
+                                                    centreX - width / 2)))
+            }
+            view.setCropRect(x, y, width, height)
+            return
+        }
+
         if (column === 0) {
-            var left = Math.max(0, Math.min(x + width - 1, view.hostToDocX(hostX)))
+            var left = Math.max(0, Math.min(x + width - 1, pointerX))
             width = x + width - left
             x = left
         } else if (column === 2) {
-            var right = Math.max(x + 1, Math.min(view.documentWidth, view.hostToDocX(hostX)))
+            var right = Math.max(x + 1, Math.min(documentWidth, pointerX))
             width = right - x
         }
         if (row === 0) {
-            var top = Math.max(0, Math.min(y + height - 1, view.hostToDocY(hostY)))
+            var top = Math.max(0, Math.min(y + height - 1, pointerY))
             height = y + height - top
             y = top
         } else if (row === 2) {
-            var bottom = Math.max(y + 1, Math.min(view.documentHeight, view.hostToDocY(hostY)))
+            var bottom = Math.max(y + 1, Math.min(documentHeight, pointerY))
             height = bottom - y
         }
         view.setCropRect(x, y, width, height)
@@ -1122,15 +1427,48 @@ Item {
     // A tool switch keeps one live preview per tool: the newly selected tool's
     // toggle decides whether Core is asked for a draft of its own. Arming
     // Transform starts from the document's own frame, so opening the tool never
-    // carries a quad from a document that is no longer there.
+    // carries a quad from a document that is no longer there. Arming Crop always
+    // starts from a frame — the typed rectangle if one is already there, the
+    // current ratio's fit otherwise — because a crop tool with no frame is a
+    // dead panel and a dead canvas.
     onToolChanged: {
         draftDebounce.restart()
         if (view.tool === "transform") view.resetTransformCorners()
+        if (view.tool === "crop") view.seedCropFrame()
     }
-    // The document changing size (another edit, a new file) invalidates a quad
-    // expressed in its pixels; the frame is the only safe starting point.
-    onDocumentWidthChanged: if (view.tool === "transform") view.resetTransformCorners()
-    onDocumentHeightChanged: if (view.tool === "transform") view.resetTransformCorners()
+    // The document changing size (another edit, a new file, an applied crop)
+    // invalidates a quad expressed in its pixels, and makes the old crop
+    // rectangle describe pixels that are gone. A frame is re-seeded only when
+    // the fields are empty: typing must never be overwritten by a late edit.
+    // A state publish changes width and height in one write but QML emits one
+    // signal at a time, so the seed waits one event-loop turn: fitting the
+    // frame from the width change alone would use the previous height.
+    onDocumentWidthChanged: {
+        if (view.tool === "transform") view.resetTransformCorners()
+        if (view.tool === "crop") cropSeedDebounce.restart()
+    }
+    onDocumentHeightChanged: {
+        if (view.tool === "transform") view.resetTransformCorners()
+        if (view.tool === "crop") cropSeedDebounce.restart()
+    }
+
+    Timer {
+        id: cropSeedDebounce
+        interval: 0
+        onTriggered: if (view.tool === "crop") view.refitCropAfterDocumentChange()
+    }
+
+    /// After another edit changed the document's size, a rectangle that no
+    /// longer fits names pixels that are gone. Clamping its sides one by one
+    /// would break a chosen ratio, so an unusable rectangle is replaced by the
+    /// starting frame (the chosen ratio at 80 % of the new picture); a rectangle
+    /// that still fits, and anything the user is typing, is left as it is.
+    function refitCropAfterDocumentChange() {
+        if (!view.documentReady) return
+        if (!view.cropHasRect() || !view.cropFieldsValid()) {
+            view.seedCropFrame(true)
+        }
+    }
 
     /// The debounce behind the live preview: typing a width must not render the
     /// whole document on every key.
@@ -1679,6 +2017,70 @@ Item {
                              && view.previewDraft === null
                     enabled: visible
 
+                    // The picture outside the rectangle is dimmed, the way a
+                    // crop tool shows what is about to be discarded. It covers
+                    // the picture only (not the matte), and every edge is
+                    // computed from the same document rectangle the frame and
+                    // the command read, so they cannot disagree.
+                    Item {
+                        id: cropShade
+                        objectName: "cropShade"
+                        anchors.fill: parent
+                        visible: view.cropFrameShown
+                        enabled: false
+                        readonly property real pictureX: view.docToHostX(0)
+                        readonly property real pictureY: view.docToHostY(0)
+                        readonly property real pictureWidth: view.displayedWidth * view.zoom
+                        readonly property real pictureHeight: view.displayedHeight * view.zoom
+                        readonly property real frameLeft: view.docToHostX(view.cropRect.x)
+                        readonly property real frameTop: view.docToHostY(view.cropRect.y)
+                        readonly property real frameRight:
+                            view.docToHostX(view.cropRect.x + view.cropRect.width)
+                        readonly property real frameBottom:
+                            view.docToHostY(view.cropRect.y + view.cropRect.height)
+
+                        Rectangle {
+                            objectName: "cropShadeTop"
+                            x: cropShade.pictureX
+                            y: cropShade.pictureY
+                            width: cropShade.pictureWidth
+                            height: Math.max(0, cropShade.frameTop - cropShade.pictureY)
+                            color: "#000000"
+                            opacity: 0.45
+                        }
+                        Rectangle {
+                            objectName: "cropShadeBottom"
+                            x: cropShade.pictureX
+                            y: cropShade.frameBottom
+                            width: cropShade.pictureWidth
+                            height: Math.max(0, cropShade.pictureY
+                                                + cropShade.pictureHeight
+                                                - cropShade.frameBottom)
+                            color: "#000000"
+                            opacity: 0.45
+                        }
+                        Rectangle {
+                            objectName: "cropShadeLeft"
+                            x: cropShade.pictureX
+                            y: cropShade.frameTop
+                            width: Math.max(0, cropShade.frameLeft - cropShade.pictureX)
+                            height: Math.max(0, cropShade.frameBottom - cropShade.frameTop)
+                            color: "#000000"
+                            opacity: 0.45
+                        }
+                        Rectangle {
+                            objectName: "cropShadeRight"
+                            x: cropShade.frameRight
+                            y: cropShade.frameTop
+                            width: Math.max(0, cropShade.pictureX
+                                               + cropShade.pictureWidth
+                                               - cropShade.frameRight)
+                            height: Math.max(0, cropShade.frameBottom - cropShade.frameTop)
+                            color: "#000000"
+                            opacity: 0.45
+                        }
+                    }
+
                     // Drawing a new rectangle starts on the empty canvas. The
                     // frame itself is declared after this area, so a press on
                     // the frame moves it instead of starting a new one.
@@ -1707,12 +2109,8 @@ Item {
                                     && Math.abs(mouse.x - startHostX) < 4
                                     && Math.abs(mouse.y - startHostY) < 4) return
                             moved = true
-                            var x1 = view.hostToDocX(startHostX)
-                            var y1 = view.hostToDocY(startHostY)
-                            var x2 = view.hostToDocX(mouse.x)
-                            var y2 = view.hostToDocY(mouse.y)
-                            view.setCropRect(Math.min(x1, x2), Math.min(y1, y2),
-                                             Math.abs(x2 - x1), Math.abs(y2 - y1))
+                            view.dragCropCreate(startHostX, startHostY,
+                                                mouse.x, mouse.y)
                         }
                         onReleased: dragging = false
                     }
@@ -1728,6 +2126,47 @@ Item {
                         color: "transparent"
                         border.width: 1
                         border.color: view.theme.accent
+
+                        // Rule-of-thirds guides: the composition aid every crop
+                        // tool draws, in the same accent as the frame. Two
+                        // verticals and two horizontals, not a dense grid, so
+                        // the picture stays readable.
+                        Rectangle {
+                            objectName: "cropGridVertical1"
+                            x: cropFrame.width / 3
+                            y: 0
+                            width: 1
+                            height: cropFrame.height
+                            color: view.theme.accent
+                            opacity: 0.55
+                        }
+                        Rectangle {
+                            objectName: "cropGridVertical2"
+                            x: cropFrame.width * 2 / 3
+                            y: 0
+                            width: 1
+                            height: cropFrame.height
+                            color: view.theme.accent
+                            opacity: 0.55
+                        }
+                        Rectangle {
+                            objectName: "cropGridHorizontal1"
+                            x: 0
+                            y: cropFrame.height / 3
+                            width: cropFrame.width
+                            height: 1
+                            color: view.theme.accent
+                            opacity: 0.55
+                        }
+                        Rectangle {
+                            objectName: "cropGridHorizontal2"
+                            x: 0
+                            y: cropFrame.height * 2 / 3
+                            width: cropFrame.width
+                            height: 1
+                            color: view.theme.accent
+                            opacity: 0.55
+                        }
 
                         // The frame's inside moves the whole rectangle; the
                         // handles below own the sides and corners.
@@ -1767,8 +2206,8 @@ Item {
                             Rectangle {
                                 required property var modelData
                                 objectName: "cropHandle_" + modelData.key
-                                width: 10
-                                height: 10
+                                width: 12
+                                height: 12
                                 radius: 1
                                 color: view.theme.accent
                                 border.width: 1
@@ -1783,7 +2222,9 @@ Item {
                                                  ? Qt.SizeVerCursor
                                                  : (modelData.row === 1
                                                     ? Qt.SizeHorCursor
-                                                    : Qt.SizeFDiagCursor)
+                                                    : (modelData.column === modelData.row
+                                                       ? Qt.SizeFDiagCursor
+                                                       : Qt.SizeBDiagCursor))
                                     onPositionChanged: function(mouse) {
                                         if (!pressed) return
                                         var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
@@ -2614,9 +3055,22 @@ Item {
                                 Component.onCompleted: currentIndex = view.cropRatioIndex
                                 onActivated: {
                                     view.setRatio(view.sizeRatios[currentIndex].key)
-                                    view.relinkFields()
-                                    draftDebounce.restart()
+                                    view.reshapeCropToRatio()
                                 }
+                            }
+                            Button {
+                                objectName: "swapCropOrientation"
+                                implicitWidth: 28
+                                implicitHeight: 28
+                                padding: 0
+                                font.pixelSize: 14
+                                text: "\u21bb"
+                                enabled: view.documentReady
+                                focusPolicy: Qt.NoFocus
+                                Accessible.name: qsTr("Swap crop orientation")
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Swap crop orientation")
+                                onClicked: view.swapCropOrientation()
                             }
                         }
 
@@ -2760,7 +3214,7 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             visible: view.tool === "crop"
-                            text: qsTr("Drag on the picture to draw the crop frame, then drag the frame or a handle to adjust it.")
+                            text: qsTr("Drag on the picture to draw the frame, then move it or drag a handle. Arrow keys nudge it; Shift moves 10 px, Alt resizes.")
                             color: view.theme.textMuted
                             font.pixelSize: 11
                             wrapMode: Text.WordWrap
@@ -2781,25 +3235,12 @@ Item {
 
                             Button {
                                 objectName: "applyCrop"
-                                text: qsTr("Apply crop")
+                                text: qsTr("Apply crop (Enter)")
                                 Layout.fillWidth: true
                                 visible: view.tool === "crop"
                                 focusPolicy: Qt.NoFocus
-                                enabled: view.cropFieldsValid()
-                                onClicked: {
-                                    view.command({
-                                        type: "editor_crop",
-                                        x: parseInt(cropX.text),
-                                        y: parseInt(cropY.text),
-                                        width: parseInt(cropWidthField.text),
-                                        height: parseInt(cropHeightField.text)
-                                    })
-                                    cropWidthField.text = ""
-                                    cropHeightField.text = ""
-                                    cropX.text = "0"
-                                    cropY.text = "0"
-                                    cropPreset.currentIndex = -1
-                                }
+                                enabled: view.cropCanApply()
+                                onClicked: view.applyCrop()
                             }
                             Button {
                                 objectName: "applyTransform"
@@ -2823,12 +3264,11 @@ Item {
                                 focusPolicy: Qt.NoFocus
                                 enabled: view.documentReady
                                 onClicked: {
-                                    cropWidthField.text = ""
-                                    cropHeightField.text = ""
-                                    cropX.text = "0"
-                                    cropY.text = "0"
-                                    cropPreset.currentIndex = -1
-                                    view.resetTransformCorners()
+                                    if (view.tool === "crop") {
+                                        view.resetCrop()
+                                    } else {
+                                        view.resetTransformCorners()
+                                    }
                                 }
                             }
                         }

@@ -600,8 +600,8 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="2763"/>
-        <source>Drag on the picture to draw the crop frame, then drag the frame or a handle to adjust it.</source>
-        <translation>Kéo trên ảnh để vẽ khung cắt, rồi kéo khung hoặc tay nắm để chỉnh lại.</translation>
+        <source>Drag on the picture to draw the frame, then move it or drag a handle. Arrow keys nudge it; Shift moves 10 px, Alt resizes.</source>
+        <translation>Kéo trên ảnh để vẽ khung, rồi di chuyển khung hoặc kéo tay nắm. Phím mũi tên dịch khung; Shift dịch 10 px, Alt đổi kích thước.</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="2772"/>
@@ -730,8 +730,13 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="2784"/>
-        <source>Apply crop</source>
-        <translation>Áp dụng cắt</translation>
+        <source>Apply crop (Enter)</source>
+        <translation>Áp dụng cắt (Enter)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="2620"/>
+        <source>Swap crop orientation</source>
+        <translation>Đổi hướng khung cắt</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="2822"/>

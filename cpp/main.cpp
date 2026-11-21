@@ -406,7 +406,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     optionally arm the pad and the steppers, then click Live preview
   //   KOGAVIEW_DEV_UI_REQUEST=editor-crop       -> the same for Crop, including
   //     one of the nine anchor buttons (`_ARG3=plain` leaves Live preview off,
-  //     which is when the canvas frame is drawn)
+  //     which is when the canvas frame is drawn; `_ARG=seed` keeps the frame
+  //     arming the tool places; `_ARG4=swap` turns it; `_ARG5=apply` presses it)
   //   KOGAVIEW_DEV_UI_REQUEST=editor-transform  -> click the Transform tool and
   //     move one corner (`_ARG` = `X,Y` in document pixels, `_ARG2` = the corner
   //     index or `e0`–`e3` for an edge), optionally arming Live preview and
@@ -707,13 +708,15 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // and the live toggle are `click()`ed, and the preset dropdown is
         // written the way its own selection writes it. `_ARG` is
         // WIDTHxHEIGHT of a preset (default 1024x1024); `_ARG2` names the
-        // anchor (default center).
+        // anchor (default center). `_ARG=seed` clicks Crop and stops, so the
+        // shot shows the frame that arming the tool places by itself.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
           return;
         }
         const QString size = requestArg.isEmpty() ? QStringLiteral("1024x1024") : requestArg;
+        const bool seedOnly = size == QLatin1String("seed");
         const QString anchor = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
         const QString anchorKey = anchor.isEmpty() ? QStringLiteral("center") : anchor;
         const QStringList parts = size.split(QLatin1Char('x'));
@@ -728,7 +731,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         if (!tool->property("highlighted").toBool()) {
           QMetaObject::invokeMethod(tool, "click");
         }
-        const QVariantList presets = editor->property("cropPresets").toList();
+        const QVariantList presets =
+          seedOnly ? QVariantList() : editor->property("cropPresets").toList();
         int index = -1;
         for (int i = 0; i < presets.size(); ++i) {
           const QVariantMap entry = presets.at(i).toMap();
@@ -738,7 +742,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             break;
           }
         }
-        if (index >= 0) {
+        if (seedOnly) {
+          // `onToolChanged` already seeded the frame; nothing else is written.
+        } else if (index >= 0) {
           QMetaObject::invokeMethod(editor, "chooseCropPreset",
                                     Q_ARG(QVariant, QVariant(index)));
         } else {
@@ -749,29 +755,47 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // tree the way the QML test harness does.
         QObject* anchorButton = nullptr;
         const QString anchorName = QStringLiteral("cropAnchor_") + anchorKey;
-        if (auto* window = qobject_cast<QQuickWindow*>(rootObject)) {
-          QList<QQuickItem*> pending{window->contentItem()};
-          while (!pending.isEmpty()) {
-            QQuickItem* item = pending.takeFirst();
-            if (item->objectName() == anchorName) {
-              anchorButton = item;
-              break;
+        if (!seedOnly) {
+          if (auto* window = qobject_cast<QQuickWindow*>(rootObject)) {
+            QList<QQuickItem*> pending{window->contentItem()};
+            while (!pending.isEmpty()) {
+              QQuickItem* item = pending.takeFirst();
+              if (item->objectName() == anchorName) {
+                anchorButton = item;
+                break;
+              }
+              pending.append(item->childItems());
             }
-            pending.append(item->childItems());
           }
-        }
-        if (anchorButton != nullptr) {
-          QMetaObject::invokeMethod(anchorButton, "click");
-        } else {
-          qWarning() << "KogaView dev ui request: no crop anchor" << anchorKey;
+          if (anchorButton != nullptr) {
+            QMetaObject::invokeMethod(anchorButton, "click");
+          } else {
+            qWarning() << "KogaView dev ui request: no crop anchor" << anchorKey;
+          }
         }
         QObject* live = editor->findChild<QObject*>(QStringLiteral("cropLivePreviewButton"));
         // `_ARG3=plain` leaves the preview off, which is the state the canvas
-        // frame (and its eight handles) is drawn in.
-        const bool armPreview =
-          qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") != QLatin1String("plain");
+        // frame (and its eight handles) is drawn in. A seed shot never arms it.
+        const bool armPreview = !seedOnly
+          && qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") != QLatin1String("plain");
         if (live != nullptr && armPreview) {
           QMetaObject::invokeMethod(live, "click");
+        }
+        // `_ARG4=swap` turns the rectangle through 90° through the same helper
+        // the inspector's button calls, and `_ARG5=apply` presses Apply, so a
+        // run can photograph the swapped frame and the cropped document on the
+        // real window instead of only in the QML suite.
+        const QVariant ratioBeforeSwap = editor->property("cropRatio");
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4") == QLatin1String("swap")) {
+          QMetaObject::invokeMethod(editor, "swapCropOrientation");
+        }
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5") == QLatin1String("apply")) {
+          QObject* applyButton = editor->findChild<QObject*>(QStringLiteral("applyCrop"));
+          if (applyButton != nullptr) {
+            QMetaObject::invokeMethod(applyButton, "click");
+          } else {
+            qWarning() << "KogaView dev ui request: no Apply crop button";
+          }
         }
         auto fieldText = [editor](const char* name) {
           QObject* field = editor->findChild<QObject*>(QString::fromLatin1(name));
@@ -779,13 +803,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         };
         qInfo().noquote() << "KogaView dev ui request editor-crop" << size << "preset"
                           << index << "anchor" << editor->property("cropAnchor")
-                          << "ratio" << editor->property("cropRatio") << "tool"
+                          << "ratio" << ratioBeforeSwap << "->"
+                          << editor->property("cropRatio") << "tool"
                           << editor->property("tool") << "live"
                           << editor->property("cropLivePreview") << "frame"
-                          << editor->property("cropFrameShown") << "rect"
+                          << editor->property("cropFrameShown") << "document"
+                          << editor->property("documentWidth")
+                          << editor->property("documentHeight") << "rect"
                           << fieldText("cropX") << fieldText("cropY")
                           << fieldText("cropWidth") << fieldText("cropHeight");
-        emitted = live != nullptr && index >= 0 && anchorButton != nullptr;
+        emitted = live != nullptr && (seedOnly || (index >= 0 && anchorButton != nullptr));
       } else if (uiRequest == QLatin1String("editor-transform")) {
         // The Transform quad without a pointer: the tool button is clicked,
         // and a corner or an edge is moved through the same helpers the canvas

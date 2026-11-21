@@ -78,8 +78,57 @@ rather than straightened.
 - The warp is one pass over every output pixel on the draft worker. A 27 MP
   document with Live preview on re-renders the whole frame per settle; tiling or
   region-of-interest decoding is a follow-up, not a promise of this ADR.
-- A crop frame can be dragged anywhere on the document, but the ratio lock still
-  only links the typed fields; keeping a ratio *during* a drag is a separate
-  decision.
+- A crop frame can be dragged anywhere on the document; keeping a ratio *during*
+  a drag was left open by this ADR and is decided in the revision below.
+
+## Revision — the crop tool finished (2026-11-21)
+
+Row 82 gave Crop a frame on the canvas. This revision answers what that frame
+left open; the protocol and Core do not change.
+
+- **A crop tool starts with a frame.** Arming Crop seeds the largest rectangle of
+  the chosen ratio at four fifths of the picture, centred (`seedCropFrame`). The
+  four fields stay the only source of truth, so the seeded frame is exactly what
+  Apply sends; an existing typed rectangle is never overwritten, and Reset
+  restores the seeded frame rather than an empty form. A document-size change
+  replaces a rectangle that is empty or no longer fits, one event-loop turn
+  later (`cropSeedDebounce`), and leaves a rectangle that still fits exactly as
+  it is. The turn is load-bearing: a state publish changes width and height in
+  one write while QML emits one signal at a time, and seeding from the width
+  change alone can fit the frame to the previous height.
+- **Crop defaults to `free`.** A crop tool with no constraint should keep the
+  shape the user draws; picking a ratio is the lock. Resize's dialog keeps
+  `original`, because scaling a picture usually keeps its shape. This supersedes
+  the consequence above.
+- **A chosen ratio survives the drag.** A corner handle pins the opposite corner
+  and fits the dragged box to the ratio; a side handle pins the opposite side and
+  grows the other axis around the rectangle's centre. A create-drag is fitted the
+  same way before it is clamped to the document, so a square drag draws a
+  square. `free` keeps row 82's behaviour exactly.
+- **The frame shows the result and the composition.** The picture outside the
+  frame is dimmed in four pieces computed from the same document rectangle the
+  frame and the command read, and two vertical plus two horizontal rule-of-thirds
+  lines sit inside it. Both disappear with the frame while a live draft is on the
+  canvas, for row 82's reason: a draft is the result, and a frame over it would
+  describe pixels that are gone.
+- **Orientation is a turn, not a retype.** `swapCropOrientation` rotates the
+  rectangle through 90° around its own centre, keeps it inside the document,
+  maps a named ratio to its counterpart (4:3 ↔ 3:4, 16:9 ↔ 9:16, 1:1 → 1:1) and
+  turns any other shape into "Keep current ratio". It is presentation only: no
+  command is sent until Apply.
+- **The keyboard is the pointer's second hand.** With Crop armed, arrows move the
+  frame, Shift moves 10 px, Alt resizes around the centre (and derives the linked
+  side), Enter applies and Escape puts the tool down. A focused field still
+  consumes these first because the handler is on the view.
+- **Apply refuses a no-op.** A rectangle equal to the whole document is what Core
+  answers with `edit_noop`, so `cropCanApply()` requires a valid rectangle *and*
+  a changed one; the button is disabled instead of sending a command that can
+  only be rejected.
+- **Applying leaves the tool usable.** `applyCrop()` puts its form down before
+  the command; the size debounce then seeds a fresh frame on the cropped
+  document, so the tool stays armed on the result rather than on an empty panel.
+- **Guides and the ratio lock are the view's, not the protocol's.** No new field
+  crosses Rust ↔ Qt: a crop is still `{x, y, width, height}`, and the thirds,
+  shade, swapped orientation and keyboard all write those four numbers.
 - The transform is one quad: no rotation of the quad, no lens/barrel model, no
   multi-point mesh. Those are different features with different guarantees.
