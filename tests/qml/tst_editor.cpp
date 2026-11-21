@@ -61,6 +61,11 @@ private slots:
   void theSizeSteppersNudgeBothSides();
   void resizeCarriesThePadFill();
   void theResizeDialogHasNoPreviewSurfaces();
+  void thePaintToolSendsOneStrokeOnRelease();
+  void theEraserStrokeCarriesItsModeAndBrush();
+  void theKritaKeysPickTheToolsAndAdjustTheBrush();
+  void ctrlZUndoesAndCtrlShiftZRedoes();
+  void spacePansInsteadOfPainting();
   void thePointerThumbnailCarriesThePreviewIdentity();
   void cropApplyEmitsTheTypedRectangle();
   void theCropPresetsFitInsideTheDocument();
@@ -92,6 +97,10 @@ private:
   QObject* findObject(const QString& name) const;
   static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
+  /// Click a control that closes the Resize form and wait for its modal overlay
+  /// to be gone. `opened` goes false one frame before the dim overlay does, and
+  /// a click that lands in that frame belongs to the overlay.
+  void closeResizeDialog(QQuickItem* control);
   void dragScene(const QPointF& from, const QPointF& to, int steps = 6);
   void typeInto(QQuickItem* field, const QString& text);
   void selectTool(const char* name);
@@ -182,15 +191,24 @@ void TestEditor::init()
   // a case that needs Crop selects it, and the pointer default is asserted by
   // the first case before anything changes it.
   m_editor->setProperty("tool", QStringLiteral("pointer"));
-  // The Resize form is modal: a case that failed mid-form would otherwise leave
-  // it blocking the next one's clicks. The form refills itself from the
-  // document on every open, so closing it is enough.
-  if (QObject* dialog = findObject(QStringLiteral("resizeDialog"))) {
-    if (dialog->property("opened").toBool()) {
-      QMetaObject::invokeMethod(dialog, "close");
-      QTest::qWait(20);
+  // The editor's forms are modal: a case that failed mid-form would otherwise
+  // leave one blocking the next one's clicks. Both refill themselves from the
+  // document on every open, so closing them is enough. `opened` goes false
+  // before a popup's dim overlay is gone, and a click that lands during that
+  // fade belongs to the overlay, so wait for the window to be free — exactly
+  // as a person cannot click twice in the same frame.
+  for (const char* name : {"resizeDialog", "exportDialog"}) {
+    QObject* dialog = findObject(QString::fromLatin1(name));
+    if (dialog == nullptr) {
+      continue;
     }
-    dialog->setProperty("fillColor", QColor(QStringLiteral("#ffffff")));
+    if (dialog->property("visible").toBool()) {
+      QMetaObject::invokeMethod(dialog, "close");
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!dialog->property("visible").toBool(), 2000);
+    if (qstrcmp(name, "resizeDialog") == 0) {
+      dialog->setProperty("fillColor", QColor(QStringLiteral("#ffffff")));
+    }
   }
   for (const char* name : {"cropWidth", "cropHeight"}) {
     if (QQuickItem* field = visualItem(QString::fromLatin1(name))) {
@@ -213,6 +231,15 @@ void TestEditor::init()
                                     {QStringLiteral("height"), 0}});
   m_editor->setProperty("transformLivePreview", false);
   m_editor->setProperty("transformCorners", QVariantList());
+  m_editor->setProperty("paintMode", QStringLiteral("brush"));
+  m_editor->setProperty("paintColor", QStringLiteral("#000000"));
+  m_editor->setProperty("paintBackgroundColor", QStringLiteral("#ffffff"));
+  m_editor->setProperty("paintSize", 24.0);
+  m_editor->setProperty("paintOpacity", 100);
+  m_editor->setProperty("paintStroke", QVariantList());
+  m_editor->setProperty("paintStroking", false);
+  m_editor->setProperty("panelsHidden", false);
+  m_editor->setProperty("spacePanning", false);
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
   for (const char* name : {"cropLivePreviewButton", "transformLivePreviewButton"}) {
     if (QQuickItem* toggle = visualItem(QString::fromLatin1(name))) {
@@ -259,6 +286,13 @@ QQuickItem* TestEditor::expectItem(const char* name) const
   if (!item)
     qFatal("expected item %s was not found", name);
   return item;
+}
+
+void TestEditor::closeResizeDialog(QQuickItem* control)
+{
+  clickItem(control);
+  QObject* dialog = resizeDialogObject();
+  QTRY_VERIFY_WITH_TIMEOUT(!dialog->property("visible").toBool(), 2000);
 }
 
 void TestEditor::clickItem(QQuickItem* item)
@@ -337,8 +371,15 @@ QObject* TestEditor::resizeDialogObject() const
 /// resize case starts here, so the folder path is exercised by the suite.
 void TestEditor::openResizeDialog()
 {
-  clickItem(expectItem("toolResize"));
   QObject* dialog = resizeDialogObject();
+  // A form that has just been answered is still fading out for a frame, and
+  // its modal overlay takes the next click. Wait until the window is free
+  // before pressing the palette button.
+  // A form that has just been answered is still fading out for a frame, and
+  // its modal overlay takes the next click. Wait until the window is free
+  // before pressing the palette button.
+  QTRY_VERIFY_WITH_TIMEOUT(!dialog->property("visible").toBool(), 2000);
+  clickItem(expectItem("toolResize"));
   QTRY_VERIFY2(dialog->property("opened").toBool(), "the Resize dialog did not open");
   // Opening a form is not choosing a tool: the canvas stays on the pointer and
   // the palette button stays lit so the form has a visible source.
@@ -630,7 +671,7 @@ void TestEditor::resizeApplyEmitsTheTypedSize()
   QTest::qWait(20);
   QVERIFY(apply->property("enabled").toBool());
 
-  clickItem(apply);
+  closeResizeDialog(apply);
   QCOMPARE(m_commands->count(), 1);
   QVariantMap command = m_commands->at(0).at(0).toMap();
   QCOMPARE(command.value("type").toString(), QStringLiteral("editor_resize"));
@@ -797,7 +838,7 @@ void TestEditor::theCurrentRatioLocksTheTypedPair()
   QCOMPARE(width->property("text").toString(), QStringLiteral("1000"));
 
   // Crop has its own snapshot: a 3:2 crop must not change the 10:7 resize.
-  clickItem(expectItem("resizeCancel"));
+  closeResizeDialog(expectItem("resizeCancel"));
   QTRY_VERIFY(!dialog->property("opened").toBool());
   selectTool("crop");
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setRatio",
@@ -975,7 +1016,7 @@ void TestEditor::theResizeDialogHasNoPreviewSurfaces()
   QTest::qWait(200);
   QCOMPARE(dialog->property("height").toReal(), openedHeight);
 
-  clickItem(expectItem("resizeCancel"));
+  closeResizeDialog(expectItem("resizeCancel"));
   QTRY_VERIFY(!dialog->property("opened").toBool());
 }
 
@@ -1617,7 +1658,7 @@ void TestEditor::thePaletteHoldsTheToolsAndTheInspectorTheirOptions()
                                                         .arg(QString::fromLatin1(option))));
   }
   QVERIFY(expectItem("imageName")->isVisible());
-  clickItem(expectItem("resizeCancel"));
+  closeResizeDialog(expectItem("resizeCancel"));
 
   // Saving lives on the toolbar, with no second copy in the inspector.
   QVERIFY(expectItem("editorToolbarSave")->isVisible());
@@ -1679,7 +1720,7 @@ void TestEditor::thePaletteSelectsTheToolsOptions()
   QVERIFY(resizeApply->isVisible());
   QVERIFY(!cropApply->isVisible());
   QCOMPARE(m_commands->count(), 0);
-  clickItem(expectItem("resizeCancel"));
+  closeResizeDialog(expectItem("resizeCancel"));
   QTRY_VERIFY(!dialog->property("opened").toBool());
   QVERIFY(!expectItem("toolResize")->property("highlighted").toBool());
 }
@@ -2195,6 +2236,206 @@ void TestEditor::aTouchpadWheelZoomsTheCanvasAtTheCursor()
            qPrintable(QStringLiteral("cursor anchor drifted x by %1")
                         .arg(anchored.x() - scene.x())));
   QCOMPARE(m_commands->count(), 0);
+}
+
+/// The paint tool is a palette tool with an inspector; a drag on the canvas is
+/// one command, carrying document-space points, the colour, the radius and the
+/// opacity, and nothing is sent before the button comes up.
+void TestEditor::thePaintToolSendsOneStrokeOnRelease()
+{
+  setState(documentState());
+  QQuickItem* brushButton = expectItem("toolBrush");
+  QTRY_VERIFY(brushButton->isVisible());
+  clickItem(brushButton);
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+  QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("brush"));
+  QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
+           QStringLiteral("Brush"));
+  QVERIFY(expectItem("paintSwatch")->isVisible());
+  QVERIFY(expectItem("paintSize")->isVisible());
+  QVERIFY(!expectItem("applyCrop")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+
+  m_editor->forceActiveFocus();
+  QQuickItem* host =
+    qobject_cast<QQuickItem*>(findObject(QStringLiteral("editorCanvasHost")));
+  QVERIFY(host != nullptr);
+  // A press on the matte around the picture is not a dab: it would send a
+  // stroke Core clips away, which still costs an undo step.
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier,
+                    host->mapToScene(QPointF(2, 2)).toPoint());
+  QTest::qWait(20);
+  QCOMPARE(m_commands->count(), 0);
+
+  const QPointF from =
+    host->mapToScene(QPointF(host->width() * 0.35, host->height() * 0.5));
+  const QPointF to =
+    host->mapToScene(QPointF(host->width() * 0.65, host->height() * 0.5));
+  dragScene(from, to, 8);
+
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_paint_stroke"));
+  const QVariantList points = command.value("points").toList();
+  QVERIFY2(points.size() >= 2,
+           qPrintable(QStringLiteral("a drag carried %1 point(s)").arg(points.size())));
+  const QVariantList colour = command.value("color").toList();
+  QCOMPARE(colour.size(), 3);
+  QCOMPARE(colour.at(0).toInt(), 0);
+  QCOMPARE(colour.at(1).toInt(), 0);
+  QCOMPARE(colour.at(2).toInt(), 0);
+  // 24 px diameter is a 12 px radius, and 100 % is alpha 1.
+  QCOMPARE(command.value("radius").toDouble(), 12.0);
+  QCOMPARE(command.value("opacity").toDouble(), 1.0);
+  QCOMPARE(command.value("erase").toBool(), false);
+  // The ephemeral stroke is gone; the preview the user sees next is Core's.
+  QVERIFY(m_editor->property("paintStroke").toList().isEmpty());
+  QCOMPARE(m_editor->property("paintStroking").toBool(), false);
+}
+
+void TestEditor::theEraserStrokeCarriesItsModeAndBrush()
+{
+  setState(documentState());
+  m_editor->setProperty("paintColor", QStringLiteral("#ff0000"));
+  m_editor->setProperty("paintSize", 80.0);
+  m_editor->setProperty("paintOpacity", 50);
+
+  clickItem(expectItem("toolEraser"));
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+  QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("eraser"));
+  QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
+           QStringLiteral("Eraser"));
+
+  m_editor->forceActiveFocus();
+  QQuickItem* host =
+    qobject_cast<QQuickItem*>(findObject(QStringLiteral("editorCanvasHost")));
+  QVERIFY(host != nullptr);
+  const QPointF from =
+    host->mapToScene(QPointF(host->width() * 0.4, host->height() * 0.45));
+  const QPointF to =
+    host->mapToScene(QPointF(host->width() * 0.6, host->height() * 0.55));
+  dragScene(from, to, 6);
+
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap command = m_commands->at(0).at(0).toMap();
+  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_paint_stroke"));
+  QCOMPARE(command.value("erase").toBool(), true);
+  QCOMPARE(command.value("radius").toDouble(), 40.0);
+  QCOMPARE(command.value("opacity").toDouble(), 0.5);
+  const QVariantList colour = command.value("color").toList();
+  QCOMPARE(colour.at(0).toInt(), 255);
+  QCOMPARE(colour.at(1).toInt(), 0);
+  QCOMPARE(colour.at(2).toInt(), 0);
+}
+
+/// The Krita defaults this slice maps live on the view, so they must not need
+/// the pointer: B/E pick the paint modes, [ ] resize the brush (Shift by ten),
+/// X swaps the colours, D resets them and Tab hides the panels.
+void TestEditor::theKritaKeysPickTheToolsAndAdjustTheBrush()
+{
+  setState(documentState());
+  m_editor->forceActiveFocus();
+
+  QTest::keyClick(m_view, Qt::Key_B);
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+  QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("brush"));
+  QTest::keyClick(m_view, Qt::Key_E);
+  QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("eraser"));
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+
+  const double start = m_editor->property("paintSize").toDouble();
+  QTest::keyClick(m_view, Qt::Key_BracketRight);
+  QCOMPARE(m_editor->property("paintSize").toDouble(), start + 1.0);
+  QTest::keyClick(m_view, Qt::Key_BracketRight, Qt::ShiftModifier);
+  QCOMPARE(m_editor->property("paintSize").toDouble(), start + 11.0);
+  QTest::keyClick(m_view, Qt::Key_BracketLeft);
+  QCOMPARE(m_editor->property("paintSize").toDouble(), start + 10.0);
+
+  QCOMPARE(m_editor->property("paintColor").toString(), QStringLiteral("#000000"));
+  QTest::keyClick(m_view, Qt::Key_X);
+  QCOMPARE(m_editor->property("paintColor").toString(), QStringLiteral("#ffffff"));
+  QCOMPARE(m_editor->property("paintBackgroundColor").toString(),
+           QStringLiteral("#000000"));
+  QTest::keyClick(m_view, Qt::Key_D);
+  QCOMPARE(m_editor->property("paintColor").toString(), QStringLiteral("#000000"));
+  QCOMPARE(m_editor->property("paintBackgroundColor").toString(),
+           QStringLiteral("#ffffff"));
+
+  // Typing into a field keeps its own keys: B/E/[/] must not fire from the
+  // field's keystrokes, which is why the handlers live on the view and not on
+  // a window-wide Shortcut.
+  QQuickItem* field = expectItem("paintColorField");
+  field->forceActiveFocus();
+  QTest::qWait(10);
+  QTest::keyClick(m_view, Qt::Key_B);
+  QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("eraser"));
+  m_editor->forceActiveFocus();
+
+  QVERIFY(!m_editor->property("panelsHidden").toBool());
+  QTest::keyClick(m_view, Qt::Key_Tab);
+  QTRY_VERIFY(m_editor->property("panelsHidden").toBool());
+  QVERIFY(!expectItem("editorTools")->isVisible());
+  QVERIFY(!expectItem("editorInspector")->isVisible());
+  QTest::keyClick(m_view, Qt::Key_Tab);
+  QTRY_VERIFY(!m_editor->property("panelsHidden").toBool());
+  QVERIFY(expectItem("editorTools")->isVisible());
+  QVERIFY(expectItem("editorInspector")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+}
+
+void TestEditor::ctrlZUndoesAndCtrlShiftZRedoes()
+{
+  setState(documentState());
+  m_editor->forceActiveFocus();
+
+  QTest::keyClick(m_view, Qt::Key_Z, Qt::ControlModifier);
+  QCOMPARE(m_commands->count(), 1);
+  QCOMPARE(m_commands->at(0).at(0).toMap().value("type").toString(),
+           QStringLiteral("editor_undo"));
+  QTest::keyClick(m_view, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+  QCOMPARE(m_commands->count(), 2);
+  QCOMPARE(m_commands->at(1).at(0).toMap().value("type").toString(),
+           QStringLiteral("editor_redo"));
+}
+
+/// Space is Krita's temporary pan: while it is held the left button moves the
+/// picture instead of painting, and no stroke command is sent.
+void TestEditor::spacePansInsteadOfPainting()
+{
+  setState(documentState());
+  clickItem(expectItem("toolBrush"));
+  m_editor->forceActiveFocus();
+  // Fit shows the whole picture, so give the pan some room first.
+  QMetaObject::invokeMethod(m_editor, "zoomIn");
+  QMetaObject::invokeMethod(m_editor, "zoomIn");
+  QTest::qWait(20);
+
+  QObject* pan = findObject(QStringLiteral("editorPanHandler"));
+  QVERIFY(pan != nullptr);
+  QVERIFY2(!pan->property("acceptedButtons").value<Qt::MouseButtons>().testFlag(Qt::LeftButton),
+           "the armed brush still gave the left button to the pan");
+
+  QTest::keyPress(m_view, Qt::Key_Space);
+  QTRY_VERIFY(m_editor->property("spacePanning").toBool());
+  QVERIFY2(pan->property("acceptedButtons").value<Qt::MouseButtons>().testFlag(Qt::LeftButton),
+           "Space did not hand the left button back to the pan");
+
+  QQuickItem* host =
+    qobject_cast<QQuickItem*>(findObject(QStringLiteral("editorCanvasHost")));
+  QVERIFY(host != nullptr);
+  const QPointF from =
+    host->mapToScene(QPointF(host->width() * 0.5, host->height() * 0.5));
+  const double beforeX = m_editor->property("offsetX").toDouble();
+  dragScene(from, from + QPointF(70, 0), 6);
+
+  QCOMPARE(m_commands->count(), 0);
+  QVERIFY2(qAbs(m_editor->property("offsetX").toDouble() - beforeX) > 1.0,
+           "Space + drag did not pan the picture");
+
+  QTest::keyRelease(m_view, Qt::Key_Space);
+  QTRY_VERIFY(!m_editor->property("spacePanning").toBool());
+  QVERIFY2(!pan->property("acceptedButtons").value<Qt::MouseButtons>().testFlag(Qt::LeftButton),
+           "the pan still owns the left button after Space came up");
 }
 
 QTEST_MAIN(TestEditor)

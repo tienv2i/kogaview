@@ -323,6 +323,19 @@ pub enum Command {
     EditorFlip {
         axis: FlipAxis,
     },
+    /// Paint one freehand stroke onto the working document. `points` are in
+    /// document pixels in drawing order; the whole list is one history step, so
+    /// one undo removes the stroke. `radius` is half the brush's width in
+    /// document pixels, `opacity` is 0–1 and `erase` clears alpha instead of
+    /// blending `color`. A single point paints a dot.
+    EditorPaintStroke {
+        points: Vec<[f64; 2]>,
+        color: [u8; 3],
+        radius: f64,
+        opacity: f64,
+        #[serde(default)]
+        erase: bool,
+    },
     EditorUndo,
     EditorRedo,
     /// Discard every edit and return the working document to the source image.
@@ -373,6 +386,7 @@ impl Command {
             Self::EditorTransformPreview { .. } => "editor_transform_preview",
             Self::EditorRotate { .. } => "editor_rotate",
             Self::EditorFlip { .. } => "editor_flip",
+            Self::EditorPaintStroke { .. } => "editor_paint_stroke",
             Self::EditorUndo => "editor_undo",
             Self::EditorRedo => "editor_redo",
             Self::EditorReset => "editor_reset",
@@ -606,6 +620,16 @@ mod tests {
                 },
                 "editor_flip",
             ),
+            (
+                Command::EditorPaintStroke {
+                    points: vec![[10.0, 12.0], [40.0, 18.0]],
+                    color: [255, 0, 0],
+                    radius: 8.0,
+                    opacity: 0.75,
+                    erase: false,
+                },
+                "editor_paint_stroke",
+            ),
             (Command::EditorUndo, "editor_undo"),
             (Command::EditorRedo, "editor_redo"),
             (Command::EditorReset, "editor_reset"),
@@ -696,6 +720,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env.command.name(), "editor_resize_preview");
+
+        // A stroke written by an older client that does not know `erase` is a
+        // brush stroke, not an eraser one.
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"p","command":{"type":"editor_paint_stroke","points":[[1,2]],"color":[0,0,0],"radius":4,"opacity":1}}"#,
+        )
+        .unwrap();
+        match env.command {
+            Command::EditorPaintStroke { erase, points, .. } => {
+                assert!(!erase);
+                assert_eq!(points, vec![[1.0, 2.0]]);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
 
         // A crop preview is the same rectangle as the applied crop and has its
         // own name, so a journal line can never read as a cut.

@@ -45,7 +45,12 @@ the workspace changes; without that reset Core still saw unsaved edits and the
 Editor reopened the old image after the user had already discarded them. A
 follow-up (row 84) took the framed preview out of that dialog: its asynchronous
 picture read as the form loading before it settled, and the size is typed, so
-the form is fields and buttons only.
+the form is fields and buttons only. The latest session (row 85) gave the canvas
+a brush and an eraser with Krita's default keys: a stroke is one typed command
+sent on release, Core paints the pixels and the canvas only shows the stroke in
+flight; `B`/`E` pick the tools, `[`/`]` size them, `X`/`D` swap and reset the
+colours, Space pans, `Tab` hides the panels, and `Ctrl+Z`/`Ctrl+Shift+Z` undo and
+redo the document.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -73,6 +78,13 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `ResizeDialog.qml` slimming, the `EditorView.qml`/`cpp/main.cpp` wiring it
   drops, `theResizeDialogHasNoPreviewSurfaces`, the Vietnamese catalogue cleanup
   and the new first-frame screenshot; ADR 0012 gained a revision note.
+  The paint session (row 85) is one commit on top: the `editor_paint_stroke`
+  protocol command, Core's mask renderer and its four tests, the palette/inspector
+  and canvas overlay in `EditorView.qml`, Krita's keys, the five QML cases, the
+  `editor-paint` harness request, the Vietnamese sentences and the two
+  screenshots; ADR 0014 records why a stroke is one command, why QML only
+  previews it and where the keymap lives. It also fixes the editor suite's
+  cross-case flake (a fading modal took the next case's click).
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -204,6 +216,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 82 | Crop had no frame on the canvas to place its rectangle, and a photo shot at an angle could not be straightened at all | `crates/app-protocol/src/lib.rs` (`EditorTransform`/`EditorTransformPreview`), `crates/app-core/src/editor.rs` (the `Transform` operation, `validate_transform`, `square_to_quad`/`invert3`/`warp_quad`, snapshot undo), `core.rs` (`PreviewKind::Transform`, `editor_transform_preview`), `crates/desktop/qml/EditorView.qml` (a fourth tool, the crop frame with eight handles, the transform quad with four corners plus four edge handles, the pan dropping the left button while either is armed, `cropFrameShown`/`transformFrameShown`), `UiLines.qml` + `kogaview_vi.ts` (four lines and the history sentence), `cpp/main.cpp` (`editor-transform`), `tests/qml/tst_editor.cpp` (4 cases + the pan assertions), 6 Core tests | `just test` 293 strings / 110 C++ / 289 drawn; cargo 78 + 4; editor 41; real window: quad grabbed (`docs/evidence/M1-editor-transform-quad-vi.png`), live draft + the `Tắt Xem trước trực tiếp…` hint (`-live-vi.png`, journal `editor_transform_preview` rev 4), applied at `1200 × 1600` with Apply disabled again (`-applied-vi.png`, `editor_transform` rev 4), crop frame 512 × 384 at `bottom_right` (`M1-editor-crop-frame-vi.png`); 8 mutations, each caught |
 | 83 | Discard did not discard: after an unsaved edit, a Discard answer and another picture in the Viewer, the Editor reopened the old image. Resize was also an Inspector column even though a size is a question, not a mode | `crates/app-core/src/core.rs` (`SetWorkspace` keeps `previous` and passes `previous == Workspace::Viewer` to `link_viewer_into_editor`, which follows the Viewer's picture from the Viewer, keeps an open document from elsewhere and refuses an unsaved one; the test walks discard → viewer open → editor), `crates/desktop/qml/Main.qml` (`leaveAfterDiscard` sends `editor_reset` + the leave through `sendSequence`; quit exempt), `crates/desktop/qml/ResizeDialog.qml` (new modal form: its own fields/ratio/presets/pad/live preview, a draft preview inside the form with the stale-draft guard, theme-coloured switch labels), `crates/desktop/qml/EditorView.qml` (palette `Resize…` opens the dialog and keeps `tool` on `pointer`, the canvas no longer draws a resize draft, the crop fields renamed `cropWidth`/`cropHeight`), `crates/app-core/src/editor.rs` (`invert3` removed), `crates/desktop/build.rs`, `i18n/kogaview_ts.pro`, `i18n/kogaview_vi.ts` (25 new strings), `tests/qml/tst_editor.cpp`, `tests/qml/tst_settings.cpp` (the discard source guard), `cpp/main.cpp` (`_ARG5=apply`), ADR 0012, ADR 0013 | `just test` 299 strings / 110 C++ / 295 drawn; cargo 78 + 4; settings 15, editor 41; real window: the dialog with a live 1024 × 1024 draft and legible switches (`docs/evidence/M1-editor-resize-dialog-vi.png`), applied (journal `editor_resize` rev 7, `M1-editor-resize-applied-vi.png`), and the Discard sequence ending on `two.png` (`M1-discard-follows-viewer-vi.png`, journal `editor_reset` rev 9 → `set_workspace` rev 10 → `viewer_open` rev 12 → `set_workspace` rev 13); 5 mutations, each caught |
 | 84 | The Resize dialog carried a framed preview of its result; its asynchronous picture inside the modal read as the form loading, then "bursting out" on first open | `crates/desktop/qml/ResizeDialog.qml` (preview frame, caption, `Live preview` switch and its state, `documentPreview`/`draft`/`ignoredDraft`/`shownDraft`/`previewSource`/`previewCaption`, `requestDraft`, `draftRequested` and the debounce timer removed; the column is measured at `dialog.width - 40` so the first layout does not use the popup's pre-open width), `crates/desktop/qml/EditorView.qml` (`resizeDraft`/`previewSource` and the draft wiring removed), `tests/qml/tst_editor.cpp` (`theResizeDialogHasNoPreviewSurfaces`; the live-preview case removed; crop no longer drives the resize form), `cpp/main.cpp` (`editor-resize` no longer clicks a live toggle), the harness reference, `i18n/kogaview_vi.ts` (6 vanished preview strings removed), ADR 0012 (revision) | `just test` 294 strings / 110 C++ / 290 drawn; cargo 78 + 4; editor 41; real window: the form at 1472 × 943 with no preview, pad armed (`docs/evidence/M1-editor-resize-dialog-no-preview-vi.png`) and a grab 150 ms after the open request already at its final size; 1 mutation, caught |
+| 85 | The Editor had no brush and no eraser: every edit was chosen with numbers, and no pixel could be placed by hand. A stroke is also continuous in time, unlike a rotate or a crop | `crates/app-protocol/src/lib.rs` (`EditorPaintStroke { points, color, radius, opacity, erase }`, `name()`, a round-trip case, and `#[serde(default)]` on `erase` so an older payload is a brush), `crates/app-core/src/editor.rs` (`EditOperation::Paint`, `MAX_BRUSH_RADIUS`, the `brush_stroke`/`eraser_stroke` labels, snapshot undo, `validate_paint` with four codes, `paint_stroke`: a bbox coverage mask of round-capped capsules, **maximum** coverage so a crossing stroke does not darken, one-pixel feather, source-over for the brush and alpha-only for the eraser), `core.rs` (dispatch + preview test), `crates/desktop/qml/EditorView.qml` (Brush/Eraser palette buttons as one `paint` tool, the paint inspector with swatch/hex/swap/eight colours/size/opacity, the in-flight `Canvas` overlay, the pan yielding the left button except while Space is held, and the Krita keys `B E [ ] X D Space + - Tab` plus `Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+Y`), `UiLines.qml` + `kogaview_vi.ts` (17 strings), `cpp/main.cpp` (`editor-paint`), `tests/qml/tst_editor.cpp` (5 cases + the matte press; `init()`/`openResizeDialog()` now wait for a closing modal to be invisible), ADR 0014 | `just test` 311 strings / 110 C++ / 307 drawn; cargo 82 + 4; editor 46; real window: a blue 40 px stroke on the exact line (`docs/evidence/M1-editor-paint-vi.png`), a brush then an eraser at rev 5 → 7 with alpha 0 under the eraser in `preview-3.png` and History `1. Brush stroke` / `2. Eraser stroke` (`M1-editor-paint-history.png`; the Vietnamese eraser grab is `M1-editor-eraser-vi.png`), an undo that restored the picture; 8 mutations, each caught after one test was strengthened |
 
 ## Test gate
 
@@ -211,17 +224,17 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 294 strings in kogaview_vi.ts, 110 of them compiled into C++, 290 drawn by the QML, 4 looked up by context
+translations: 311 strings in kogaview_vi.ts, 110 of them compiled into C++, 307 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 78 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 37 · browser 45 · cache 15 · state 7 · settings 15 · editor 41 · language 7 · toolbar 11
+cargo: 82 passed (kogaview-core) + 4 passed (kogaview-protocol)
+viewer 37 · browser 45 · cache 15 · state 7 · settings 15 · editor 46 · language 7 · toolbar 11
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
 still reports the two pre-existing `derivable_impls` warnings in
 `crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
 the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 80, 81, 83 and 84 add no new warning
+`field_reassign_with_default`, `needless_return`); rows 80, 81, 83, 84 and 85 add no new warning
 (the protocol's `Anchor` and the anchored Core helpers are still gone).
 
 ## Design decisions, keyboard session
@@ -525,6 +538,48 @@ the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by
   does not move after the first layout. `editor_resize_preview` still exists in
   protocol/Core; no front end emits it now.
 
+## Design decisions, paint session (row 85, ADR 0014)
+
+- **A stroke is one command, sent on release.** `editor_paint_stroke` carries
+  document-space points, an RGB colour, a radius, an opacity and `erase`.
+  Points are collected while the button is down and nothing reaches Core until
+  it comes up, so an abandoned stroke (Escape, focus loss, Space for pan)
+  changes no pixels. A press with no drag is one point and still paints a dot.
+- **QML previews, Core paints.** `paintStroke` plus a `Canvas` overlay is the
+  in-flight mark; it is presentation state like zoom, and the pixels that
+  persist are Core's new preview. The overlay is cleared on release, so for the
+  moment the worker renders, the canvas shows the previous frame — the
+  alternative (holding the overlay until `previewRevision` advances) was not
+  built.
+- **The mask takes the maximum, not a sum.** Each segment is a round-capped
+  capsule with a one-pixel feather; overlapping segments contribute their
+  largest coverage to a pixel. Summing would darken a semi-transparent stroke at
+  every join and at every self-crossing, the classic dab artefact. The eraser
+  uses the same mask and only lowers destination alpha; it never repaints a
+  colour.
+- **The brush and the eraser are one tool with two modes.** `tool === "paint"`
+  and `paintMode` is `brush` or `eraser`, the way Krita's freehand brush and
+  eraser share one engine. The palette shows both as separate buttons; the
+  inspector column owns colour, size and opacity for whichever is armed.
+- **Krita's keys live on the Editor view.** Plain keys (`B`, `E`, `[`, `]`,
+  `X`, `D`, `Space`, `+`, `-`, `Tab`) are handled by `Keys` on the view root, so
+  a focused text field consumes them first: typing `b` in the colour field must
+  not arm the brush. `Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+Y` are handled there too, so
+  they undo the document rather than a field. Palette buttons are
+  `focusPolicy: Qt.NoFocus`; the colour field hands focus back on
+  `onEditingFinished`, and a focus loss cancels a half stroke and releases a
+  held Space.
+- **Space is temporary pan and yields the left button back.** While Space is
+  held, the paint overlay is disabled and the pan handler accepts the left
+  button again. The pan already accepted only the middle button under Crop and
+  Transform; Paint joins that rule, so a brush drag is never stolen by the pan.
+- **Tab hides the Editor's panels, not the shell.** The two side panels and
+  their splitters go and the picture gets their width; the header toolbar
+  belongs to the window, not to the Editor, so it stays.
+- **A press on the matte is not a dab.** The canvas host extends beyond the
+  picture; a press outside the document is ignored, because it would send a
+  stroke Core clips away and still cost an undo step and a preview render.
+
 ## Design decisions, fit/settings session (ADR 0009)
 
 - **Fit is a mode.** `fit()` sets `autoFit = true`; `setZoom` clears it. Both
@@ -681,6 +736,22 @@ restored, then the suite green.
 Preview removal: putting a 150 px `Rectangle { objectName: "resizePreview" }`
 back into the form's column → `theResizeDialogHasNoPreviewSurfaces` fails with
 "the resize form still has a preview frame". Restored, then the suite green.
+
+Paint: summing the segment coverage instead of taking the maximum → the eraser
+case first **passed**, because its one sampled pixel sat inside full coverage
+where max and sum agree; the case was strengthened to compare a whole stroke
+drawn out and back against the same line drawn once, after which the mutation
+fails ("the return leg summed its dabs instead of covering them once"). The
+eraser branch replaced by the brush's blend → the eraser case fails
+(`left: 255, right: 128`, the alpha was not lowered). `erase` hardcoded `false`
+in the QML command → `theEraserStrokeCarriesItsModeAndBrush` fails. The pan
+accepting the left button under Paint again → `spacePansInsteadOfPainting`
+fails ("the armed brush still gave the left button to the pan"). `]` stepping
+the size down → `theKritaKeysPickTheToolsAndAdjustTheBrush` fails. `paintStroke`
+not cleared on release → `thePaintToolSendsOneStrokeOnRelease` fails. `radius`
+pinned to `8` instead of `paintSize / 2` → the same case fails. The matte guard
+removed → the same case fails on the press outside the picture. Each restored,
+then the suite green three runs in a row.
 
 ## Design decisions, export-size session (ADR 0004)
 
@@ -849,6 +920,33 @@ back into the form's column → `theResizeDialogHasNoPreviewSurfaces` fails with
   very first painted frame is still not available here.
 - Flatpak, Windows, the portal Save-As chooser and the Editor's adjustment
   operations remain unverified as recorded in earlier rows.
+- **No hand drew a stroke.** The real-window runs drove `beginPaintStroke`/
+  `extendPaintStroke`/`finishPaintStroke` through the `editor-paint` hook, which
+  is the same path the canvas `MouseArea` calls; the drag paths themselves are
+  `QTest` pointer sequences in `tst_editor`, and this compositor does not
+  deliver synthetic pointer moves to the window. No pen, pressure, tilt or
+  stylus eraser was exercised.
+- **The brush is one hard-edged round tip.** There is no spacing, softness,
+  blending mode, colour picker or eyedropper; the eight swatches and the
+  `#rrggbb` field are the whole palette question. Krita's `[`/`]` step the size
+  by 1 px (10 with Shift) between 1 and 400 display px, while Core accepts a
+  radius up to 4096 — the view's range is narrower than the protocol's.
+- **The in-flight stroke is not held until the preview lands.** The overlay is
+  cleared on release, so the canvas shows the previous frame for the moment the
+  worker renders; the alternative was not built, and no frame-by-frame capture
+  proves how long that gap looks. The eraser's in-flight mark is a solid line in
+  the theme's thumb colour rather than a checkerboard or a live cut, so it says
+  "erasing" more than it shows the result.
+- **`Tab` hides only the Editor's panels.** The shell's toolbar stays, because
+  it is the window's, not the Editor's; Krita's canvas-only mode would hide
+  more. Space-pan and Tab were asserted with `QTest` keys, not a keyboard.
+- **The paint tests found a suite flake, not a product bug.** Seven resize and
+  palette cases failed after the paint cases were added; the cause was a Resize
+  form answered by the previous case still fading out while its modal overlay
+  took the next case's click. `init()` and `openResizeDialog()` now wait for
+  `visible` to go false and close both modal forms. It passed 46/46 on three
+  consecutive runs after the fix; the underlying fade timing on a slower
+  machine was not measured.
 
 ## Installed binary (this session, after `fad0fb1`)
 
@@ -902,3 +1000,9 @@ comes from `build/dev/bin/kogaview`.
    protocol/Core, but no window emits it; keeping it for a future CLI is a
    contract decision, and deleting it would remove a payload shape that row 73's
    preview work introduced.
+7. **Painting is one hard tip and one pass per stroke.** Softness, spacing,
+   pressure and a colour eyedropper are the natural next questions, and a long
+   stroke on a 27 MP document re-renders the whole bounding box on a worker —
+   tiling it belongs with the same profile that item 5 asks for. Keeping the
+   in-flight overlay until `previewRevision` advances would remove the
+   one-frame gap where the old preview shows.

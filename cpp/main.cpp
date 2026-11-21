@@ -334,6 +334,10 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     move one corner (`_ARG` = `X,Y` in document pixels, `_ARG2` = the corner
   //     index or `e0`–`e3` for an edge), optionally arming Live preview and
   //     pressing Apply
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-paint      -> pick Brush or Eraser and
+  //     draw one stroke through the canvas helpers (`_ARG` = `x1,y1;x2,y2;…`
+  //     in document pixels, `_ARG2` = `eraser`, `_ARG3` = `#rrggbb`, `_ARG4` =
+  //     the brush size in px, `_ARG5` = the opacity 1–100)
   //   KOGAVIEW_DEV_UI_REQUEST=editor-export     -> click the toolbar's Export
   //     button, write the dialog's path/quality/size, and optionally press
   //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
@@ -756,6 +760,71 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           }
         }
         emitted = true;
+      } else if (uiRequest == QLatin1String("editor-paint")) {
+        // A stroke without a pointer: the palette's Brush/Eraser button is
+        // clicked and the points go through `beginPaintStroke` /
+        // `extendPaintStroke` / `finishPaintStroke`, the same functions the
+        // canvas MouseArea calls. The points arrive in document pixels and are
+        // mapped to the canvas host the way `docToHost` does, so the command
+        // Core receives describes the same line the screenshot shows.
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        const bool erasing =
+          qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2") == QLatin1String("eraser");
+        QObject* tool = editor->findChild<QObject*>(
+          erasing ? QStringLiteral("toolEraser") : QStringLiteral("toolBrush"));
+        if (tool == nullptr) {
+          qWarning() << "KogaView dev ui request: paint tool button missing";
+          return;
+        }
+        QMetaObject::invokeMethod(tool, "click");
+        const QString colour = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        if (!colour.isEmpty()) {
+          editor->setProperty("paintColor", colour);
+        }
+        const QString size = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
+        if (!size.isEmpty()) {
+          editor->setProperty("paintSize", size.toDouble());
+        }
+        const QString opacity = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5");
+        if (!opacity.isEmpty()) {
+          editor->setProperty("paintOpacity", opacity.toInt());
+        }
+        const double zoom = editor->property("zoom").toDouble();
+        const double originX = editor->property("canvasOriginX").toDouble();
+        const double originY = editor->property("canvasOriginY").toDouble();
+        const QString strokeArg =
+          requestArg.isEmpty() ? QStringLiteral("120,80;240,160") : requestArg;
+        const QStringList points = strokeArg.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+        bool began = false;
+        int mapped = 0;
+        for (const QString& point : points) {
+          const QStringList pair = point.split(QLatin1Char(','));
+          if (pair.size() != 2) {
+            continue;
+          }
+          const double hostX = originX + pair.at(0).toDouble() * zoom;
+          const double hostY = originY + pair.at(1).toDouble() * zoom;
+          const QByteArray method = began ? "extendPaintStroke" : "beginPaintStroke";
+          QMetaObject::invokeMethod(editor, method.constData(),
+                                    Q_ARG(QVariant, QVariant(hostX)),
+                                    Q_ARG(QVariant, QVariant(hostY)));
+          began = true;
+          ++mapped;
+        }
+        qInfo().noquote() << "KogaView dev ui request editor-paint" << strokeArg
+                          << (erasing ? "eraser" : "brush") << "points" << mapped
+                          << "brush" << editor->property("paintSize")
+                          << editor->property("paintOpacity")
+                          << editor->property("paintColor")
+                          << "stroking" << editor->property("paintStroking");
+        QMetaObject::invokeMethod(editor, "finishPaintStroke");
+        qInfo().noquote() << "KogaView dev ui request editor-paint sent"
+                          << "stroking" << editor->property("paintStroking");
+        emitted = mapped > 0;
       } else if (uiRequest == QLatin1String("editor-export")) {
         // The toolbar's Export button is `click()`ed, which is the same handler
         // a press runs, and the dialog's fields are written the way the dialog's

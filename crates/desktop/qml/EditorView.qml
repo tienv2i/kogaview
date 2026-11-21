@@ -22,6 +22,15 @@ import QtQuick.Layouts
 Item {
     id: view
 
+    // The Editor owns the keyboard while it is the visible workspace: the
+    // Krita-style paint keys live here and the text fields consume their own
+    // keys before they bubble this far.
+    focus: true
+
+    // The paint keys and Space-pan need the view to be the focus item when the
+    // Editor opens; a text field or a click takes focus away on purpose.
+    Component.onCompleted: view.forceActiveFocus()
+
     property Theme theme: Theme {}
     /// The shared thumbnail cache (C++ `ThumbnailCache`). Null in the QML test
     /// harness, where the pointer frame stays empty instead of decoding a fake
@@ -67,6 +76,236 @@ Item {
     /// handles are an affordance over this one array: dragging an edge moves
     /// the two corners that form it.
     property var transformCorners: []
+
+    /// Paint is one canvas tool with two modes, the way Krita's freehand brush
+    /// and eraser are two tools over one paint engine: `brush` blends
+    /// `paintColor` over the picture, `eraser` lowers alpha. One stroke is one
+    /// `editor_paint_stroke` command, sent on release, so one undo removes it.
+    property string paintMode: "brush"
+    /// Krita's foreground and background colours — X swaps them and D resets
+    /// them. Stored as `#rrggbb`, which is both the typed command's bytes and
+    /// the field's own text, so the swatch and the field cannot disagree.
+    property string paintColor: "#000000"
+    property string paintBackgroundColor: "#ffffff"
+    /// Brush diameter in document pixels; the command carries the radius.
+    property real paintSize: 24
+    /// The stroke's alpha, 1–100, before it is blended.
+    property int paintOpacity: 100
+    /// The stroke being drawn, in document pixels. Presentation only: the
+    /// canvas draws it while the button is down and the command is sent on
+    /// release, so a half-drawn stroke can still be abandoned.
+    property var paintStroke: []
+    property bool paintStroking: false
+    /// Held Space pans on the left button, as in Krita; while it is held the
+    /// brush does not paint.
+    property bool spacePanning: false
+    /// Tab gives the picture the whole canvas by hiding the two side panels.
+    property bool panelsHidden: false
+    readonly property real minimumPaintSize: 1
+    readonly property real maximumPaintSize: 400
+    /// A small, fixed palette: enough to pick a colour without a platform
+    /// colour dialog (which is a portal question of its own), and the field
+    /// stays the way to any other value.
+    readonly property var paintSwatches: [
+        "#000000", "#ffffff", "#e5484d", "#f5a623",
+        "#3fb950", "#2f81f7", "#a371f7", "#8b5e3c"
+    ]
+
+    /// Whether a left press paints instead of panning.
+    function paintArmed() {
+        return view.tool === "paint" && view.documentReady
+            && view.previewDraft === null && !view.spacePanning
+    }
+
+    /// The three bytes for `paintColor`. Core carries RGB, not a QML colour.
+    function paintColorBytes() {
+        var match = /^#([0-9a-fA-F]{6})$/.exec(String(view.paintColor))
+        if (!match) return [0, 0, 0]
+        return [parseInt(match[1].slice(0, 2), 16),
+                parseInt(match[1].slice(2, 4), 16),
+                parseInt(match[1].slice(4, 6), 16)]
+    }
+
+    /// Normalise a typed or picked colour to `#rrggbb`. An illegal value is
+    /// ignored rather than sent, so the document never sees a colour the
+    /// interface cannot show.
+    function setPaintColor(value) {
+        var text = String(value).trim()
+        if (/^[0-9a-fA-F]{6}$/.test(text)) text = "#" + text
+        if (!/^#[0-9a-fA-F]{6}$/.test(text)) return
+        view.paintColor = text.toLowerCase()
+    }
+
+    /// Krita's X: foreground and background swap places.
+    function swapPaintColors() {
+        var previous = view.paintColor
+        view.paintColor = view.paintBackgroundColor
+        view.paintBackgroundColor = previous
+    }
+
+    /// Krita's D: black foreground, white background.
+    function resetPaintColors() {
+        view.paintColor = "#000000"
+        view.paintBackgroundColor = "#ffffff"
+    }
+
+    /// Krita's [ and ]: one pixel per press, ten with Shift.
+    function stepPaintSize(delta) {
+        view.paintSize = Math.max(view.minimumPaintSize,
+                                  Math.min(view.maximumPaintSize,
+                                           view.paintSize + delta))
+    }
+
+    /// Pick the paint tool and one of its two modes; the palette's Brush and
+    /// Eraser buttons and the B/E keys both land here.
+    function selectPaintMode(mode) {
+        view.tool = "paint"
+        view.paintMode = mode === "eraser" ? "eraser" : "brush"
+    }
+
+    /// Begin a stroke at a canvas-host point. A press without a drag is still a
+    /// dot, which is why a one-point stroke is a valid command.
+    function beginPaintStroke(hostX, hostY) {
+        if (!view.paintArmed()) return
+        var x = view.hostToDocX(hostX)
+        var y = view.hostToDocY(hostY)
+        // The matte around the picture is not canvas: a press there would send
+        // a stroke Core clips away entirely, which would still cost an undo
+        // step and a preview render for no pixels.
+        if (x < 0 || y < 0 || x >= view.documentWidth || y >= view.documentHeight)
+            return
+        view.paintStroking = true
+        view.paintStroke = [[x, y]]
+        strokePreview.requestPaint()
+    }
+
+    /// Add a point to the open stroke. Consecutive points closer than half a
+    /// document pixel are the same dab at any zoom the canvas shows, and the
+    /// list is capped so a held button cannot build an unbounded command.
+    function extendPaintStroke(hostX, hostY) {
+        if (!view.paintStroking) return
+        var x = view.hostToDocX(hostX)
+        var y = view.hostToDocY(hostY)
+        var points = view.paintStroke
+        if (points.length >= 4096) return
+        var last = points[points.length - 1]
+        if (last && Math.hypot(x - last[0], y - last[1]) < 0.5) return
+        points.push([x, y])
+        view.paintStroke = points
+        strokePreview.requestPaint()
+    }
+
+    /// End the stroke and send it as one command.
+    function finishPaintStroke() {
+        if (!view.paintStroking) return
+        view.paintStroking = false
+        var points = view.paintStroke
+        view.paintStroke = []
+        strokePreview.requestPaint()
+        if (points.length === 0) return
+        view.command({
+            type: "editor_paint_stroke",
+            points: points,
+            color: view.paintColorBytes(),
+            radius: Math.max(0.5, view.paintSize / 2),
+            opacity: Math.max(0.01, view.paintOpacity / 100),
+            erase: view.paintMode === "eraser"
+        })
+    }
+
+    function cancelPaintStroke() {
+        if (!view.paintStroking) return
+        view.paintStroking = false
+        view.paintStroke = []
+        strokePreview.requestPaint()
+    }
+
+    /// The Krita defaults this build maps. Plain keys belong to the view, so a
+    /// text field that has focus consumes them first — typing "b" into X must
+    /// not arm the brush. Ctrl+Z and Ctrl+Shift+Z are the undo pair; the rest
+    /// are bare keys.
+    Keys.onPressed: function(event) {
+        var control = (event.modifiers & Qt.ControlModifier) !== 0
+        var alt = (event.modifiers & Qt.AltModifier) !== 0
+        var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+        if (control || alt) {
+            if (control && !alt && (event.key === Qt.Key_Z || event.key === Qt.Key_Y)) {
+                var redo = event.key === Qt.Key_Y || shift
+                view.command({ type: redo ? "editor_redo" : "editor_undo" })
+                event.accepted = true
+            }
+            return
+        }
+        if (event.isAutoRepeat && event.key === Qt.Key_Tab) return
+        switch (event.key) {
+        case Qt.Key_B:
+            view.selectPaintMode("brush")
+            event.accepted = true
+            break
+        case Qt.Key_E:
+            view.selectPaintMode("eraser")
+            event.accepted = true
+            break
+        case Qt.Key_BracketLeft:
+            view.stepPaintSize(shift ? -10 : -1)
+            event.accepted = true
+            break
+        case Qt.Key_BracketRight:
+            view.stepPaintSize(shift ? 10 : 1)
+            event.accepted = true
+            break
+        case Qt.Key_X:
+            view.swapPaintColors()
+            event.accepted = true
+            break
+        case Qt.Key_D:
+            view.resetPaintColors()
+            event.accepted = true
+            break
+        case Qt.Key_Space:
+            if (view.documentReady) {
+                // Space interrupts a stroke rather than swallowing it: the
+                // stroke is finished as drawn, then the button pans.
+                view.finishPaintStroke()
+                view.spacePanning = true
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Plus:
+        case Qt.Key_Equal:
+            if (view.documentReady) {
+                view.zoomIn()
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Minus:
+        case Qt.Key_Underscore:
+            if (view.documentReady) {
+                view.zoomOut()
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Tab:
+            view.panelsHidden = !view.panelsHidden
+            event.accepted = true
+            break
+        }
+    }
+    Keys.onReleased: function(event) {
+        if (event.key === Qt.Key_Space) {
+            view.spacePanning = false
+            event.accepted = true
+        }
+    }
+    // A key release is delivered to the item that has focus, so losing focus
+    // mid-stroke would otherwise leave Space stuck down and a half-drawn
+    // stroke on screen forever.
+    onActiveFocusChanged: {
+        if (!activeFocus) {
+            view.spacePanning = false
+            view.cancelPaintStroke()
+        }
+    }
 
     /// The quad that changes nothing: the document's own frame.
     function identityCorners() {
@@ -1109,6 +1348,10 @@ Item {
             Layout.preferredWidth: view.leftPanelWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
+            // Tab gives the picture the whole window, as Krita's canvas-only
+            // mode does; the side panels and their splitters are the only
+            // things this view owns, so the toolbar stays.
+            visible: !view.panelsHidden
 
             ColumnLayout {
                 anchors.fill: parent
@@ -1131,6 +1374,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Pointer")
                     highlighted: view.tool === "pointer"
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.tool = "pointer"
                 }
                 // Resize is not a mode: it opens a dialog, and the dialog's own
@@ -1142,6 +1386,7 @@ Item {
                     text: qsTr("Resize…")
                     highlighted: view.resizeDialogOpen
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.openResizeDialog()
                 }
                 Button {
@@ -1150,6 +1395,7 @@ Item {
                     text: qsTr("Crop")
                     highlighted: view.tool === "crop"
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
                 }
                 Button {
@@ -1158,9 +1404,40 @@ Item {
                     text: qsTr("Transform")
                     highlighted: view.tool === "transform"
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Drag the corners onto the picture's edges to straighten it")
                     onClicked: view.tool = view.tool === "transform" ? "pointer" : "transform"
+                }
+                // Krita's freehand brush and eraser are one paint engine with
+                // two modes, so they sit side by side and B/E pick them.
+                Button {
+                    objectName: "toolBrush"
+                    Layout.fillWidth: true
+                    text: qsTr("Brush")
+                    highlighted: view.tool === "paint" && view.paintMode === "brush"
+                    enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Paint freehand (B)")
+                    onClicked: {
+                        view.selectPaintMode("brush")
+                        view.forceActiveFocus()
+                    }
+                }
+                Button {
+                    objectName: "toolEraser"
+                    Layout.fillWidth: true
+                    text: qsTr("Eraser")
+                    highlighted: view.tool === "paint" && view.paintMode === "eraser"
+                    enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Erase with the brush (E)")
+                    onClicked: {
+                        view.selectPaintMode("eraser")
+                        view.forceActiveFocus()
+                    }
                 }
 
                 MenuSeparator {}
@@ -1173,6 +1450,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Rotate left")
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.command({ type: "editor_rotate", degrees: -90 })
                 }
                 Button {
@@ -1180,6 +1458,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Rotate right")
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.command({ type: "editor_rotate", degrees: 90 })
                 }
                 Button {
@@ -1187,6 +1466,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Flip horizontal")
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
                 }
                 Button {
@@ -1194,6 +1474,7 @@ Item {
                     Layout.fillWidth: true
                     text: qsTr("Flip vertical")
                     enabled: view.documentReady
+                    focusPolicy: Qt.NoFocus
                     onClicked: view.command({ type: "editor_flip", axis: "vertical" })
                 }
 
@@ -1208,6 +1489,7 @@ Item {
             value: view.leftPanelWidth
             minimum: 160
             maximum: 360
+            visible: !view.panelsHidden
             onMoved: function(width) { view.leftPanelWidth = width }
         }
 
@@ -1284,11 +1566,15 @@ Item {
                 // Arm on the picture only: a drag that begins on a sidebar or
                 // a scroll view must keep scrolling. While Crop or Transform
                 // is armed the left button belongs to the overlay's own
-                // handles and the frame; the middle button still pans. The
-                // Resize dialog is modal, so no button pans behind it.
+                // handles and the frame, and while Paint is armed it belongs
+                // to the brush; the middle button still pans in all three
+                // cases. Holding Space hands Paint's left button back to the
+                // pan, the way Krita does. The Resize dialog is modal, so no
+                // button pans behind it.
                 enabled: view.panHover && !view.resizeDialogOpen
                 acceptedDevices: PointerDevice.AllDevices
-                acceptedButtons: (view.tool === "crop" || view.tool === "transform")
+                acceptedButtons: (view.tool === "crop" || view.tool === "transform"
+                                  || (view.tool === "paint" && !view.spacePanning))
                                  ? Qt.MiddleButton
                                  : (Qt.LeftButton | Qt.MiddleButton)
                 property real startX: 0
@@ -1567,6 +1853,74 @@ Item {
                         }
                     }
                 }
+
+                // ------------------------------------------------ paint stroke
+                // The stroke is drawn here while the button is down, in the
+                // same host coordinates the picture uses, and the real pixels
+                // are painted by Core when the button comes up. The overlay is
+                // presentation only: cancelling it leaves the document alone.
+                Item {
+                    id: paintOverlay
+                    objectName: "paintOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "paint" && view.documentReady
+                             && view.previewDraft === null
+                    enabled: visible && !view.spacePanning
+
+                    Canvas {
+                        id: strokePreview
+                        objectName: "strokePreview"
+                        anchors.fill: parent
+
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var points = view.paintStroke
+                            if (!points || points.length === 0) return
+                            ctx.globalAlpha = Math.max(0.05, view.paintOpacity / 100)
+                            ctx.strokeStyle = view.paintMode === "eraser"
+                                    ? view.theme.thumb : view.paintColor
+                            ctx.fillStyle = ctx.strokeStyle
+                            ctx.lineCap = "round"
+                            ctx.lineJoin = "round"
+                            var radius = Math.max(0.5, view.paintSize * view.zoom / 2)
+                            ctx.lineWidth = radius * 2
+                            if (points.length === 1) {
+                                ctx.beginPath()
+                                ctx.arc(view.docToHostX(points[0][0]),
+                                        view.docToHostY(points[0][1]), radius, 0, 2 * Math.PI)
+                                ctx.fill()
+                                return
+                            }
+                            ctx.beginPath()
+                            ctx.moveTo(view.docToHostX(points[0][0]),
+                                       view.docToHostY(points[0][1]))
+                            for (var index = 1; index < points.length; ++index) {
+                                ctx.lineTo(view.docToHostX(points[index][0]),
+                                           view.docToHostY(points[index][1]))
+                            }
+                            ctx.stroke()
+                        }
+                    }
+
+                    MouseArea {
+                        id: paintArea
+                        objectName: "paintArea"
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        cursorShape: Qt.CrossCursor
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            view.beginPaintStroke(mouse.x, mouse.y)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return
+                            view.extendPaintStroke(mouse.x, mouse.y)
+                        }
+                        onReleased: view.finishPaintStroke()
+                        onCanceled: view.cancelPaintStroke()
+                    }
+                }
             }
 
             Component.onCompleted: {
@@ -1619,6 +1973,7 @@ Item {
             direction: -1
             minimum: 220
             maximum: 400
+            visible: !view.panelsHidden
             onMoved: function(width) { view.rightPanelWidth = width }
         }
 
@@ -1636,6 +1991,7 @@ Item {
             Layout.preferredWidth: view.rightPanelWidth
             Layout.fillHeight: true
             color: view.theme.surface
+            visible: !view.panelsHidden
 
             ScrollView {
                 anchors.fill: parent
@@ -1656,7 +2012,11 @@ Item {
                               ? qsTr("Pointer")
                               : (view.tool === "crop"
                                  ? qsTr("Crop")
-                                 : (view.tool === "transform" ? qsTr("Transform") : qsTr("Resize")))
+                                 : (view.tool === "transform"
+                                    ? qsTr("Transform")
+                                    : (view.tool === "paint"
+                                       ? (view.paintMode === "eraser" ? qsTr("Eraser") : qsTr("Brush"))
+                                       : qsTr("Resize"))))
                         color: view.theme.text
                         font.bold: true
                     }
@@ -1817,6 +2177,214 @@ Item {
                         }
                     }
 
+                    // ------------------------------- paint: brush and eraser
+                    // One engine, two modes. A stroke changes pixels only when
+                    // the button comes up, so nothing here is an Apply; the
+                    // fields are the brush's own properties, and the [ ] X D
+                    // keys reach the same properties as the controls.
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        visible: view.tool === "paint"
+                        spacing: 10
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Button {
+                                objectName: "paintBrushMode"
+                                Layout.fillWidth: true
+                                text: qsTr("Brush")
+                                checkable: true
+                                checked: view.paintMode === "brush"
+                                enabled: view.documentReady
+                                focusPolicy: Qt.NoFocus
+                                onClicked: {
+                                    view.selectPaintMode("brush")
+                                    view.forceActiveFocus()
+                                }
+                            }
+                            Button {
+                                objectName: "paintEraserMode"
+                                Layout.fillWidth: true
+                                text: qsTr("Eraser")
+                                checkable: true
+                                checked: view.paintMode === "eraser"
+                                enabled: view.documentReady
+                                focusPolicy: Qt.NoFocus
+                                onClicked: {
+                                    view.selectPaintMode("eraser")
+                                    view.forceActiveFocus()
+                                }
+                            }
+                        }
+
+                        // The colour row is the foreground swatch, its hex
+                        // field, the background swatch X swaps with, and the
+                        // swap button itself.
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Rectangle {
+                                objectName: "paintSwatch"
+                                implicitWidth: 22
+                                implicitHeight: 22
+                                radius: 3
+                                color: view.paintColor
+                                border.width: 1
+                                border.color: view.theme.border
+                            }
+
+                            TextField {
+                                id: paintColorField
+                                objectName: "paintColorField"
+                                Layout.fillWidth: true
+                                font.pixelSize: 12
+                                text: view.paintColor
+                                placeholderText: qsTr("#rrggbb")
+                                onEditingFinished: {
+                                    view.setPaintColor(text)
+                                    text = view.paintColor
+                                    // Enter belongs to the field; the next key
+                                    // should reach the canvas keys again.
+                                    view.forceActiveFocus()
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "paintBackgroundSwatch"
+                                implicitWidth: 22
+                                implicitHeight: 22
+                                radius: 3
+                                color: view.paintBackgroundColor
+                                border.width: 1
+                                border.color: view.theme.border
+                            }
+
+                            Button {
+                                objectName: "paintSwap"
+                                implicitWidth: 30
+                                text: qsTr("X")
+                                enabled: view.documentReady
+                                focusPolicy: Qt.NoFocus
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Swap the foreground and background colours (X)")
+                                onClicked: {
+                                    view.swapPaintColors()
+                                    view.forceActiveFocus()
+                                }
+                            }
+                        }
+
+                        // The field and the swatch follow X and D even after
+                        // the field has been typed into, which breaks its
+                        // initial binding.
+                        Connections {
+                            target: view
+                            function onPaintColorChanged() {
+                                if (!paintColorField.activeFocus)
+                                    paintColorField.text = view.paintColor
+                            }
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 8
+                            columnSpacing: 4
+                            rowSpacing: 4
+
+                            Repeater {
+                                model: view.paintSwatches
+
+                                Rectangle {
+                                    required property string modelData
+                                    objectName: "paintSwatch_" + modelData.substring(1)
+                                    Layout.preferredWidth: 22
+                                    Layout.preferredHeight: 22
+                                    radius: 3
+                                    color: modelData
+                                    border.width: view.paintColor === modelData ? 2 : 1
+                                    border.color: view.paintColor === modelData
+                                                  ? view.theme.accent : view.theme.border
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            view.setPaintColor(modelData)
+                                            view.forceActiveFocus()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                text: qsTr("Brush size")
+                                color: view.theme.textMuted
+                            }
+                            Slider {
+                                id: paintSizeSlider
+                                objectName: "paintSize"
+                                Layout.fillWidth: true
+                                from: view.minimumPaintSize
+                                to: view.maximumPaintSize
+                                stepSize: 1
+                                value: view.paintSize
+                                enabled: view.documentReady
+                                onMoved: view.paintSize = Math.round(value)
+                            }
+                            Label {
+                                objectName: "paintSizeValue"
+                                text: qsTr("%1 px").arg(Math.round(view.paintSize))
+                                color: view.theme.text
+                                font.pixelSize: 12
+                                Layout.preferredWidth: 52
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                text: qsTr("Opacity")
+                                color: view.theme.textMuted
+                            }
+                            Slider {
+                                id: paintOpacitySlider
+                                objectName: "paintOpacity"
+                                Layout.fillWidth: true
+                                from: 1
+                                to: 100
+                                stepSize: 1
+                                value: view.paintOpacity
+                                enabled: view.documentReady
+                                onMoved: view.paintOpacity = Math.round(value)
+                            }
+                            Label {
+                                objectName: "paintOpacityValue"
+                                text: qsTr("%1 %").arg(Math.round(view.paintOpacity))
+                                color: view.theme.text
+                                font.pixelSize: 12
+                                Layout.preferredWidth: 52
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("Drag on the picture to paint. [ and ] change the size, X swaps colours, D resets them, Space pans.")
+                            color: view.theme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
                     // ------------------------------- crop/transform: tool options
                     // Crop's rectangle has a size and a place; Resize asked the
                     // same two-number question but as a dialog, because a size
@@ -1824,7 +2392,7 @@ Item {
                     // sending anything.
                     ColumnLayout {
                         Layout.fillWidth: true
-                        visible: view.tool !== "pointer"
+                        visible: view.tool === "crop" || view.tool === "transform"
                         spacing: 10
 
                         GridLayout {
@@ -2179,6 +2747,7 @@ Item {
                                 text: qsTr("Apply crop")
                                 Layout.fillWidth: true
                                 visible: view.tool === "crop"
+                                focusPolicy: Qt.NoFocus
                                 enabled: view.cropFieldsValid()
                                 onClicked: {
                                     view.command({
@@ -2200,6 +2769,7 @@ Item {
                                 text: qsTr("Apply")
                                 Layout.fillWidth: true
                                 visible: view.tool === "transform"
+                                focusPolicy: Qt.NoFocus
                                 enabled: view.transformUsable() && view.transformChanged()
                                 onClicked: {
                                     view.command({
@@ -2213,6 +2783,7 @@ Item {
                             Button {
                                 objectName: "resetToolFields"
                                 text: qsTr("Reset")
+                                focusPolicy: Qt.NoFocus
                                 enabled: view.documentReady
                                 onClicked: {
                                     cropWidthField.text = ""

@@ -742,6 +742,19 @@ impl Core {
                 self.editor_apply(EditOperation::Rotate { degrees })
             }
             Command::EditorFlip { axis } => self.editor_apply(EditOperation::Flip { axis }),
+            Command::EditorPaintStroke {
+                points,
+                color,
+                radius,
+                opacity,
+                erase,
+            } => self.editor_apply(EditOperation::Paint {
+                points,
+                color,
+                radius,
+                opacity,
+                erase,
+            }),
             Command::EditorSave => self.editor_save(None),
             Command::EditorSaveAs { path } => self.editor_save(Some(&path)),
             Command::EditorExport {
@@ -3681,6 +3694,70 @@ mod tests {
             );
         }
 
+        remove_tree(&base);
+    }
+
+    /// The typed stroke reaches the document: the pixels change, the preview
+    /// hides them behind a redraw, and the whole stroke is one undo step.
+    #[test]
+    fn a_paint_stroke_is_one_undo_step_and_publishes_a_new_preview() {
+        let base = temp_dir();
+        let photo = base.join("paint.png");
+        write_png(&photo, 40, 30);
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+        let open = format!(
+            r#"{{"type":"editor_open","path":{}}}"#,
+            serde_json::to_string(&photo.to_string_lossy()).unwrap()
+        );
+        core.dispatch(&editor_envelope("open", &open));
+        assert!(settle_editor(&mut core), "the document never arrived");
+        let before_pixels = core.editor.as_ref().unwrap().pixels();
+        let before_preview_revision = core.state.editor.as_ref().unwrap().preview_revision;
+        let before_revision = core.state.revision;
+
+        let response = core.dispatch(&editor_envelope(
+            "stroke",
+            r#"{"type":"editor_paint_stroke","points":[[10,10],[20,10]],"color":[255,0,0],"radius":3,"opacity":1}"#,
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["ok"], true, "{response}");
+        assert!(core.state.revision > before_revision, "no revision bumped");
+
+        let editor = core.state.editor.as_ref().unwrap();
+        assert_eq!(editor.history, vec![UiText::new("brush_stroke")]);
+        assert!(editor.can_undo && !editor.can_redo);
+        assert!(editor.modified);
+        let after_pixels = core.editor.as_ref().unwrap().pixels();
+        assert_ne!(after_pixels.as_raw(), before_pixels.as_raw());
+        // The middle of the stroke really carries the brush colour.
+        assert_eq!(after_pixels.get_pixel(15, 10).0, [255, 0, 0, 255]);
+        // The canvas is handed a fresh preview once the worker lands it.
+        assert!(settle_editor(&mut core), "the preview never landed");
+        assert!(
+            core.state.editor.as_ref().unwrap().preview_revision > before_preview_revision,
+            "the canvas must be given a new preview"
+        );
+
+        let undo_revision = core.state.editor.as_ref().unwrap().preview_revision;
+        core.dispatch(&editor_envelope("undo", r#"{"type":"editor_undo"}"#));
+        let editor = core.state.editor.as_ref().unwrap();
+        assert!(editor.history.is_empty());
+        assert!(editor.can_redo);
+        assert_eq!(
+            core.editor.as_ref().unwrap().pixels().as_raw(),
+            before_pixels.as_raw(),
+            "undo must restore the bytes the stroke covered"
+        );
+        assert!(settle_editor(&mut core));
+        assert!(
+            core.state.editor.as_ref().unwrap().preview_revision > undo_revision,
+            "undo repaints the canvas too"
+        );
+
+        let journal =
+            std::fs::read_to_string(runtime.join("state/journal/commands.jsonl")).unwrap();
+        assert!(journal.contains("\"command\":\"editor_paint_stroke\""));
         remove_tree(&base);
     }
 

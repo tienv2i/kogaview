@@ -73,6 +73,17 @@ pub enum EditOperation {
     Transform {
         corners: [[f64; 2]; 4],
     },
+    /// One freehand stroke. `points` are in document pixels in drawing order,
+    /// `radius` is half the brush width, `opacity` is 0–1 and `erase` lowers
+    /// the destination alpha instead of blending `color` over it. The stroke is
+    /// painted as one history step, so one undo removes it whole.
+    Paint {
+        points: Vec<[f64; 2]>,
+        color: [u8; 3],
+        radius: f64,
+        opacity: f64,
+        erase: bool,
+    },
 }
 
 impl EditOperation {
@@ -122,6 +133,13 @@ impl EditOperation {
                 None => UiText::with("resize", [width.to_string(), height.to_string()]),
             },
             Self::Transform { .. } => UiText::new("transform"),
+            Self::Paint { erase, .. } => {
+                if *erase {
+                    UiText::new("eraser_stroke")
+                } else {
+                    UiText::new("brush_stroke")
+                }
+            }
         }
     }
 }
@@ -764,6 +782,18 @@ impl EditorDocument {
                 validate_transform(corners, width, height)?;
                 Ok(is_identity_quad(corners, width, height))
             }
+            EditOperation::Paint {
+                points,
+                radius,
+                opacity,
+                ..
+            } => {
+                validate_paint(points, *radius, *opacity)?;
+                // A valid stroke always leaves a mark: the validation rejects
+                // an empty point list and a zero radius or opacity, so there is
+                // no "nothing to do" case to report.
+                Ok(false)
+            }
         }
     }
 
@@ -777,6 +807,9 @@ impl EditorDocument {
             // A warp cannot be recreated from its parameters: the pixels that
             // left the quad are not in the result. Snapshot, like crop.
             EditOperation::Transform { .. } => Undo::Snapshot(before),
+            // A stroke blends over the pixels underneath it, so inverting it
+            // would need the original alpha at every touched pixel. Snapshot.
+            EditOperation::Paint { .. } => Undo::Snapshot(before),
         };
         self.undo.push(Step { operation, undo });
         self.redo.clear();
@@ -946,6 +979,168 @@ fn quad_area(corners: &[[f64; 2]; 4]) -> f64 {
         twice += a[0] * b[1] - b[0] * a[1];
     }
     twice.abs() / 2.0
+}
+
+/// The largest brush radius accepted, in document pixels. A stroke is a paint
+/// operation, not a fill: a radius this big still paints one line, and the cap
+/// keeps a bad client from asking for a coverage mask over the whole frame.
+const MAX_BRUSH_RADIUS: f64 = 4096.0;
+
+/// A stroke needs at least one finite point, a radius with some width and an
+/// opacity above zero. Outside coordinates are not an error: a stroke that
+/// starts off the canvas and enters it is clipped, exactly like a real brush
+/// held past the paper's edge.
+fn validate_paint(points: &[[f64; 2]], radius: f64, opacity: f64) -> Result<(), UiText> {
+    if points.is_empty() {
+        return Err(UiText::new("paint_empty_stroke"));
+    }
+    if points.iter().any(|[x, y]| !x.is_finite() || !y.is_finite()) {
+        return Err(UiText::new("paint_bad_point"));
+    }
+    if !radius.is_finite() || !(0.5..=MAX_BRUSH_RADIUS).contains(&radius) {
+        return Err(UiText::with(
+            "paint_bad_radius",
+            [format!("{radius:.1}"), MAX_BRUSH_RADIUS.to_string()],
+        ));
+    }
+    if !opacity.is_finite() || opacity <= 0.0 || opacity > 1.0 {
+        return Err(UiText::with(
+            "paint_bad_opacity",
+            [format!("{:.0}", opacity * 100.0)],
+        ));
+    }
+    Ok(())
+}
+
+/// Paint one stroke as a union of round-capped capsules.
+///
+/// The coverage of a pixel is the *maximum* over every segment that reaches it,
+/// not a sum: a stroke that crosses itself or doubles back would otherwise get
+/// darker at the join, which is the classic overlap artefact of painting dabs.
+/// Each segment is feathered over one pixel at its edge so a diagonal is not a
+/// staircase. A brush blends `color` source-over the pixels; an eraser only
+/// lowers their alpha, so it works on a transparent document too.
+fn paint_stroke(
+    image: &RgbaImage,
+    points: &[[f64; 2]],
+    color: [u8; 3],
+    radius: f64,
+    opacity: f64,
+    erase: bool,
+) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let mut result = image.clone();
+
+    // The stroke's bounds plus a pixel of feather, clipped to the frame.
+    let feather = radius + 1.0;
+    let first = points[0];
+    let mut min_x = first[0];
+    let mut min_y = first[1];
+    let mut max_x = first[0];
+    let mut max_y = first[1];
+    for [x, y] in points {
+        min_x = min_x.min(*x);
+        min_y = min_y.min(*y);
+        max_x = max_x.max(*x);
+        max_y = max_y.max(*y);
+    }
+    let left = (min_x - feather).floor().max(0.0) as u32;
+    let top = (min_y - feather).floor().max(0.0) as u32;
+    let right = ((max_x + feather).ceil().max(0.0) as u32).min(width);
+    let bottom = ((max_y + feather).ceil().max(0.0) as u32).min(height);
+    if left >= right || top >= bottom {
+        return result;
+    }
+
+    let box_w = (right - left) as usize;
+    let box_h = (bottom - top) as usize;
+    let mut coverage = vec![0.0f32; box_w * box_h];
+
+    // A single point is a dot: a zero-length segment whose caps make a disk.
+    let segments: Vec<([f64; 2], [f64; 2])> = if points.len() == 1 {
+        vec![(points[0], points[0])]
+    } else {
+        points.windows(2).map(|pair| (pair[0], pair[1])).collect()
+    };
+
+    for (a, b) in &segments {
+        let seg_left = (a[0].min(b[0]) - feather).floor().max(left as f64) as usize;
+        let seg_top = (a[1].min(b[1]) - feather).floor().max(top as f64) as usize;
+        let seg_right = ((a[0].max(b[0]) + feather).ceil().max(0.0) as usize).min(right as usize);
+        let seg_bottom = ((a[1].max(b[1]) + feather).ceil().max(0.0) as usize).min(bottom as usize);
+        if seg_left >= seg_right || seg_top >= seg_bottom {
+            continue;
+        }
+        let delta = [b[0] - a[0], b[1] - a[1]];
+        let length_squared = delta[0] * delta[0] + delta[1] * delta[1];
+        for y in seg_top..seg_bottom {
+            let py = y as f64 + 0.5;
+            for x in seg_left..seg_right {
+                let px = x as f64 + 0.5;
+                let t = if length_squared > 0.0 {
+                    (((px - a[0]) * delta[0] + (py - a[1]) * delta[1]) / length_squared)
+                        .clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let cx = a[0] + delta[0] * t;
+                let cy = a[1] + delta[1] * t;
+                let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+                let value = (radius + 0.5 - distance).clamp(0.0, 1.0) as f32;
+                let index = (y - top as usize) * box_w + (x - left as usize);
+                if value > coverage[index] {
+                    coverage[index] = value;
+                }
+            }
+        }
+    }
+
+    let alpha_scale = opacity as f32;
+    for y in top..bottom {
+        for x in left..right {
+            let amount = coverage[((y - top) as usize) * box_w + (x as usize - left as usize)];
+            if amount <= 0.0 {
+                continue;
+            }
+            let alpha = (amount * alpha_scale).clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let pixel = result.get_pixel_mut(x, y);
+            let destination = pixel.0;
+            let destination_alpha = f32::from(destination[3]) / 255.0;
+            if erase {
+                let out_alpha = destination_alpha * (1.0 - alpha);
+                pixel.0 = [
+                    destination[0],
+                    destination[1],
+                    destination[2],
+                    (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+                ];
+            } else {
+                let out_alpha = alpha + destination_alpha * (1.0 - alpha);
+                if out_alpha <= 0.0 {
+                    pixel.0 = [0, 0, 0, 0];
+                    continue;
+                }
+                let blend = |source: u8, under: u8| -> u8 {
+                    let source = f32::from(source) / 255.0;
+                    let under = f32::from(under) / 255.0;
+                    (((source * alpha + under * destination_alpha * (1.0 - alpha)) / out_alpha)
+                        * 255.0)
+                        .round()
+                        .clamp(0.0, 255.0) as u8
+                };
+                pixel.0 = [
+                    blend(color[0], destination[0]),
+                    blend(color[1], destination[1]),
+                    blend(color[2], destination[2]),
+                    (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+                ];
+            }
+        }
+    }
+    result
 }
 
 /// The homography that maps the unit square onto `corners`.
@@ -1161,6 +1356,18 @@ fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<Rgba
         EditOperation::Transform { corners } => {
             validate_transform(corners, width, height)?;
             Ok(warp_quad(image, corners))
+        }
+        EditOperation::Paint {
+            points,
+            color,
+            radius,
+            opacity,
+            erase,
+        } => {
+            validate_paint(points, *radius, *opacity)?;
+            Ok(paint_stroke(
+                image, points, *color, *radius, *opacity, *erase,
+            ))
         }
     }
 }
@@ -1971,6 +2178,131 @@ mod tests {
             document.history(),
             vec![UiText::with("resize", ["32", "16"])]
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A stroke is one history step: it paints its colour at full opacity,
+    /// leaves pixels outside it alone, and undo restores the exact bytes.
+    #[test]
+    fn a_brush_stroke_paints_its_colour_and_undoes_in_one_step() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let before = document.pixels();
+        assert!(document
+            .apply(EditOperation::Paint {
+                points: vec![[16.3, 16.0]],
+                color: [255, 0, 0],
+                radius: 4.0,
+                opacity: 1.0,
+                erase: false,
+            })
+            .unwrap());
+
+        assert_eq!(document.history(), vec![UiText::new("brush_stroke")]);
+        assert!(document.can_undo());
+        let painted = document.pixels();
+        // The centre of the dot is exactly the brush colour.
+        assert_eq!(painted.get_pixel(16, 16).0, [255, 0, 0, 255]);
+        // A pixel outside the stroke keeps its source value.
+        assert_eq!(painted.get_pixel(50, 2).0, before.get_pixel(50, 2).0);
+        // The edge is feathered: partly the brush, partly the source, never a
+        // hard step.
+        let edge = painted.get_pixel(20, 16).0;
+        assert_ne!(edge, [255, 0, 0, 255]);
+        assert_ne!(edge, before.get_pixel(20, 16).0);
+
+        assert!(document.undo());
+        assert_eq!(document.pixels().as_raw(), before.as_raw());
+        assert!(document.history().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An eraser lowers alpha and keeps the colour it uncovered, and a stroke
+    /// that doubles back does not erase twice at the join: coverage is the
+    /// maximum over the segments, not their sum.
+    #[test]
+    fn an_eraser_lowers_alpha_without_building_up_at_a_join() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let before = document.pixels();
+        assert!(document
+            .apply(EditOperation::Paint {
+                points: vec![[10.0, 10.0], [30.0, 10.0], [10.0, 10.0]],
+                color: [0, 0, 0],
+                radius: 3.0,
+                opacity: 0.5,
+                erase: true,
+            })
+            .unwrap());
+
+        assert_eq!(
+            document.history(),
+            vec![UiText::new("eraser_stroke")],
+            "the history names the eraser, not the brush"
+        );
+        // 255 × (1 − 0.5) = 127.5 → 128 at full coverage. A sum over the
+        // outbound and return segments would erase this pixel twice.
+        let pixel = document.pixels().get_pixel(20, 10).0;
+        assert_eq!(pixel[3], 128, "the overlap erased twice: {pixel:?}");
+        // The eraser does not repaint the colour.
+        assert_eq!(&pixel[..3], &before.get_pixel(20, 10).0[..3]);
+        // The outbound and return legs cover the same line, so the result must
+        // be the same as one leg on its own — including on the anti-aliased
+        // edge, where a sum would darken the ring. Comparing the whole frame
+        // rather than one hand-picked pixel keeps the check honest about the
+        // geometry.
+        let doubled = document.pixels();
+        assert!(document.undo());
+        assert!(document
+            .apply(EditOperation::Paint {
+                points: vec![[10.0, 10.0], [30.0, 10.0]],
+                color: [0, 0, 0],
+                radius: 3.0,
+                opacity: 0.5,
+                erase: true,
+            })
+            .unwrap());
+        assert_eq!(
+            doubled.as_raw(),
+            document.pixels().as_raw(),
+            "the return leg summed its dabs instead of covering them once"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A request a brush cannot honour is refused with a line, not painted as
+    /// far as it can go.
+    #[test]
+    fn a_malformed_stroke_is_rejected_with_a_line() {
+        let dir = temp_dir();
+        let mut document = open(&dir);
+        let mut paint = |points: Vec<[f64; 2]>, radius: f64, opacity: f64| {
+            document.apply(EditOperation::Paint {
+                points,
+                color: [1, 2, 3],
+                radius,
+                opacity,
+                erase: false,
+            })
+        };
+
+        assert_eq!(
+            paint(Vec::new(), 4.0, 1.0).unwrap_err().code,
+            "paint_empty_stroke"
+        );
+        assert_eq!(
+            paint(vec![[f64::NAN, 0.0]], 4.0, 1.0).unwrap_err().code,
+            "paint_bad_point"
+        );
+        assert_eq!(
+            paint(vec![[1.0, 1.0]], 0.0, 1.0).unwrap_err().code,
+            "paint_bad_radius"
+        );
+        assert_eq!(
+            paint(vec![[1.0, 1.0]], 4.0, 0.0).unwrap_err().code,
+            "paint_bad_opacity"
+        );
+        assert!(!document.can_undo(), "a refused stroke records no step");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

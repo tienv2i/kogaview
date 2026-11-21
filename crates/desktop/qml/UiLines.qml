@@ -143,6 +143,12 @@ QtObject {
             return qsTr("Those four corners do not make a usable shape; keep them in order and apart");
         case "transform_noop": return qsTr("That transform would not change the image");
         case "transform_preview": return qsTr("Previewing a transform at %1 × %2").arg(args[0]).arg(args[1]);
+        case "paint_empty_stroke": return qsTr("A stroke needs at least one point");
+        case "paint_bad_point": return qsTr("A stroke point is not a number");
+        case "paint_bad_radius":
+            return qsTr("A brush from 0.5 to %1 px wide is needed, not %2")
+                .arg(args[1]).arg(args[0]);
+        case "paint_bad_opacity": return qsTr("A brush opacity must be above 0 and at most 100 %, not %1 %").arg(args[0]);
 
         // --- editor history (also the text of an applied edit) -----------
         case "rotate_right": return qsTr("Rotate right 90°");
@@ -155,6 +161,8 @@ QtObject {
         case "resize": return qsTr("Resize %1 × %2").arg(args[0]).arg(args[1]);
         case "resize_pad": return qsTr("Resize %1 × %2 · pad %3").arg(args[0]).arg(args[1]).arg(args[2]);
         case "transform": return qsTr("Straighten the frame");
+        case "brush_stroke": return qsTr("Brush stroke");
+        case "eraser_stroke": return qsTr("Eraser stroke");
         }
         return args.length ? args.join(" ") : line.code;
     }
