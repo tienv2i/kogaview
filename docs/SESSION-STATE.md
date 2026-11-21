@@ -63,7 +63,13 @@ into one `⋮` menu, which lowered the window floor from ~798 px to a measured
 580 px. A follow-up (row 89) moved the fold and label points from the widest
 workspace to the workspace on screen: the three switcher buttons now decide
 which row the window must fit, so the Browser no longer folds at the Editor's
-width and shows its labels about 350 px sooner.
+width and shows its labels about 350 px sooner. The latest session (row 90)
+finished the Crop tool: it has a frame the moment it is armed, a chosen ratio
+survives handle and create-drags, the discarded picture is dimmed outside the
+frame and split by rule-of-thirds guides, the rectangle turns through 90° with
+one button, arrows/Shift/Alt nudge and resize it, Enter applies and Escape puts
+the tool down, Apply refuses the whole document, and an applied crop leaves a
+fresh frame on the cropped result.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
@@ -118,6 +124,13 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   `modeFor`, `Main.qml`'s single `toolbarMode` binding, the two fixtures, six
   row measurements and `theTierFollowsTheOpenWorkspace`, ADR 0017, a revision
   note in ADR 0015, and three screenshots. No `.ts` change: no new words.
+  The crop-completion session (row 90) is one commit on top, `11fd126
+  feat(editor): finish the crop tool`: `EditorView.qml`'s seeded frame, ratio
+  lock in drags, shade and thirds, swap, keyboard, no-op guard and
+  document-change refit; six new `tst_editor` cases plus two rewritten ones;
+  `editor-crop`'s `seed`/`swap`/`apply` arguments and its ratio/document log;
+  the reworded hint, Apply label and swap tooltip in the `.ts`; the stale
+  `Apply crop` C++ row removed; ADR 0011's revision; four screenshots.
   Nothing is pushed (see below).
   Earlier commits in `git log`: the keyboard map, the tooltip hints, the
   burger-menu fix, the modal-pointer fix, the Editor layout and its pointer
@@ -262,6 +275,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 87 | The copy entries were menu-only and no entry said which key reached them; `Ctrl+C` was not available (a focused Editor field owns it) and a `MenuItem` draws no shortcut column | two `Shortcut`s in `Main.qml` (`Ctrl+Shift+C` → `copyImageContent`, `Ctrl+Alt+C` → `copySelectedPaths`, both gated on `modalDialogOpen`), `MenuShortcut.qml` (right-aligned label, `objectName: "shortcutHint"`, colour from the entry's content item), `Theme.qml`'s `menuShortcutLabels`/`menuWidth(widths, shortcutWidths)`, hints in `Viewer.qml`/`BrowserView.qml`, `tst_viewer`/`tst_browser::theCopyEntriesNameTheirKeys`, `tst_settings::theShellBindsTheCopyKeysItsMenusName`, `KOGAVIEW_DEV_KEY`, ADR 0016 | `just test` 316 strings / 313 drawn; viewer 40, browser 48, settings 17; **real window**: clipboard image `1200x800` and the toast, then clipboard text = the path; a Browser selection of `two.png` gave `640x480`, an empty selection toasted `Select one image to copy its content.` while the path key copied the folder; two menus photographed after a colour fix (white-on-light first); 3 mutations, each caught |
 | 88 | The header had only two states and its floor *was* the icon-only row (~798 px), so a window could not be narrower than the widest workspace toolbar | `ToolbarMetrics.qml` (`*MiniButtons`, `miniToolbarWidth`, `minimumWindowWidth = max(miniToolbarWidth, 260 + 320)`), `Main.qml` (`toolbarMini`), the three views (`visible: !view.miniToolbar` plus one `⋮` overflow menu each, Editor zoom hidden), `Theme.menuEntries` 31–38 appended, the mini fixture and `theFloorIsTheMiniToolbar`, three view cases, ADR 0015 and a revision note in ADR 0010 | toolbar 12, viewer 40, browser 48, editor 49; **real window** at 700 × 620 and at the 580 px floor: Browser 4 buttons, Viewer 5 + counter, Editor 7 with no zoom, each ending in `⋮`; overflow menus open with their folded actions; 2 mutations, each caught |
 | 89 | The three tiers were chosen from the widest workspace, so the Browser folded at ~782 px although it needs 438 and showed labels only at the Editor's ~1000 px; the switcher's three buttons were counted only in that global maximum | per-workspace `*CompactRowWidth`/`*MiniRowWidth`/`*LabelledRowWidth` and `modeFor(workspace,width)` in `ToolbarMetrics.qml`, `Main.qml`'s single `toolbarMode` binding, the per-workspace fixture and six row measurements, `theTierFollowsTheOpenWorkspace`, ADR 0017 + ADR 0015 revision | toolbar 17; real window at 600/700 px: Browser all six icons / labels while Viewer and Editor fold (`M1-toolbar-tier-*.png`); 3 mutations, each caught |
+| 90 | Crop still asked to be typed into: no frame on a fresh document, a chosen ratio broken by every drag, nothing dimmed outside the frame and no thirds, no one-button turn, no keyboard, Reset emptied the form, Apply accepted the whole document (`edit_noop`), and an applied crop left the tool with no frame | `EditorView.qml` (`cropRatio: "free"`, `seedCropFrame`, `cropSeedDebounce` + `refitCropAfterDocumentChange`, ratio-aware `dragCropHandle`/`dragCropCreate`, `cropShade` + four thirds lines, `swapCropOrientation`, arrow/Shift/Alt/Enter/Escape, `cropCanApply`, `applyCrop` order), `cpp/main.cpp` (`editor-crop` `seed`/`swap`/`apply` + ratio/document log), `tst_editor` (six new cases, `resetRestoresTheStartingCropFrame`, free-default assertion), `.ts` (hint, “Apply crop (Enter)”, swap tooltip), ADR 0011 revision | editor 55; real window (Vietnamese, isolated `XDG_*`): seeded 1003 × 1003 frame with shade/thirds (`M1-crop-seed-vi.png`), 4:3 → 3:4 swap to 384 × 512 at (435,371) (`M1-crop-swap-vi.png`, `M1-crop-ratio-locked-en.png`), apply `512 384 742 870` then a fresh 410 × 307 frame on the 512 × 384 document (`M1-crop-applied-vi.png`); 11 mutations caught, one equivalent reordering recorded |
 
 ## Test gate
 
@@ -269,10 +283,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 316 strings in kogaview_vi.ts, 110 of them compiled into C++, 313 drawn by the QML, 4 looked up by context
+translations: 317 strings in kogaview_vi.ts, 109 of them compiled into C++, 314 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 82 passed (kogaview-core) + 4 passed (kogaview-protocol)
-viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 49 · language 7 · toolbar 17
+viewer 40 · browser 48 · cache 15 · state 7 · settings 17 · editor 55 · language 7 · toolbar 17
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -537,6 +551,49 @@ add no new warning (the protocol's `Anchor` and the anchored Core helpers are st
   never cropped to the quad's aspect: the inspector says so, and Resize/Export
   remain the ways to choose another size. Outside the quad the sampler clamps to
   the border pixel, so the leftover smears rather than turning transparent.
+
+## Design decisions, crop completion (row 90, ADR 0011 revision)
+
+- **Crop starts free.** A crop tool with no constraint should keep the shape the
+  user draws; picking a ratio is the lock. Resize's dialog keeps `original`,
+  because a scale usually keeps the shape. The default is asserted in
+  `initTestCase` before `init()` writes any per-case state, so the QML
+  declaration itself is the thing under test.
+- **The frame exists when the tool does.** `seedCropFrame` fits the chosen ratio
+  at 80 % of the picture and writes the same four fields the command is built
+  from. It never overwrites a typed rectangle unless Reset forces it. Reset is
+  the starting frame, not an empty form.
+- **A size change waits one turn and then refits.** A state publish changes width
+  and height in one write but QML emits one signal at a time; seeding from the
+  width change fitted the frame to the previous height. `cropSeedDebounce` (0 ms)
+  runs `refitCropAfterDocumentChange()` after both bindings settle. It re-seeds
+  an empty or no-longer-fitting rectangle and leaves a fitting one alone; the QML
+  case measures both directions on a rectangle whose partial seed *would* have
+  fitted, so it can tell the difference.
+- **A ratio is a lock on the canvas too.** A corner drag pins the opposite
+  corner and fits the pointer box to the ratio; a side drag pins the opposite
+  side and grows the other axis around the rectangle's centre. A create-drag is
+  fitted before clamping, so a square drag draws a square. The `free` path is
+  row 82's code unchanged.
+- **The frame is also the composition aid.** Four shade rectangles dim the
+  picture outside the frame, computed from the same document rectangle the frame
+  and the command read, and four thirds lines sit inside it. Both vanish with
+  the frame while a live draft is on the canvas, because a draft is the result.
+- **Swap is a turn, not a retype.** `swapCropOrientation` rotates through 90°
+  around the rectangle's centre, keeps it inside the document, maps a named
+  ratio to its counterpart (4:3 ↔ 3:4, 16:9 ↔ 9:16, 1:1 → 1:1) and turns any
+  other shape into `current`. It sends nothing until Apply.
+- **The keyboard belongs to the armed tool, not the window.** Arrows nudge,
+  Shift steps 10 px, Alt resizes around the centre and derives the linked side,
+  Enter applies, Escape returns to Pointer. The handler is on the view, so a
+  focused field still consumes the keys first; palette buttons stay
+  `NoFocus`.
+- **Apply refuses Core's no-op.** A rectangle equal to the document is
+  `edit_noop`, so `cropCanApply()` requires a valid *and* changed rectangle.
+  `applyCrop()` puts the form down before the command; the debounce then seeds
+  the cropped result's fresh frame.
+- **No new protocol or Core code.** A crop is still `{x, y, width, height}`;
+  the ratio, guides, shade, swap and keyboard all write those four numbers.
 
 ## Design decisions, resize-dialog session (rows 83, ADR 0012 and 0013)
 
@@ -926,6 +983,31 @@ Viewer's zoom-in button → `theMiniToolbarFoldsTheSecondaryActions` fails
 not below the compact row 782, so the overflow menu would never be used". Each
 restored, then the suite green.
 
+Crop completion (row 90): dropping the ratio from `dragCropHandle`'s aspect path
+→ `theCropRatioLocksTheFrameDrag` fails (`cropHeight` 200, expected 260 after the
+side drag); giving `cropShadeTop` a zero height → `theCropFrameDrawsItsGuidesAndShade`
+fails (0, expected 30); reversing the Left arrow's nudge → `theCropKeysNudgeResizeAndApply`
+fails (`width` 201, expected 199); making `swapCropOrientation` keep W and H →
+`theCropOrientationSwapsTheRectangle` fails (`cropWidth` 200, expected 100);
+removing the seed from `onToolChanged` → `theCropFrameIsDrawnAndDragged` fails
+with "frame->isVisible() returned FALSE"; inverting the Enter guard → the key
+case fails with 0 commands instead of 1. Reverting the declared default to
+`"original"` → `initTestCase` fails (`cropRatio` "original", expected "free").
+Replacing the zero-turn `cropSeedDebounce` with a direct
+`refitCropAfterDocumentChange()` in both size handlers → `theAppliedCropLeavesAFreshFrame`
+fails (`cropHeight` 512, expected 480: the width change had fitted the frame to
+the previous height and the partial 640 × 512 still fitted the new 800 × 600,
+so the second change did not correct it). Dropping `cropChanged()` from
+`cropCanApply()` → the same case fails because Apply is armed for the whole
+document. Forcing the refit to re-seed a rectangle that still fits →
+`theCropFrameRefitsAfterADocumentChange` fails (`cropWidth` 640 after a grow,
+expected 160); refusing the refit entirely → the same case fails with 300 (the
+shrink left the old rectangle). Each restored, then the suite green. One
+reordering is recorded as **equivalent**: moving `clearCropFields()` back after
+`view.command()` in `applyCrop()` leaves the suite green, because the zero-turn
+seed sees the cleared fields either way; the order before the command is kept
+for clarity, and is not claimed to fix anything.
+
 ## Design decisions, export-size session (ADR 0004)
 
 - **A delivery size is one number: the long edge.** `max_edge` scales the whole
@@ -1080,7 +1162,22 @@ restored, then the suite green.
   corner through `setTransformCorner`/`moveTransformEdge` — the functions the
   handles call — and the drags themselves are `QTest` pointer sequences inside
   the QML suite. A pointer sequence on this compositor was not delivered to the
-  window (see above), so a hand's frame-by-frame drag is still unexercised.
+  window (see above), so a hand's frame-by-frame drag is still unexercised. Row
+  90's real-window evidence is the same kind: `editor-crop` (`seed`, a
+  preset + anchor, `_ARG4=swap`, `_ARG5=apply`) called the helpers and the
+  buttons' own `click()`, while the nudges, Enter/Escape and the ratio-locked
+  drags are `QTest` sequences. No hand pressed the swap button, typed X/Y or
+  dragged a handle.
+- **Row 90's side-drag rule is a choice, not a measurement.** A ratio-locked side
+  handle pins its opposite side and grows the other axis around the rectangle's
+  centre; corner handles pin the opposite corner. Photoshop's and Krita's exact
+  behaviour was not compared, and no user asked for one. The shade is a fixed
+  45 % black over the picture (not a theme colour), swap has no key, and Crop
+  still has no straighten or output size — Transform and Resize/Export own those.
+- **A document change only refits an unusable frame.** A rotate keeps the
+  document size and therefore the same rectangle; only a shrink or an edit that
+  leaves the rectangle outside re-seeds. That rule was chosen, not measured
+  against what a user expects of a rotate.
 - **The transform is one projective quad onto the document's own frame.** It
   keeps the document size, never crops to the quad's aspect, has no rotation of
   the quad, no lens/barrel model and no "keep transparency outside the quad"
@@ -1172,9 +1269,9 @@ the instance reported `profile="prod"`. The owner's own configuration and the
 `image/jpeg` default handler were not touched.
 
 The prefix binary was **not** reinstalled for the keyboard commit or any
-follow-up since; it predates rows 66 and 77–88 until the next `just install-dev`
-(or `just install`). The keyboard, tooltip, menu, export, canvas and row 87–88
-evidence all comes from `build/dev/bin/kogaview`.
+follow-up since; it predates rows 66 and 77–90 until the next `just install-dev`
+(or `just install`). The keyboard, tooltip, menu, export, canvas, toolbar and
+crop evidence all comes from `build/dev/bin/kogaview`.
 
 ## Next natural step
 
@@ -1195,9 +1292,11 @@ evidence all comes from `build/dev/bin/kogaview`.
    a decision about what the user should be told, not a mechanical sweep.
 4. **The canvas now edits, so decide what "outside the quad" should look like.**
    Row 82's warp clamps to the border pixel; transparent or a fill colour would
-   be a different result, and neither was asked for. Related: the crop frame
-   accepts a rectangle anywhere on the document but never offers to keep its
-   ratio while dragging (the ratio lock still only links the typed fields).
+   be a different result, and neither was asked for. Crop's remaining questions
+   are smaller now that row 90 landed: whether a ratio-locked side drag should
+   grow the other axis around the centre (the current choice) or keep a corner,
+   whether swap deserves a key, and whether the 80 % starting frame is the right
+   default size.
 5. **The warp is one pass over every pixel on a worker thread.** `spawn_draft`
    already renders drafts on a `std::thread::spawn`, but a corner drag on a 27 MP
    document with Live preview on re-renders the whole frame per settle. Profiling
