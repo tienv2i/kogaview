@@ -95,6 +95,20 @@ ApplicationWindow {
     /// a stored preference.
     property real rightPanelWidth: appTheme.previewWidth
 
+    /// The open workspace's sidebar panels, for the burger menu's `View >
+    /// Sidebar` submenu. The view owns which panels exist and what each key
+    /// means (`panelEntries`/`setPanelVisible`); the shell only draws the rows
+    /// and routes the toggle back. The binding follows both the workspace and
+    /// the view's own flags.
+    readonly property var workspacePanelEntries: {
+        var view = workspaceLoader.item
+        return (view && view.panelEntries) ? view.panelEntries : []
+    }
+    function setWorkspacePanelVisible(key, visible) {
+        var view = workspaceLoader.item
+        if (view && view.setPanelVisible) view.setPanelVisible(key, visible)
+    }
+
     /// The floor is also enforced here, and not only through `minimumWidth`.
     ///
     /// On this GNOME/Wayland session the compositor does not honour a QML
@@ -1060,6 +1074,38 @@ ApplicationWindow {
             text: appTheme.menuEntries[29]
             icon.name: "document-edit-symbolic"
             onTriggered: root.chooseEditorImage()
+        }
+        MenuSeparator {}
+        // The one place a sidebar panel goes away or comes back. The top-level
+        // `View` entry and `Sidebar` inside it are shell words; the panel rows
+        // are the open workspace's own list, so the Browser offers its two
+        // pages, the Viewer its one, and the Editor its tool frame and three
+        // reference pages. Hiding the last one hides the whole column; showing
+        // any one brings it back.
+        Menu {
+            id: viewMenu
+            title: qsTr("View")
+            Menu {
+                id: sidebarMenu
+                objectName: "sidebarMenu"
+                title: qsTr("Sidebar")
+                Instantiator {
+                    model: root.workspacePanelEntries
+                    delegate: MenuItem {
+                        required property var modelData
+                        text: modelData.label
+                        checkable: true
+                        checked: modelData.checked
+                        onTriggered: root.setWorkspacePanelVisible(modelData.key, checked)
+                    }
+                    onObjectAdded: function(index, object) {
+                        sidebarMenu.insertItem(index, object)
+                    }
+                    onObjectRemoved: function(index, object) {
+                        sidebarMenu.removeItem(object)
+                    }
+                }
+            }
         }
         MenuSeparator {}
         MenuItem {

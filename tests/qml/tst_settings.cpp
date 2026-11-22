@@ -66,6 +66,7 @@ private slots:
   void theDiscardAnswerResetsTheDocumentBeforeLeaving();
   void theShellAsksBeforeReplacingAnUnsavedDocument();
   void theShellSharesOneDockWidthAndRevealsThroughThePlatform();
+  void theShellListsTheSidebarPanelsInTheViewMenu();
 
 private:
   /// The dialog is a `Popup`: its header, content and buttons are QObjects of
@@ -652,6 +653,58 @@ void TestSettings::theShellSharesOneDockWidthAndRevealsThroughThePlatform()
   QVERIFY2(reveal == 2,
            qPrintable(QStringLiteral("%1 reveal requests reach the platform, expected 2")
                         .arg(reveal)));
+}
+
+/// Panel visibility lives in exactly one place: the burger menu's `View >
+/// Sidebar` submenu. `Main.qml` draws the rows from the open workspace's own
+/// list, and the three views no longer carry a sidebar toggle of their own —
+/// no checklist, no toolbar button, no context-menu entry, and no key that
+/// hides the Editor's panels.
+void TestSettings::theShellListsTheSidebarPanelsInTheViewMenu()
+{
+  QFile main(qmlDir() + QStringLiteral("/Main.qml"));
+  QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+  const QString source = QString::fromUtf8(main.readAll());
+
+  QVERIFY2(source.contains(QStringLiteral("title: qsTr(\"View\")")),
+           "the burger menu has no View entry");
+  QVERIFY2(source.contains(QStringLiteral("title: qsTr(\"Sidebar\")")),
+           "View has no Sidebar submenu");
+  QVERIFY2(source.contains(QStringLiteral("model: root.workspacePanelEntries")),
+           "the Sidebar submenu is not fed by the open workspace's panel list");
+  QVERIFY2(source.contains(
+             QStringLiteral("root.setWorkspacePanelVisible(modelData.key, checked)")),
+           "a Sidebar row does not route its toggle back to the workspace");
+
+  const QStringList views = { QStringLiteral("BrowserView.qml"),
+                              QStringLiteral("Viewer.qml"),
+                              QStringLiteral("EditorView.qml") };
+  for (const QString& name : views) {
+    QFile view(qmlDir() + QLatin1Char('/') + name);
+    QVERIFY2(view.open(QIODevice::ReadOnly | QIODevice::Text),
+             qPrintable(QStringLiteral("cannot read %1").arg(name)));
+    const QString text = QString::fromUtf8(view.readAll());
+    QVERIFY2(text.contains(QStringLiteral("readonly property var panelEntries")),
+             qPrintable(QStringLiteral("%1 exposes no panel list").arg(name)));
+    QVERIFY2(text.contains(
+               QStringLiteral("readonly property bool sidebarShown: view.visiblePanelCount > 0")),
+             qPrintable(QStringLiteral("%1 does not derive the sidebar from its panels")
+                          .arg(name)));
+    QVERIFY2(!text.contains(QStringLiteral("toggle_right_panel")),
+             qPrintable(QStringLiteral("%1 still sends a sidebar toggle command").arg(name)));
+    QVERIFY2(!text.contains(QStringLiteral("PanelMenu")),
+             qPrintable(QStringLiteral("%1 still draws the checklist gutter").arg(name)));
+    QVERIFY2(!text.contains(QStringLiteral("sidebar-show-right-symbolic")),
+             qPrintable(QStringLiteral("%1 still has a sidebar toolbar/menu button").arg(name)));
+  }
+
+  QFile editor(qmlDir() + QStringLiteral("/EditorView.qml"));
+  QVERIFY(editor.open(QIODevice::ReadOnly | QIODevice::Text));
+  const QString editorText = QString::fromUtf8(editor.readAll());
+  QVERIFY2(!editorText.contains(QStringLiteral("panelsHidden")),
+           "Tab still hides the Editor's panels behind the menu's back");
+  QVERIFY2(editorText.contains(QStringLiteral("toolZoneHeight")),
+           "the Editor has no fixed tool frame");
 }
 
 QTEST_MAIN(TestSettings)

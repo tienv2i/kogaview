@@ -1402,7 +1402,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 5 : 13);
+    QCOMPARE(buttons, mini ? 5 : 12);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.
@@ -1413,9 +1413,10 @@ private slots:
       const int rows = menu->property("count").toInt();
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
-      // Zoom in/out, actual size, rotate left/right, flip horizontal/vertical,
-      // the filmstrip and the dock toggle, with two separators.
-      QCOMPARE(rows, 11);
+      // Zoom in/out, actual size, rotate left/right, flip horizontal/vertical
+      // and the filmstrip, with two separators. The dock is no longer a
+      // toolbar action: panel visibility lives in the burger menu.
+      QCOMPARE(rows, 10);
     }
     m_viewer->setProperty("miniToolbar", false);
   }
@@ -1462,20 +1463,20 @@ private slots:
              QStringLiteral("1200 × 800"));
     QCOMPARE(item("infoPath")->property("text").toString(), m_landscape);
 
-    // The checklist on the right edge can hide the only page. The dock, its
-    // splitter and the checklist stay, so the page can come back without
-    // reopening the panel from the toolbar.
-    QObject* menu = object("viewerPanelMenuPopup");
-    QVERIFY2(menu != nullptr, "the viewer sidebar has no panel checklist");
-    QCOMPARE(menu->property("count").toInt(), 1);
-    QQuickItem* menuButton = item("panelMenuButton");
-    QVERIFY2(menuButton != nullptr, "the viewer has no checklist button");
-    QVERIFY(menuButton->isVisible());
+    // The shell's `View > Sidebar` submenu hides the only page through the
+    // same `panelEntries`/`setPanelVisible` pair every workspace exposes. With
+    // no panel left, the whole column and its splitter go; showing Info brings
+    // both back.
+    const QVariantList rows = m_viewer->property("panelEntries").toList();
+    QCOMPARE(rows.size(), 1);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("key")).toString(),
+             QStringLiteral("info"));
     m_viewer->setProperty("infoPanelVisible", false);
     QTRY_VERIFY(!name->isVisible());
-    QVERIFY(panel->isVisible());
-    QVERIFY(menuButton->isVisible());
-    QVERIFY(!panel->property("stripShown").toBool());
+    QCOMPARE(m_viewer->property("visiblePanelCount").toInt(), 0);
+    QVERIFY(!m_viewer->property("sidebarShown").toBool());
+    QVERIFY(!panel->isVisible());
+    QVERIFY(!item("viewerRightSplitter")->isVisible());
     m_viewer->setProperty("infoPanelVisible", true);
     QTRY_VERIFY(name->isVisible());
 
@@ -1483,10 +1484,11 @@ private slots:
     QVERIFY2(splitter != nullptr, "the viewer has no dock splitter");
     QVERIFY(splitter->isVisible());
 
+    // A state flag no longer drives the sidebar: the panels do.
     state.insert(QStringLiteral("rightPanelViewer"), false);
     m_viewer->setProperty("state", state);
-    QTRY_VERIFY(!panel->isVisible());
-    QVERIFY2(!splitter->isVisible(), "the splitter outlived its panel");
+    QTRY_VERIFY(panel->isVisible());
+    QVERIFY2(splitter->isVisible(), "a stale state flag hid the splitter");
   }
 
   /// "Show in folder" is the shell's job: the view only asks, and both the file

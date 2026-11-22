@@ -343,3 +343,67 @@ and checks that naming a hidden tab falls back to the first shown page instead
 of drawing it. `tst_browser`'s `theSidebarHasAPreviewPageAndABatchPage` does the
 same for the two pages, counts only image selections, and asserts a one-page
 dock draws no strip. `tst_viewer` hides and restores its one page.
+
+## Revision — the panel list belongs to the window's menu (2026-11-22)
+
+Row 104's checklist answered "which pages do I want?" but put the answer in a
+26 px gutter on the edge of the very column it hid, in three workspaces at once.
+Visibility is a question about the window — "what does this window show?" — so
+the list moved to the window's own burger menu, under `View > Sidebar`, and the
+gutter is gone.
+
+- **One list, owned by the shell.** `Main.qml` builds `Menu > View > Sidebar`
+  from `workspacePanelEntries`, which is `workspaceLoader.item.panelEntries`.
+  Each row is a checkable `MenuItem` whose `checked` is the view's own flag and
+  whose `onTriggered` calls `root.setWorkspacePanelVisible(key, checked)`.
+  `View` and `Sidebar` are shell words (`qsTr`); the panel names come from the
+  view, because only the view knows which pages it has.
+- **Each view publishes the same pair.** `panelEntries` returns
+  `[{ key, label, checked }]` (Editor: `tools`, `info`, `history`, `original`;
+  Browser: `preview`, `batch`; Viewer: `info`), and
+  `setPanelVisible(key, visible)` is the single writer. The Browser and the
+  Viewer derive `visiblePanelCount`/`sidebarShown` from their flags; the Editor
+  counts its tool frame as one of four and keeps `shownReferenceCount` for the
+  strip.
+- **There is no other control, and no second "show sidebar" switch.** The
+  toolbar's right-panel button, the three views' overflow and canvas entries,
+  the Editor's `Tab` fold and the gutter all went; the column is drawn exactly
+  while at least one panel is on, and hiding the last one hides it. Showing any
+  row brings the column back on that row's page.
+- **Panel visibility is still presentation state.** It is not `config.json`,
+  not a protocol command and not a journal line; `state.rightPanel*` and
+  `toggle_right_panel` remain in the protocol and Core (and keep their tests)
+  for a CLI or a future settings surface, but no window control emits them now.
+  `Main.qml`'s `rightPanelWidth` still shares one width between the three docks.
+- **The Editor's tool panel is one standard frame.** `defaultToolZoneHeight`
+  is 340; the divider writes `toolZoneHeight`; `toolZoneShownHeight` clamps it to
+  `height - 200` so a short window keeps room for a reference page. Every tool
+  draws the same heading row and the same frame — only the contents change. The
+  options are as tall as their own content (`toolOptionsHost`), the verbs sit
+  directly under them, and `toolZoneSpacer` takes whatever the frame has left,
+  *below* the verbs, so Apply/Reset/Clear never detach from the fields they act
+  on and a short tool does not open a hole above its heading. Without a tool the
+  pointer shows `Pointer options` and `This tool has no options.` inside that
+  same frame.
+- **Arming a tool reopens its panel.** `onToolChanged` sets
+  `toolOptionsVisible = true` for anything but the pointer: choosing a tool is a
+  request for its options, and a panel put away in the menu should not hide the
+  tool just picked. The pointer does not force it open, because it has nothing
+  to show.
+
+Superseded by this revision: row 104's `PanelMenu.qml`, its
+`panel-menu.svg` and every `panelMenuEntries`/`editorPanelMenu` reference;
+ADR 0019's `toolZoneFolded` and the content-sized tool zone (`Layout.fillHeight:
+false` stays, and the frame now also states its own preferred height).
+
+`tst_editor`'s `theToolFrameIsOneSizeForEveryTool` measures the frame's height
+and the verbs' bottom across Pointer, Crop, Brush and Transform, so a frame that
+grows with its content fails; `armingAToolBringsItsPanelBack` hides `tools`
+through `setPanelVisible` and then picks Brush. `tst_browser`'s
+`theSidebarHasAPreviewPageAndABatchPage` asserts the two rows, that hiding both
+hides the dock, and that showing `batch` after it opens on Batch — a panel named
+by the menu is opened by the menu, not by the strip's memory. `tst_settings`'s
+`theShellListsTheSidebarPanelsInTheViewMenu` reads `Main.qml` and requires the
+`View > Sidebar` menus, the `workspacePanelEntries` model and the
+`setWorkspacePanelVisible(modelData.key, checked)` route, because `Main.qml`
+needs the bridge and cannot be loaded in a test.

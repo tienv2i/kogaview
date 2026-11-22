@@ -119,10 +119,11 @@ Item {
 
     property var selectionInfo: view.state.selectionInfo || null
 
-    /// The Browser's sidebar pages and the checklist that arranges them. The
-    /// page is presentation state, like the tab the Editor keeps open: hiding
-    /// Batch action changes no file and sends no command. `Info` is not a tab:
-    /// it sits under the preview because the two answer one question together.
+    /// The Browser's sidebar pages. The page is presentation state, like the
+    /// tab the Editor keeps open: hiding Batch action changes no file and sends
+    /// no command. `Info` is not a tab: it sits under the preview because the
+    /// two answer one question together. The burger menu's `View > Sidebar`
+    /// submenu is the only place a panel is shown or hidden.
     property string rightPage: "preview"
     property bool previewPanelVisible: true
     property bool batchPanelVisible: true
@@ -132,10 +133,16 @@ Item {
         { key: "batch", label: qsTr("Batch action"), icon: "icons/batch.svg",
           shown: view.batchPanelVisible }
     ]
-    readonly property var rightPanelMenuEntries: [
+    /// The rows the shell draws under `View > Sidebar`.
+    readonly property var panelEntries: [
         { key: "preview", label: qsTr("Preview"), checked: view.previewPanelVisible },
         { key: "batch", label: qsTr("Batch action"), checked: view.batchPanelVisible }
     ]
+    /// The whole sidebar is the sum of its panels: hiding every one hides the
+    /// column, showing any one brings it back. There is no separate switch.
+    readonly property int visiblePanelCount:
+        (view.previewPanelVisible ? 1 : 0) + (view.batchPanelVisible ? 1 : 0)
+    readonly property bool sidebarShown: view.visiblePanelCount > 0
     /// How many of the selected paths are images. The batch page counts what it
     /// could act on, not a folder that happens to be selected beside them.
     readonly property int selectedImages: {
@@ -152,7 +159,7 @@ Item {
         }
         return count
     }
-    function setRightPageVisible(key, visible) {
+    function setPanelVisible(key, visible) {
         if (key === "preview") view.previewPanelVisible = visible
         else if (key === "batch") view.batchPanelVisible = visible
         else return
@@ -862,7 +869,7 @@ Item {
 
         PanelSplitter {
             objectName: "rightSplitter"
-            visible: !!view.state.rightPanel
+            visible: view.sidebarShown
             Layout.fillHeight: true
             theme: view.theme
             value: view.rightPanelWidth
@@ -881,11 +888,11 @@ Item {
         // they share the Preview page; Batch action is the selection as a
         // question of its own. The dock is shared with the Viewer and the
         // Editor (`RightDock.qml`), and its width is the shell's one value for
-        // all three workspaces. The checklist on its right edge shows or hides
-        // either page without a command.
+        // all three workspaces. The burger menu's `View > Sidebar` submenu is
+        // where either page is hidden or brought back.
         RightDock {
             objectName: "rightPanel"
-            visible: !!view.state.rightPanel
+            visible: view.sidebarShown
             Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
             theme: view.theme
@@ -893,15 +900,10 @@ Item {
             tabs: view.rightPageEntries
             currentKey: view.rightPage
             compact: view.dockWidth < 240
-            panels: view.rightPanelMenuEntries
             stripObjectName: "browserRightTabs"
             tabKeyPrefix: "browserTab"
             pagesObjectName: "browserRightPages"
-            menuObjectName: "browserPanelMenuPopup"
             onActivated: function(key) { view.rightPage = key }
-            onPanelToggled: function(key, checked) {
-                view.setRightPageVisible(key, checked)
-            }
 
             ScrollView {
                 id: browserInfoPage
@@ -1339,13 +1341,6 @@ Item {
             checked: !!view.state.leftPanel
             onTriggered: view.command({ type: "toggle_left_panel" })
         }
-        MenuItem {
-            text: view.theme.menuEntries[34]
-            icon.name: "sidebar-show-right-symbolic"
-            checkable: true
-            checked: !!view.state.rightPanel
-            onTriggered: view.command({ type: "toggle_right_panel" })
-        }
     }
 
     Dialog {
@@ -1459,17 +1454,6 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Toggle quick access and folder tree")
                 onClicked: view.command({ type: "toggle_left_panel" })
-            }
-            ToolbarButton {
-                theme: view.theme
-                visible: !view.miniToolbar
-                checkable: true
-                checked: !!view.state.rightPanel
-                icon.name: "sidebar-show-right-symbolic"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Toggle preview and metadata panel")
-                onClicked: view.command({ type: "toggle_right_panel" })
             }
             ToolbarButton {
                 objectName: "browserOverflowButton"

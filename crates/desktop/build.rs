@@ -15,7 +15,6 @@ fn main() {
         "qml/Theme.qml",
         "qml/PanelSplitter.qml",
         "qml/PanelTabs.qml",
-        "qml/PanelMenu.qml",
         "qml/RightDock.qml",
         "qml/InfoPanel.qml",
         "qml/PreviewPanel.qml",

@@ -156,24 +156,48 @@ as tall as its options and pinned to the dock's top, with Apply/Reset/Clear
 directly under the fields they act on; the pointer's empty column no longer
 floats in the middle when its reference pages are hidden.
 
+The next pass (row 105) took that checklist out of the sidebar altogether. Every
+workspace now has one list of panels and it lives in the window's own burger
+menu, under `View > Sidebar`: the three views publish `panelEntries`
+(`{ key, label, checked }`) and a single `setPanelVisible(key, visible)`, and
+`Main.qml` draws the rows and routes each toggle back. The 26 px gutter, the
+toolbar's right-panel button, the overflow and canvas menu entries and the
+Editor's `Tab` fold are all gone, and whole-dock visibility is now derived —
+`visiblePanelCount > 0` — so hiding the last panel hides the column and showing
+any one brings it back. The Editor's tool side became one standard frame:
+`defaultToolZoneHeight` 340, a frame that keeps that height for every tool,
+options as tall as their content, the verbs directly under them, and the
+leftover as blank space below the verbs and above the reference tabs, so
+Pointer, Crop, Brush and Transform all open the same box at the same place.
+Measured on the real window, Pointer, Crop and Brush report the same drawn
+geometry (`top 50 bottom 390 divider 390 strip 405`) while their content
+heights read 59, 336 and 250.
+
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. Row 104 is **uncommitted** on top of `2dc8a0e feat: an honest
-  resize, a foldable dock and a defined reopen`: the new
-  `crates/desktop/qml/PanelMenu.qml` and `BatchPanel.qml` (both in
-  `crates/desktop/build.rs`, the `.pro` entry for `BatchPanel` included), two
-  SVGs (`panel-menu`, `batch`) in `icons.qrc`, `PanelTabs.qml` (folds removed,
-  `shown` filtering, `keyPrefix`), `RightDock.qml` (fold fields removed, panel
-  checklist and empty state, hidden-aware `currentIndex`), `EditorView.qml`
-  (per-panel flags, checklist, content-sized top-aligned tool zone, own empty
-  state, divider only while both halves show), `BrowserView.qml` (Preview and
-  Batch pages, `selectedImages`), `Viewer.qml` (one page with its checklist),
-  `cpp/main.cpp` (`editor-dock` rewritten with hide/show lists and `_ARG7=menu`;
-  the new `sidebar-dock` request), the three view suites, the 21 new Vietnamese
-  sentences, ADR 0020's second revision, `docs/M1-REPORT.md`, this file and the
-  ten `M1-sidebar-*` screenshots under `docs/evidence/`.
+- Branch `main`. Row 104 is committed as `78adc66 feat(shell): a panel checklist
+  and a Browser batch page` on top of `2dc8a0e feat: an honest resize, a
+  foldable dock and a defined reopen`: that commit carries `PanelMenu.qml` and
+  `BatchPanel.qml`, the two SVGs, `PanelTabs.qml`'s `shown`/`keyPrefix`,
+  `RightDock.qml`'s checklist and empty state, the per-panel flags in the three
+  views, `cpp/main.cpp`'s `editor-dock`/`sidebar-dock` requests, the three view
+  suites, 21 Vietnamese sentences, ADR 0020's second revision and the ten
+  `M1-sidebar-*` grabs.
+- Branch `main`. Row 105 is **uncommitted** on top of `78adc66`: `Main.qml`'s
+  `workspacePanelEntries`/`setWorkspacePanelVisible` and the `View > Sidebar`
+  submenu, `panelEntries`/`setPanelVisible`/`visiblePanelCount`/`sidebarShown` in
+  `BrowserView.qml`, `Viewer.qml` and `EditorView.qml`, the deletion of
+  `PanelMenu.qml` and `panel-menu.svg` (and their `build.rs`, `icons.qrc` and
+  `.pro` entries), `RightDock.qml` without its gutter, the Editor's fixed tool
+  frame (`defaultToolZoneHeight`, `toolZoneShownHeight`, `toolOptionsHost`,
+  `toolZoneSpacer`) and its removed `Tab` fold, `ToolbarMetrics.qml`'s smaller
+  counts, `cpp/main.cpp`'s rewritten dock hooks plus `KOGAVIEW_DEV_GRAB_POPUPS`,
+  the four suites, `i18n/kogaview_vi.ts` (View/Sidebar, 21 sentences, six
+  vanished entries removed), ADR 0020's third revision, `docs/M1-REPORT.md`,
+  this file and the seven `M1-tool-frame-*`/`M1-sidebar-menu-*`/
+  `M1-sidebar-off-*` grabs. `git status` is the authority.
 - Branch `main`. Rows 99–103 are one commit on top of `346d65c`,
   `feat: an honest resize, a foldable dock and a defined reopen` (its hash is
   the one `git log -1` prints; this file is inside that commit, so it cannot
@@ -478,6 +502,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 102 | The Viewer never re-read a file it had already shown, and the Editor tore its document down when asked for the same path | `viewer_modified`/`viewer_size` + `set_viewer_path`, the Viewer's `?v=` source, `open_editor`'s four-way guard (`editor_already_open`, reload-on-rewrite, `unsaved_document`), `Main.qml`'s `requestEditorOpen` queue | real window: a red 800 × 600 file rewritten to blue 640 × 480 was redrawn at 640 × 480 after a second `open_file` (`M1-viewer-before-rewrite.png` / `-rewritten.png`), and a rotated document kept its `Rotate right 90°` history across a second `editor_open` (`M1-editor-reopen-same.png`, `-history.png`, rev 6); 4 mutations caught |
 | 103 | "Explore here" duplicated Open folder and Show in folder without doing either reliably | the label dropped from `Theme.menuEntryLabels` and every menu entry at index ≥ 10 renumbered; the vanished string removed | `tst_browser::theFolderMenusDoNotRepeatTheOpenAction`; `just test` green |
 | 104 | The sidebar hid halves, not panels: both fold chevrons were all-or-nothing, a user who wanted History but not Info had no way to say so, hiding everything left a blank column with no visible exit, and the Browser had no page for a selection as a whole. The Editor's tool zone could float to the dock's middle once its pages were gone, and its verbs were not visibly the tool's | `PanelMenu.qml` (26 px gutter, checked menu parented to its button), `BatchPanel.qml` (real image-selection count, disabled verbs, Core-not-wired note), `panel-menu.svg`/`batch.svg`, `PanelTabs.qml` (`shown` filtering, `keyPrefix`, chevron gone), `RightDock.qml` (`panels`/`panelToggled`, hidden-aware `currentIndex`, top-aligned `No panels shown`, checklist, folds gone), `EditorView.qml` (four panel flags, checklist, content-sized top-aligned zone with a 26 px gutter, divider only while both halves show, own empty state), `BrowserView.qml` (Preview + Batch pages, `selectedImages`), `Viewer.qml`, `cpp/main.cpp` (`editor-dock` hide/show lists and `_ARG7=menu`, the new `sidebar-dock`), the three view suites, 21 Vietnamese strings, ADR 0020 revision | `just test` green: translations 358 / 105 C++ / 358 drawn / 4 by context, packaging 19, cargo 98 + 5, viewer 43 · browser 51 · editor 69 · toolbar 18; the ten `docs/evidence/M1-sidebar-*` grabs show each dock state in Vietnamese. Mutations caught: the hidden-tab index in the Editor and in `RightDock`, the current-tab fallback, a hidden tab's button, a selected folder counted as a batch image, a strip on a one-page dock, and the zone's top alignment (after the case was strengthened to put Crop down first). Two were equivalent/unreached: `Layout.fillHeight: true` on the zone and its `maximumHeight` at `Number.MAX_VALUE`, because the empty column has no other filler either way. No hand clicked a checklist row or a tab; the hook drove every state |
+| 105 | The panel list was a control on the column it hid: a 26 px gutter in three workspaces, a toolbar button, context and overflow entries, and the Editor's `Tab` folding its panels behind the shell's back. The Editor's tool side changed shape with its tool — no frame for Pointer, verbs stranded at the bottom for a short tool, a content-sized frame | `PanelMenu.qml`/`panel-menu.svg` deleted; `Main.qml`'s `View > Sidebar` submenu fed by `workspacePanelEntries`; `panelEntries`/`setPanelVisible`/`visiblePanelCount`/`sidebarShown` in the three views; `RightDock.qml` without its gutter; the Editor's fixed frame (`defaultToolZoneHeight: 340`, `toolZoneShownHeight` clamped to `height - 200`, content-height `toolOptionsHost`, `toolZoneSpacer` after the verbs, top alignment, `onToolChanged` reopening the options); `ToolbarMetrics` 5/1, 12/4, 13/5; `cpp/main.cpp`'s hooks plus `KOGAVIEW_DEV_GRAB_POPUPS`; four suites; 21 Vietnamese sentences and six vanished entries removed; ADR 0020 revision | `just test` green: 358 strings / 105 C++ / 358 drawn / 4 by context, packaging 19, cargo 98 + 5, viewer 43 · browser 51 · cache 15 · state 7 · settings 20 · editor 70 · language 7 · toolbar 18; real window: `top 50 bottom 390 divider 390 strip 405` for Pointer, Crop and Brush (content 59 / 336 / 250), Crop's verbs directly under its fields, the burger menu with `Xem ›`, and the sidebar gone in all three workspaces (`M1-tool-frame-*`, `M1-sidebar-menu-editor-vi`, `M1-sidebar-off-*`); 7 mutations caught; the submenu's checkbox rows are the QML suite, not a photo |
 
 ## Test gate
 
@@ -488,7 +513,7 @@ one now; `/tmp/opencode/lrel` no longer exists):
 translations: 358 strings in kogaview_vi.ts, 105 of them compiled into C++, 358 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 98 passed (kogaview-core) + 5 passed (kogaview-protocol)
-viewer 43 · browser 51 · cache 15 · state 7 · settings 19 · editor 69 · language 7 · toolbar 18
+viewer 43 · browser 51 · cache 15 · state 7 · settings 20 · editor 70 · language 7 · toolbar 18
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -1790,16 +1815,75 @@ the defect exactly. Each restored, then `just test` green.
   `<prefix>_<key>`, `<prefix>Icon_<key>` and `<prefix>Label_<key>` stay unique in
   one window and the harness can address each view's strip.
 
+## Design decisions, the panel list belongs to the window (row 105, ADR 0020)
+
+- **Visibility is a question about the window, so it lives in the window's
+  menu.** Row 104's checklist hung on the edge of the column it controlled and
+  appeared in three workspaces at once; a `View > Sidebar` submenu of the burger
+  menu says the same thing once, away from the content, and follows the open
+  workspace because its model is `workspaceLoader.item.panelEntries`.
+- **The shell draws rows; the view owns them.** `Main.qml` knows the menu
+  shape, not the panel names: `workspacePanelEntries` is the open view's
+  `[{ key, label, checked }]`, and `setWorkspacePanelVisible` calls
+  `setPanelVisible`. The Editor's four keys are `tools`/`info`/`history`/
+  `original`, the Browser's are `preview`/`batch`, the Viewer's is `info`. A
+  workspace with no panels would offer no rows.
+- **Whole-dock visibility is derived, not a second flag.** `sidebarShown` is
+  `visiblePanelCount > 0` in all three views, so hiding the last panel hides the
+  splitter and the column and checking any row brings both back. The stored
+  `state.rightPanel*` flags and `toggle_right_panel` stay in the protocol and
+  Core (with their tests) for a future CLI or settings surface; no window
+  control emits them, and the source guard fails a view that starts to.
+- **The tool frame is one size, and its contents are not.** The frame is
+  `defaultToolZoneHeight` (340), the divider writes `toolZoneHeight`, and
+  `toolZoneShownHeight` clamps it to `height - 200` so a short window still
+  keeps a reference page. Inside it the options are as tall as their content,
+  the verbs follow immediately, and `toolZoneSpacer` takes the rest *after*
+  them: Apply/Reset/Clear stay attached to the fields, and Pointer, Crop, Brush
+  and Transform all open the same box. The window measured `top 50 bottom 390
+  divider 390 strip 405` for Pointer, Crop and Brush while their content heights
+  read 59, 336 and 250 — the frame is the constant, the content is not.
+- **The pointer has a frame too.** `Pointer options` plus `This tool has no
+  options.` sits in the same 340 px box, so switching to the pointer does not
+  make the dock jump; it says there is nothing to configure instead of
+  pretending the panel does not exist.
+- **Arming a tool brings its panel back.** `onToolChanged` sets
+  `toolOptionsVisible = true` for every tool but the pointer, because picking a
+  tool is asking for its options; the pointer does not, because it would reopen
+  a panel the user deliberately closed to show an empty sentence.
+- **The menu is the only control, and `Tab` is not one.** The three toolbar
+  buttons, the overflow and canvas menu entries, the gutter and the Editor's
+  `Tab` fold are gone; `tst_settings` reads the three view sources and fails on
+  `toggle_right_panel`, `PanelMenu`, `sidebar-show-right-symbolic` or
+  `panelsHidden`.
+- **The menu photograph stops at the burger menu.** A `Menu` is a top-level
+  window, so `KOGAVIEW_DEV_GRAB_POPUPS` can paint the open burger menu into a
+  window grab; a submenu of a closed menu has no popup to paint, and opening
+  the chain programmatically (`popup()`/`open()`/`visible`) drew nothing on this
+  desktop. The four checkboxes are therefore proven by
+  `theShellListsTheSidebarPanelsInTheViewMenu` (the model and the routing) and
+  by `tst_editor`/`tst_browser`/`tst_viewer` calling `setPanelVisible`, while
+  `M1-sidebar-menu-editor-vi.png` shows `Xem ›` and stops there.
+
 ## Known gaps, in the words they were last measured with
 
-- **Row 104's checklist was never pressed by a hand.** Every grab came from
-  `editor-dock` with `_ARG2`/`_ARG5` (the lists its menu emits) or
-  `sidebar-dock`, which call `setPanelVisible`/`setRightPageVisible` — the same
-  handlers the menu's `toggled` signal reaches — and `_ARG7=menu`/`_ARG4=menu`
-  click the gutter button. The menu's checked rows, the right-aligned popup, the
-  empty dock and the two Browser pages are real window grabs of those states,
-  but this compositor delivers no synthetic pointer move, so a human clicking a
-  row, a tab or the divider is `QTest` in the suites, not a photograph.
+- **The sidebar's panel list is a menu of menus, and only the first menu was
+  photographed.** Row 105's `View > Sidebar` rows are ordinary checkable
+  `MenuItem`s fed by the open view's `panelEntries`, but a `Menu` is a top-level
+  window and a submenu of a closed menu has none to paint: `popup()`, `open()`
+  and writing `visible` on `viewMenu`/`sidebarMenu` were tried on the real
+  window and drew nothing, so `M1-sidebar-menu-editor-vi.png` shows `Xem ›` and
+  stops there. No hand opened the menu or clicked a checkbox row; `editor-dock`
+  with `_ARG2`/`_ARG5` and `sidebar-dock` call `setPanelVisible`, the same
+  function the row's `onTriggered` calls, and the row model itself is
+  `theShellListsTheSidebarPanelsInTheViewMenu` plus the three view suites. A
+  row, a tab or the divider being clicked by a person is still `QTest`, because
+  this compositor delivers no synthetic pointer move.
+- **Row 104's checklist grabs predate the move.** The ten `M1-sidebar-*` images
+  were taken while the gutter existed; the states they show (which pages are on,
+  the empty column, the Batch page counting images) are the same states the menu
+  now produces, but the grabs no longer show the current control. Row 105's own
+  grabs are the three panels-off columns and the tool frame.
 - **The Batch page has no engine, by design.** Resize/Convert/Export are
   disabled and there is no batch command in the protocol or Core; the only real
   number is `selectedImages`, which counts selected entries whose `isImage` is
@@ -2360,3 +2444,10 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     protocol decision, and every answer needs the async/bounded/observable rules
     of `AGENTS.md` before the first button is enabled. The count is already
     exact, so the first command can be written against a known selection.
+19. **The panel list has no keyboard route and no memory.** `View > Sidebar` is
+    reached with the pointer only — the burger button is `focusPolicy`
+    `NoFocus` like the rest of the compact toolbar, and no key opens the menu
+    chain — and its four flags are view state, so which pages were on is
+    forgotten on the next launch. Both are open design questions: a key for the
+    menu, and whether "History but not Info" is a layout choice or a settings
+    field (persisting it would need a protocol command, not just a QML write).

@@ -121,8 +121,9 @@ private slots:
   void thePaletteHoldsTheToolsAndTheInspectorTheirOptions();
   void thePaletteSelectsTheToolsOptions();
   void theInspectorSplitsToolsFromThreeReferenceTabs();
-  void theToolOptionsHugTheActionRow();
+  void theToolFrameIsOneSizeForEveryTool();
   void thePanelChecklistHidesAndRestoresTheSidebar();
+  void armingAToolBringsItsPanelBack();
   void theDividerSetsTheToolZoneHeight();
   void thePointerSaysItHasNoOptions();
   void theReferenceZoneKeepsRoomWhenTheWindowIsShort();
@@ -149,9 +150,6 @@ private:
   QObject* findObject(const QString& name) const;
   static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
-  /// Press one row of the sidebar's panel checklist by its label, opening the
-  /// menu first when a previous row closed it. Returns false if no row matches.
-  bool clickPanelRow(QObject* menu, const QString& label);
   /// Scroll the tool-options column until `item` is inside its viewport. The
   /// pinned Crop action row wraps to two rows in the default 260 px dock, so
   /// the anchor pad sits just under the fold; a hand scrolls it into view.
@@ -333,7 +331,6 @@ void TestEditor::init()
   m_editor->setProperty("paintOpacity", 100);
   m_editor->setProperty("paintStroke", QVariantList());
   m_editor->setProperty("paintStroking", false);
-  m_editor->setProperty("panelsHidden", false);
   m_editor->setProperty("spacePanning", false);
   // The right dock's split, open tab and panel checklist are view state, like
   // the rail's columns: a case must not decide what the next one opens on.
@@ -342,7 +339,7 @@ void TestEditor::init()
   m_editor->setProperty("infoVisible", true);
   m_editor->setProperty("historyVisible", true);
   m_editor->setProperty("originalVisible", true);
-  m_editor->setProperty("toolZoneHeight", 0);
+  m_editor->setProperty("toolZoneHeight", 340);
   m_editor->setProperty("rightTab", QStringLiteral("info"));
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
   // Zoom, pan and fit are presentation state that survives a case. Two cases
@@ -416,37 +413,6 @@ void TestEditor::clickItem(QQuickItem* item)
     item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
   QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre);
   QTest::qWait(20);
-}
-
-bool TestEditor::clickPanelRow(QObject* menu, const QString& label)
-{
-  if (menu == nullptr) return false;
-  if (!menu->property("visible").toBool()) {
-    QMetaObject::invokeMethod(menu, "popup");
-    for (int wait = 0; wait < 100 && !menu->property("visible").toBool(); ++wait) {
-      QTest::qWait(10);
-    }
-  }
-  // The rows are `MenuItem` delegates under the menu's content item, and a
-  // QML function's return type is not reliably a C++ metatype, so read them
-  // through the engine rather than `invokeMethod`.
-  const int count = menu->property("count").toInt();
-  for (int index = 0; index < count; ++index) {
-    QQmlExpression reader(QQmlEngine::contextForObject(menu), menu,
-                          QStringLiteral("itemAt(%1)").arg(index));
-    QQuickItem* row = reader.evaluate().value<QQuickItem*>();
-    if (row != nullptr && row->property("text").toString() == label) {
-      QMetaObject::invokeMethod(row, "click");
-      // A directly invoked `click()` does not run the menu's own close path,
-      // and a popup left open would take the next case's pointer.
-      QMetaObject::invokeMethod(menu, "close");
-      for (int wait = 0; wait < 100 && menu->property("visible").toBool(); ++wait) {
-        QTest::qWait(10);
-      }
-      return true;
-    }
-  }
-  return false;
 }
 
 void TestEditor::scrollOptionsIntoView(QQuickItem* item)
@@ -2635,7 +2601,7 @@ void TestEditor::theMiniToolbarFoldsTheSecondaryActions()
   walk(row);
   QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
   QCOMPARE(overflow->isVisible(), mini);
-  QCOMPARE(buttons, mini ? 7 : 14);
+  QCOMPARE(buttons, mini ? 7 : 13);
 
   if (mini) {
     QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
@@ -2647,9 +2613,10 @@ void TestEditor::theMiniToolbarFoldsTheSecondaryActions()
     // case's click, which read as a broken tab strip.
     QMetaObject::invokeMethod(menu, "close");
     QTRY_VERIFY(!menu->property("visible").toBool());
-    // zoom out/in, fit, actual size, a separator, save as, export, a separator,
-    // reset, a separator and the dock toggle: eleven rows.
-    QCOMPARE(rows, 11);
+    // zoom out/in, fit, actual size, a separator, save as, export, a separator
+    // and reset: nine rows. The dock toggle moved to the burger menu's
+    // `View > Sidebar` submenu, so it is not a toolbar row any more.
+    QCOMPARE(rows, 9);
   }
   m_editor->setProperty("miniToolbar", false);
 }
@@ -2848,14 +2815,13 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   setState(editor);
 
   QQuickItem* zone = expectItem("editorToolZone");
-  // The pointer has no options: its zone is the heading alone, and the
-  // checklist on the right edge is the sidebar's arrangement control.
+  // The pointer has no options, and the frame stays the standard height every
+  // tool gets; only the contents change.
   QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(expectItem("editorPanelMenu")->isVisible());
   QVERIFY(expectItem("toolOptionsHeading")->isVisible());
-  // The pointer's zone is the heading plus the line saying it has no options.
-  QVERIFY2(zone->height() <= 70.0,
-           qPrintable(QStringLiteral("the pointer zone is %1 px tall").arg(zone->height())));
+  const qreal frameHeight = zone->height();
+  QVERIFY2(frameHeight > 200.0,
+           qPrintable(QStringLiteral("the pointer frame is %1 px tall").arg(frameHeight)));
   QVERIFY(expectItem("infoPanel")->isVisible());
   QVERIFY(!expectItem("historyPanel")->isVisible());
   QVERIFY(!expectItem("originalPanel")->isVisible());
@@ -2869,27 +2835,23 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   QVERIFY(!expectItem("historyPanel")->isVisible());
   QCOMPARE(m_commands->count(), 0);
 
-  // Arming Crop opens the tool zone above the tabs; the Original page stays
-  // open, which is the whole reason for the split.
+  // Arming Crop fills the same frame; the Original page stays open, which is
+  // the whole reason for the split.
   selectTool("crop");
   QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(zone->height() > 200.0);
+  QTRY_COMPARE(qRound(zone->height()), qRound(frameHeight));
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("originalPanel")->isVisible());
   QVERIFY(expectItem("originalThumbnail")->isVisible());
 
-  // The zone is sized by its content: the action row ends just above the tab
-  // strip, so the tabs take the rest of the dock. A divider used to sit here,
-  // and a 440 px zone left a band of nothing between the last field and Apply.
+  // The verbs follow the fields they act on, and the rest of the frame is
+  // blank under them; the tabs start below the divider, not right under Apply.
   const qreal zoneBottom = zone->mapToScene(QPointF(0, zone->height())).y();
   // The action row is a grid: at this dock width Apply takes a line of its own
   // and Reset/Clear the next, so the row's bottom is the grid's, not Apply's.
   QQuickItem* actions = expectItem("cropActions");
   const qreal actionsBottom =
     actions->mapToScene(QPointF(0, actions->height())).y();
-  QVERIFY2(zoneBottom - actionsBottom <= 12.0,
-           qPrintable(QStringLiteral("the action row ends %1 px above the tool zone")
-                        .arg(zoneBottom - actionsBottom)));
   QVERIFY2(zoneBottom - actionsBottom >= 0.0, "the action row left the tool zone");
   QCOMPARE(m_commands->count(), 0);
 
@@ -2932,41 +2894,55 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The sidebar's right-edge checklist is how a panel goes away now. Each row
-/// hides or shows one panel, a hidden page keeps its stack slot, hiding the
-/// open page opens the first one left, and the button never leaves the screen.
+/// The shell's `View > Sidebar` menu is the only way a panel goes away. Each
+/// row hides or shows one panel, a hidden page keeps its stack slot, hiding
+/// the open page opens the first one left, and hiding every panel hides the
+/// whole column — which the next shown panel brings back.
 void TestEditor::thePanelChecklistHidesAndRestoresTheSidebar()
 {
   setState(documentState());
   selectTool("crop");
+  QQuickItem* inspector = expectItem("editorInspector");
   QQuickItem* zone = expectItem("editorToolZone");
   QQuickItem* pages = expectItem("editorReferencePages");
   QQuickItem* strip = expectItem("editorRightTabs");
   QQuickItem* divider = expectItem("editorToolZoneDivider");
-  const qreal dockTop =
-    expectItem("editorInspector")->mapToScene(QPointF(0, 0)).y();
-  QVERIFY(expectItem("editorPanelMenu")->isVisible());
+  const qreal dockTop = inspector->mapToScene(QPointF(0, 0)).y();
+  QVERIFY(inspector->isVisible());
   QVERIFY(pages->isVisible());
   QVERIFY(strip->isVisible());
   QVERIFY(divider->isVisible());
 
-  QObject* menu = findObject(QStringLiteral("editorPanelMenuPopup"));
-  QVERIFY2(menu != nullptr, "the sidebar has no panel checklist");
-  QCOMPARE(menu->property("count").toInt(), 4);
+  const QVariantList rows = m_editor->property("panelEntries").toList();
+  QCOMPARE(rows.size(), 4);
+  const QStringList keys = {
+    QStringLiteral("tools"), QStringLiteral("info"),
+    QStringLiteral("history"), QStringLiteral("original")
+  };
+  for (int index = 0; index < keys.size(); ++index) {
+    QCOMPARE(rows.at(index).toMap().value(QStringLiteral("key")).toString(),
+             keys.at(index));
+    QCOMPARE(rows.at(index).toMap().value(QStringLiteral("checked")).toBool(), true);
+  }
+
+  const auto setPanel = [this](const QString& key, bool visible) {
+    QVERIFY(QMetaObject::invokeMethod(m_editor, "setPanelVisible",
+                                      Q_ARG(QVariant, key),
+                                      Q_ARG(QVariant, visible)));
+  };
 
   // Hiding Tool options leaves the whole dock to the pages: the heading goes
-  // with the zone (the checklist in the gutter is still the way back), and the
-  // divider has no second half to divide.
-  QVERIFY(clickPanelRow(menu, QStringLiteral("Tool options")));
+  // with the zone and the divider has no second half to divide.
+  setPanel(QStringLiteral("tools"), false);
   QTRY_VERIFY(!zone->isVisible());
   QVERIFY(pages->isVisible());
   QTRY_VERIFY(!divider->isVisible());
-  QVERIFY(expectItem("editorPanelMenu")->isVisible());
+  QVERIFY(inspector->isVisible());
   QCOMPARE(m_commands->count(), 0);
 
   // Showing it again restores the heading at the dock's top, not floating in
   // the middle of the column.
-  QVERIFY(clickPanelRow(menu, QStringLiteral("Tool options")));
+  setPanel(QStringLiteral("tools"), true);
   QTRY_VERIFY(zone->isVisible());
   QTRY_VERIFY(divider->isVisible());
   QVERIFY2(zone->mapToScene(QPointF(0, 0)).y() - dockTop <= 2.0,
@@ -2975,7 +2951,7 @@ void TestEditor::thePanelChecklistHidesAndRestoresTheSidebar()
   // Hiding the open page opens the first one that is left; the page keeps its
   // stack slot, so the other pages do not change index.
   selectRightTab("history");
-  QVERIFY(clickPanelRow(menu, QStringLiteral("History")));
+  setPanel(QStringLiteral("history"), false);
   QTRY_COMPARE(m_editor->property("rightTab").toString(), QStringLiteral("info"));
   QVERIFY(expectItem("infoPanel")->isVisible());
   QVERIFY(!expectItem("historyPanel")->isVisible());
@@ -2986,45 +2962,53 @@ void TestEditor::thePanelChecklistHidesAndRestoresTheSidebar()
   QCOMPARE(m_editor->property("shownReferenceCount").toInt(), 2);
 
   // A hidden tab keeps its stack slot but must not be drawn when it is named:
-  // the index falls back to the first tab the checklist left visible. Without
-  // that fallback the tab strip says Info while History's page is on screen.
+  // the index falls back to the first tab that is visible. Without that
+  // fallback the tab strip says Info while History's page is on screen.
   m_editor->setProperty("rightTab", "history");
   QTRY_COMPARE(m_editor->property("rightTabIndex").toInt(), 0);
   QVERIFY(expectItem("infoPanel")->isVisible());
   QVERIFY(!expectItem("historyPanel")->isVisible());
 
-  // Hiding the rest leaves the dock as the checklist: the pages and the strip
-  // are gone, the gutter is not.
-  QVERIFY(clickPanelRow(menu, QStringLiteral("Info")));
-  QVERIFY(clickPanelRow(menu, QStringLiteral("Original")));
+  // Hiding the rest leaves the tool frame as the only panel: the pages and the
+  // strip are gone, the sidebar is still there, and the frame stays pinned to
+  // its top rather than centring its heading in the spare height.
+  setPanel(QStringLiteral("info"), false);
+  setPanel(QStringLiteral("original"), false);
   QTRY_COMPARE(m_editor->property("shownReferenceCount").toInt(), 0);
   QTRY_VERIFY(!pages->isVisible());
   QTRY_VERIFY(!strip->isVisible());
-  QVERIFY(expectItem("editorPanelMenu")->isVisible());
-
-  // With the pages gone the tool zone is the only thing left in the column,
-  // so it must start at the dock's top: a layout with nothing else to fill
-  // would otherwise centre the heading in the sidebar. Put Crop down first,
-  // because the pointer's zone is the short one — a tall tool form can fill
-  // the column by itself and hide the bug.
+  QVERIFY(inspector->isVisible());
   selectTool("pointer");
-  QTRY_VERIFY(expectItem("editorToolZone")->height() <= 70.0);
   QVERIFY2(zone->mapToScene(QPointF(0, 0)).y() - dockTop <= 2.0,
            "the only remaining panel was centred in the dock");
 
-  // Every item is still in the menu, so one click brings a page back and opens
-  // it; the pages were never renumbered underneath.
-  QVERIFY(clickPanelRow(menu, QStringLiteral("Original")));
+  // Every panel is still in the menu, so one click brings a page back and
+  // opens it; the pages were never renumbered underneath.
+  setPanel(QStringLiteral("original"), true);
   QTRY_VERIFY(pages->isVisible());
   QVERIFY(expectItem("originalPanel")->isVisible());
   QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("original"));
   QCOMPARE(m_commands->count(), 0);
+
+  // The last panel hides the whole column: no dock, no splitter. Showing any
+  // panel brings both back — there is no separate "show sidebar" switch.
+  setPanel(QStringLiteral("tools"), false);
+  setPanel(QStringLiteral("original"), false);
+  QTRY_COMPARE(m_editor->property("visiblePanelCount").toInt(), 0);
+  QVERIFY(!m_editor->property("sidebarShown").toBool());
+  QTRY_VERIFY(!inspector->isVisible());
+  QVERIFY(!expectItem("editorRightSplitter")->isVisible());
+
+  setPanel(QStringLiteral("info"), true);
+  QTRY_VERIFY(inspector->isVisible());
+  QVERIFY(expectItem("editorRightSplitter")->isVisible());
+  QVERIFY(expectItem("infoPanel")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
 }
 
-/// The split between the tool options and the reference pages is the user's:
-/// the divider's value is a height, a drag writes it, and dragging it all the
-/// way up hands the zone back to its own content instead of leaving it at a
-/// pixel.
+/// The split between the tool frame and the reference pages is the user's: the
+/// frame opens at one standard height, the divider's value is that height, a
+/// drag writes a new one, and a double-click restores the standard height.
 void TestEditor::theDividerSetsTheToolZoneHeight()
 {
   setState(documentState());
@@ -3033,85 +3017,154 @@ void TestEditor::theDividerSetsTheToolZoneHeight()
   QQuickItem* divider = expectItem("editorToolZoneDivider");
   QQuickItem* strip = expectItem("editorRightTabs");
   QTRY_VERIFY(divider->isVisible());
-  QCOMPARE(m_editor->property("toolZoneHeight").toInt(), 0);
-  const qreal hugHeight = zone->height();
+  QCOMPARE(m_editor->property("toolZoneHeight").toInt(),
+           m_editor->property("defaultToolZoneHeight").toInt());
+  const qreal openHeight = zone->height();
+  QVERIFY2(qAbs(openHeight - m_editor->property("defaultToolZoneHeight").toInt()) <= 1.0,
+           qPrintable(QStringLiteral("the frame opened at %1 px").arg(openHeight)));
   const qreal stripTop = strip->mapToScene(QPointF(0, 0)).y();
 
-  // Drag the handle up: the zone shrinks and the reference pages grow.
+  // Drag the handle up: the frame shrinks and the reference pages grow.
   const QPointF from(divider->mapToScene(QPointF(divider->width() / 2,
                                                  divider->height() / 2)));
   dragScene(from, from - QPointF(0, 90));
-  QTRY_VERIFY2(m_editor->property("toolZoneHeight").toInt() > 0,
-               "the divider drag never wrote a height");
-  QVERIFY2(zone->height() < hugHeight - 40.0,
+  QTRY_VERIFY2(m_editor->property("toolZoneHeight").toInt() < int(openHeight) - 40,
+               "the divider drag never wrote a smaller height");
+  QVERIFY2(zone->height() < openHeight - 40.0,
            qPrintable(QStringLiteral("the tool zone is still %1 px tall").arg(zone->height())));
   QVERIFY2(strip->mapToScene(QPointF(0, 0)).y() < stripTop - 40.0,
            "the reference pages did not grow");
-  // The pinned action row stays inside the zone it was given.
-  const qreal zoneBottom = zone->mapToScene(QPointF(0, zone->height())).y();
-  const qreal actionsBottom =
-    expectItem("cropActions")->mapToScene(QPointF(0, expectItem("cropActions")->height())).y();
-  QVERIFY2(actionsBottom <= zoneBottom + 0.5 && actionsBottom >= zoneBottom - 12.0,
-           qPrintable(QStringLiteral("the actions end %1 px from the zone's bottom")
-                        .arg(zoneBottom - actionsBottom)));
 
-  // A double-click on the handle puts the zone back on its content.
+  // A double-click on the handle puts the frame back to its standard height.
   const QPointF handle(divider->mapToScene(QPointF(divider->width() / 2,
                                                    divider->height() / 2)));
   QTest::mouseDClick(m_view, Qt::LeftButton, Qt::NoModifier, handle.toPoint());
-  QTRY_COMPARE(m_editor->property("toolZoneHeight").toInt(), 0);
-  QTRY_VERIFY(qAbs(zone->height() - hugHeight) <= 1.0);
-  // The height the handle reports is the height the zone is drawn at, not just
-  // a number the handle writes into its own property.
+  QTRY_COMPARE(m_editor->property("toolZoneHeight").toInt(),
+               m_editor->property("defaultToolZoneHeight").toInt());
+  QTRY_VERIFY(qAbs(zone->height() - openHeight) <= 1.0);
+  // The height the handle reports is the height the frame is drawn at, not
+  // just a number the handle writes into its own property.
   m_editor->setProperty("toolZoneHeight", 300);
   QTRY_COMPARE(qRound(zone->height()), 300);
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The tool zone is as tall as what it draws: heading, the armed tool's
-/// options, then its action row. A tall window must not stretch the zone and
-/// leave a band of nothing between the last field and Apply; the reference
-/// tabs take the leftover height instead.
-void TestEditor::theToolOptionsHugTheActionRow()
+/// Choosing a tool is a request for its options. If the tool panel was put
+/// away with `View > Sidebar`, arming a tool brings it back; the pointer is the
+/// no-op tool, so it never forces the panel open.
+void TestEditor::armingAToolBringsItsPanelBack()
 {
   setState(documentState());
   selectTool("crop");
   QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
 
-  auto gapToActions = [this]() {
-    QQuickItem* options = expectItem("toolOptionsScroll");
-    QQuickItem* actions = expectItem("applyCrop");
-    const qreal optionsBottom =
-      options->mapToScene(QPointF(0, options->height())).y();
-    const qreal actionsTop = actions->mapToScene(QPointF(0, 0)).y();
-    return actionsTop - optionsBottom;
-  };
-  const qreal compactGap = gapToActions();
-  QVERIFY2(compactGap >= 0.0 && compactGap <= 20.0,
-           qPrintable(QStringLiteral("the options end %1 px above Apply")
-                        .arg(compactGap)));
-  const qreal zoneHeight = expectItem("editorToolZone")->height();
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setPanelVisible",
+                                    Q_ARG(QVariant, QStringLiteral("tools")),
+                                    Q_ARG(QVariant, false)));
+  QTRY_VERIFY(!expectItem("editorToolZone")->isVisible());
+  // The reference pages are still on, so the column itself stays.
+  QCOMPARE(m_editor->property("visiblePanelCount").toInt(), 3);
+  QVERIFY(m_editor->property("sidebarShown").toBool());
 
-  // Give the window another 250 px. The zone keeps its content height and the
-  // tabs get the room, so the gap does not grow with the window.
+  // The pointer does not force the panel open: it has no options to show.
+  selectTool("pointer");
+  QVERIFY(!m_editor->property("toolOptionsVisible").toBool());
+
+  clickItem(expectItem("toolBrush"));
+  QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+  QTRY_VERIFY(m_editor->property("toolOptionsVisible").toBool());
+  QTRY_VERIFY(expectItem("editorToolZone")->isVisible());
+  QTRY_VERIFY(expectItem("paintSwatch")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// One frame for every tool. Its height, and therefore the reference pages'
+/// top edge, does not move when Crop, Brush or the pointer is chosen; only the
+/// contents change. The options and their verbs start at the top of the frame
+/// and the rest of the frame is blank under them, so a short tool never pushes
+/// Apply to the bottom edge.
+void TestEditor::theToolFrameIsOneSizeForEveryTool()
+{
+  setState(documentState());
+  selectTool("crop");
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+
+  QQuickItem* zone = expectItem("editorToolZone");
+  QQuickItem* pages = expectItem("editorReferencePages");
+  QQuickItem* options = expectItem("toolOptionsScroll");
+  QQuickItem* actions = expectItem("cropActions");
+  const qreal frameHeight = zone->height();
+  const qreal pagesTop = pages->mapToScene(QPointF(0, 0)).y();
+  const qreal actionsTop = actions->mapToScene(QPointF(0, 0)).y();
+  const qreal optionsBottom = options->mapToScene(QPointF(0, options->height())).y();
+  // Verbs follow the fields they act on.
+  QVERIFY2(actionsTop - optionsBottom >= 0.0 && actionsTop - optionsBottom <= 20.0,
+           qPrintable(QStringLiteral("the options end %1 px above Apply")
+                        .arg(actionsTop - optionsBottom)));
+  const qreal actionsBottom = actionsTop + actions->height();
+  const qreal frameBottom = zone->mapToScene(QPointF(0, 0)).y() + frameHeight;
+  QVERIFY2(actionsBottom <= frameBottom + 0.5,
+           "the verbs left the tool frame");
+
+  // Brush is a different height of content; the frame and the pages stay put.
+  clickItem(expectItem("toolBrush"));
+  QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
+  QTRY_VERIFY(expectItem("paintSwatch")->isVisible());
+  QTRY_COMPARE(qRound(zone->height()), qRound(frameHeight));
+  QTRY_COMPARE(qRound(pages->mapToScene(QPointF(0, 0)).y()), qRound(pagesTop));
+
+  // Transform has a short form with verbs: its fields and buttons sit at the
+  // top of the same frame, and the blank part of the frame is below them, not
+  // between them. A tool that needs less room therefore does not push its
+  // Apply against the frame's bottom edge.
+  clickItem(expectItem("toolTransform"));
+  QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("transform"));
+  QTRY_VERIFY(expectItem("transformLivePreviewButton")->isVisible());
+  QTRY_COMPARE(qRound(zone->height()), qRound(frameHeight));
+  QTRY_COMPARE(qRound(pages->mapToScene(QPointF(0, 0)).y()), qRound(pagesTop));
+  const qreal transformActionsBottom = actions->mapToScene(QPointF(0, actions->height())).y();
+  QVERIFY2(frameBottom - transformActionsBottom > 20.0,
+           qPrintable(QStringLiteral("the short tool's verbs end %1 px above the frame")
+                        .arg(frameBottom - transformActionsBottom)));
+
+  // The pointer has no options at all, and the same frame still stands.
+  selectTool("pointer");
+  QTRY_VERIFY(expectItem("pointerNoOptions")->isVisible());
+  QTRY_COMPARE(qRound(zone->height()), qRound(frameHeight));
+  QTRY_COMPARE(qRound(pages->mapToScene(QPointF(0, 0)).y()), qRound(pagesTop));
+
+  // Give the window another 250 px. A fixed frame stays 340 px and the tabs
+  // take the room; the gap between the fields and their verbs cannot grow.
+  selectTool("crop");
+  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
+  const qreal gapBefore = expectItem("applyCrop")->mapToScene(QPointF(0, 0)).y()
+    - expectItem("toolOptionsScroll")->mapToScene(
+        QPointF(0, expectItem("toolOptionsScroll")->height())).y();
   m_editor->setHeight(kHostHeight + 250);
   QCoreApplication::processEvents();
   QTRY_VERIFY2(expectItem("editorReferencePages")->height() > 0.0,
                "the reference tabs got no height");
-  QTRY_VERIFY2(qAbs(expectItem("editorToolZone")->height() - zoneHeight) <= 1.0,
-               "the tool zone stretched with the window");
-  QTRY_VERIFY2(gapToActions() <= 20.0, "the gap grew with the window");
+  QTRY_VERIFY2(qAbs(expectItem("editorToolZone")->height() - frameHeight) <= 1.0,
+               "the tool frame stretched with the window");
+  QTRY_VERIFY2(qAbs((expectItem("applyCrop")->mapToScene(QPointF(0, 0)).y()
+                     - expectItem("toolOptionsScroll")->mapToScene(
+                         QPointF(0, expectItem("toolOptionsScroll")->height())).y())
+                    - gapBefore) <= 1.0,
+               "the gap between the fields and Apply grew with the window");
   m_editor->setHeight(kHostHeight);
   QCoreApplication::processEvents();
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The pointer is a tool with nothing to configure, and the dock says so
+/// The pointer is a tool with nothing to configure, and the frame says so
 /// instead of drawing an empty column that reads as a panel that failed to
-/// load. Its heading still names the column.
+/// load. Its heading still names the column, and the frame is the same height
+/// every other tool gets.
 void TestEditor::thePointerSaysItHasNoOptions()
 {
   setState(documentState());
+  selectTool("crop");
+  const qreal frameHeight = expectItem("editorToolZone")->height();
   selectTool("pointer");
 
   QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
@@ -3121,10 +3174,8 @@ void TestEditor::thePointerSaysItHasNoOptions()
   QVERIFY(!note->property("text").toString().isEmpty());
   QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
   QVERIFY(!expectItem("applyCrop")->isVisible());
-  // The checklist is present even for the tool with no options, so a panel is
-  // never hidden with no way back.
-  QVERIFY(expectItem("editorPanelMenu")->isVisible());
-  // The tabs are the whole dock in this state.
+  QTRY_COMPARE(qRound(expectItem("editorToolZone")->height()), qRound(frameHeight));
+  // The tabs share the dock with the frame, as they do for every tool.
   QVERIFY(expectItem("infoPanel")->isVisible());
   QCOMPARE(m_commands->count(), 0);
 }
@@ -3969,7 +4020,7 @@ void TestEditor::theEraserStrokeCarriesItsModeAndBrush()
 
 /// The Krita defaults this slice maps live on the view, so they must not need
 /// the pointer: B/E pick the paint modes, [ ] resize the brush (Shift by ten),
-/// X swaps the colours, D resets them and Tab hides the panels.
+/// X swaps the colours and D resets them.
 void TestEditor::theKritaKeysPickTheToolsAndAdjustTheBrush()
 {
   setState(documentState());
@@ -4010,15 +4061,6 @@ void TestEditor::theKritaKeysPickTheToolsAndAdjustTheBrush()
   QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("eraser"));
   m_editor->forceActiveFocus();
 
-  QVERIFY(!m_editor->property("panelsHidden").toBool());
-  QTest::keyClick(m_view, Qt::Key_Tab);
-  QTRY_VERIFY(m_editor->property("panelsHidden").toBool());
-  QVERIFY(!expectItem("editorTools")->isVisible());
-  QVERIFY(!expectItem("editorInspector")->isVisible());
-  QTest::keyClick(m_view, Qt::Key_Tab);
-  QTRY_VERIFY(!m_editor->property("panelsHidden").toBool());
-  QVERIFY(expectItem("editorTools")->isVisible());
-  QVERIFY(expectItem("editorInspector")->isVisible());
   QCOMPARE(m_commands->count(), 0);
 }
 

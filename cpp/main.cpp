@@ -16,6 +16,7 @@
 #include <QLibraryInfo>
 #include <QJsonObject>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QPointingDevice>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -128,6 +129,38 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app, ThumbnailCac
       logDevState(rootObject, bridge, &thumbnails);
     });
   }
+}
+
+/// Open the burger menu for a photograph. A menu is its own top-level window,
+/// so a grab of the main window leaves it out; `KOGAVIEW_DEV_GRAB_POPUPS` paints
+/// every visible popup into the picture.
+///
+/// The `View > Sidebar` list cannot be photographed the same way: only the one
+/// menu Qt Quick actually shows is a window, and a submenu of a closed menu is
+/// never drawn, so `popup()`/`open()`/`visible` on it produce nothing. The hook
+/// therefore opens the burger menu and logs the sidebar list's row count, which
+/// is the view's own `panelEntries`; the checklist's behaviour is the QML
+/// suite's business.
+void openSidebarPanelMenu(QObject* rootObject)
+{
+  QObject* mainMenu = rootObject->findChild<QObject*>(QStringLiteral("mainMenu"));
+  QObject* sidebarMenu = rootObject->findChild<QObject*>(QStringLiteral("sidebarMenu"));
+  bool mainOpened = false;
+  if (mainMenu != nullptr) {
+    mainOpened = QMetaObject::invokeMethod(mainMenu, "popup");
+    // `popup()` applies its own placement policy; move it under the burger
+    // afterwards so the grab shows the menu where a click would put it.
+    const int width = rootObject->property("width").toInt();
+    const int menuWidth = mainMenu->property("width").toInt();
+    if (width > 0 && menuWidth > 0) {
+      mainMenu->setProperty("x", width - menuWidth - 24);
+      mainMenu->setProperty("y", 56);
+    }
+  }
+  qInfo() << "KogaView dev ui request sidebar menu"
+          << "main" << mainOpened
+          << "visible" << (mainMenu != nullptr && mainMenu->property("visible").toBool())
+          << "rows" << (sidebarMenu != nullptr ? sidebarMenu->property("count").toInt() : 0);
 }
 
 // Debug-only evidence harness: grab the app window after it is exposed.
@@ -356,7 +389,28 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       }
       retry->stop();
 
-      const QImage image = window->grabWindow();
+      QImage image = window->grabWindow();
+      // A menu is its own top-level window, so a grab of the main window leaves
+      // it out. With `KOGAVIEW_DEV_GRAB_POPUPS` set, paint every visible popup
+      // where the compositor put it relative to this window; that is how the
+      // burger menu can be photographed on a session where no screen capture
+      // works. A closed menu, and a submenu of one, has no window to paint. It
+      // is evidence of the widget, not of the compositor's own drawing.
+      if (qEnvironmentVariableIsSet("KOGAVIEW_DEV_GRAB_POPUPS")) {
+        const QPoint origin = window->position();
+        for (QWindow* top : QGuiApplication::topLevelWindows()) {
+          auto* popup = qobject_cast<QQuickWindow*>(top);
+          if (popup == nullptr || popup == window || !popup->isVisible()) {
+            continue;
+          }
+          const QImage layer = popup->grabWindow();
+          if (layer.isNull()) {
+            continue;
+          }
+          QPainter painter(&image);
+          painter.drawImage(popup->position() - origin, layer);
+        }
+      }
       const QFileInfo info(path);
       if (!QDir().mkpath(info.absolutePath()) || image.isNull() ||
           !image.save(path, "PNG")) {
@@ -1181,41 +1235,31 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << editor->property("tool") << "index"
                           << editor->property("rightTabIndex");
         if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG7") == QLatin1String("menu")) {
-          QObject* button =
-            editor->findChild<QObject*>(QStringLiteral("editorPanelMenuButton"));
-          if (button != nullptr) {
-            QMetaObject::invokeMethod(button, "click");
-          }
-          QObject* menu =
-            editor->findChild<QObject*>(QStringLiteral("editorPanelMenuPopup"));
-          qInfo() << "KogaView dev ui request editor-dock menu"
-                  << (menu != nullptr && menu->property("visible").toBool())
-                  << (menu != nullptr ? menu->property("count").toInt() : 0);
+          // The panel list is a submenu of the burger menu, so the burger menu
+          // is what can be shown and photographed; the hook logs the list's row
+          // count, which is the view's own `panelEntries`.
+          openSidebarPanelMenu(rootObject);
         }
         emitted = true;
       } else if (uiRequest == QLatin1String("sidebar-dock")) {
-        // The Browser's and the Viewer's sidebar without a pointer. Their docks
-        // are the same `RightDock`, but the two views named their pages and
-        // their setters differently before the tabs became one component, so
-        // this request maps them here instead of renaming public properties.
+        // The Browser's and the Viewer's sidebar without a pointer. Both views
+        // expose the same `panelEntries`/`setPanelVisible` pair the shell's
+        // `View > Sidebar` menu drives, so this request calls the same handler
+        // instead of naming a view.
         QObject* view = rootObject->findChild<QObject*>(QStringLiteral("browser"));
-        QString setter = QStringLiteral("setRightPageVisible");
         QString keyProperty = QStringLiteral("rightPage");
-        QString menuName = QStringLiteral("browserPanelMenuPopup");
         if (view == nullptr) {
           view = rootObject->findChild<QObject*>(QStringLiteral("viewer"));
-          setter = QStringLiteral("setRightPanelVisible");
           keyProperty.clear(); // the Viewer has one page and no tab strip
-          menuName = QStringLiteral("viewerPanelMenuPopup");
         }
         if (view == nullptr) {
           qWarning() << "KogaView dev ui request: no browser or viewer view";
           return;
         }
-        auto setSidebarPanels = [view, setter](const QString& list, bool visible) {
+        auto setSidebarPanels = [view](const QString& list, bool visible) {
           const QStringList keys = list.split(QLatin1Char(','), Qt::SkipEmptyParts);
           for (const QString& key : keys) {
-            QMetaObject::invokeMethod(view, setter.toLatin1().constData(),
+            QMetaObject::invokeMethod(view, "setPanelVisible",
                                       Q_ARG(QVariant, key.trimmed()),
                                       Q_ARG(QVariant, visible));
           }
@@ -1228,13 +1272,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         const bool openList = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4")
                               == QLatin1String("menu");
         if (openList) {
-          QObject* button = view->findChild<QObject*>(QStringLiteral("panelMenuButton"));
-          if (button != nullptr) {
-            QMetaObject::invokeMethod(button, "click");
-          }
-          QObject* menu = rootObject->findChild<QObject*>(menuName);
-          qInfo() << "KogaView dev ui request sidebar-dock menu" << menuName
-                  << (menu != nullptr && menu->property("visible").toBool());
+          openSidebarPanelMenu(rootObject);
         }
         QObject* dock = view->findChild<QObject*>(QStringLiteral("rightPanel"))
                         ?: view->findChild<QObject*>(QStringLiteral("viewerRightPanel"));

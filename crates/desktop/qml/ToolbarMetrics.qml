@@ -67,11 +67,11 @@ Item {
     /// counted: it is the one control the mini row adds in place of the ones
     /// it folds, so counting it would budget room for a button the compact row
     /// never draws.
-    readonly property int browserButtons: 6
+    readonly property int browserButtons: 5
     readonly property int browserSeparators: 1
-    readonly property int viewerButtons: 13
+    readonly property int viewerButtons: 12
     readonly property int viewerSeparators: 4
-    readonly property int editorButtons: 14
+    readonly property int editorButtons: 13
     readonly property int editorSeparators: 5
 
     /// The buttons each workspace keeps once the window is too narrow for the

@@ -702,15 +702,17 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 4 : 6);
+    QCOMPARE(buttons, mini ? 4 : 5);
 
     if (mini) {
       QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
       QObject* menu = findPopup(QStringLiteral("browserOverflowMenu"));
       QVERIFY2(menu != nullptr, "the browser has no overflow menu");
       QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
-      // New folder, then the two panel toggles and a separator.
-      QCOMPARE(menu->property("count").toInt(), 4);
+      // New folder, then the quick-access panel's toggle after a separator.
+      // The right dock has no toggle of its own any more: its panels live in
+      // the burger menu's `View > Sidebar` submenu.
+      QCOMPARE(menu->property("count").toInt(), 3);
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
     }
@@ -2186,18 +2188,19 @@ private slots:
     QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
     QVERIFY(!findItem(QStringLiteral("batchResize"))->isEnabled());
 
-    // The sidebar's checklist names both pages, and unchecking one hides it
-    // while the other stays. The button itself never leaves the screen.
-    QObject* menu = findPopup(QStringLiteral("browserPanelMenuPopup"));
-    QVERIFY2(menu != nullptr, "the browser sidebar has no panel checklist");
-    QCOMPARE(menu->property("count").toInt(), 2);
-    QVERIFY(findItem(QStringLiteral("panelMenuButton")) != nullptr);
-    QVERIFY(findItem(QStringLiteral("panelMenuButton"))->isVisible());
+    // The shell's `View > Sidebar` submenu drives the same panel list the view
+    // exposes: two rows, each a page. Hiding Preview keeps the dock on Batch
+    // action; hiding both hides the whole column, and showing one brings it
+    // back.
+    const QVariantList rows = browserRoot()->property("panelEntries").toList();
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("key")).toString(),
+             QStringLiteral("preview"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("key")).toString(),
+             QStringLiteral("batch"));
 
-    // Hiding Preview keeps the dock on Batch action and the button on screen;
-    // showing it again opens the page it describes.
     QQmlExpression hide(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
-                        QStringLiteral("setRightPageVisible('preview', false)"));
+                        QStringLiteral("setPanelVisible('preview', false)"));
     QVERIFY(!hide.hasError());
     hide.evaluate();
     settle();
@@ -2206,7 +2209,7 @@ private slots:
     QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
     // One page left means no strip: a single tab would only label itself.
     QVERIFY(!panel->property("stripShown").toBool());
-    QVERIFY(findItem(QStringLiteral("panelMenuButton"))->isVisible());
+    QVERIFY(panel->isVisible());
 
     // A hidden page keeps its stack slot but must not be drawn when it is
     // named: the visible pages are the only ones the dock can open.
@@ -2215,12 +2218,39 @@ private slots:
     QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
     QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
 
+    // The whole sidebar follows the panels: with none left there is no column
+    // and no splitter, and the menu's next check brings both back.
+    QQmlExpression hideBoth(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
+                            QStringLiteral("setPanelVisible('batch', false)"));
+    QVERIFY(!hideBoth.hasError());
+    hideBoth.evaluate();
+    settle();
+    QCOMPARE(browserRoot()->property("visiblePanelCount").toInt(), 0);
+    QVERIFY(!browserRoot()->property("sidebarShown").toBool());
+    QVERIFY(!panel->isVisible());
+    QVERIFY(!findItem(QStringLiteral("rightSplitter"))->isVisible());
+
+    // Showing a panel opens it: after none was left, the next check brings the
+    // column back *on the page it names*, not on whatever the strip last
+    // remembered.
+    QQmlExpression showBatch(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
+                             QStringLiteral("setPanelVisible('batch', true)"));
+    QVERIFY(!showBatch.hasError());
+    showBatch.evaluate();
+    settle();
+    QCOMPARE(browserRoot()->property("rightPage").toString(), QStringLiteral("batch"));
+    QVERIFY(panel->isVisible());
+    QVERIFY(findItem(QStringLiteral("rightSplitter"))->isVisible());
+    QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
+
     QQmlExpression show(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
-                        QStringLiteral("setRightPageVisible('preview', true)"));
+                        QStringLiteral("setPanelVisible('preview', true)"));
     QVERIFY(!show.hasError());
     show.evaluate();
     settle();
     QCOMPARE(browserRoot()->property("rightPage").toString(), QStringLiteral("preview"));
+    QVERIFY(panel->isVisible());
+    QVERIFY(findItem(QStringLiteral("rightSplitter"))->isVisible());
     QVERIFY(findItem(QStringLiteral("previewThumbnail"))->isVisible());
 
     // The Batch count is about images, not about every selected entry: a

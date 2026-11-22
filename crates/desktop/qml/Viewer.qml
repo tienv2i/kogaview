@@ -110,15 +110,19 @@ Item {
     readonly property real dockWidth:
         Math.max(200, Math.min(640, rightPanelWidth))
 
-    /// The Viewer's one page, and the checklist on the sidebar's right edge
-    /// that hides and restores it. Presentation state: no command, no file.
+    /// The Viewer's one page. Presentation state: no command, no file. The
+    /// burger menu's `View > Sidebar` submenu is where it is hidden or brought
+    /// back.
     property bool infoPanelVisible: true
-    readonly property var rightPanelMenuEntries: [
+    /// The rows the shell draws under `View > Sidebar`.
+    readonly property var panelEntries: [
         { key: "info", label: qsTr("Info"), checked: view.infoPanelVisible }
     ]
-    function setRightPanelVisible(key, visible) {
+    function setPanelVisible(key, visible) {
         if (key === "info") view.infoPanelVisible = visible
     }
+    readonly property int visiblePanelCount: view.infoPanelVisible ? 1 : 0
+    readonly property bool sidebarShown: view.visiblePanelCount > 0
 
     property string currentPath: view.state.viewerPath || ""
     property var images: view.viewerImages || []
@@ -753,7 +757,7 @@ Item {
 
         PanelSplitter {
             objectName: "viewerRightSplitter"
-            visible: !!view.state.rightPanelViewer
+            visible: view.sidebarShown
             Layout.fillHeight: true
             theme: view.theme
             value: view.dockWidth
@@ -769,11 +773,11 @@ Item {
 
         // One page, no strip: a viewer has exactly one thing to say about
         // the file on screen. The same `InfoPanel` as the Browser's, so the
-        // words for a file's details are written once. The checklist on the
-        // right edge can hide the page and bring it back.
+        // words for a file's details are written once. The burger menu's
+        // `View > Sidebar` submenu hides the page and brings it back.
         RightDock {
             objectName: "viewerRightPanel"
-            visible: !!view.state.rightPanelViewer
+            visible: view.sidebarShown
             Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
             theme: view.theme
@@ -781,14 +785,9 @@ Item {
             tabs: [{ key: "info", label: qsTr("Info"), icon: "icons/info.svg",
                      shown: view.infoPanelVisible }]
             currentKey: "info"
-            panels: view.rightPanelMenuEntries
             stripObjectName: "viewerRightTabs"
             tabKeyPrefix: "viewerTab"
             pagesObjectName: "viewerRightPages"
-            menuObjectName: "viewerPanelMenuPopup"
-            onPanelToggled: function(key, checked) {
-                view.setRightPanelVisible(key, checked)
-            }
 
             ScrollView {
                 id: viewerInfoPage
@@ -985,16 +984,6 @@ Item {
             onTriggered: view.command({ type: "toggle_filmstrip" })
             MenuShortcut { text: "T" }
         }
-        MenuItem {
-            text: view.theme.menuEntries[39]
-            icon.name: "sidebar-show-right-symbolic"
-            checkable: true
-            checked: !!view.state.rightPanelViewer
-            onTriggered: view.command({
-                type: "toggle_right_panel",
-                workspace: "viewer"
-            })
-        }
     }
 
     Connections {
@@ -1163,22 +1152,6 @@ Item {
                 ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
                 onClicked: view.command({ type: "toggle_filmstrip" })
             }
-            ToolbarButton {
-                objectName: "viewerRightPanelButton"
-                theme: view.theme
-                visible: !view.miniToolbar
-                checkable: true
-                checked: !!view.state.rightPanelViewer
-                icon.name: "sidebar-show-right-symbolic"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Toggle information panel")
-                onClicked: view.command({
-                    type: "toggle_right_panel",
-                    workspace: "viewer"
-                })
-            }
-
             ToolbarButton {
                 objectName: "viewerOverflowButton"
                 theme: view.theme
