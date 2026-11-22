@@ -119,6 +119,51 @@ Item {
 
     property var selectionInfo: view.state.selectionInfo || null
 
+    /// The Browser's sidebar pages and the checklist that arranges them. The
+    /// page is presentation state, like the tab the Editor keeps open: hiding
+    /// Batch action changes no file and sends no command. `Info` is not a tab:
+    /// it sits under the preview because the two answer one question together.
+    property string rightPage: "preview"
+    property bool previewPanelVisible: true
+    property bool batchPanelVisible: true
+    readonly property var rightPageEntries: [
+        { key: "preview", label: qsTr("Preview"), icon: "icons/preview.svg",
+          shown: view.previewPanelVisible },
+        { key: "batch", label: qsTr("Batch action"), icon: "icons/batch.svg",
+          shown: view.batchPanelVisible }
+    ]
+    readonly property var rightPanelMenuEntries: [
+        { key: "preview", label: qsTr("Preview"), checked: view.previewPanelVisible },
+        { key: "batch", label: qsTr("Batch action"), checked: view.batchPanelVisible }
+    ]
+    /// How many of the selected paths are images. The batch page counts what it
+    /// could act on, not a folder that happens to be selected beside them.
+    readonly property int selectedImages: {
+        var selection = view.state.selection || []
+        var entries = view.entries || []
+        var count = 0
+        for (var index = 0; index < selection.length; ++index) {
+            for (var entry = 0; entry < entries.length; ++entry) {
+                if (entries[entry].path === selection[index]) {
+                    if (entries[entry].isImage) ++count
+                    break
+                }
+            }
+        }
+        return count
+    }
+    function setRightPageVisible(key, visible) {
+        if (key === "preview") view.previewPanelVisible = visible
+        else if (key === "batch") view.batchPanelVisible = visible
+        else return
+        if (visible) {
+            view.rightPage = key
+        } else if (view.rightPage === key) {
+            view.rightPage = view.previewPanelVisible ? "preview"
+                            : (view.batchPanelVisible ? "batch" : "")
+        }
+    }
+
     function parentPath(path) {
         if (!path) return "";
         var trimmed = ("" + path).replace(/\/+$/, "");
@@ -832,10 +877,12 @@ Item {
         }
 
         // --------------------------------------------------- right sidebar
-        // One page, no strip: the picture and the file's details are read
-        // together, so a tab that hid one of them would only add a click. The
-        // dock is shared with the Viewer and the Editor (`RightDock.qml`), and
-        // its width is the shell's one value for all three workspaces.
+        // Two pages: the picture and the file's details are read together, so
+        // they share the Preview page; Batch action is the selection as a
+        // question of its own. The dock is shared with the Viewer and the
+        // Editor (`RightDock.qml`), and its width is the shell's one value for
+        // all three workspaces. The checklist on its right edge shows or hides
+        // either page without a command.
         RightDock {
             objectName: "rightPanel"
             visible: !!view.state.rightPanel
@@ -843,13 +890,22 @@ Item {
             Layout.fillHeight: true
             theme: view.theme
             backgroundColor: view.theme.sidebar
-            tabs: [{ key: "info", label: qsTr("Info"), icon: "" }]
-            currentKey: "info"
-            stripObjectName: ""
+            tabs: view.rightPageEntries
+            currentKey: view.rightPage
+            compact: view.dockWidth < 240
+            panels: view.rightPanelMenuEntries
+            stripObjectName: "browserRightTabs"
+            tabKeyPrefix: "browserTab"
             pagesObjectName: "browserRightPages"
+            menuObjectName: "browserPanelMenuPopup"
+            onActivated: function(key) { view.rightPage = key }
+            onPanelToggled: function(key, checked) {
+                view.setRightPageVisible(key, checked)
+            }
 
             ScrollView {
                 id: browserInfoPage
+                objectName: "browserPreviewPage"
                 contentWidth: availableWidth
                 clip: true
 
@@ -879,6 +935,19 @@ Item {
                     }
 
                     Item { Layout.fillHeight: true }
+                }
+            }
+
+            ScrollView {
+                id: browserBatchPage
+                objectName: "browserBatchPage"
+                contentWidth: availableWidth
+                clip: true
+
+                BatchPanel {
+                    width: browserBatchPage.availableWidth
+                    theme: view.theme
+                    selectionCount: view.selectedImages
                 }
             }
         }

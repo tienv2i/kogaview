@@ -1,4 +1,4 @@
-# Session handoff — state at 2026-11-21
+# Session handoff — state at 2026-11-22
 
 Four sessions' worth of work on the same day: the launch surface speaks
 Vietnamese and the dock icon draws, the mouse wheel moves at the rate the device
@@ -142,10 +142,38 @@ re-decode, no lost history — and a *different* picture asked for over unsaved
 edits is refused in Core and questioned by the shell (row 102). The duplicate
 "Explore here" menu entry is gone (row 103).
 
+This pass (row 104) replaces the sidebar's folds with a checklist. Both chevrons
+are gone: each workspace's dock carries a small three-dot button on its right
+edge whose menu shows or hides one panel at a time — the Editor's Tool options,
+Info, History and Original; the Browser's Preview and its new Batch action page;
+the Viewer's Info. Hiding a panel sends no command (it is layout state, unlike
+the whole-dock toggle in `config.json`), a hidden page keeps its stack slot and
+is never drawn, and hiding every panel leaves the gutter and a top-aligned
+"No panels shown" sentence rather than a blank column. Batch action is a real
+surface with the count of selected images, three visibly disabled verbs and a
+note that Core owns no batch command yet. The Editor's tool zone is now exactly
+as tall as its options and pinned to the dock's top, with Apply/Reset/Clear
+directly under the fields they act on; the pointer's empty column no longer
+floats in the middle when its reference pages are hidden.
+
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
+- Branch `main`. Row 104 is **uncommitted** on top of `2dc8a0e feat: an honest
+  resize, a foldable dock and a defined reopen`: the new
+  `crates/desktop/qml/PanelMenu.qml` and `BatchPanel.qml` (both in
+  `crates/desktop/build.rs`, the `.pro` entry for `BatchPanel` included), two
+  SVGs (`panel-menu`, `batch`) in `icons.qrc`, `PanelTabs.qml` (folds removed,
+  `shown` filtering, `keyPrefix`), `RightDock.qml` (fold fields removed, panel
+  checklist and empty state, hidden-aware `currentIndex`), `EditorView.qml`
+  (per-panel flags, checklist, content-sized top-aligned tool zone, own empty
+  state, divider only while both halves show), `BrowserView.qml` (Preview and
+  Batch pages, `selectedImages`), `Viewer.qml` (one page with its checklist),
+  `cpp/main.cpp` (`editor-dock` rewritten with hide/show lists and `_ARG7=menu`;
+  the new `sidebar-dock` request), the three view suites, the 21 new Vietnamese
+  sentences, ADR 0020's second revision, `docs/M1-REPORT.md`, this file and the
+  ten `M1-sidebar-*` screenshots under `docs/evidence/`.
 - Branch `main`. Rows 99–103 are one commit on top of `346d65c`,
   `feat: an honest resize, a foldable dock and a defined reopen` (its hash is
   the one `git log -1` prints; this file is inside that commit, so it cannot
@@ -449,6 +477,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 | 101 | `Show in folder` was gated on the file manager already running, which a D-Bus-activated desktop never satisfies before the first click | `revealInFolder` sends the call with a 5 s timeout and lets the bus activate the service; a missing path is answered with a line; sandbox skip kept; each branch logs | in a fresh `dbus-run-session` the call activated `/usr/bin/dolphin --new-window --select /tmp/opencode/ws5/pics/wide.png` (pid 185577); on this session Dolphin already owned the name, so the old gate happened to be true here — which is why the bug was invisible |
 | 102 | The Viewer never re-read a file it had already shown, and the Editor tore its document down when asked for the same path | `viewer_modified`/`viewer_size` + `set_viewer_path`, the Viewer's `?v=` source, `open_editor`'s four-way guard (`editor_already_open`, reload-on-rewrite, `unsaved_document`), `Main.qml`'s `requestEditorOpen` queue | real window: a red 800 × 600 file rewritten to blue 640 × 480 was redrawn at 640 × 480 after a second `open_file` (`M1-viewer-before-rewrite.png` / `-rewritten.png`), and a rotated document kept its `Rotate right 90°` history across a second `editor_open` (`M1-editor-reopen-same.png`, `-history.png`, rev 6); 4 mutations caught |
 | 103 | "Explore here" duplicated Open folder and Show in folder without doing either reliably | the label dropped from `Theme.menuEntryLabels` and every menu entry at index ≥ 10 renumbered; the vanished string removed | `tst_browser::theFolderMenusDoNotRepeatTheOpenAction`; `just test` green |
+| 104 | The sidebar hid halves, not panels: both fold chevrons were all-or-nothing, a user who wanted History but not Info had no way to say so, hiding everything left a blank column with no visible exit, and the Browser had no page for a selection as a whole. The Editor's tool zone could float to the dock's middle once its pages were gone, and its verbs were not visibly the tool's | `PanelMenu.qml` (26 px gutter, checked menu parented to its button), `BatchPanel.qml` (real image-selection count, disabled verbs, Core-not-wired note), `panel-menu.svg`/`batch.svg`, `PanelTabs.qml` (`shown` filtering, `keyPrefix`, chevron gone), `RightDock.qml` (`panels`/`panelToggled`, hidden-aware `currentIndex`, top-aligned `No panels shown`, checklist, folds gone), `EditorView.qml` (four panel flags, checklist, content-sized top-aligned zone with a 26 px gutter, divider only while both halves show, own empty state), `BrowserView.qml` (Preview + Batch pages, `selectedImages`), `Viewer.qml`, `cpp/main.cpp` (`editor-dock` hide/show lists and `_ARG7=menu`, the new `sidebar-dock`), the three view suites, 21 Vietnamese strings, ADR 0020 revision | `just test` green: translations 358 / 105 C++ / 358 drawn / 4 by context, packaging 19, cargo 98 + 5, viewer 43 · browser 51 · editor 69 · toolbar 18; the ten `docs/evidence/M1-sidebar-*` grabs show each dock state in Vietnamese. Mutations caught: the hidden-tab index in the Editor and in `RightDock`, the current-tab fallback, a hidden tab's button, a selected folder counted as a batch image, a strip on a one-page dock, and the zone's top alignment (after the case was strengthened to put Crop down first). Two were equivalent/unreached: `Layout.fillHeight: true` on the zone and its `maximumHeight` at `Number.MAX_VALUE`, because the empty column has no other filler either way. No hand clicked a checklist row or a tab; the hook drove every state |
 
 ## Test gate
 
@@ -456,7 +485,7 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 353 strings in kogaview_vi.ts, 105 of them compiled into C++, 353 drawn by the QML, 4 looked up by context
+translations: 358 strings in kogaview_vi.ts, 105 of them compiled into C++, 358 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
 cargo: 98 passed (kogaview-core) + 5 passed (kogaview-protocol)
 viewer 43 · browser 51 · cache 15 · state 7 · settings 19 · editor 69 · language 7 · toolbar 18
@@ -1705,7 +1734,98 @@ the defect exactly. Each restored, then `just test` green.
   command followed by the exact open in one `sendSequence`. The refusal is what
   protects a CLI or IPC caller; the question is what a person gets.
 
+## Design decisions, a checklist per panel (row 104, ADR 0020 revision)
+
+- **A fold was a switch for a half; a checklist is a switch per panel.** The two
+  chevrons answered "give the options the whole dock" and nothing smaller, so a
+  user who wanted History but not Info had to fold the strip and reopen one tab.
+  `PanelMenu.qml` is one 26 px gutter with one checkable menu; every row is the
+  same `toggled(key, checked)` signal and the view decides what a key means. The
+  menu draws no panel name of its own, so it owns no translation.
+- **The popup is parented to its button, not to the window.** A parentless
+  `Menu` opened at the platform's own placement — the window's left edge on this
+  desktop — which reads as a menu unrelated to the sidebar. `x: button.width -
+  width`, `y: button.height + 2` puts it under the gutter and right-aligned with
+  it; the grab is the authority, the logged geometry is read before layout.
+- **Panel visibility is view state; the dock's own visibility is Core's.**
+  `toolOptionsVisible`/`infoVisible`/`historyVisible`/`originalVisible`,
+  `previewPanelVisible`/`batchPanelVisible`, `infoPanelVisible`. A panel is a
+  layout choice made while looking at the window, like the tab or the split; the
+  workspace-level `right_panel*` flag still travels through
+  `toggle_right_panel` and `config.json`. Neither kind is a second command path.
+- **Hiding never renumbers a page.** A tab with `shown: false` keeps its
+  `StackLayout` slot and draws no button, so `RightDock.currentIndex` and the
+  Editor's `rightTabIndex` walk the model, not the visible rank. Naming a hidden
+  tab falls back to the first shown page instead of drawing it; hiding the open
+  page moves to the first survivor in the same turn. This is what stops the
+  strip saying `Info` while History's page is on screen.
+- **An empty dock is a state with an exit.** `No panels shown` is pinned to the
+  top (`Layout.fillHeight: true` + `Text.AlignTop`, because the hidden stack
+  leaves no filler and a version with only `Layout.alignment` centred the
+  sentence) and the checklist gutter stays. The Browser's and Viewer's sentence
+  comes from `RightDock`; the Editor keeps `editorNoPanels` because its empty
+  column also owns the tool zone.
+- **The Browser's Batch page is a surface, not an engine.** `BatchPanel.qml`
+  reads a real count — `selectedImages`, which skips a folder selected beside a
+  picture — and shows three visibly disabled verbs with a note that Core owns no
+  batch command yet. A working button over a command that does not exist would
+  be a lie about the product; the count is the honest half this pass can prove.
+- **Two Browser pages share one strip; Info stays under the preview.**
+  `Preview` is the thumbnail over the file's details because the two are read
+  together, and `Batch action` is the selection as its own question. Two pages
+  mean a strip; hiding one leaves a single page and no strip, which the case
+  asserts rather than leaves to the layout.
+- **The tool zone hugs its options and is top-aligned.** `fillHeight: false`,
+  `preferredHeight`/`maximumHeight` from the content, `alignment: Qt.AlignTop`.
+  Without the alignment a `ColumnLayout` with no reference page to fill centres
+  the zone in the dock's spare height, so hiding the pages made the heading
+  float. The action row is directly under the fields and the divider is drawn
+  only while both halves have something to show.
+- **The case must arm the short panel to see the bug.** The first version of the
+  empty-dock assertion left Crop armed; its tall form filled the column by
+  itself and the alignment mutation passed. `selectTool("pointer")` first, then
+  the same assertion, is what catches the centring.
+- **Three strips need three name prefixes.** `PanelTabs.keyPrefix` defaults to
+  `editorTab` and the Browser/Viewer pass `browserTab`/`viewerTab`, so
+  `<prefix>_<key>`, `<prefix>Icon_<key>` and `<prefix>Label_<key>` stay unique in
+  one window and the harness can address each view's strip.
+
 ## Known gaps, in the words they were last measured with
+
+- **Row 104's checklist was never pressed by a hand.** Every grab came from
+  `editor-dock` with `_ARG2`/`_ARG5` (the lists its menu emits) or
+  `sidebar-dock`, which call `setPanelVisible`/`setRightPageVisible` — the same
+  handlers the menu's `toggled` signal reaches — and `_ARG7=menu`/`_ARG4=menu`
+  click the gutter button. The menu's checked rows, the right-aligned popup, the
+  empty dock and the two Browser pages are real window grabs of those states,
+  but this compositor delivers no synthetic pointer move, so a human clicking a
+  row, a tab or the divider is `QTest` in the suites, not a photograph.
+- **The Batch page has no engine, by design.** Resize/Convert/Export are
+  disabled and there is no batch command in the protocol or Core; the only real
+  number is `selectedImages`, which counts selected entries whose `isImage` is
+  true. Whether a batch action is one command per file or a typed job list is a
+  contract question the next pass has to answer before the verbs can work.
+- **A page's visibility is forgotten on the next launch.** All the new flags are
+  view state; `config.json` still carries only the three whole-dock switches
+  row 96 added. Persisting "History but not Info" would be a settings field and
+  a protocol decision, and the Checklist's arrangement is not a document fact.
+- **The two `Layout` mutations escaped.** Setting the tool zone back to
+  `fillHeight: true`, or its `maximumHeight` to `Number.MAX_VALUE`, left
+  `thePanelChecklistHidesAndRestoresTheSidebar` green once the pointer was
+  selected, because the empty dock's column has no other filler to push the
+  heading either way. They are recorded as equivalent/unreached, not as caught;
+  the alignment mutation is the one that reproduces the reported centring.
+- **The empty sentence's exact top margin is a layout, not a measurement.**
+  `pageMargin + 2` on the left and `pageMargin` on the top put the Browser's and
+  the Viewer's sentence where the grabs show it; the Editor's label is its own
+  item with its own spacing. No window run compared the three at more than one
+  window size, and the 580 px mini row was not photographed with every panel
+  hidden.
+- **The Accessibility of the checklist is its tooltip and name only.** The rows
+  are ordinary `MenuItem`s with a check mark; no key opens the menu, Tab does
+  not reach the gutter button (`focusPolicy: Qt.NoFocus`, like the rail's tool
+  buttons), and no grab shows the menu with a keyboard focus ring. A keyboard
+  route to panel visibility is an open design question.
 
 - **Rows 99–103's window runs are driven, not clicked.** No hand typed a size,
   picked a fit, pressed the dock chevron, dragged the divider, answered the
@@ -2233,3 +2353,10 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     comparison covers it. The same is true of the shell's unsaved-changes
     question for an Editor open: it is a source guard plus Core's command order,
     not a dialog somebody answered.
+18. **Batch action needs a contract before its verbs can be enabled.** The
+    Browser's page is a surface with a real image count and three disabled
+    tasks; whether a batch is one command per file (as `editor_paint_stroke` is
+    one stroke) or one typed job with its own progress and cancellation is a
+    protocol decision, and every answer needs the async/bounded/observable rules
+    of `AGENTS.md` before the first button is enabled. The count is already
+    exact, so the first command can be written against a known selection.

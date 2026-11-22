@@ -1462,6 +1462,23 @@ private slots:
              QStringLiteral("1200 × 800"));
     QCOMPARE(item("infoPath")->property("text").toString(), m_landscape);
 
+    // The checklist on the right edge can hide the only page. The dock, its
+    // splitter and the checklist stay, so the page can come back without
+    // reopening the panel from the toolbar.
+    QObject* menu = object("viewerPanelMenuPopup");
+    QVERIFY2(menu != nullptr, "the viewer sidebar has no panel checklist");
+    QCOMPARE(menu->property("count").toInt(), 1);
+    QQuickItem* menuButton = item("panelMenuButton");
+    QVERIFY2(menuButton != nullptr, "the viewer has no checklist button");
+    QVERIFY(menuButton->isVisible());
+    m_viewer->setProperty("infoPanelVisible", false);
+    QTRY_VERIFY(!name->isVisible());
+    QVERIFY(panel->isVisible());
+    QVERIFY(menuButton->isVisible());
+    QVERIFY(!panel->property("stripShown").toBool());
+    m_viewer->setProperty("infoPanelVisible", true);
+    QTRY_VERIFY(name->isVisible());
+
     QQuickItem* splitter = item("viewerRightSplitter");
     QVERIFY2(splitter != nullptr, "the viewer has no dock splitter");
     QVERIFY(splitter->isVisible());

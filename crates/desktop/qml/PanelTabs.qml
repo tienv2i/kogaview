@@ -3,36 +3,39 @@ import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 
-// The Editor dock's reference tabs: what the document is, what was done to it,
-// what it looks like. The armed tool's options live above this strip, so a tab
-// can stay open while Crop or Brush is in hand.
+// The dock's tabs: what the document is, what was done to it, what it looks
+// like — or, in the Browser, the picture and the batch page. The armed tool's
+// options live above the Editor's strip, so a tab can stay open while Crop or
+// Brush is in hand.
 //
 // The strip is drawn here rather than with `TabBar` for two measured reasons:
 // the platform style paints its own light strip on a dark window (the collision
 // the context menus had), and each tab needs a stable `objectName` for the QML
 // suite. The labels arrive from the view, so this file draws no string and owns
 // no translation.
+//
+// A tab whose `shown` is false stays in the model but draws no button: the
+// page keeps its place in the dock's stack, and the sidebar's panel menu is
+// what puts it back. Hiding the panel therefore never renumbers the pages.
 Item {
     id: root
 
     property Theme theme: Theme {}
-    /// `[{ key, label, icon }]`, in the order they are drawn.
+    /// `[{ key, label, icon, shown }]`, in the order they are drawn. `shown`
+    /// defaults to true when the view omits it.
     property var tabs: []
     property string currentKey: ""
     /// Fold the labels away when the dock is too narrow for them; the drawing
     /// and its tooltip still say which tab it is.
     property bool compact: false
     property int tabHeight: 30
-    /// The pages under this strip are put away: only the strip is left, and the
-    /// chevron points back down.
-    property bool folded: false
-    /// The chevron's sentence, supplied by the view because this file owns no
-    /// translation (the tab labels are the view's words too).
-    property string foldTooltip: ""
+    /// Names each button (`<prefix>_<key>`), its drawing
+    /// (`<prefix>Icon_<key>`) and its label (`<prefix>Label_<key>`). The Editor
+    /// keeps the historical `editorTab` prefix; the Browser and the Viewer use
+    /// their own, so a suite can tell three strips apart in one window.
+    property string keyPrefix: "editorTab"
 
     signal activated(string key)
-    /// The chevron was pressed: the view flips its own flag and sends nothing.
-    signal foldRequested()
 
     implicitHeight: tabHeight
 
@@ -53,7 +56,8 @@ Item {
                                               : tab.hovered ? root.theme.text
                                               : root.theme.textMuted
 
-                objectName: "editorTab_" + modelData.key
+                objectName: root.keyPrefix + "_" + modelData.key
+                visible: modelData.shown !== false
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 padding: 4
@@ -87,7 +91,7 @@ Item {
                         spacing: 4
 
                         IconImage {
-                            objectName: "editorTabIcon_" + tab.modelData.key
+                            objectName: root.keyPrefix + "Icon_" + tab.modelData.key
                             source: tab.modelData.icon
                             sourceSize: Qt.size(32, 32)
                             Layout.preferredWidth: 16
@@ -98,7 +102,7 @@ Item {
                         }
 
                         Label {
-                            objectName: "editorTabLabel_" + tab.modelData.key
+                            objectName: root.keyPrefix + "Label_" + tab.modelData.key
                             visible: !root.compact
                             text: tab.modelData.label
                             color: tab.ink
@@ -107,50 +111,6 @@ Item {
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
-                }
-            }
-        }
-
-        // The strip is also the way to put the pages away. It has to live here
-        // rather than in the dock: the strip is one row, and a chevron added
-        // outside it would be a second row that a folded dock would still have
-        // to draw.
-        AbstractButton {
-            id: foldButton
-            objectName: "stripFoldToggle"
-            visible: root.tabs.length > 1
-            // Smaller than the tabs it sits beside: it is a fold, not a mode.
-            Layout.preferredWidth: 24
-            Layout.fillHeight: true
-            padding: 0
-            focusPolicy: Qt.NoFocus
-            activeFocusOnTab: false
-            hoverEnabled: true
-
-            Accessible.role: Accessible.Button
-            Accessible.name: root.foldTooltip
-            ToolTip.visible: hovered && root.foldTooltip.length > 0
-            ToolTip.text: root.foldTooltip
-
-            onClicked: root.foldRequested()
-
-            background: Rectangle {
-                radius: root.theme.radius
-                color: foldButton.hovered ? root.theme.hover : "transparent"
-            }
-
-            contentItem: Item {
-                IconImage {
-                    objectName: "stripFoldIcon"
-                    source: "icons/chevron.svg"
-                    sourceSize: Qt.size(32, 32)
-                    width: 14
-                    height: 14
-                    anchors.centerIn: parent
-                    fillMode: Image.PreserveAspectFit
-                    color: foldButton.hovered ? root.theme.text : root.theme.textMuted
-                    // Down while the pages are open, up when they are away.
-                    rotation: root.folded ? 180 : 0
                 }
             }
         }

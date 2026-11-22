@@ -2124,10 +2124,11 @@ private slots:
              QStringList{ QStringLiteral("/root/dirA") });
   }
 
-  /// The right column is one page holding the picture and the file's details.
-  /// A tab strip over a single page would only add a click, and a hidden one
-  /// must take no room, so the preview starts at the dock's top edge.
-  void theSidebarIsOnePreviewPage()
+  /// The right column holds two pages now: Preview (the picture and the
+  /// file's details, which are read together) and Batch action (the selection
+  /// as its own question). The checklist on the right edge hides either one
+  /// without a command, and a hidden page keeps its place in the stack.
+  void theSidebarHasAPreviewPageAndABatchPage()
   {
     QVariantMap state = baseState();
     state.insert(QStringLiteral("rightPanel"), true);
@@ -2145,9 +2146,9 @@ private slots:
     QQuickItem* panel = findItem(QStringLiteral("rightPanel"));
     QVERIFY2(panel != nullptr, "the browser has no right dock");
     QVERIFY(panel->isVisible());
-    QVERIFY2(!panel->property("stripShown").toBool(),
-             "a one-page dock drew a tab strip");
-    QCOMPARE(panel->property("tabs").toList().size(), 1);
+    QVERIFY2(panel->property("stripShown").toBool(),
+             "the two-page dock drew no tab strip");
+    QCOMPARE(readQml(panel, QStringLiteral("tabs.length")).toInt(), 2);
 
     QQuickItem* preview = findItem(QStringLiteral("previewThumbnail"));
     QQuickItem* name = findItem(QStringLiteral("infoName"));
@@ -2161,9 +2162,77 @@ private slots:
     QCOMPARE(findItem(QStringLiteral("infoPath"))->property("text").toString(),
              QStringLiteral("/root/img.png"));
 
-    // Both are read together, so there is no page to switch to.
-    QVERIFY(!findItem(QStringLiteral("browserRightTabs")) ||
-            !findItem(QStringLiteral("browserRightTabs"))->isVisible());
+    // The Preview page shows both halves; the Batch page is the other tab and
+    // draws the selection count it can really see, with its verbs disabled
+    // until Core owns a batch command.
+    QQuickItem* tabs = findItem(QStringLiteral("browserRightTabs"));
+    QVERIFY2(tabs != nullptr, "the browser has no dock strip");
+    QVERIFY(tabs->isVisible());
+
+    QQuickItem* batchTab = findItem(QStringLiteral("browserTab_batch"));
+    QVERIFY2(batchTab != nullptr, "the dock has no Batch action tab");
+    QVERIFY(batchTab->isVisible());
+    QCOMPARE(batchTab->property("text").toString(), QString());
+    QVERIFY(!findItem(QStringLiteral("batchSelection"))->isVisible());
+
+    QVERIFY(QMetaObject::invokeMethod(batchTab, "click"));
+    settle();
+    QCOMPARE(browserRoot()->property("rightPage").toString(), QStringLiteral("batch"));
+    QQuickItem* selection = findItem(QStringLiteral("batchSelection"));
+    QVERIFY2(selection != nullptr, "the Batch page draws no selection count");
+    QTRY_VERIFY(selection->isVisible());
+    QCOMPARE(selection->property("text").toString(),
+             QStringLiteral("No images selected"));
+    QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
+    QVERIFY(!findItem(QStringLiteral("batchResize"))->isEnabled());
+
+    // The sidebar's checklist names both pages, and unchecking one hides it
+    // while the other stays. The button itself never leaves the screen.
+    QObject* menu = findPopup(QStringLiteral("browserPanelMenuPopup"));
+    QVERIFY2(menu != nullptr, "the browser sidebar has no panel checklist");
+    QCOMPARE(menu->property("count").toInt(), 2);
+    QVERIFY(findItem(QStringLiteral("panelMenuButton")) != nullptr);
+    QVERIFY(findItem(QStringLiteral("panelMenuButton"))->isVisible());
+
+    // Hiding Preview keeps the dock on Batch action and the button on screen;
+    // showing it again opens the page it describes.
+    QQmlExpression hide(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
+                        QStringLiteral("setRightPageVisible('preview', false)"));
+    QVERIFY(!hide.hasError());
+    hide.evaluate();
+    settle();
+    QCOMPARE(browserRoot()->property("rightPage").toString(), QStringLiteral("batch"));
+    QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
+    QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
+    // One page left means no strip: a single tab would only label itself.
+    QVERIFY(!panel->property("stripShown").toBool());
+    QVERIFY(findItem(QStringLiteral("panelMenuButton"))->isVisible());
+
+    // A hidden page keeps its stack slot but must not be drawn when it is
+    // named: the visible pages are the only ones the dock can open.
+    browserRoot()->setProperty("rightPage", QStringLiteral("preview"));
+    settle();
+    QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
+    QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
+
+    QQmlExpression show(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
+                        QStringLiteral("setRightPageVisible('preview', true)"));
+    QVERIFY(!show.hasError());
+    show.evaluate();
+    settle();
+    QCOMPARE(browserRoot()->property("rightPage").toString(), QStringLiteral("preview"));
+    QVERIFY(findItem(QStringLiteral("previewThumbnail"))->isVisible());
+
+    // The Batch count is about images, not about every selected entry: a
+    // folder picked beside a picture is not something a batch could resize.
+    QVariantMap mixed = state;
+    mixed.insert(QStringLiteral("selection"),
+                 QStringList{ QStringLiteral("/root/dirA"),
+                              QStringLiteral("/root/img.png") });
+    showState(browserItem(), mixed);
+    settle();
+    QCOMPARE(findItem(QStringLiteral("batchSelection"))->property("text").toString(),
+             QStringLiteral("1 selected"));
   }
 
   /// "Show in folder" is the shell's request, not the view's: every Browser

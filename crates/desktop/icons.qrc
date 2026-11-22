@@ -32,6 +32,8 @@
     <file alias="icons/history.svg">qml/icons/history.svg</file>
     <file alias="icons/preview.svg">qml/icons/preview.svg</file>
     <file alias="icons/original.svg">qml/icons/original.svg</file>
+    <file alias="icons/batch.svg">qml/icons/batch.svg</file>
+    <file alias="icons/panel-menu.svg">qml/icons/panel-menu.svg</file>
     <file alias="icons/chevron.svg">qml/icons/chevron.svg</file>
   </qresource>
 </RCC>

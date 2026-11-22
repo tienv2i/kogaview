@@ -122,7 +122,7 @@ private slots:
   void thePaletteSelectsTheToolsOptions();
   void theInspectorSplitsToolsFromThreeReferenceTabs();
   void theToolOptionsHugTheActionRow();
-  void theReferenceTabsFoldToTheirStrip();
+  void thePanelChecklistHidesAndRestoresTheSidebar();
   void theDividerSetsTheToolZoneHeight();
   void thePointerSaysItHasNoOptions();
   void theReferenceZoneKeepsRoomWhenTheWindowIsShort();
@@ -149,6 +149,9 @@ private:
   QObject* findObject(const QString& name) const;
   static QVariant readQml(QObject* object, const QString& expression);
   void clickItem(QQuickItem* item);
+  /// Press one row of the sidebar's panel checklist by its label, opening the
+  /// menu first when a previous row closed it. Returns false if no row matches.
+  bool clickPanelRow(QObject* menu, const QString& label);
   /// Scroll the tool-options column until `item` is inside its viewport. The
   /// pinned Crop action row wraps to two rows in the default 260 px dock, so
   /// the anchor pad sits just under the fold; a hand scrolls it into view.
@@ -332,11 +335,13 @@ void TestEditor::init()
   m_editor->setProperty("paintStroking", false);
   m_editor->setProperty("panelsHidden", false);
   m_editor->setProperty("spacePanning", false);
-  // The right dock's split, open tab and fold are view state, like the rail's
-  // columns: a case must not decide what the next one opens on.
+  // The right dock's split, open tab and panel checklist are view state, like
+  // the rail's columns: a case must not decide what the next one opens on.
   m_editor->setProperty("rightPanelWidth", 260);
-  m_editor->setProperty("toolZoneFolded", false);
-  m_editor->setProperty("referenceFolded", false);
+  m_editor->setProperty("toolOptionsVisible", true);
+  m_editor->setProperty("infoVisible", true);
+  m_editor->setProperty("historyVisible", true);
+  m_editor->setProperty("originalVisible", true);
   m_editor->setProperty("toolZoneHeight", 0);
   m_editor->setProperty("rightTab", QStringLiteral("info"));
   m_editor->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
@@ -411,6 +416,37 @@ void TestEditor::clickItem(QQuickItem* item)
     item->mapToScene(QPointF(item->width() / 2.0, item->height() / 2.0)).toPoint();
   QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre);
   QTest::qWait(20);
+}
+
+bool TestEditor::clickPanelRow(QObject* menu, const QString& label)
+{
+  if (menu == nullptr) return false;
+  if (!menu->property("visible").toBool()) {
+    QMetaObject::invokeMethod(menu, "popup");
+    for (int wait = 0; wait < 100 && !menu->property("visible").toBool(); ++wait) {
+      QTest::qWait(10);
+    }
+  }
+  // The rows are `MenuItem` delegates under the menu's content item, and a
+  // QML function's return type is not reliably a C++ metatype, so read them
+  // through the engine rather than `invokeMethod`.
+  const int count = menu->property("count").toInt();
+  for (int index = 0; index < count; ++index) {
+    QQmlExpression reader(QQmlEngine::contextForObject(menu), menu,
+                          QStringLiteral("itemAt(%1)").arg(index));
+    QQuickItem* row = reader.evaluate().value<QQuickItem*>();
+    if (row != nullptr && row->property("text").toString() == label) {
+      QMetaObject::invokeMethod(row, "click");
+      // A directly invoked `click()` does not run the menu's own close path,
+      // and a popup left open would take the next case's pointer.
+      QMetaObject::invokeMethod(menu, "close");
+      for (int wait = 0; wait < 100 && menu->property("visible").toBool(); ++wait) {
+        QTest::qWait(10);
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 void TestEditor::scrollOptionsIntoView(QQuickItem* item)
@@ -2812,9 +2848,11 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   setState(editor);
 
   QQuickItem* zone = expectItem("editorToolZone");
-  // The pointer has no options: its zone is the heading alone, with no toggle.
+  // The pointer has no options: its zone is the heading alone, and the
+  // checklist on the right edge is the sidebar's arrangement control.
   QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(!expectItem("toolZoneToggle")->isVisible());
+  QVERIFY(expectItem("editorPanelMenu")->isVisible());
+  QVERIFY(expectItem("toolOptionsHeading")->isVisible());
   // The pointer's zone is the heading plus the line saying it has no options.
   QVERIFY2(zone->height() <= 70.0,
            qPrintable(QStringLiteral("the pointer zone is %1 px tall").arg(zone->height())));
@@ -2835,7 +2873,6 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   // open, which is the whole reason for the split.
   selectTool("crop");
   QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(expectItem("toolZoneToggle")->isVisible());
   QVERIFY(zone->height() > 200.0);
   QVERIFY(expectItem("cropX")->isVisible());
   QVERIFY(expectItem("originalPanel")->isVisible());
@@ -2856,24 +2893,15 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   QVERIFY2(zoneBottom - actionsBottom >= 0.0, "the action row left the tool zone");
   QCOMPARE(m_commands->count(), 0);
 
-  // The heading folds the options away and the tabs take the whole dock.
-  clickItem(expectItem("toolZoneToggle"));
-  QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(zone->height() <= 40.0);
-  QVERIFY(expectItem("originalPanel")->isVisible());
-  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("original"));
-  clickItem(expectItem("toolZoneToggle"));
-  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(zone->height() > 200.0);
-
-  // Folding is a decision about this visit, not a setting: arming another tool
-  // opens its options even though the last one was folded away.
-  clickItem(expectItem("toolZoneToggle"));
-  QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
-  clickItem(expectItem("toolBrush"));
-  QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
-  QTRY_VERIFY(expectItem("toolOptionsScroll")->isVisible());
-  QVERIFY(!m_editor->property("toolZoneFolded").toBool());
+  // The zone is anchored at the dock's top whenever it is drawn: the old fold
+  // could stretch it and leave the sidebar's title floating mid-column.
+  const qreal zoneTop =
+    expectItem("editorToolZone")->mapToScene(QPointF(0, 0)).y();
+  const qreal dockTop =
+    expectItem("editorInspector")->mapToScene(QPointF(0, 0)).y();
+  QVERIFY2(zoneTop - dockTop <= 2.0,
+           qPrintable(QStringLiteral("the tool zone is %1 px below the dock's top")
+                        .arg(zoneTop - dockTop)));
 
   // A narrow dock folds the labels to their drawings; the icons stay. The
   // pinned action row is the other thing width takes away: Apply, Reset and
@@ -2904,63 +2932,92 @@ void TestEditor::theInspectorSplitsToolsFromThreeReferenceTabs()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// The tool zone is as tall as what it draws: heading, the armed tool's
-/// options, then its action row. A tall window must not stretch the zone and
-/// leave a band of nothing between the last field and Apply; the reference
-/// tabs take the leftover height instead.
-/// The dock's other half: the reference pages can be put away, leaving the tab
-/// strip alone at the bottom and giving the armed tool's options the height.
-/// Two folds, one dock — "less of this, more of that" — and neither is a
-/// command, because both are presentation state.
-void TestEditor::theReferenceTabsFoldToTheirStrip()
+/// The sidebar's right-edge checklist is how a panel goes away now. Each row
+/// hides or shows one panel, a hidden page keeps its stack slot, hiding the
+/// open page opens the first one left, and the button never leaves the screen.
+void TestEditor::thePanelChecklistHidesAndRestoresTheSidebar()
 {
   setState(documentState());
   selectTool("crop");
   QQuickItem* zone = expectItem("editorToolZone");
   QQuickItem* pages = expectItem("editorReferencePages");
   QQuickItem* strip = expectItem("editorRightTabs");
-  QQuickItem* toggle = expectItem("stripFoldToggle");
-  QQuickItem* inspector = expectItem("editorInspector");
-  QVERIFY(toggle->isVisible());
+  QQuickItem* divider = expectItem("editorToolZoneDivider");
+  const qreal dockTop =
+    expectItem("editorInspector")->mapToScene(QPointF(0, 0)).y();
+  QVERIFY(expectItem("editorPanelMenu")->isVisible());
   QVERIFY(pages->isVisible());
   QVERIFY(strip->isVisible());
-  const qreal openZone = zone->height();
-  const qreal openOptions = expectItem("toolOptionsHost")->height();
-  QVERIFY(openZone > 200.0);
+  QVERIFY(divider->isVisible());
 
-  clickItem(toggle);
-  QTRY_VERIFY(!pages->isVisible());
-  QVERIFY(m_editor->property("referenceFolded").toBool());
-  // The options took the room: the zone and the options column both grew.
-  QTRY_VERIFY2(zone->height() > openZone + 40.0,
-               qPrintable(QStringLiteral("the folded tool zone is %1 px, was %2")
-                            .arg(zone->height()).arg(openZone)));
-  QVERIFY2(expectItem("toolOptionsHost")->height() > openOptions + 40.0,
-           "the options did not take the height the pages gave up");
-  // The strip is what is left, and it sits at the bottom of the dock.
-  QVERIFY(strip->isVisible());
-  const qreal inspectorBottom = inspector->mapToScene(QPointF(0, inspector->height())).y();
-  const qreal stripBottom = strip->mapToScene(QPointF(0, strip->height())).y();
-  QVERIFY2(inspectorBottom - stripBottom >= 0.0 && inspectorBottom - stripBottom <= 24.0,
-           qPrintable(QStringLiteral("the folded strip is %1 px from the dock's bottom")
-                        .arg(inspectorBottom - stripBottom)));
-  const qreal zoneBottom = zone->mapToScene(QPointF(0, zone->height())).y();
-  QVERIFY2(zoneBottom <= strip->mapToScene(QPointF(0, 0)).y() + 0.5,
-           "the tool zone overlaps the strip");
-  // No divider to drag when there is only one half.
-  QVERIFY(!expectItem("editorToolZoneDivider")->isVisible());
+  QObject* menu = findObject(QStringLiteral("editorPanelMenuPopup"));
+  QVERIFY2(menu != nullptr, "the sidebar has no panel checklist");
+  QCOMPARE(menu->property("count").toInt(), 4);
 
-  // A tab still switches while folded — the strip is the strip either way,
-  // and its pages are only hidden by the fold.
+  // Hiding Tool options leaves the whole dock to the pages: the heading goes
+  // with the zone (the checklist in the gutter is still the way back), and the
+  // divider has no second half to divide.
+  QVERIFY(clickPanelRow(menu, QStringLiteral("Tool options")));
+  QTRY_VERIFY(!zone->isVisible());
+  QVERIFY(pages->isVisible());
+  QTRY_VERIFY(!divider->isVisible());
+  QVERIFY(expectItem("editorPanelMenu")->isVisible());
+  QCOMPARE(m_commands->count(), 0);
+
+  // Showing it again restores the heading at the dock's top, not floating in
+  // the middle of the column.
+  QVERIFY(clickPanelRow(menu, QStringLiteral("Tool options")));
+  QTRY_VERIFY(zone->isVisible());
+  QTRY_VERIFY(divider->isVisible());
+  QVERIFY2(zone->mapToScene(QPointF(0, 0)).y() - dockTop <= 2.0,
+           "the restored tool zone did not sit at the dock's top");
+
+  // Hiding the open page opens the first one that is left; the page keeps its
+  // stack slot, so the other pages do not change index.
   selectRightTab("history");
-  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("history"));
+  QVERIFY(clickPanelRow(menu, QStringLiteral("History")));
+  QTRY_COMPARE(m_editor->property("rightTab").toString(), QStringLiteral("info"));
+  QVERIFY(expectItem("infoPanel")->isVisible());
+  QVERIFY(!expectItem("historyPanel")->isVisible());
+  // The hidden tab draws no button either; its page keeps its stack slot.
+  QVERIFY(expectItem("editorTab_info")->isVisible());
+  QVERIFY(!expectItem("editorTab_history")->isVisible());
+  QVERIFY(strip->isVisible());
+  QCOMPARE(m_editor->property("shownReferenceCount").toInt(), 2);
 
-  // And the chevron is the way back: the same page is waiting.
-  clickItem(toggle);
+  // A hidden tab keeps its stack slot but must not be drawn when it is named:
+  // the index falls back to the first tab the checklist left visible. Without
+  // that fallback the tab strip says Info while History's page is on screen.
+  m_editor->setProperty("rightTab", "history");
+  QTRY_COMPARE(m_editor->property("rightTabIndex").toInt(), 0);
+  QVERIFY(expectItem("infoPanel")->isVisible());
+  QVERIFY(!expectItem("historyPanel")->isVisible());
+
+  // Hiding the rest leaves the dock as the checklist: the pages and the strip
+  // are gone, the gutter is not.
+  QVERIFY(clickPanelRow(menu, QStringLiteral("Info")));
+  QVERIFY(clickPanelRow(menu, QStringLiteral("Original")));
+  QTRY_COMPARE(m_editor->property("shownReferenceCount").toInt(), 0);
+  QTRY_VERIFY(!pages->isVisible());
+  QTRY_VERIFY(!strip->isVisible());
+  QVERIFY(expectItem("editorPanelMenu")->isVisible());
+
+  // With the pages gone the tool zone is the only thing left in the column,
+  // so it must start at the dock's top: a layout with nothing else to fill
+  // would otherwise centre the heading in the sidebar. Put Crop down first,
+  // because the pointer's zone is the short one — a tall tool form can fill
+  // the column by itself and hide the bug.
+  selectTool("pointer");
+  QTRY_VERIFY(expectItem("editorToolZone")->height() <= 70.0);
+  QVERIFY2(zone->mapToScene(QPointF(0, 0)).y() - dockTop <= 2.0,
+           "the only remaining panel was centred in the dock");
+
+  // Every item is still in the menu, so one click brings a page back and opens
+  // it; the pages were never renumbered underneath.
+  QVERIFY(clickPanelRow(menu, QStringLiteral("Original")));
   QTRY_VERIFY(pages->isVisible());
-  QTRY_VERIFY(expectItem("historyPanel")->isVisible());
-  QVERIFY(!m_editor->property("referenceFolded").toBool());
-  QTRY_VERIFY(expectItem("editorToolZoneDivider")->isVisible());
+  QVERIFY(expectItem("originalPanel")->isVisible());
+  QCOMPARE(m_editor->property("rightTab").toString(), QStringLiteral("original"));
   QCOMPARE(m_commands->count(), 0);
 }
 
@@ -3011,6 +3068,10 @@ void TestEditor::theDividerSetsTheToolZoneHeight()
   QCOMPARE(m_commands->count(), 0);
 }
 
+/// The tool zone is as tall as what it draws: heading, the armed tool's
+/// options, then its action row. A tall window must not stretch the zone and
+/// leave a band of nothing between the last field and Apply; the reference
+/// tabs take the leftover height instead.
 void TestEditor::theToolOptionsHugTheActionRow()
 {
   setState(documentState());
@@ -3060,7 +3121,9 @@ void TestEditor::thePointerSaysItHasNoOptions()
   QVERIFY(!note->property("text").toString().isEmpty());
   QVERIFY(!expectItem("toolOptionsScroll")->isVisible());
   QVERIFY(!expectItem("applyCrop")->isVisible());
-  QVERIFY(!expectItem("toolZoneToggle")->isVisible());
+  // The checklist is present even for the tool with no options, so a panel is
+  // never hidden with no way back.
+  QVERIFY(expectItem("editorPanelMenu")->isVisible());
   // The tabs are the whole dock in this state.
   QVERIFY(expectItem("infoPanel")->isVisible());
   QCOMPARE(m_commands->count(), 0);

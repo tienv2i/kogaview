@@ -23,6 +23,9 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/InfoPanel.qml \
           ../crates/desktop/qml/PreviewPanel.qml \
           ../crates/desktop/qml/HistoryPanel.qml \
+          ../crates/desktop/qml/BatchPanel.qml \
+          ../crates/desktop/qml/PanelMenu.qml \
+          ../crates/desktop/qml/RightDock.qml \
           ../crates/desktop/qml/WorkspaceSwitcher.qml \
           ../crates/desktop/qml/UiLines.qml \
           ../crates/desktop/qml/ToolbarMetrics.qml \

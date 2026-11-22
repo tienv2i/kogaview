@@ -110,6 +110,16 @@ Item {
     readonly property real dockWidth:
         Math.max(200, Math.min(640, rightPanelWidth))
 
+    /// The Viewer's one page, and the checklist on the sidebar's right edge
+    /// that hides and restores it. Presentation state: no command, no file.
+    property bool infoPanelVisible: true
+    readonly property var rightPanelMenuEntries: [
+        { key: "info", label: qsTr("Info"), checked: view.infoPanelVisible }
+    ]
+    function setRightPanelVisible(key, visible) {
+        if (key === "info") view.infoPanelVisible = visible
+    }
+
     property string currentPath: view.state.viewerPath || ""
     property var images: view.viewerImages || []
     property int imageIndex: (view.state.viewerIndex === undefined
@@ -759,7 +769,8 @@ Item {
 
         // One page, no strip: a viewer has exactly one thing to say about
         // the file on screen. The same `InfoPanel` as the Browser's, so the
-        // words for a file's details are written once.
+        // words for a file's details are written once. The checklist on the
+        // right edge can hide the page and bring it back.
         RightDock {
             objectName: "viewerRightPanel"
             visible: !!view.state.rightPanelViewer
@@ -767,10 +778,17 @@ Item {
             Layout.fillHeight: true
             theme: view.theme
             backgroundColor: view.theme.sidebar
-            tabs: [{ key: "info", label: qsTr("Info"), icon: "" }]
+            tabs: [{ key: "info", label: qsTr("Info"), icon: "icons/info.svg",
+                     shown: view.infoPanelVisible }]
             currentKey: "info"
-            stripObjectName: ""
+            panels: view.rightPanelMenuEntries
+            stripObjectName: "viewerRightTabs"
+            tabKeyPrefix: "viewerTab"
             pagesObjectName: "viewerRightPages"
+            menuObjectName: "viewerPanelMenuPopup"
+            onPanelToggled: function(key, checked) {
+                view.setRightPanelVisible(key, checked)
+            }
 
             ScrollView {
                 id: viewerInfoPage

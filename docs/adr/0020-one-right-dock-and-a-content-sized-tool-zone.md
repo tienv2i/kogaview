@@ -277,3 +277,69 @@ file manager is running, the bus activates it. A missing file or folder is
 answered with `That file is no longer there.` before any request; a sandbox
 still skips the direct bus call; `FileManager1` → portal → `QDesktopServices` is
 the unchanged order, and each branch logs which one answered.
+
+## Revision — a checklist per panel, not a fold for the column (2026-11-22)
+
+The fold answered "give the options the whole dock" but not "I never want the
+history here": it was one switch for a whole half, the chevron sat in the tab
+strip it hid, and a user who wanted a different subset had to fold everything
+and reopen one tab. Both folds — the reference strip's chevron and the tool
+zone's — are gone, and the dock has one control instead.
+
+- **`PanelMenu.qml`** is a 26 px gutter on the dock's right edge: a 30 px
+  vertically centred button (`⋮` drawing) that opens a checkable menu built from
+  `[{ key, label, checked }]`. Each row emits `toggled(key, checked)`; the view
+  decides what a key means. It draws no panel name of its own and is `visible`
+  only when there is at least one row, so a workspace with no panels has no
+  button.
+- **The popup is the button's child.** A menu with no parent is positioned by
+  the platform's own placement and opened at the window's left edge on this
+  desktop; `x: button.width - width`, `y: button.height + 2` puts it under the
+  gutter and right-aligned with it, which is where the screenshots show it.
+- **Hiding a panel is view state, not Core's.** `toolOptionsVisible`,
+  `infoVisible`, `historyVisible`, `originalVisible` on the Editor;
+  `previewPanelVisible`/`batchPanelVisible` on the Browser; `infoPanelVisible`
+  on the Viewer. Whole-dock visibility stays Core's `toggle_right_panel`, which
+  is a workspace answer and lands in `config.json`; "which pages inside it" is a
+  layout choice made while looking at the window, like the tab or the split.
+- **A hidden page keeps its stack slot.** `PanelTabs` draws no button for a tab
+  whose `shown` is false, but `RightDock.currentIndex` and the Editor's
+  `rightTabIndex` walk `tabs`, not the drawn buttons, so the stack never
+  renumbers. Naming a hidden tab falls back to the first tab still shown; the
+  hidden page is never drawn. Hiding the open page moves to the first survivor
+  in the same turn.
+- **Hiding the last page leaves the checklist.** The dock draws
+  `No panels shown` pinned to the top of the empty body, and the gutter is still
+  there, so an empty dock is a state with an exit rather than a failed load.
+  The Browser's and the Viewer's sentence comes from `RightDock`; the Editor
+  keeps its own label because its empty column also owns the tool zone.
+- **The Browser's sidebar is two peer pages.** `Preview` holds the thumbnail
+  over `InfoPanel` (the two are read together), and `Batch action` is the
+  selection as its own question: a real heading, the count of selected
+  **images** (`selectedImages` skips a folder picked beside them), three task
+  buttons that are visibly disabled, and a note that Core owns no batch command
+  yet. The page is a surface this pass, not a batch engine; the strip appears
+  exactly because there are two pages to switch between.
+- **The Editor's tool zone is content-sized and top-aligned.** `fillHeight` is
+  false and `alignment: Qt.AlignTop`, so hiding every reference page leaves the
+  heading at the dock's top instead of a layout centring it in the spare
+  height; the action row stays directly under the options it acts on, and the
+  vertical divider is drawn only while both halves have something to show.
+  `anchors.rightMargin: 26` reserves the gutter for the panel menu.
+- **The Editor's own checklist is inside the reference half**, not the dock,
+  because its dock is two zones; `editorPanelMenu` lists all four entries and
+  hiding the tool options is the same key (`tools`) as any page.
+
+Superseded by this revision: ADR 0019's `folded`/`foldRequested` chevron and
+ADR 0020's `RightDock.folded`/`stripHeight`/`foldTooltip`. `PanelTabs` keeps its
+self-drawn strip, its `compact` labels and its measured action row; it lost
+the chevron and gained `keyPrefix` so three strips can be addressed in one
+window (`editorTab`, `browserTab`, `viewerTab`).
+
+`tst_editor`'s `thePanelChecklistHidesAndRestoresTheSidebar` walks the real
+menu: it hides one page, checks the strip and the stack followed, hides the
+rest, checks the empty state at the dock's top and the checklist still there,
+and checks that naming a hidden tab falls back to the first shown page instead
+of drawing it. `tst_browser`'s `theSidebarHasAPreviewPageAndABatchPage` does the
+same for the two pages, counts only image selections, and asserts a one-page
+dock draws no strip. `tst_viewer` hides and restores its one page.

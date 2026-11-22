@@ -142,13 +142,13 @@ Item {
     /// its splitter allows.
     readonly property real dockWidth:
         Math.max(220, Math.min(400, rightPanelWidth))
-    /// The tool zone folded to its heading by the user. Arm a tool and it opens
-    /// again, so a folded dock never hides a tool the user just chose.
-    property bool toolZoneFolded: false
-    /// The reference pages put away, leaving the tab strip alone at the bottom
-    /// of the dock. The armed tool's options take the height that frees, which
-    /// is the other half of the same question the fold above asks.
-    property bool referenceFolded: false
+    /// Which panels the sidebar's checklist is showing. They are presentation
+    /// state, like the open tab: hiding History changes no pixel and sends no
+    /// command, and the checklist is the only way back.
+    property bool toolOptionsVisible: true
+    property bool infoVisible: true
+    property bool historyVisible: true
+    property bool originalVisible: true
     /// The height the user dragged the tool zone to, or `0` while it hugs its
     /// own content. A drag upwards reaches 0, which is how the drag itself can
     /// put the zone back to hugging; the divider's double-click does the same.
@@ -156,20 +156,68 @@ Item {
     /// Which reference tab is open: `info`, `history` or `original`. A pointer
     /// has no tool options, so this is the whole dock in that state.
     property string rightTab: "info"
-    /// The tabs and the words they draw. The labels are translated here, in
-    /// `EditorView`'s context, so `PanelTabs.qml` keeps no string of its own.
+    /// The tabs and the words they draw. `shown` is the panel checklist; a
+    /// hidden tab keeps its page in the stack but draws no button. The labels
+    /// are translated here, in `EditorView`'s context, so `PanelTabs.qml`
+    /// keeps no string of its own.
     readonly property var rightTabEntries: [
-        { key: "info", label: qsTr("Info"), icon: "icons/info.svg" },
-        { key: "history", label: qsTr("History"), icon: "icons/history.svg" },
-        { key: "original", label: qsTr("Original"), icon: "icons/original.svg" }
+        { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
+          shown: view.infoVisible },
+        { key: "history", label: qsTr("History"), icon: "icons/history.svg",
+          shown: view.historyVisible },
+        { key: "original", label: qsTr("Original"), icon: "icons/original.svg",
+          shown: view.originalVisible }
     ]
-    /// The `StackLayout` index for `rightTab`. An unknown key falls back to the
-    /// first tab instead of leaving the pages without a current index.
+    /// The checklist on the sidebar's right edge. It covers the whole dock,
+    /// including the tool options above the tabs, so one button arranges
+    /// everything the sidebar can show.
+    readonly property var panelMenuEntries: [
+        { key: "tools", label: qsTr("Tool options"), checked: view.toolOptionsVisible },
+        { key: "info", label: qsTr("Info"), checked: view.infoVisible },
+        { key: "history", label: qsTr("History"), checked: view.historyVisible },
+        { key: "original", label: qsTr("Original"), checked: view.originalVisible }
+    ]
+    /// How many reference tabs the checklist is showing.
+    readonly property int shownReferenceCount:
+        (view.infoVisible ? 1 : 0) + (view.historyVisible ? 1 : 0)
+        + (view.originalVisible ? 1 : 0)
+    /// The `StackLayout` index for `rightTab`. An unknown or hidden key falls
+    /// back to the first visible tab instead of leaving the pages without a
+    /// current index.
     readonly property int rightTabIndex: {
         for (var index = 0; index < rightTabEntries.length; ++index) {
-            if (rightTabEntries[index].key === rightTab) return index
+            if (rightTabEntries[index].key === rightTab
+                && rightTabEntries[index].shown !== false) return index
         }
-        return 0
+        for (var fallback = 0; fallback < rightTabEntries.length; ++fallback) {
+            if (rightTabEntries[fallback].shown !== false) return fallback
+        }
+        return -1
+    }
+    /// The first reference tab the checklist has left visible.
+    function firstShownTab() {
+        if (view.infoVisible) return "info"
+        if (view.historyVisible) return "history"
+        if (view.originalVisible) return "original"
+        return ""
+    }
+    /// One checklist item was toggled. Hiding the open page opens the first
+    /// one that is left; hiding the last page is allowed, because the menu
+    /// itself stays on screen to bring one back.
+    function setPanelVisible(key, visible) {
+        if (key === "tools") {
+            view.toolOptionsVisible = visible
+            return
+        }
+        if (key === "info") view.infoVisible = visible
+        else if (key === "history") view.historyVisible = visible
+        else if (key === "original") view.originalVisible = visible
+        else return
+        if (visible) {
+            view.rightTab = key
+        } else if (view.rightTab === key) {
+            view.rightTab = view.firstShownTab()
+        }
     }
     /// Which tool is armed on the canvas: `pointer` (no tool), `crop` or
     /// `transform`. The pointer is the default and the no-op tool, so opening
@@ -2086,9 +2134,6 @@ Item {
     // tool does not guess which part of the picture is wanted.
     onToolChanged: {
         draftDebounce.restart()
-        // A tool the user just chose opens its zone: folding it is a decision
-        // about this visit, not a setting that would hide the next tool.
-        if (view.tool !== "pointer") view.toolZoneFolded = false
         if (view.tool === "transform") view.resetTransformCorners()
         if (view.tool === "crop") view.enterCropTool()
     }
@@ -3272,7 +3317,7 @@ Item {
         // is left. The options scroll only when the dock is too short to show
         // them whole, which is what keeps the 180 px the tabs need.
         // Everything here is presentation state: no command leaves the view and
-        // the open tab and the fold are remembered for this run only.
+        // the open tab and the panel checklist are remembered for this run only.
         Rectangle {
             id: inspector
             objectName: "editorInspector"
@@ -3281,24 +3326,25 @@ Item {
             color: view.theme.surface
             visible: !view.panelsHidden && !!view.state.rightPanelEditor
 
-            // The heading row is the zone's minimum: it is what stays when the
-            // options are folded.
+            /// The heading row is the tool zone's minimum.
             readonly property int headerHeight: 34
             /// Height the pinned action row adds, so the options can be capped
-            /// before the tabs lose their floor. A tool with no verbs adds
-            /// nothing.
+            /// before the tabs lose their floor. A hidden tool zone or a tool
+            /// with no verbs adds nothing.
             readonly property int actionRowHeight:
-                (view.tool === "crop" || view.tool === "transform") && !view.toolZoneFolded
+                view.toolOptionsVisible
+                && (view.tool === "crop" || view.tool === "transform")
                 ? cropActions.implicitHeight + 10 : 0
             /// How tall the options may be: their own content, unless the dock
             /// cannot also keep `header + options + actions + 180 px of tabs`.
-            /// Only then do they scroll.
+            /// Only then do they scroll. A sidebar with no reference page has
+            /// no tabs to reserve that 180 px for.
             readonly property real optionsCap: Math.max(
                 40,
-                height - (view.referenceFolded ? 0 : 180)
+                height - (view.shownReferenceCount > 0 ? 180 : 0)
                        - headerHeight - actionRowHeight - 10)
             readonly property bool toolOptionsShown:
-                view.tool !== "pointer" && !view.toolZoneFolded
+                view.tool !== "pointer" && view.toolOptionsVisible
             /// The tool's name for the heading. The sentence is "… options", so
             /// the heading says whose column this is whether or not a tool is
             /// armed.
@@ -3318,6 +3364,8 @@ Item {
 
             ColumnLayout {
                 anchors.fill: parent
+                // Room for the panel checklist on the right edge.
+                anchors.rightMargin: 26
                 spacing: 0
 
                 // ------------------------------------------ tool zone (top)
@@ -3325,19 +3373,27 @@ Item {
                     id: toolZone
                     objectName: "editorToolZone"
                     Layout.fillWidth: true
-                    // The zone is as tall as what it draws, unless the user
-                    // dragged the divider or folded the pages away. `implicit`
-                    // is the content's own height; a dragged height is what the
-                    // divider writes; a folded reference gives this zone the
-                    // rest of the dock, which is what "the options take the
-                    // freed height" means.
+                    // The checklist can hide the whole zone, heading included:
+                    // the reference pages then take the dock, and the gutter's
+                    // button is still the way back. Otherwise the zone is as
+                    // tall as what it draws, unless the user dragged the
+                    // divider, which writes `toolZoneHeight`.
+                    visible: view.toolOptionsVisible
                     Layout.preferredHeight: view.toolZoneHeight > 0
                                             ? view.toolZoneHeight : implicitHeight
-                    Layout.fillHeight: view.referenceFolded
+                    // A nested `ColumnLayout` is offered the leftover height by
+                    // default; say no, because the reference tab strip is the
+                    // half that grows.
+                    Layout.fillHeight: false
+                    // Keep the heading at the dock's top when there is no
+                    // reference page left to take the height: without the
+                    // alignment a layout with nothing to fill centres the zone
+                    // and the heading floats into the middle of the sidebar.
+                    Layout.alignment: Qt.AlignTop
                     Layout.maximumHeight: view.toolZoneHeight > 0
                                           ? Math.max(40, Math.min(view.toolZoneHeight,
                                                                   inspector.height - 120))
-                                          : Number.MAX_VALUE
+                                          : implicitHeight
                     spacing: 0
 
                     RowLayout {
@@ -3359,23 +3415,6 @@ Item {
                             color: view.theme.text
                             font.bold: true
                             elide: Text.ElideRight
-                        }
-
-                        // The fold is the dock's own, not Core's: it writes
-                        // `toolZoneFolded` and sends nothing. Breeze and the QML
-                        // suite both read the drawing through `ToolRailButton`,
-                        // the same component the left rail uses.
-                        ToolRailButton {
-                            objectName: "toolZoneToggle"
-                            visible: view.tool !== "pointer"
-                            iconSource: "icons/chevron.svg"
-                            tooltip: view.toolZoneFolded
-                                     ? qsTr("Expand tool options")
-                                     : qsTr("Collapse tool options")
-                            // The chevron points down when the options are open
-                            // and up when they are folded away.
-                            rotation: view.toolZoneFolded ? 180 : 0
-                            onClicked: view.toolZoneFolded = !view.toolZoneFolded
                         }
                     }
 
@@ -3425,11 +3464,10 @@ Item {
                             return Math.min(toolOptionsColumn.implicitHeight + 10,
                                             inspector.optionsCap)
                         }
-                        // A dragged or folded zone must be able to grow past
-                        // the content it happened to have at that moment.
-                        Layout.maximumHeight: view.toolZoneHeight > 0 || view.referenceFolded
+                        // A dragged zone must be able to grow past the content
+                        // it happened to have at that moment.
+                        Layout.maximumHeight: view.toolZoneHeight > 0
                                                ? Number.MAX_VALUE : Layout.preferredHeight
-                        Layout.fillHeight: view.referenceFolded
                         clip: true
 
                         ScrollView {
@@ -4010,7 +4048,7 @@ Item {
                         id: cropActions
                         objectName: "cropActions"
                         visible: (view.tool === "crop" || view.tool === "transform")
-                                 && !view.toolZoneFolded
+                                 && view.toolOptionsVisible
                         Layout.fillWidth: true
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
@@ -4098,10 +4136,10 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
                     orientation: Qt.Vertical
-                    // Nothing to divide against when the options are folded or
-                    // there are no options at all.
-                    visible: view.tool !== "pointer" && !view.toolZoneFolded
-                             && !view.referenceFolded
+                    // Nothing to divide against when the tool zone is hidden,
+                    // no tool is armed, or the checklist hid every page.
+                    visible: view.toolOptionsVisible && view.tool !== "pointer"
+                             && view.shownReferenceCount > 0
                     value: view.toolZoneHeight > 0 ? view.toolZoneHeight
                                                    : toolZone.implicitHeight
                     defaultValue: 0
@@ -4116,22 +4154,14 @@ Item {
                 // The shared dock: a strip and one page at a time. The tool
                 // zone above it hugs its own content, so these tabs start
                 // right under the action row (or under the heading, for the
-                // pointer) and take whatever height is left.
+                // pointer) and take whatever height is left. A hidden page
+                // keeps its slot inside the dock, so the checklist never
+                // renumbers the other pages.
                 RightDock {
                     id: referenceDock
                     Layout.fillWidth: true
-                    // Folded, the pages are away and only the strip is left:
-                    // it drops to the bottom of the dock, and the tool zone
-                    // above it fills (hence `fillHeight` follows the same
-                    // flag).
-                    Layout.fillHeight: !view.referenceFolded
-                    Layout.preferredHeight: view.referenceFolded
-                                            ? referenceDock.stripHeight : -1
-                    folded: view.referenceFolded
-                    foldTooltip: view.referenceFolded
-                                 ? qsTr("Expand the reference panels")
-                                 : qsTr("Collapse the reference panels")
-                    onFoldRequested: view.referenceFolded = !view.referenceFolded
+                    Layout.fillHeight: true
+                    visible: view.shownReferenceCount > 0
                     theme: view.theme
                     backgroundColor: "transparent"
                     borderColor: "transparent"
@@ -4210,6 +4240,40 @@ Item {
                         }
                     }
                 }
+            }
+
+            // Every panel unchecked: the checklist on the right edge is the
+            // way back, and this says why the body is blank rather than leaving
+            // an empty column that reads as a failed load.
+            Label {
+                objectName: "editorNoPanels"
+                Layout.fillWidth: true
+                Layout.leftMargin: 12
+                Layout.rightMargin: 26
+                Layout.topMargin: 12
+                visible: !view.toolOptionsVisible
+                         && view.shownReferenceCount === 0
+                text: qsTr("No panels shown")
+                color: view.theme.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
+            // The checklist covers the whole sidebar, tool options included,
+            // which is why it is anchored here rather than inside the reference
+            // dock. Hiding every page still leaves this button to bring one
+            // back.
+            PanelMenu {
+                objectName: "editorPanelMenu"
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                width: 26
+                theme: view.theme
+                panels: view.panelMenuEntries
+                buttonObjectName: "editorPanelMenuButton"
+                menuObjectName: "editorPanelMenuPopup"
+                onToggled: function(key, checked) { view.setPanelVisible(key, checked) }
             }
         }
     }

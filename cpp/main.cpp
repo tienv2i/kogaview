@@ -426,15 +426,22 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     button, write the dialog's path/quality/size, and optionally press
   //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
   //   KOGAVIEW_DEV_UI_REQUEST=editor-dock       -> choose a reference tab
-  //     (`_ARG` = `info`, `history`, `original`), fold the tool options
-  //     (`_ARG2=fold`), set the dock width (`_ARG3`), arm a tool (`_ARG4` =
+  //     (`_ARG` = `info`, `history`, `original`), hide panels through the
+  //     sidebar checklist (`_ARG2` = `tools,info,history,original`), show them
+  //     again with `_ARG5`, set the dock width (`_ARG3`), arm a tool (`_ARG4` =
   //     `crop`, `brush`, `eraser`, `transform`) by clicking its rail button,
-  //     fold the reference pages with `_ARG5=fold-reference`, or drag the
-  //     divider to a height with `_ARG6` — the tab, both folds, the width and
-  //     the split are view state and send no command
-  //   The five editor requests exist because this session's compositor does not
-  //   deliver synthetic pointer moves to the window; each one calls the handler
-  //   the real control calls, and none of them invents a command of its own.
+  //     or drag the divider to a height with `_ARG6` — the tab, the checklist,
+  //     the width and the split are view state and send no command. `_ARG7=menu`
+  //     clicks the checklist button so its rows can be photographed.
+  //   KOGAVIEW_DEV_UI_REQUEST=sidebar-dock     -> the Browser's or the Viewer's
+  //     sidebar without a pointer: `_ARG` names a page (`preview`, `batch`,
+  //     `info`), `_ARG2`/`_ARG5` are comma-separated lists of panels to
+  //     hide/show through the checklist, and `_ARG4=menu` clicks the checklist
+  //     button so its rows can be photographed. Like the other requests it
+  //     calls the handler the real control calls and sends no command.
+  //   The editor and sidebar requests exist because this session's compositor
+  //   does not deliver synthetic pointer moves to the window; each one calls
+  //   the handler the real control calls, and none invents a command of its own.
   //   `KOGAVIEW_DEV_UI_REQUEST_REPEAT_MS` fires it repeatedly, which is how the
   //   "a dismissed dialog does not block the next one" path is observed.
   const QString uiRequest = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST");
@@ -461,7 +468,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
             && qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_MENU")
                  == QLatin1String("viewerMenu"));
       if (browser == nullptr && !uiRequest.startsWith(QLatin1String("editor-")) &&
-          uiRequest != QLatin1String("leave-guard") && !menuRequest) {
+          uiRequest != QLatin1String("leave-guard")
+          && uiRequest != QLatin1String("sidebar-dock") && !menuRequest) {
         qWarning() << "KogaView dev ui request: browser view not found";
         return;
       }
@@ -1086,13 +1094,14 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         emitted = mapped > 0;
       } else if (uiRequest == QLatin1String("editor-dock")) {
         // The right dock without a pointer: `_ARG` is the reference tab
-        // (`info`, `history` or `original`), `_ARG2` the literal `fold` to fold
-        // the tool options away, `_ARG3` the dock's width in pixels, `_ARG4` a
-        // tool to arm (`crop`, `brush`, `eraser`, `transform`) by clicking its
-        // real rail button, `_ARG5=fold-reference` to put the pages away with
-        // the strip's chevron, and `_ARG6` a tool-zone height in pixels sent
-        // through the divider's own `moved`. It writes the same state the tabs,
-        // the two folds and the splitters write, and sends no command.
+        // (`info`, `history` or `original`), `_ARG2` a comma-separated list of
+        // panels to hide through the sidebar's checklist (`tools`, `info`,
+        // `history`, `original`), `_ARG5` the same list to show, `_ARG3` the
+        // dock's width in pixels, `_ARG4` a tool to arm (`crop`, `brush`,
+        // `eraser`, `transform`) by clicking its real rail button, and `_ARG6`
+        // a tool-zone height in pixels sent through the divider's own `moved`.
+        // It writes the same state the tabs, the checklist and the splitters
+        // write, and sends no command.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
@@ -1114,24 +1123,21 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         const QString tab = requestArg.isEmpty() ? QStringLiteral("info") : requestArg;
         editor->setProperty("rightTab", tab);
-        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2") == QLatin1String("fold")) {
-          editor->setProperty("toolZoneFolded", true);
-        }
+        // The checklist handler is `setPanelVisible`, the same function the
+        // menu's `toggled` signal calls.
+        auto setPanels = [editor](const QString& list, bool visible) {
+          const QStringList keys = list.split(QLatin1Char(','), Qt::SkipEmptyParts);
+          for (const QString& key : keys) {
+            QMetaObject::invokeMethod(editor, "setPanelVisible",
+                                      Q_ARG(QVariant, key.trimmed()),
+                                      Q_ARG(QVariant, visible));
+          }
+        };
+        setPanels(qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2"), false);
+        setPanels(qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5"), true);
         const QString width = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
         if (!width.isEmpty()) {
           editor->setProperty("rightPanelWidth", width.toInt());
-        }
-        const QString foldReference =
-          qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5");
-        if (foldReference == QLatin1String("fold-reference")) {
-          // The strip's chevron handler is the same write; `foldRequested` is
-          // what a press sends, so send that through the real control.
-          QObject* toggle = editor->findChild<QObject*>(QStringLiteral("stripFoldToggle"));
-          if (toggle == nullptr) {
-            qWarning() << "KogaView dev ui request: reference fold button missing";
-            return;
-          }
-          QMetaObject::invokeMethod(toggle, "click");
         }
         const QString dividerArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
         if (!dividerArg.isEmpty()) {
@@ -1165,13 +1171,86 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           }
         }
         qInfo().noquote() << "KogaView dev ui request editor-dock" << "tab"
-                          << editor->property("rightTab") << "folded"
-                          << editor->property("toolZoneFolded") << "reference"
-                          << editor->property("referenceFolded") << "split"
+                          << editor->property("rightTab") << "panels"
+                          << editor->property("toolOptionsVisible")
+                          << editor->property("infoVisible")
+                          << editor->property("historyVisible")
+                          << editor->property("originalVisible") << "split"
                           << editor->property("toolZoneHeight") << "width"
                           << editor->property("rightPanelWidth") << "tool"
                           << editor->property("tool") << "index"
                           << editor->property("rightTabIndex");
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG7") == QLatin1String("menu")) {
+          QObject* button =
+            editor->findChild<QObject*>(QStringLiteral("editorPanelMenuButton"));
+          if (button != nullptr) {
+            QMetaObject::invokeMethod(button, "click");
+          }
+          QObject* menu =
+            editor->findChild<QObject*>(QStringLiteral("editorPanelMenuPopup"));
+          qInfo() << "KogaView dev ui request editor-dock menu"
+                  << (menu != nullptr && menu->property("visible").toBool())
+                  << (menu != nullptr ? menu->property("count").toInt() : 0);
+        }
+        emitted = true;
+      } else if (uiRequest == QLatin1String("sidebar-dock")) {
+        // The Browser's and the Viewer's sidebar without a pointer. Their docks
+        // are the same `RightDock`, but the two views named their pages and
+        // their setters differently before the tabs became one component, so
+        // this request maps them here instead of renaming public properties.
+        QObject* view = rootObject->findChild<QObject*>(QStringLiteral("browser"));
+        QString setter = QStringLiteral("setRightPageVisible");
+        QString keyProperty = QStringLiteral("rightPage");
+        QString menuName = QStringLiteral("browserPanelMenuPopup");
+        if (view == nullptr) {
+          view = rootObject->findChild<QObject*>(QStringLiteral("viewer"));
+          setter = QStringLiteral("setRightPanelVisible");
+          keyProperty.clear(); // the Viewer has one page and no tab strip
+          menuName = QStringLiteral("viewerPanelMenuPopup");
+        }
+        if (view == nullptr) {
+          qWarning() << "KogaView dev ui request: no browser or viewer view";
+          return;
+        }
+        auto setSidebarPanels = [view, setter](const QString& list, bool visible) {
+          const QStringList keys = list.split(QLatin1Char(','), Qt::SkipEmptyParts);
+          for (const QString& key : keys) {
+            QMetaObject::invokeMethod(view, setter.toLatin1().constData(),
+                                      Q_ARG(QVariant, key.trimmed()),
+                                      Q_ARG(QVariant, visible));
+          }
+        };
+        setSidebarPanels(qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2"), false);
+        setSidebarPanels(qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5"), true);
+        if (!keyProperty.isEmpty() && !requestArg.isEmpty()) {
+          view->setProperty(keyProperty.toLatin1().constData(), requestArg);
+        }
+        const bool openList = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4")
+                              == QLatin1String("menu");
+        if (openList) {
+          QObject* button = view->findChild<QObject*>(QStringLiteral("panelMenuButton"));
+          if (button != nullptr) {
+            QMetaObject::invokeMethod(button, "click");
+          }
+          QObject* menu = rootObject->findChild<QObject*>(menuName);
+          qInfo() << "KogaView dev ui request sidebar-dock menu" << menuName
+                  << (menu != nullptr && menu->property("visible").toBool());
+        }
+        QObject* dock = view->findChild<QObject*>(QStringLiteral("rightPanel"))
+                        ?: view->findChild<QObject*>(QStringLiteral("viewerRightPanel"));
+        qInfo().noquote() << "KogaView dev ui request sidebar-dock"
+                          << (view->objectName()) << "page"
+                          << (keyProperty.isEmpty() ? QStringLiteral("-")
+                                                    : view->property(keyProperty.toLatin1().constData()).toString())
+                          << "panels"
+                          << (view->property("previewPanelVisible").isValid()
+                                ? view->property("previewPanelVisible").toBool()
+                                : view->property("infoPanelVisible").toBool())
+                          << (view->property("batchPanelVisible").isValid()
+                                ? view->property("batchPanelVisible").toBool()
+                                : false)
+                          << "pages" << (dock ? dock->property("shownTabCount").toInt() : 0)
+                          << "strip" << (dock ? dock->property("stripShown").toBool() : false);
         emitted = true;
       } else if (uiRequest == QLatin1String("editor-export")) {
         // The toolbar's Export button is `click()`ed, which is the same handler
