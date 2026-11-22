@@ -36,6 +36,9 @@ Item {
     /// harness, where the pointer frame stays empty instead of decoding a fake
     /// path.
     property var thumbnails: null
+    /// The folder tree's listing for the left dock: C++ in the app, a stub in
+    /// the QML suite.
+    property var listFolders: function(path) { return { ok: false, folders: [] }; }
     /// The published Core state; `editor` is null until a document is open.
     property var state: ({})
     /// True while the window is below the full icon row (`Main.qml`): the
@@ -112,10 +115,24 @@ Item {
 
         onCheckedChanged: lockGlyph.requestPaint()
     }
-    /// The icon rail's shape: two columns, or one for a narrow window. Like
-    /// the zoom, this is presentation state — Core neither
-    /// owns it nor is told about it, and it is not remembered between runs.
-    property int toolColumns: 2
+    /// The saved layout. The shell owns one copy for the three workspaces, so
+    /// a width or a tab chosen here is the one the Browser opens with next
+    /// time; the view reads it and reports every change through
+    /// `layoutRequested`, never by writing it.
+    property var layout: ({})
+    readonly property var panels: view.layout.panels || ({})
+    function panelShown(key) { return view.panels[key] !== false }
+    readonly property bool quickAccessShown: view.panelShown("editor.quickAccess")
+    readonly property bool explorerShown: view.panelShown("editor.explorer")
+    readonly property bool leftDockShown: view.quickAccessShown || view.explorerShown
+    /// The tool rail is a panel like any other: it can be put away from
+    /// Settings › Appearance and comes back the same way.
+    readonly property bool toolsShown: view.panelShown("editor.tools")
+
+    /// The icon rail's shape: two columns, or one for a narrow window. It is a
+    /// layout choice, so the rail's own toggle asks for it and the next launch
+    /// opens the same way.
+    readonly property int toolColumns: view.layout.editorToolColumns === 1 ? 1 : 2
     /// 8 px of margin on each side, a 34 px button per column, and the 4 px
     /// gap between two columns. Written as one sum so the rail and its
     /// buttons cannot disagree.
@@ -132,36 +149,66 @@ Item {
                                                      + resetCropButton.implicitWidth
                                                      + clearCropButton.implicitWidth
                                                      + 12)
-    /// The right dock's width. The shell owns one value for all three
-    /// workspaces, so a width dragged in the Browser is the width the Editor
-    /// opens at; the view writes it through `panelWidthRequested` and keeps the
-    /// shell's number even while its own splitter clamps what is drawn.
-    property real rightPanelWidth: 300
+
+    // Widths. The saved layout is the source; a drag keeps a local value while
+    // the pointer is down and the shell saves the result once it comes up. A
+    // splitter therefore writes one `set_layout`, not one per pixel, and a
+    // width chosen in the Browser is the width the Editor opens at.
+    property real leftPanelWidth: view.layout.leftWidth || 240
+    property bool leftDragging: false
+    Binding {
+        target: view
+        property: "leftPanelWidth"
+        value: view.layout.leftWidth || 240
+        when: !view.leftDragging
+        restoreMode: Binding.RestoreNone
+    }
+    property real rightPanelWidth: view.layout.rightWidth || 300
+    property bool rightDragging: false
+    Binding {
+        target: view
+        property: "rightPanelWidth"
+        value: view.layout.rightWidth || 300
+        when: !view.rightDragging
+        restoreMode: Binding.RestoreNone
+    }
     /// What this dock draws: the Editor's own range, applied to the shared
     /// width so a Browser drag past it cannot make the tool column wider than
     /// its splitter allows.
     readonly property real dockWidth:
         Math.max(220, Math.min(400, rightPanelWidth))
-    /// Which panels the sidebar is showing. They are presentation state, like
-    /// the open tab: hiding History changes no pixel and sends no command, and
-    /// the shell's burger menu (`View > Sidebar`) is the only way back.
-    property bool toolOptionsVisible: true
-    property bool infoVisible: true
-    property bool historyVisible: true
-    property bool originalVisible: true
-    /// The tool panel's height, in pixels. It is one number for every tool, so
-    /// choosing Crop, Brush or the pointer never moves the reference pages
-    /// below it; the divider writes a new number and a double-click restores
-    /// this default. The panel is a frame, not a form that grows with its
-    /// content: a short tool leaves blank space under its verbs.
-    readonly property int defaultToolZoneHeight: 340
-    property int toolZoneHeight: defaultToolZoneHeight
-    /// Which reference tab is open: `info`, `history` or `original`.
-    property string rightTab: "info"
-    /// The tabs and the words they draw. `shown` is the shell's panel
-    /// checklist; a hidden tab keeps its page in the stack but draws no
-    /// button. The labels are translated here, in `EditorView`'s context, so
-    /// `PanelTabs.qml` keeps no string of its own.
+
+    /// Which panels the dock shows. They are the saved layout's answer, edited
+    /// in Settings › Appearance; a hidden panel keeps its page in the stack, so
+    /// hiding one never renumbers the others.
+    readonly property bool toolOptionsVisible: view.panelShown("editor.options")
+    readonly property bool infoVisible: view.panelShown("editor.info")
+    readonly property bool historyVisible: view.panelShown("editor.history")
+    readonly property bool originalVisible: view.panelShown("editor.original")
+
+    /// The reference dock's height once the user has dragged the divider; `0`
+    /// is the default answer, "only as tall as the open page needs". It is
+    /// remembered with the rest of the layout.
+    property real referenceHeight: view.layout.editorReferenceHeight || 0
+    property bool referenceDragging: false
+    Binding {
+        target: view
+        property: "referenceHeight"
+        value: view.layout.editorReferenceHeight || 0
+        when: !view.referenceDragging
+        restoreMode: Binding.RestoreNone
+    }
+
+    /// The open reference tab, from the saved layout. An unknown key reads as
+    /// `info`, the same fallback `LayoutState::sanitized` writes.
+    readonly property string rightTab: {
+        var key = view.layout.editorReferenceTab || "info"
+        return (key === "history" || key === "original") ? key : "info"
+    }
+    /// The tabs and the words they draw. `shown` is the panel checklist; a
+    /// hidden tab keeps its page in the stack but draws no button. The labels
+    /// are translated here, in `EditorView`'s context, so `PanelTabs.qml` keeps
+    /// no string of its own.
     readonly property var rightTabEntries: [
         { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
           shown: view.infoVisible },
@@ -170,24 +217,14 @@ Item {
         { key: "original", label: qsTr("Original"), icon: "icons/original.svg",
           shown: view.originalVisible }
     ]
-    /// The rows the shell's burger menu draws under `View > Sidebar`. The
-    /// shell supplies the menu; the view owns what each key means and which
-    /// panels exist, the same way the tabs above are the view's.
-    readonly property var panelEntries: [
-        { key: "tools", label: qsTr("Tool options"), checked: view.toolOptionsVisible },
-        { key: "info", label: qsTr("Info"), checked: view.infoVisible },
-        { key: "history", label: qsTr("History"), checked: view.historyVisible },
-        { key: "original", label: qsTr("Original"), checked: view.originalVisible }
-    ]
     /// How many reference tabs the panel checklist is showing.
     readonly property int shownReferenceCount:
         (view.infoVisible ? 1 : 0) + (view.historyVisible ? 1 : 0)
         + (view.originalVisible ? 1 : 0)
-    /// The whole sidebar. Hiding every panel hides the column; showing any
+    /// The whole right dock. Hiding every panel hides the column; showing any
     /// one brings it back. There is no separate "show sidebar" switch.
-    readonly property int visiblePanelCount:
-        (view.toolOptionsVisible ? 1 : 0) + view.shownReferenceCount
-    readonly property bool sidebarShown: view.visiblePanelCount > 0
+    readonly property bool sidebarShown:
+        view.toolOptionsVisible || view.shownReferenceCount > 0
     /// The `StackLayout` index for `rightTab`. An unknown or hidden key falls
     /// back to the first visible tab instead of leaving the pages without a
     /// current index.
@@ -201,30 +238,54 @@ Item {
         }
         return -1
     }
-    /// The first reference tab the checklist has left visible.
-    function firstShownTab() {
-        if (view.infoVisible) return "info"
-        if (view.historyVisible) return "history"
-        if (view.originalVisible) return "original"
+    /// The open reference page's own height, for a dock that fits its content.
+    /// The pages are measured here because the view owns them and knows which
+    /// one the stack is drawing.
+    readonly property real referencePageHeight: {
+        if (view.rightTab === "history" && view.historyVisible)
+            return historyPage ? historyPage.implicitHeight : 0
+        if (view.rightTab === "original" && view.originalVisible)
+            return originalPage ? originalPage.implicitHeight : 0
+        return infoPage ? infoPage.implicitHeight : 0
+    }
+    /// The first reference tab the checklist leaves visible once `hidden` is
+    /// taken away. Hiding the open page needs the answer *after* the toggle,
+    /// or the old firstShownTab would name the page being hidden.
+    function firstShownTab(hidden) {
+        if (view.infoVisible && hidden !== "info") return "info"
+        if (view.historyVisible && hidden !== "history") return "history"
+        if (view.originalVisible && hidden !== "original") return "original"
         return ""
     }
-    /// One panel row was toggled from the shell's `View > Sidebar` menu.
-    /// Hiding the open page opens the first one that is left; hiding the last
-    /// panel hides the whole column, and any visible panel brings it back.
+    /// One panel row was toggled in Settings › Appearance. The layout is
+    /// Core's, so the view only says which key changed; hiding the page that is
+    /// open names its replacement in the same patch, so the strip cannot say
+    /// History while drawing Info.
     function setPanelVisible(key, visible) {
-        if (key === "tools") {
-            view.toolOptionsVisible = visible
-            return
+        var keys = ["quickAccess", "explorer", "tools", "options", "info",
+                    "history", "original"]
+        if (keys.indexOf(key) < 0) return
+        var patch = { panels: {} }
+        patch.panels["editor." + key] = visible
+        var isReference = key === "info" || key === "history" || key === "original"
+        if (!visible && isReference && view.rightTab === key) {
+            // The page being closed names its replacement in the same patch,
+            // so the strip never says one tab while drawing another.
+            patch.editorReferenceTab = view.firstShownTab(key)
+        } else if (visible && isReference) {
+            // Showing a page that the saved tab was not naming opens it; a
+            // still-hidden tab is not left as the strip's answer.
+            var named = view.rightTab
+            if (named !== key && !view.panelShown("editor." + named)) {
+                patch.editorReferenceTab = key
+            }
         }
-        if (key === "info") view.infoVisible = visible
-        else if (key === "history") view.historyVisible = visible
-        else if (key === "original") view.originalVisible = visible
-        else return
-        if (visible) {
-            view.rightTab = key
-        } else if (view.rightTab === key) {
-            view.rightTab = view.firstShownTab()
-        }
+        view.layoutRequested(patch)
+    }
+    /// The strip's tab click. A tab is a layout choice, so it is saved.
+    function showRightTab(key) { view.layoutRequested({ editorReferenceTab: key }) }
+    function setToolColumns(columns) {
+        view.layoutRequested({ editorToolColumns: columns === 1 ? 1 : 2 })
     }
     /// Which tool is armed on the canvas: `pointer` (no tool), `crop` or
     /// `transform`. The pointer is the default and the no-op tool, so opening
@@ -1822,7 +1883,13 @@ Item {
     signal requestExportPath()
     /// The user dragged the dock's splitter: the shell keeps one width for all
     /// three workspaces, so the view reports the number rather than owning it.
-    signal panelWidthRequested(real width)
+    /// A layout interaction — a splitter, the rail's columns, a reference tab
+    /// or panel — as a patch the shell merges into the saved layout. A layout
+    /// is Core state (`set_layout`), so the view never writes it.
+    signal layoutRequested(var patch)
+    /// Show a folder in the desktop's file manager. The shell owns the platform
+    /// call, so the view only names the path.
+    signal revealPath(string path)
     signal command(var command)
 
     readonly property var editor: state.editor || null
@@ -2136,8 +2203,10 @@ Item {
         draftDebounce.restart()
         // The tool panel is where a tool is configured. A user who put it
         // away and then arms a tool gets the panel back; the pointer is the
-        // no-op tool, so it never forces the panel open.
-        if (view.tool !== "pointer") view.toolOptionsVisible = true
+        // no-op tool, so it never forces the panel open. Panel visibility is
+        // Core's layout, so asking for it is a patch, not a local write.
+        if (view.tool !== "pointer" && !view.toolOptionsVisible)
+            view.layoutRequested({ panels: { "editor.options": true } })
         if (view.tool === "transform") view.resetTransformCorners()
         if (view.tool === "crop") view.enterCropTool()
     }
@@ -2198,6 +2267,16 @@ Item {
     ThumbnailBook {
         id: thumbs
         cache: view.thumbnails
+    }
+
+    /// The left dock's folder menu in this workspace: go to the folder in the
+    /// Browser, or show it in the desktop's file manager. The Browser keeps its
+    /// own, longer menu because it can also create and organise folders here.
+    FolderMenu {
+        id: folderMenu
+        theme: view.theme
+        onOpenInBrowser: view.command({ type: "open_folder", path: folderMenu.path })
+        onReveal: view.revealPath(folderMenu.path)
     }
 
     // ------------------------------------------------------------ editor menu
@@ -2431,6 +2510,46 @@ Item {
         anchors.fill: parent
         spacing: 0
 
+        // --------------------------------------------------------- files (left)
+        // The same two panels the Browser and the Viewer show, in the same
+        // order. A folder click opens it in the Browser: re-rooting the file
+        // list would replace the document the Editor is holding.
+        LeftDock {
+            objectName: "editorLeftPanel"
+            visible: view.leftDockShown
+            Layout.preferredWidth: view.leftPanelWidth
+            Layout.fillHeight: true
+            theme: view.theme
+            state: view.state
+            quickAccessShown: view.quickAccessShown
+            explorerShown: view.explorerShown
+            listFolders: view.listFolders
+            onOpenFolder: function(path) { view.command({ type: "open_folder", path: path }) }
+            onNavigateTo: function(path) { view.command({ type: "open_folder", path: path }) }
+            onOpenMenu: function(path) { view.folderMenu.path = path; view.folderMenu.popup() }
+            onQuickMenu: function(path) { view.folderMenu.path = path; view.folderMenu.popup() }
+        }
+
+        PanelSplitter {
+            objectName: "editorLeftSplitter"
+            visible: view.leftDockShown
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.leftPanelWidth
+            defaultValue: 240
+            direction: 1
+            minimum: 180
+            maximum: 560
+            onMoved: function(width) {
+                view.leftDragging = true
+                view.leftPanelWidth = width
+            }
+            onReleased: function(width) {
+                view.leftDragging = false
+                view.layoutRequested({ leftWidth: Math.round(width) })
+            }
+        }
+
         // -------------------------------------------------------- tools (left)
         // An icon rail, the way Krita's toolbox and Photoshop's toolbar are: the
         // picture keeps the width, and a tool is a drawing with its sentence in
@@ -2447,10 +2566,10 @@ Item {
             Layout.preferredWidth: view.toolRailWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
-            // The rail is the canvas's own tool palette; it is not one of the
-            // sidebar's panels, so only the shell's workspace decides whether
-            // the Editor is drawn.
-            visible: true
+            // The rail is a panel of its own: it is a column beside the
+            // canvas, so Settings › Appearance can put it away, and the canvas
+            // takes its width when it does.
+            visible: view.toolsShown
 
             ColumnLayout {
                 anchors.fill: parent
@@ -2607,7 +2726,7 @@ Item {
                                                        : "icons/columns-two.svg"
                     tooltip: view.toolColumns === 2 ? qsTr("One column")
                                                     : qsTr("Two columns")
-                    onClicked: view.toolColumns = view.toolColumns === 2 ? 1 : 2
+                    onClicked: view.setToolColumns(view.toolColumns === 2 ? 1 : 2)
                 }
             }
         }
@@ -3290,25 +3409,28 @@ Item {
             maximum: 400
             visible: view.sidebarShown
             onMoved: function(width) {
+                view.rightDragging = true
                 view.rightPanelWidth = width
-                view.panelWidthRequested(width)
+            }
+            onReleased: function(width) {
+                view.rightDragging = false
+                view.layoutRequested({ rightWidth: Math.round(width) })
             }
         }
 
         // -------------------------------------------------- tool options (right)
-        // The dock is two places, not one. The top is one standard tool frame
-        // for every tool; below it is the document itself — what it is, what
-        // was done to it, and the file on disk — as three reference tabs.
+        // The dock is two places, not one. The top is the armed tool's frame;
+        // below it is the document itself — what it is, what was done to it,
+        // and the file on disk — as three reference tabs.
         //
-        // The frame's height is the same for every tool, so choosing Crop,
-        // Brush or the pointer never moves the reference pages. Inside it the
-        // options start at the top and their verbs sit directly under them;
-        // the rest of the frame stays blank, and the divider at its bottom
-        // lets the user trade that space for reference room. The options
-        // scroll only when they are taller than the frame.
-        // Everything here is presentation state: no command leaves the view and
-        // the open tab and the panel visibility are remembered for this run
-        // only.
+        // The reference takes only the height its open page needs and sits at
+        // the bottom, so a two-line Info page does not leave a tall empty
+        // column, and the tool frame above keeps the rest. The divider is how
+        // the user overrules that: it writes a reference height, which is saved
+        // with the layout and restored on the next launch. Inside the frame the
+        // options start at the top and their verbs sit directly under them; the
+        // frame is the same height for every tool, so arming Crop does not move
+        // the divider.
         Rectangle {
             id: inspector
             objectName: "editorInspector"
@@ -3326,17 +3448,22 @@ Item {
                 view.toolOptionsVisible
                 && (view.tool === "crop" || view.tool === "transform")
                 ? cropActions.implicitHeight + 10 : 0
-            /// The frame's height: one number for every tool, clamped so a
-            /// short window still keeps room for the reference pages.
-            readonly property real toolZoneShownHeight: Math.max(
-                headerHeight, Math.min(view.toolZoneHeight, height - 200))
+            /// What the reference dock is offered: its page's own height
+            /// unless the user dragged the divider, and never more than the
+            /// dock can give while the tool frame keeps its room.
+            readonly property real referenceCap: Math.max(140, height - 240)
+            readonly property real referenceShownHeight: {
+                var wanted = view.referenceHeight > 0
+                             ? view.referenceHeight : referenceDock.contentHeight
+                return Math.max(140, Math.min(wanted, referenceCap))
+            }
             /// How tall the options may be: their own content, unless the
-            /// frame cannot also keep the action row and 180 px of tabs.
-            /// Only then do they scroll. A sidebar with no reference page has
-            /// no tabs to reserve that 180 px for.
+            /// frame cannot also keep the action row and 140 px of reference.
+            /// Only then do they scroll.
             readonly property real optionsCap: Math.max(
                 40,
-                toolZoneShownHeight - headerHeight - actionRowHeight - 10)
+                Math.max(0, height - referenceShownHeight - headerHeight
+                            - actionRowHeight - 10))
             readonly property bool toolOptionsShown:
                 view.tool !== "pointer" && view.toolOptionsVisible
             /// The tool's name for the heading. The sentence is "… options", so
@@ -3372,19 +3499,13 @@ Item {
                     id: toolZone
                     objectName: "editorToolZone"
                     Layout.fillWidth: true
-                    // The shell's `View > Sidebar` menu hides this panel like
-                    // any other; the reference pages then take the dock.
+                    // Settings › Appearance hides this panel like any other; the
+                    // reference pages then take the whole dock.
                     visible: view.toolOptionsVisible
-                    Layout.preferredHeight: inspector.toolZoneShownHeight
-                    // A nested `ColumnLayout` is offered the leftover height by
-                    // default; say no, because the reference tab strip is the
-                    // half that grows and this frame owns a fixed height.
-                    Layout.fillHeight: false
-                    // The frame is pinned to the dock's top, so a short tool
-                    // leaves its blank space below the verbs rather than above
-                    // the heading.
-                    Layout.alignment: Qt.AlignTop
-                    Layout.maximumHeight: Layout.preferredHeight
+                    // The reference dock below is content-sized and pinned to
+                    // the bottom, so this frame takes the rest: one height for
+                    // every tool, and the divider is where the user moves it.
+                    Layout.fillHeight: true
                     Layout.minimumHeight: inspector.headerHeight
                     spacing: 0
 
@@ -4107,10 +4228,10 @@ Item {
                         }
                     }
 
-                    // Whatever the frame's fixed height leaves after the fields
-                    // and their verbs is blank, above the divider and the
-                    // reference pages. A short tool therefore keeps its buttons
-                    // under its own options instead of against the bottom edge.
+                    // Whatever the frame leaves after the fields and their
+                    // verbs is blank, above the divider and the reference
+                    // pages. A short tool therefore keeps its buttons under its
+                    // own options instead of against the bottom edge.
                     Item {
                         objectName: "toolZoneSpacer"
                         Layout.fillWidth: true
@@ -4119,10 +4240,11 @@ Item {
                 }
 
                 // The handle between the two halves of the dock. It writes the
-                // height of the tool zone above it, so the split is the user's
-                // answer to "more options or more reference" and not a guess
-                // baked into the layout. A double-click restores the standard
-                // frame height every tool opens with.
+                // height of the reference dock *below* it (hence `direction:
+                // -1`): dragging up gives the pages more room, down gives the
+                // tool frame more. A double-click goes back to 0, the default
+                // answer "as tall as the open page needs". The number is saved
+                // with the layout, once, when the drag ends.
                 PanelSplitter {
                     objectName: "editorToolZoneDivider"
                     Layout.fillWidth: true
@@ -4131,26 +4253,38 @@ Item {
                     // Nothing to divide against when the tool frame is hidden
                     // or every reference page is hidden.
                     visible: view.toolOptionsVisible && view.shownReferenceCount > 0
-                    value: view.toolZoneHeight
-                    defaultValue: view.defaultToolZoneHeight
-                    direction: 1
-                    minimum: inspector.headerHeight + 80
-                    maximum: Math.max(inspector.headerHeight + 80,
-                                      inspector.height - 160)
-                    onMoved: function(height) { view.toolZoneHeight = Math.round(height) }
+                    value: view.referenceHeight
+                    defaultValue: 0
+                    direction: -1
+                    minimum: 0
+                    maximum: Math.max(0, inspector.height - 240)
+                    onMoved: function(height) {
+                        view.referenceDragging = true
+                        view.referenceHeight = Math.max(0, Math.round(height))
+                    }
+                    onReleased: function(height) {
+                        view.referenceDragging = false
+                        view.layoutRequested({ editorReferenceHeight: Math.max(0, Math.round(height)) })
+                    }
                 }
 
                 // -------------------------------------- reference zone (tabs)
-                // The shared dock: a strip and one page at a time. The tool
-                // zone above it hugs its own content, so these tabs start
-                // right under the action row (or under the heading, for the
-                // pointer) and take whatever height is left. A hidden page
-                // keeps its slot inside the dock, so the checklist never
-                // renumbers the other pages.
+                // The shared dock: a strip and one page at a time. It takes
+                // only the height of the page it is showing (or the height the
+                // divider remembers) and sits at the bottom of the column, so a
+                // short Info page does not grow into the tool frame above it. A
+                // hidden page keeps its slot inside the dock, so the checklist
+                // never renumbers the other pages.
                 RightDock {
                     id: referenceDock
+                    objectName: "editorReferenceDock"
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    // Not `fillHeight`: the dock asks for the page's own height
+                    // and the tool frame above absorbs the rest.
+                    Layout.fillHeight: false
+                    Layout.alignment: Qt.AlignBottom
+                    Layout.preferredHeight: inspector.referenceShownHeight
+                    Layout.minimumHeight: Math.min(140, inspector.referenceShownHeight)
                     visible: view.shownReferenceCount > 0
                     theme: view.theme
                     backgroundColor: "transparent"
@@ -4160,7 +4294,10 @@ Item {
                     compact: inspector.tabsCompact
                     stripObjectName: "editorRightTabs"
                     pagesObjectName: "editorReferencePages"
-                    onActivated: function(key) { view.rightTab = key }
+                    /// The open page's natural height, measured by the view
+                    /// because it owns the pages and knows which one is drawn.
+                    pageContentHeight: view.referencePageHeight
+                    onActivated: function(key) { view.showRightTab(key) }
 
                     // ------------------------------------ Info
                     // What the document is: name, size, save target. The words
@@ -4173,6 +4310,7 @@ Item {
                         clip: true
 
                         InfoPanel {
+                            id: infoPage
                             width: infoPanel.availableWidth
                             theme: view.theme
                             editor: view.editor
@@ -4190,6 +4328,7 @@ Item {
                         objectName: "historyPanel"
 
                         HistoryPanel {
+                            id: historyPage
                             anchors.fill: parent
                             theme: view.theme
                             history: view.history
@@ -4210,6 +4349,7 @@ Item {
                         clip: true
 
                         PreviewPanel {
+                            id: originalPage
                             width: originalPanel.availableWidth
                             theme: view.theme
                             book: thumbs

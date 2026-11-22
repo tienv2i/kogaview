@@ -34,7 +34,7 @@ import QtQuick 2.0
 Item {
   objectName: "host"
   property string label: qsTranslate("Theme", "Open")
-  property string folderLabel: qsTranslate("BrowserView", "Quick access")
+  property string folderLabel: qsTranslate("QuickAccessPanel", "Quick access")
 }
 )";
 

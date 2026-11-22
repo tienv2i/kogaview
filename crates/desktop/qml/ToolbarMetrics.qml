@@ -67,7 +67,7 @@ Item {
     /// counted: it is the one control the mini row adds in place of the ones
     /// it folds, so counting it would budget room for a button the compact row
     /// never draws.
-    readonly property int browserButtons: 5
+    readonly property int browserButtons: 4
     readonly property int browserSeparators: 1
     readonly property int viewerButtons: 12
     readonly property int viewerSeparators: 4

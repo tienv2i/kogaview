@@ -173,10 +173,42 @@ Measured on the real window, Pointer, Crop and Brush report the same drawn
 geometry (`top 50 bottom 390 divider 390 strip 405`) while their content
 heights read 59, 336 and 250.
 
+This pass (row 106) gives the layout an owner. The three workspaces share one
+left column of two independent panels — `Truy cập nhanh` over `Cây thư mục`, each
+switchable on its own — so the Viewer and the Editor finally have a file list at
+all, and the Editor's tool rail is a panel of the same kind. Everything about the
+shape is Core state now: `LayoutState` in the protocol (`leftWidth`,
+`rightWidth`, fourteen dotted panel keys, `editorToolColumns`,
+`editorReferenceHeight`, `editorReferenceTab`) written by a `set_layout` command,
+so a dock width, a hidden panel, a folded rail, a dragged reference height and the
+open tab survive a relaunch. The Editor's reference dock takes only the height its
+page needs — measured on the real window at `165` px for a `101` px Info page,
+with the tool frame absorbing the other 566 — and a dragged height is remembered.
+The panel list moved out of the burger menu into Settings › Appearance, four pages
+(General, Browser, Editor, Viewer) with one checkbox per panel; the burger is flat
+and right-aligned with no submenu left. Settings previews the whole layout on the
+real window before Apply/OK writes it, and `Reset layout` restores Core's defaults.
+
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
+- Branch `main`. Row 106 is **uncommitted** on top of `57341cb`: the protocol's
+  `LayoutState`/`LAYOUT_PANEL_KEYS`/`LAYOUT_REFERENCE_TABS`/`Command::SetLayout`
+  and its tests, `Config.layout` with `from_legacy` and its two tests,
+  `UiState.layout`/`StateMeta.layout`, Core's `SetLayout` handler and
+  `toggle_panels`; the new `LeftDock.qml`, `QuickAccessPanel.qml`,
+  `ExplorerPanel.qml`, `FolderMenu.qml` and four SVGs (`preferences`, `browser`,
+  `viewer`, `editor`) with their `build.rs`/`icons.qrc`/`.pro` entries; the three
+  views' left dock and `layoutRequested`, the Editor's rail panel and content-fit
+  reference dock, `RightDock.qml`'s `contentHeight`/`pageContentHeight`,
+  `PanelSplitter.qml`'s `released`, `HistoryPanel.qml`'s `implicitHeight`;
+  `Main.qml`'s `previewLayout`/`requestLayout`/`mergeLayout` and silent
+  `set_layout`; the rewritten `SettingsDialog.qml` (four pages, 14 rows,
+  `panelRow`, `adoptLayout`, `Reset layout`); `cpp/main.cpp`'s section argument and
+  reference-dock probe; the five suites; `i18n/kogaview_vi.ts` (23 sentences,
+  `lupdate` re-run); ADR 0022 plus revisions to 0019 and 0020; the report row and
+  the ten `M1-layout-*` grabs. `git status` is the authority.
 - Branch `main`. Row 104 is committed as `78adc66 feat(shell): a panel checklist
   and a Browser batch page` on top of `2dc8a0e feat: an honest resize, a
   foldable dock and a defined reopen`: that commit carries `PanelMenu.qml` and
@@ -185,7 +217,8 @@ Nothing here is a plan; it is what was measured, what was not, and why.
   views, `cpp/main.cpp`'s `editor-dock`/`sidebar-dock` requests, the three view
   suites, 21 Vietnamese sentences, ADR 0020's second revision and the ten
   `M1-sidebar-*` grabs.
-- Branch `main`. Row 105 is **uncommitted** on top of `78adc66`: `Main.qml`'s
+- Branch `main`. Row 105 is committed as `57341cb feat(shell): the panel list
+  moves into the window's menu` on top of `78adc66`: `Main.qml`'s
   `workspacePanelEntries`/`setWorkspacePanelVisible` and the `View > Sidebar`
   submenu, `panelEntries`/`setPanelVisible`/`visiblePanelCount`/`sidebarShown` in
   `BrowserView.qml`, `Viewer.qml` and `EditorView.qml`, the deletion of
@@ -510,10 +543,10 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 358 strings in kogaview_vi.ts, 105 of them compiled into C++, 358 drawn by the QML, 4 looked up by context
+translations: 367 strings in kogaview_vi.ts, 105 of them compiled into C++, 362 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 98 passed (kogaview-core) + 5 passed (kogaview-protocol)
-viewer 43 · browser 51 · cache 15 · state 7 · settings 20 · editor 70 · language 7 · toolbar 18
+cargo: 102 passed (kogaview-core) + 6 passed (kogaview-protocol)
+viewer 44 · browser 52 · cache 15 · state 7 · settings 21 · editor 70 · language 7 · toolbar 18
 ```
 
 `cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
@@ -1815,6 +1848,81 @@ the defect exactly. Each restored, then `just test` green.
   `<prefix>_<key>`, `<prefix>Icon_<key>` and `<prefix>Label_<key>` stay unique in
   one window and the harness can address each view's strip.
 
+## Design decisions, one layout owned by Core (row 106, ADR 0022)
+
+- **A layout is a preference, so it is protocol state.** `LayoutState` lives in
+  `kogaview-protocol`, `Config` and `UiState`, and `set_layout` is the only
+  write. Zoom, pan, hover and an in-flight stroke stay presentation; a panel's
+  existence, a dock's width, the rail's columns, the reference height and the
+  open tab are remembered. A CLI that can read `config.json` can therefore
+  describe the same window the person had.
+- **Fourteen dotted keys, because the same question differs per workspace.** The
+  Viewer may keep its files list shut while the Browser shows both, so the keys
+  are `browser.quickAccess` … `editor.original` rather than three booleans. An
+  absent key is visible, and `sanitized()` re-adds a key a file forgot **as
+  visible** — a file from a newer build cannot silently hide a panel.
+- **`from_legacy` reads the four old booleans once.** `left_panel: false` hides
+  every left panel in all three workspaces; `right_panel*` hide their own dock's
+  pages. They are then not written back: the next save carries only `layout`,
+  which is why `an_older_configs_panel_flags_become_a_layout_once` also asserts
+  the text.
+- **Views request; the shell saves.** Every interaction emits
+  `layoutRequested(patch)`; `Main.qml` merges it into `previewLayout` and either
+  keeps it local while Settings is open (`adoptLayout`) or sends `set_layout`.
+  Setting a tab is `layoutRequested({ editorReferenceTab: key })`, a splitter's
+  release is `{ rightWidth }`, the rail's fold is `{ editorToolColumns }`, and
+  the reference drag is `{ editorReferenceHeight }` only on `released` — one drag
+  is one command, not one per pixel.
+- **`set_layout` is silent in the window.** The journal keeps `layout_saved` and
+  `config.json` changes on arrival, so a closing window loses nothing, but a tab
+  click cannot toast "Layout saved" every turn. Settings still answers through
+  `set_settings`, which is the one place the user asked for a write.
+- **The left dock is two panels, and they are panels, not a tab strip.** Quick
+  access is short and pinned on top, the tree takes the rest; hiding either
+  leaves the other whole (Quick access then fills the column). Hiding both
+  hides the column and its splitter, so there is no toggle left on a blank
+  column.
+- **The Editor's rail is `editor.tools`.** The rail and the quick-edit grid fold
+  as one panel, and the canvas takes their width. Arming a tool reopens
+  `editor.options` only: a person who put the tools away did not ask for them
+  back.
+- **Content-fit is `0`, and a height is pixels.** `editorReferenceHeight: 0`
+  means `referenceDock.contentHeight` (page + strip + margins), clamped to
+  `max(140, min(wanted, height - 240))`, with `Layout.fillHeight: false` and
+  `AlignBottom`; the tool frame above takes the rest. The divider writes a real
+  height, and a double-click returns to `0`. A percentage was rejected: it
+  changes meaning when the window resizes, and the user dragged pixels.
+- **The measurement corrected a wrong reading, and both are on record.** The
+  first fresh-config grab looked like a 250–330 px reference dock under a
+  two-line Info page. The probe then logged `reference dock 165 needs 165 page
+  101 inspector 738`: the dock is exactly its page plus its strip, and the blank
+  the first reading named is the tool frame's spacer. The QML case
+  (`theReferenceDockFitsItsPage`) had been right; the picture was read wrong.
+- **Settings is a page, not a control on the column.** Four sections — General
+  (look, language, the two widths), Browser, Editor, Viewer — with one checkbox
+  per panel. The dialog edits a copy (`editedLayout`) and previews it through
+  the shell, so Cancel restores the opening layout and `Reset layout` restores
+  Core's defaults (`defaultLayout.leftWidth` is 260, the same number as
+  `LayoutState::default`).
+- **A checkbox inside a `Popup` is not dark.** It resolves the *platform*
+  palette, which is light on this desktop, so its stock content item drew
+  `#2b2f36` words on the `#181b21` form — a list nobody can read. One `panelRow`
+  component draws its own `Text` in `theme.text` (muted when disabled) and keeps
+  the style's indicator; the case asserts the colour against the theme, and the
+  mutation check restores the near-black literal to watch it fail.
+- **A folder click in the Viewer or the Editor browses in the Browser.**
+  `open_folder` is the command whose Core handler also sets the workspace;
+  `navigate` does not. Neither workspace has a grid, so a folder click is asked
+  for with the command that also shows the result, and the Browser's own tree
+  keeps using `navigate`.
+- **The old toggles stay for replay.** `ToggleLeftPanel`/`ToggleRightPanel`
+  still exist in the protocol and Core (and their tests) and toggle every panel
+  on their side; no window control emits them, and `tst_settings` fails a view
+  source that starts to.
+- **The burger is flat.** `View` and its submenu are gone — a submenu of a
+  closed menu could never even be photographed — and the menu is right-aligned
+  under its button.
+
 ## Design decisions, the panel list belongs to the window (row 105, ADR 0020)
 
 - **Visibility is a question about the window, so it lives in the window's
@@ -2444,10 +2552,10 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     protocol decision, and every answer needs the async/bounded/observable rules
     of `AGENTS.md` before the first button is enabled. The count is already
     exact, so the first command can be written against a known selection.
-19. **The panel list has no keyboard route and no memory.** `View > Sidebar` is
-    reached with the pointer only — the burger button is `focusPolicy`
-    `NoFocus` like the rest of the compact toolbar, and no key opens the menu
-    chain — and its four flags are view state, so which pages were on is
-    forgotten on the next launch. Both are open design questions: a key for the
-    menu, and whether "History but not Info" is a layout choice or a settings
-    field (persisting it would need a protocol command, not just a QML write).
+19. **The panel list is remembered, but Settings has no keyboard route.** Row
+    106 answered the memory question: visibility, widths, the rail's columns,
+    the reference height and the tab are `LayoutState` in `config.json`, not
+    view state. What is still missing is a key: the burger and the Settings
+    form are pointer-reached like the rest of the compact toolbar. A person who
+    wants "History but not Info" now has one place to say so, and a CLI can say
+    it with `set_layout`, but neither has been driven by a hand here.

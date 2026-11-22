@@ -3,6 +3,8 @@
 //! Commands are the only way to mutate Core state. Queries are read-only and
 //! events are emitted by Core; they are separate types on purpose.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Independent from the application semantic version.
@@ -200,6 +202,162 @@ impl Default for Theme {
     }
 }
 
+/// Every panel the window can show, in the order Settings lists them.
+///
+/// The keys are the contract between the Settings checkbox, the view that owns
+/// the panel and the saved layout: a key Core does not know is dropped when the
+/// layout is sanitized, and a key absent from a saved file opens visible. They
+/// are dotted by workspace because the same question ("quick access?") has a
+/// different answer in the Browser and in the Editor — the Viewer may keep its
+/// files list shut while the Browser shows both.
+pub const LAYOUT_PANEL_KEYS: [&str; 14] = [
+    "browser.quickAccess",
+    "browser.explorer",
+    "browser.preview",
+    "browser.batch",
+    "viewer.quickAccess",
+    "viewer.explorer",
+    "viewer.info",
+    "editor.quickAccess",
+    "editor.explorer",
+    "editor.tools",
+    "editor.options",
+    "editor.info",
+    "editor.history",
+    "editor.original",
+];
+
+/// The reference tabs the Editor's dock can have open. An unknown value falls
+/// back to `info` when the layout is sanitized.
+pub const LAYOUT_REFERENCE_TABS: [&str; 3] = ["info", "history", "original"];
+
+/// The persisted layout: which panels each workspace shows, how wide its docks
+/// are, and how the Editor splits its two halves.
+///
+/// It lives in the protocol because it is a preference the CLI has to be able
+/// to read and write as well as the window: a layout is Core state, not a QML
+/// variable. Zoom, pan and hover stay presentation state; a panel's existence,
+/// the width it is drawn at and the tab that is open are remembered across
+/// launches, so they are here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LayoutState {
+    /// Width of the shared left dock (quick access + explorer).
+    pub left_width: u32,
+    /// Width of the shared right dock.
+    pub right_width: u32,
+    /// `LAYOUT_PANEL_KEYS` → visible. An absent key means visible.
+    pub panels: BTreeMap<String, bool>,
+    /// The Editor's tool rail as one or two columns.
+    pub editor_tool_columns: u8,
+    /// Height of the Editor's reference dock when the user has dragged it.
+    /// `0` is the default: the dock takes only the height its page needs.
+    pub editor_reference_height: u32,
+    /// The open reference tab: one of `LAYOUT_REFERENCE_TABS`.
+    pub editor_reference_tab: String,
+}
+
+impl Default for LayoutState {
+    fn default() -> Self {
+        Self {
+            left_width: 260,
+            right_width: 300,
+            panels: LAYOUT_PANEL_KEYS
+                .iter()
+                .map(|key| ((*key).to_owned(), true))
+                .collect(),
+            editor_tool_columns: 2,
+            editor_reference_height: 0,
+            editor_reference_tab: "info".to_owned(),
+        }
+    }
+}
+
+impl LayoutState {
+    /// Clamp what can be clamped, drop unknown panel keys and put back the ones
+    /// a file forgot. A layout that came from a newer build keeps every panel
+    /// it did not name visible rather than silently hiding it.
+    pub fn sanitized(mut self) -> Self {
+        self.left_width = self.left_width.clamp(180, 560);
+        self.right_width = self.right_width.clamp(200, 640);
+        self.editor_tool_columns = self.editor_tool_columns.clamp(1, 2);
+        // 0 means "as tall as the page", which is a valid answer; anything
+        // else is a height a person dragged, bounded so the tool frame keeps
+        // its room.
+        self.editor_reference_height = self.editor_reference_height.min(900);
+        if !LAYOUT_REFERENCE_TABS.contains(&self.editor_reference_tab.as_str()) {
+            self.editor_reference_tab = "info".to_owned();
+        }
+        let mut panels = BTreeMap::new();
+        for key in LAYOUT_PANEL_KEYS {
+            panels.insert(
+                key.to_owned(),
+                self.panels.get(key).copied().unwrap_or(true),
+            );
+        }
+        self.panels = panels;
+        self
+    }
+
+    /// Is a panel visible? An absent key is visible, which is also what a
+    /// sanitized layout guarantees, so a view can use this directly.
+    pub fn panel(&self, key: &str) -> bool {
+        self.panels.get(key).copied().unwrap_or(true)
+    }
+
+    /// Hide or show one panel. The layout is sanitized by the command, so a
+    /// key from a newer view is dropped rather than stored.
+    pub fn with_panel(mut self, key: &str, visible: bool) -> Self {
+        self.panels.insert(key.to_owned(), visible);
+        self
+    }
+
+    /// The layout this config's legacy flags meant.
+    ///
+    /// Before a layout was saved, visibility lived in four booleans. They are
+    /// read once: `false` hides every panel of that dock, `true` (and an absent
+    /// field) leaves the defaults alone.
+    pub fn from_legacy(
+        left_panel: Option<bool>,
+        right_panel: Option<bool>,
+        right_panel_viewer: Option<bool>,
+        right_panel_editor: Option<bool>,
+    ) -> Self {
+        let mut layout = Self::default();
+        if left_panel == Some(false) {
+            for key in [
+                "browser.quickAccess",
+                "browser.explorer",
+                "viewer.quickAccess",
+                "viewer.explorer",
+                "editor.quickAccess",
+                "editor.explorer",
+            ] {
+                layout.panels.insert(key.to_owned(), false);
+            }
+        }
+        if right_panel == Some(false) {
+            for key in ["browser.preview", "browser.batch"] {
+                layout.panels.insert(key.to_owned(), false);
+            }
+        }
+        if right_panel_viewer == Some(false) {
+            layout.panels.insert("viewer.info".to_owned(), false);
+        }
+        if right_panel_editor == Some(false) {
+            for key in [
+                "editor.options",
+                "editor.info",
+                "editor.history",
+                "editor.original",
+            ] {
+                layout.panels.insert(key.to_owned(), false);
+            }
+        }
+        layout
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MoveDirection {
@@ -255,6 +413,12 @@ pub enum Command {
         language: Language,
     },
     ToggleLeftPanel,
+    /// Replace the persisted layout: which panels each workspace shows, the two
+    /// dock widths and the Editor's split. A layout is a preference, so it is
+    /// written to `config.json` immediately rather than waiting for a form.
+    SetLayout {
+        layout: LayoutState,
+    },
     /// Show or hide the right panel of a workspace.
     ///
     /// Each workspace owns its own preference, because a narrow Viewer wants
@@ -470,6 +634,7 @@ impl Command {
             Self::ToggleTheme => "toggle_theme",
             Self::SetLanguage { .. } => "set_language",
             Self::ToggleLeftPanel => "toggle_left_panel",
+            Self::SetLayout { .. } => "set_layout",
             Self::ToggleRightPanel { .. } => "toggle_right_panel",
             Self::ToggleFilmstrip => "toggle_filmstrip",
             Self::NewFolder { .. } => "new_folder",
@@ -693,6 +858,57 @@ mod tests {
             other => panic!("round trip changed the command to {}", other.name()),
         }
         assert_eq!(round.name(), "toggle_right_panel");
+    }
+
+    #[test]
+    fn a_layout_round_trips_and_sanitizes() {
+        let command = Command::SetLayout {
+            layout: LayoutState::default()
+                .with_panel("editor.history", false)
+                .with_panel("made.up", false),
+        };
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(json.contains("\"set_layout\""), "{json}");
+        let round: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.name(), "set_layout");
+        match round {
+            Command::SetLayout { layout } => {
+                assert!(!layout.panel("editor.history"));
+                // The payload carries what the view sent; Core drops a key it
+                // does not know when it sanitizes the layout.
+                assert!(!layout.panel("made.up"));
+            }
+            other => panic!("round trip changed the command to {}", other.name()),
+        }
+
+        // Out-of-range numbers are clamped instead of trusted, and a tab that
+        // is not a reference tab reads as `info`.
+        let wild = LayoutState {
+            left_width: 5,
+            right_width: 9999,
+            editor_tool_columns: 7,
+            editor_reference_height: 9999,
+            editor_reference_tab: "elsewhere".into(),
+            ..LayoutState::default()
+        }
+        .sanitized();
+        assert_eq!(wild.left_width, 180);
+        assert_eq!(wild.right_width, 640);
+        assert_eq!(wild.editor_tool_columns, 2);
+        assert_eq!(wild.editor_reference_height, 900);
+        assert_eq!(wild.editor_reference_tab, "info");
+
+        // An older config's booleans hide the dock they described.
+        let legacy = LayoutState::from_legacy(Some(false), Some(true), Some(false), Some(false));
+        assert!(!legacy.panel("browser.quickAccess"));
+        assert!(!legacy.panel("editor.explorer"));
+        assert!(legacy.panel("browser.preview"));
+        assert!(!legacy.panel("viewer.info"));
+        assert!(!legacy.panel("editor.history"));
+        assert!(
+            legacy.panel("editor.tools"),
+            "the rail was never a config flag"
+        );
     }
 
     #[test]

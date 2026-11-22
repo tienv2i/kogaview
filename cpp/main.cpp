@@ -135,16 +135,13 @@ void dispatchDevCommands(QObject* rootObject, QGuiApplication& app, ThumbnailCac
 /// so a grab of the main window leaves it out; `KOGAVIEW_DEV_GRAB_POPUPS` paints
 /// every visible popup into the picture.
 ///
-/// The `View > Sidebar` list cannot be photographed the same way: only the one
-/// menu Qt Quick actually shows is a window, and a submenu of a closed menu is
-/// never drawn, so `popup()`/`open()`/`visible` on it produce nothing. The hook
-/// therefore opens the burger menu and logs the sidebar list's row count, which
-/// is the view's own `panelEntries`; the checklist's behaviour is the QML
-/// suite's business.
-void openSidebarPanelMenu(QObject* rootObject)
+/// The menu is flat: the panel checklist lives in Settings › Appearance, not in
+/// a `View > Sidebar` submenu, so there is nothing nested to draw. The hook
+/// opens the menu and logs how many panels the saved layout switches, which is
+/// the same list the form draws.
+void openMainMenu(QObject* rootObject)
 {
   QObject* mainMenu = rootObject->findChild<QObject*>(QStringLiteral("mainMenu"));
-  QObject* sidebarMenu = rootObject->findChild<QObject*>(QStringLiteral("sidebarMenu"));
   bool mainOpened = false;
   if (mainMenu != nullptr) {
     mainOpened = QMetaObject::invokeMethod(mainMenu, "popup");
@@ -157,10 +154,11 @@ void openSidebarPanelMenu(QObject* rootObject)
       mainMenu->setProperty("y", 56);
     }
   }
-  qInfo() << "KogaView dev ui request sidebar menu"
+  const QVariantMap layout = rootObject->property("state").toMap().value("layout").toMap();
+  qInfo() << "KogaView dev ui request main menu"
           << "main" << mainOpened
           << "visible" << (mainMenu != nullptr && mainMenu->property("visible").toBool())
-          << "rows" << (sidebarMenu != nullptr ? sidebarMenu->property("count").toInt() : 0);
+          << "panels" << layout.value("panels").toMap().size();
 }
 
 // Debug-only evidence harness: grab the app window after it is exposed.
@@ -505,10 +503,20 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
     auto fire = [rootObject, uiRequest, requestArg, requestDelay, &app]() {
       if (uiRequest == QLatin1String("settings")) {
         // The shell's own function, so the dialog receives the stored theme and
-        // checkbox values exactly as the menu entry hands them over.
+        // checkbox values exactly as the menu entry hands them over. `_ARG`
+        // names the section strip's page to draw (`general` by default), which
+        // is what a click on the strip writes.
         const bool opened = QMetaObject::invokeMethod(rootObject, "openSettings");
+        QObject* dialog = rootObject->findChild<QObject*>(QStringLiteral("settingsDialog"));
+        QString section = QStringLiteral("general");
+        if (!requestArg.isEmpty()) {
+          section = requestArg;
+        }
+        const bool chosen = dialog != nullptr
+                            && dialog->setProperty("section", section);
         qInfo().noquote() << "KogaView dev ui request settings"
-                          << (opened ? "emitted" : "not supported");
+                          << (opened ? "emitted" : "not supported")
+                          << "section" << (chosen ? section : QStringLiteral("not set"));
         return;
       }
       bool emitted = false;
@@ -1149,13 +1157,14 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
       } else if (uiRequest == QLatin1String("editor-dock")) {
         // The right dock without a pointer: `_ARG` is the reference tab
         // (`info`, `history` or `original`), `_ARG2` a comma-separated list of
-        // panels to hide through the sidebar's checklist (`tools`, `info`,
-        // `history`, `original`), `_ARG5` the same list to show, `_ARG3` the
-        // dock's width in pixels, `_ARG4` a tool to arm (`crop`, `brush`,
-        // `eraser`, `transform`) by clicking its real rail button, and `_ARG6`
-        // a tool-zone height in pixels sent through the divider's own `moved`.
-        // It writes the same state the tabs, the checklist and the splitters
-        // write, and sends no command.
+        // panels to hide (`tools`, `options`, `info`, `history`, `original`,
+        // `quickAccess`, `explorer`), `_ARG5` the same list to show, `_ARG3` the
+        // dock's width in pixels, `_ARG8` the left dock's width, `_ARG4` a tool
+        // to arm (`crop`, `brush`, `eraser`, `transform`) by clicking its real
+        // rail button, and `_ARG6` a reference height in pixels sent through
+        // the divider's own `moved`/`released`. Panels and widths travel as
+        // `layoutRequested` patches, the same call the form and the splitters
+        // make, so the shell merges them and Core saves them.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
         if (editor == nullptr) {
           qWarning() << "KogaView dev ui request: editor view not found";
@@ -1176,7 +1185,13 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           }
         }
         const QString tab = requestArg.isEmpty() ? QStringLiteral("info") : requestArg;
-        editor->setProperty("rightTab", tab);
+        // The tab is layout state now, so it travels through the same function
+        // a tab click calls; the shell merges the patch into `set_layout`. An
+        // empty `_ARG` leaves the saved tab alone, which is how a persistence
+        // run reads back what the last launch saved instead of overwriting it.
+        if (!requestArg.isEmpty()) {
+          QMetaObject::invokeMethod(editor, "showRightTab", Q_ARG(QVariant, tab));
+        }
         // The checklist handler is `setPanelVisible`, the same function the
         // menu's `toggled` signal calls.
         auto setPanels = [editor](const QString& list, bool visible) {
@@ -1191,7 +1206,15 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         setPanels(qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5"), true);
         const QString width = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
         if (!width.isEmpty()) {
-          editor->setProperty("rightPanelWidth", width.toInt());
+          QVariantMap patch;
+          patch.insert(QStringLiteral("rightWidth"), width.toInt());
+          QMetaObject::invokeMethod(editor, "layoutRequested", Q_ARG(QVariant, patch));
+        }
+        const QString leftWidth = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG8");
+        if (!leftWidth.isEmpty()) {
+          QVariantMap patch;
+          patch.insert(QStringLiteral("leftWidth"), leftWidth.toInt());
+          QMetaObject::invokeMethod(editor, "layoutRequested", Q_ARG(QVariant, patch));
         }
         const QString dividerArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
         if (!dividerArg.isEmpty()) {
@@ -1204,48 +1227,70 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           }
           QMetaObject::invokeMethod(divider, "moved",
                                     Q_ARG(qreal, dividerArg.toDouble()));
-          if (QObject* zone = editor->findChild<QObject*>(QStringLiteral("editorToolZone"))) {
-            // The layout settles a frame after the tool is armed, so measure
-            // what the window actually drew, not the pre-layout zero.
-            QObject* dividerProbe = divider;
-            QObject* stripProbe = editor->findChild<QObject*>(QStringLiteral("editorRightTabs"));
-            QTimer::singleShot(1200, zone, [zone, dividerProbe, stripProbe]() {
-              auto sceneTop = [](QObject* item) {
-                QQmlExpression expression(QQmlEngine::contextForObject(item), item,
-                                          QStringLiteral("mapToItem(null, 0, 0).y"));
-                return expression.evaluate().toDouble();
-              };
-              qInfo() << "KogaView dev ui request: tool zone height"
-                      << zone->property("height") << "implicit"
-                      << zone->property("implicitHeight") << "top" << sceneTop(zone)
-                      << "bottom" << sceneTop(zone) + zone->property("height").toDouble()
-                      << "divider" << (dividerProbe ? sceneTop(dividerProbe) : -1.0)
-                      << "strip" << (stripProbe ? sceneTop(stripProbe) : -1.0);
-            });
-          }
+          // The drag itself is only saved on release; the hook ends the drag the
+          // way a pointer coming up does, so the layout remembers the height.
+          QMetaObject::invokeMethod(divider, "released",
+                                    Q_ARG(qreal, dividerArg.toDouble()));
+        }
+        if (QObject* zone = editor->findChild<QObject*>(QStringLiteral("editorToolZone"))) {
+          // The layout settles a frame after the tab, the panels and the
+          // widths have been written, so measure what the window actually
+          // drew, not the pre-layout zero. This runs for every dock request,
+          // not only a dragged divider, so a saved layout and a content-fit
+          // dock both report a number next to their grab.
+          QObject* dividerProbe =
+            editor->findChild<QObject*>(QStringLiteral("editorToolZoneDivider"));
+          QObject* stripProbe = editor->findChild<QObject*>(QStringLiteral("editorRightTabs"));
+          QObject* referenceProbe =
+            editor->findChild<QObject*>(QStringLiteral("editorReferenceDock"));
+          QObject* inspectorProbe = editor->findChild<QObject*>(QStringLiteral("editorInspector"));
+          QTimer::singleShot(1200, editor, [zone, dividerProbe, stripProbe,
+                                            referenceProbe, inspectorProbe]() {
+            auto sceneTop = [](QObject* item) {
+              QQmlExpression expression(QQmlEngine::contextForObject(item), item,
+                                        QStringLiteral("mapToItem(null, 0, 0).y"));
+              return expression.evaluate().toDouble();
+            };
+            qInfo() << "KogaView dev ui request: tool zone height"
+                    << zone->property("height") << "implicit"
+                    << zone->property("implicitHeight") << "top" << sceneTop(zone)
+                    << "bottom" << sceneTop(zone) + zone->property("height").toDouble()
+                    << "divider" << (dividerProbe ? sceneTop(dividerProbe) : -1.0)
+                    << "strip" << (stripProbe ? sceneTop(stripProbe) : -1.0)
+                    << "reference dock"
+                    << (referenceProbe ? referenceProbe->property("height").toDouble() : -1.0)
+                    << "needs"
+                    << (referenceProbe ? referenceProbe->property("contentHeight").toDouble() : -1.0)
+                    << "page"
+                    << (referenceProbe ? referenceProbe->property("pageContentHeight").toDouble()
+                                       : -1.0)
+                    << "inspector"
+                    << (inspectorProbe ? inspectorProbe->property("height").toDouble() : -1.0);
+          });
         }
         qInfo().noquote() << "KogaView dev ui request editor-dock" << "tab"
                           << editor->property("rightTab") << "panels"
                           << editor->property("toolOptionsVisible")
                           << editor->property("infoVisible")
                           << editor->property("historyVisible")
-                          << editor->property("originalVisible") << "split"
-                          << editor->property("toolZoneHeight") << "width"
-                          << editor->property("rightPanelWidth") << "tool"
+                          << editor->property("originalVisible") << "reference"
+                          << editor->property("referenceHeight") << "content"
+                          << editor->property("referencePageHeight") << "left"
+                          << editor->property("leftPanelWidth") << "width"
+                          << editor->property("rightPanelWidth") << "columns"
+                          << editor->property("toolColumns") << "tool"
                           << editor->property("tool") << "index"
                           << editor->property("rightTabIndex");
         if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG7") == QLatin1String("menu")) {
-          // The panel list is a submenu of the burger menu, so the burger menu
-          // is what can be shown and photographed; the hook logs the list's row
-          // count, which is the view's own `panelEntries`.
-          openSidebarPanelMenu(rootObject);
+          // The window's menu is where the workspace entries live; the panel
+          // checklist itself is Settings › Appearance. Photograph what exists.
+          openMainMenu(rootObject);
         }
         emitted = true;
       } else if (uiRequest == QLatin1String("sidebar-dock")) {
         // The Browser's and the Viewer's sidebar without a pointer. Both views
-        // expose the same `panelEntries`/`setPanelVisible` pair the shell's
-        // `View > Sidebar` menu drives, so this request calls the same handler
-        // instead of naming a view.
+        // expose the same `setPanelVisible` function Settings › Appearance
+        // calls, so this request drives it instead of naming a view.
         QObject* view = rootObject->findChild<QObject*>(QStringLiteral("browser"));
         QString keyProperty = QStringLiteral("rightPage");
         if (view == nullptr) {
@@ -1272,7 +1317,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         const bool openList = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4")
                               == QLatin1String("menu");
         if (openList) {
-          openSidebarPanelMenu(rootObject);
+          openMainMenu(rootObject);
         }
         QObject* dock = view->findChild<QObject*>(QStringLiteral("rightPanel"))
                         ?: view->findChild<QObject*>(QStringLiteral("viewerRightPanel"));
@@ -1280,6 +1325,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << (view->objectName()) << "page"
                           << (keyProperty.isEmpty() ? QStringLiteral("-")
                                                     : view->property(keyProperty.toLatin1().constData()).toString())
+                          << "left" << view->property("quickAccessShown").toBool()
+                          << view->property("explorerShown").toBool()
                           << "panels"
                           << (view->property("previewPanelVisible").isValid()
                                 ? view->property("previewPanelVisible").toBool()
@@ -1287,6 +1334,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << (view->property("batchPanelVisible").isValid()
                                 ? view->property("batchPanelVisible").toBool()
                                 : false)
+                          << "widths" << view->property("leftPanelWidth").toInt()
+                          << view->property("rightPanelWidth").toInt()
                           << "pages" << (dock ? dock->property("shownTabCount").toInt() : 0)
                           << "strip" << (dock ? dock->property("stripShown").toBool() : false);
         emitted = true;

@@ -88,25 +88,53 @@ ApplicationWindow {
     /// buttons into one overflow menu (`*OverflowMenu` in the view).
     readonly property bool toolbarMini: root.toolbarMode === "mini"
 
-    /// The right dock's width, shared by the three workspaces. A width dragged
-    /// in the Browser is the width the Editor opens at; each view clamps it to
-    /// its own range before drawing, so a narrow Viewer panel cannot become a
-    /// sliver in the Editor. Session-only: the width is presentation state, not
-    /// a stored preference.
-    property real rightPanelWidth: appTheme.previewWidth
+    /// The layout on screen. Core owns the saved one (`state.layout`); while
+    /// Settings is open the form edits a copy and the window draws *that*, so
+    /// a checkbox or a width is a preview until Apply — the same shape the
+    /// theme preview has. `null` means "the saved layout".
+    property var previewLayout: null
+    readonly property var activeLayout: root.previewLayout
+                                        || root.state.layout
+                                        || ({})
 
-    /// The open workspace's sidebar panels, for the burger menu's `View >
-    /// Sidebar` submenu. The view owns which panels exist and what each key
-    /// means (`panelEntries`/`setPanelVisible`); the shell only draws the rows
-    /// and routes the toggle back. The binding follows both the workspace and
-    /// the view's own flags.
-    readonly property var workspacePanelEntries: {
-        var view = workspaceLoader.item
-        return (view && view.panelEntries) ? view.panelEntries : []
+    /// One view asked for a layout change: a splitter, the rail's columns, a
+    /// reference tab, a panel from Settings. While the Settings form is open
+    /// the change is only previewed; otherwise it is the saved layout, so a
+    /// drag or a tab is remembered without a second Save. The patch carries
+    /// only what moved; the rest is taken from the layout on screen.
+    function requestLayout(patch) {
+        var next = root.mergeLayout(root.activeLayout, patch)
+        if (settingsDialog.visible) {
+            root.previewLayout = next
+            settingsDialog.adoptLayout(next)
+            return
+        }
+        root.previewLayout = null
+        root.send({ type: "set_layout", layout: next })
     }
-    function setWorkspacePanelVisible(key, visible) {
-        var view = workspaceLoader.item
-        if (view && view.setPanelVisible) view.setPanelVisible(key, visible)
+
+    /// Merge a patch into a layout without sharing objects with either side:
+    /// a form, a view and Core must not end up holding one map between them.
+    function mergeLayout(base, patch) {
+        var source = base || ({})
+        var changes = patch || ({})
+        var result = {
+            leftWidth: changes.leftWidth !== undefined ? changes.leftWidth : source.leftWidth,
+            rightWidth: changes.rightWidth !== undefined ? changes.rightWidth : source.rightWidth,
+            editorToolColumns: changes.editorToolColumns !== undefined
+                               ? changes.editorToolColumns : source.editorToolColumns,
+            editorReferenceHeight: changes.editorReferenceHeight !== undefined
+                                   ? changes.editorReferenceHeight
+                                   : source.editorReferenceHeight,
+            editorReferenceTab: changes.editorReferenceTab !== undefined
+                                ? changes.editorReferenceTab : source.editorReferenceTab,
+            panels: {}
+        }
+        var panels = source.panels || ({})
+        for (var key in panels) result.panels[key] = panels[key]
+        var changedPanels = changes.panels || ({})
+        for (var panelKey in changedPanels) result.panels[panelKey] = changedPanels[panelKey]
+        return result
     }
 
     /// The floor is also enforced here, and not only through `minimumWidth`.
@@ -280,10 +308,14 @@ ApplicationWindow {
                 } else {
                     root.showToast(result.error.message);
                 }
-            } else if (command.type !== "select") {
+            } else if (command.type !== "select" && command.type !== "set_layout") {
                 // The typed line first: Core publishes `{code, args}` so the
                 // toast speaks the interface language. `message` is the English
                 // rendering kept for the journal and for callers without one.
+                // A layout change is silent like a selection: clicking a tab or
+                // releasing a splitter would otherwise announce "Layout saved"
+                // on every turn. Settings still confirms with "Settings saved",
+                // the command that owns the form the change came from.
                 if (result.ui && result.ui.code) {
                     root.showToast(uiLines.text(result.ui, root.state.language));
                 } else if (result.message) {
@@ -320,6 +352,7 @@ ApplicationWindow {
         settingsDialog.initialRemember = root.state.rememberLastFolder !== false;
         settingsDialog.initialBackground = root.state.backgroundThumbnails !== false;
         settingsDialog.initialLanguage = root.state.language || "system";
+        settingsDialog.initialLayout = JSON.parse(JSON.stringify(root.state.layout || ({})));
         settingsDialog.languageChoices = Platform.languages();
         settingsDialog.open();
     }
@@ -982,8 +1015,8 @@ ApplicationWindow {
             entries: snapshot.entries
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             listFolders: root.listFolders
-            rightPanelWidth: root.rightPanelWidth
-            onPanelWidthRequested: function(width) { root.rightPanelWidth = width }
+            layout: root.activeLayout
+            onLayoutRequested: function(patch) { root.requestLayout(patch) }
             onRevealPath: function(path) { Platform.revealInFolder(path); }
             onCommand: function(command) { root.send(command); }
             onToast: function(message) { root.showToast(message); }
@@ -1017,8 +1050,9 @@ ApplicationWindow {
             entries: snapshot.entries
             viewerImages: snapshot.viewerImages
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
-            rightPanelWidth: root.rightPanelWidth
-            onPanelWidthRequested: function(width) { root.rightPanelWidth = width }
+            listFolders: root.listFolders
+            layout: root.activeLayout
+            onLayoutRequested: function(patch) { root.requestLayout(patch) }
             onRevealPath: function(path) { Platform.revealInFolder(path); }
             onCommand: function(command) { root.send(command); }
             onCopyImage: function(path) { Platform.copyImage(path); }
@@ -1045,8 +1079,10 @@ ApplicationWindow {
             miniToolbar: root.toolbarMini
             state: root.state
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
-            rightPanelWidth: root.rightPanelWidth
-            onPanelWidthRequested: function(width) { root.rightPanelWidth = width }
+            listFolders: root.listFolders
+            layout: root.activeLayout
+            onLayoutRequested: function(patch) { root.requestLayout(patch) }
+            onRevealPath: function(path) { Platform.revealInFolder(path); }
             onCommand: function(command) { root.send(command); }
             onRequestOpen: root.chooseEditorImage()
             onRequestSaveAs: root.chooseEditorSaveAs()
@@ -1074,38 +1110,6 @@ ApplicationWindow {
             text: appTheme.menuEntries[29]
             icon.name: "document-edit-symbolic"
             onTriggered: root.chooseEditorImage()
-        }
-        MenuSeparator {}
-        // The one place a sidebar panel goes away or comes back. The top-level
-        // `View` entry and `Sidebar` inside it are shell words; the panel rows
-        // are the open workspace's own list, so the Browser offers its two
-        // pages, the Viewer its one, and the Editor its tool frame and three
-        // reference pages. Hiding the last one hides the whole column; showing
-        // any one brings it back.
-        Menu {
-            id: viewMenu
-            title: qsTr("View")
-            Menu {
-                id: sidebarMenu
-                objectName: "sidebarMenu"
-                title: qsTr("Sidebar")
-                Instantiator {
-                    model: root.workspacePanelEntries
-                    delegate: MenuItem {
-                        required property var modelData
-                        text: modelData.label
-                        checkable: true
-                        checked: modelData.checked
-                        onTriggered: root.setWorkspacePanelVisible(modelData.key, checked)
-                    }
-                    onObjectAdded: function(index, object) {
-                        sidebarMenu.insertItem(index, object)
-                    }
-                    onObjectRemoved: function(index, object) {
-                        sidebarMenu.removeItem(object)
-                    }
-                }
-            }
         }
         MenuSeparator {}
         MenuItem {
@@ -1140,6 +1144,9 @@ ApplicationWindow {
             root.previewTheme = themeName;
             if (language) root.applyInterfaceLanguage(language === "system" ? "" : language);
         }
+        onLayoutPreviewRequested: function(layout) {
+            root.previewLayout = JSON.parse(JSON.stringify(layout));
+        }
         /// Apply (stay open) or OK (close): persist through the one command
         /// that owns these values. The preview becomes the stored value, so the
         /// override is dropped and the binding takes over again.
@@ -1150,10 +1157,15 @@ ApplicationWindow {
                         background_thumbnails: backgroundThumbnails,
                         language: language });
         }
+        onLayoutSaveRequested: function(layout) {
+            root.previewLayout = null;
+            root.send({ type: "set_layout", layout: layout });
+        }
         /// Cancel, × or Escape: nothing was written, so dropping the override
         /// is the whole undo, and the language goes back to the stored one.
         onRevertRequested: {
             root.previewTheme = "";
+            root.previewLayout = null;
             root.applyInterfaceLanguage(root.state.language === "system"
                                         ? "" : (root.state.language || ""));
         }

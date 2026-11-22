@@ -46,9 +46,10 @@ Item {
     /// in folder`). The platform layer owns the FileManager1/portal choice, so
     /// the view only names the path.
     signal revealPath(string path)
-    /// The user dragged the right dock's splitter: the shell keeps one width
-    /// for the three workspaces, so the view reports the number.
-    signal panelWidthRequested(real width)
+    /// The user changed the layout: a splitter, the open reference tab or a
+    /// panel. The shell keeps one copy for the three workspaces and sends it to
+    /// Core as a `set_layout`, so a width or a tab survives the next launch.
+    signal layoutRequested(var patch)
 
     property string menuPath: ""
     property bool menuIsImage: false
@@ -64,58 +65,46 @@ Item {
     /// left the folder (or an empty one) has no index to walk from.
     property int keyboardCursor: -1
 
-    // Sidebar widths. Seeded from the theme, then owned by the drag handles so
-    // both panels are resizable; nothing is persisted yet.
-    property real leftPanelWidth: theme.panelWidth
-    property real rightPanelWidth: theme.previewWidth
+    /// The saved layout: which panels this workspace shows, the two dock
+    /// widths and the Editor's split. The shell owns one copy for the three
+    /// workspaces, because a width dragged in the Browser is the width the
+    /// Editor opens at. A view reports an interaction with `layoutRequested`;
+    /// it never writes the layout itself.
+    property var layout: ({})
+    readonly property var panels: view.layout.panels || ({})
+    function panelShown(key) { return view.panels[key] !== false }
+    readonly property bool quickAccessShown: view.panelShown("browser.quickAccess")
+    readonly property bool explorerShown: view.panelShown("browser.explorer")
+    /// The whole left dock is the sum of its panels: hiding every one hides the
+    /// column, showing any one brings it back. There is no separate switch.
+    readonly property bool leftDockShown: view.quickAccessShown || view.explorerShown
+
+    // Sidebar widths. The saved layout is the source; a drag writes a local
+    // value while the pointer is down and the shell sends the result in one
+    // `set_layout` when it comes up, so a saved width comes back on the next
+    // launch and a drag does not put a command in the journal per pixel.
+    property real leftPanelWidth: view.layout.leftWidth || theme.panelWidth
+    property bool leftDragging: false
+    Binding {
+        target: view
+        property: "leftPanelWidth"
+        value: view.layout.leftWidth || view.theme.panelWidth
+        when: !view.leftDragging
+        restoreMode: Binding.RestoreNone
+    }
+    property real rightPanelWidth: view.layout.rightWidth || theme.previewWidth
+    property bool rightDragging: false
+    Binding {
+        target: view
+        property: "rightPanelWidth"
+        value: view.layout.rightWidth || view.theme.previewWidth
+        when: !view.rightDragging
+        restoreMode: Binding.RestoreNone
+    }
     /// The shell keeps one width for all three workspaces; this view draws it
     /// within its own range, so a width dragged in the Editor cannot become a
     /// sliver here.
     readonly property real dockWidth: Math.max(200, Math.min(640, rightPanelWidth))
-
-    // Expansion lives outside the tree nodes so the tree can be rebuilt after a
-    // file operation without collapsing what the user had open.
-    property var expandedPaths: ({})
-    property var collapsedPaths: ({})
-    property int lastTreeRevision: -1
-
-    /// Reload the tree after Core reports that the folder tree may have changed
-    /// (copy, move, trash, delete, new folder, explicit refresh). Coalesced so a
-    /// burst of state updates rebuilds the tree once.
-    function requestTreeRefresh() {
-        treeRefreshTimer.restart();
-    }
-
-    function reloadTree() {
-        var root = treeRoot.item;
-        if (!root) return;
-        var savedY = treeScroll.contentY;
-        root.reloadChildren();
-        // Rebuilding the nodes changes the content height, so the scroll offset
-        // is restored afterwards and clamped to the new content.
-        Qt.callLater(function() {
-            var limit = Math.max(0, treeScroll.contentHeight - treeScroll.height);
-            treeScroll.contentY = Math.min(savedY, limit);
-        });
-    }
-
-    Timer {
-        id: treeRefreshTimer
-        interval: 120
-        onTriggered: view.reloadTree()
-    }
-
-    Connections {
-        target: view
-        function onStateChanged() {
-            var revision = view.state.treeRevision;
-            if (typeof revision !== "number") return;
-            if (view.lastTreeRevision === revision) return;
-            var isFirstState = view.lastTreeRevision < 0;
-            view.lastTreeRevision = revision;
-            if (!isFirstState) view.requestTreeRefresh();
-        }
-    }
 
     property var selectionInfo: view.state.selectionInfo || null
 
@@ -125,18 +114,13 @@ Item {
     /// two answer one question together. The burger menu's `View > Sidebar`
     /// submenu is the only place a panel is shown or hidden.
     property string rightPage: "preview"
-    property bool previewPanelVisible: true
-    property bool batchPanelVisible: true
+    readonly property bool previewPanelVisible: view.panelShown("browser.preview")
+    readonly property bool batchPanelVisible: view.panelShown("browser.batch")
     readonly property var rightPageEntries: [
         { key: "preview", label: qsTr("Preview"), icon: "icons/preview.svg",
           shown: view.previewPanelVisible },
         { key: "batch", label: qsTr("Batch action"), icon: "icons/batch.svg",
           shown: view.batchPanelVisible }
-    ]
-    /// The rows the shell draws under `View > Sidebar`.
-    readonly property var panelEntries: [
-        { key: "preview", label: qsTr("Preview"), checked: view.previewPanelVisible },
-        { key: "batch", label: qsTr("Batch action"), checked: view.batchPanelVisible }
     ]
     /// The whole sidebar is the sum of its panels: hiding every one hides the
     /// column, showing any one brings it back. There is no separate switch.
@@ -159,15 +143,25 @@ Item {
         }
         return count
     }
+    /// Settings' Appearance tab toggled one of this workspace's panels. The
+    /// layout is Core's, so the view reports which key changed; opening a page
+    /// that was just shown is the one piece of presentation state that follows.
     function setPanelVisible(key, visible) {
-        if (key === "preview") view.previewPanelVisible = visible
-        else if (key === "batch") view.batchPanelVisible = visible
-        else return
-        if (visible) {
-            view.rightPage = key
-        } else if (view.rightPage === key) {
-            view.rightPage = view.previewPanelVisible ? "preview"
-                            : (view.batchPanelVisible ? "batch" : "")
+        var layoutKey = "browser." + key
+        if (key !== "preview" && key !== "batch"
+            && key !== "quickAccess" && key !== "explorer") return
+        var patch = {}
+        patch.panels = {}
+        patch.panels[layoutKey] = visible
+        view.layoutRequested(patch)
+        if (key === "preview" || key === "batch") {
+            if (visible) {
+                view.rightPage = key
+            } else if (view.rightPage === key) {
+                // Name the page that is still there, not the one just hidden.
+                var other = key === "preview" ? "batch" : "preview"
+                if (view.panelShown("browser." + other)) view.rightPage = other
+            }
         }
     }
 
@@ -441,131 +435,29 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // ------------------------------------------------------- left sidebar
-        Rectangle {
+        // ------------------------------------------------------- left dock
+        // Quick access and Explorer are two panels of one column, shared with
+        // the Viewer and the Editor. Which are on is the saved layout's answer;
+        // the column itself is shown while at least one of them is.
+        LeftDock {
             objectName: "leftPanel"
-            visible: !!view.state.leftPanel
+            visible: view.leftDockShown
             Layout.preferredWidth: view.leftPanelWidth
             Layout.fillHeight: true
-            color: view.theme.sidebar
-            border.width: 1
-            border.color: view.theme.border
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
-
-                Label {
-                    text: qsTr("Quick access")
-                    color: view.theme.textMuted
-                    font.bold: true
-                    font.pixelSize: 12
-                }
-
-                ListView {
-                    id: quickList
-                    objectName: "quickAccessList"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Math.min(contentHeight, 190)
-                    clip: true
-                    interactive: contentHeight > height
-                    model: view.state.favorites || []
-                    /// Three 32 px rows per notch.
-                    WheelScroll {
-                        view: quickList
-                        step: 96
-                    }
-
-                    delegate: Rectangle {
-                        objectName: "quickAccessItem"
-                        width: quickList.width
-                        height: 32
-                        radius: view.theme.radius
-                        color: quickHover.hovered ? view.theme.hover : "transparent"
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 6
-                            anchors.rightMargin: 6
-                            spacing: 6
-
-                            Label {
-                                text: qsTr("★")
-                                color: view.theme.accent
-                            }
-                            Label {
-                                text: view.folderLabel(modelData)
-                                color: view.theme.text
-                                elide: Text.ElideMiddle
-                                Layout.fillWidth: true
-                            }
-                        }
-
-                        HoverHandler { id: quickHover }
-                        TapHandler {
-                            acceptedButtons: Qt.LeftButton
-                            onSingleTapped: view.command({ type: "open_folder", path: modelData })
-                        }
-                        TapHandler {
-                            acceptedButtons: Qt.RightButton
-                            onSingleTapped: view.openQuickMenu(modelData)
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    color: view.theme.border
-                }
-
-                Label {
-                    text: qsTr("Folders")
-                    color: view.theme.textMuted
-                    font.bold: true
-                    font.pixelSize: 12
-                }
-
-                Flickable {
-                    id: treeScroll
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    contentWidth: width
-                    contentHeight: treeRoot.height
-                    boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                    /// Five 24 px rows per notch, like a tree in any other file
-                    /// manager — Qt's own 72 px is three.
-                    WheelScroll {
-                        view: treeScroll
-                        step: 120
-                    }
-
-                    Loader {
-                        id: treeRoot
-                        objectName: "folderTreeRoot"
-                        width: parent.width
-                        height: item ? item.implicitHeight : 0
-                        // The tree is rooted at the folder the user opened, not
-                        // at whatever folder was navigated to, so browsing the
-                        // tree or the grid never moves its root.
-                        property string folderPath: view.state.rootFolder
-                                                   || view.state.currentFolder || ""
-                        // No root node at all when nothing is open, instead of
-                        // an empty row in the tree.
-                        sourceComponent: folderPath ? folderNode : null
-                        onLoaded: if (item) item.reset(folderPath, view.folderLabel(folderPath), 0)
-                        onFolderPathChanged: if (item) item.reset(folderPath, view.folderLabel(folderPath), 0)
-                    }
-                }
-            }
+            theme: view.theme
+            state: view.state
+            quickAccessShown: view.quickAccessShown
+            explorerShown: view.explorerShown
+            listFolders: view.listFolders
+            onOpenFolder: function(path) { view.command({ type: "open_folder", path: path }) }
+            onNavigateTo: function(path) { view.command({ type: "navigate", path: path }) }
+            onOpenMenu: function(path) { view.openFolderMenu(path) }
+            onQuickMenu: function(path) { view.openQuickMenu(path) }
         }
 
         PanelSplitter {
             objectName: "leftSplitter"
-            visible: !!view.state.leftPanel
+            visible: view.leftDockShown
             Layout.fillHeight: true
             theme: view.theme
             value: view.leftPanelWidth
@@ -573,7 +465,14 @@ Item {
             direction: 1
             minimum: 180
             maximum: 560
-            onMoved: function(width) { view.leftPanelWidth = width }
+            onMoved: function(width) {
+                view.leftDragging = true
+                view.leftPanelWidth = width
+            }
+            onReleased: function(width) {
+                view.leftDragging = false
+                view.layoutRequested({ leftWidth: Math.round(width) })
+            }
         }
 
         // ------------------------------------------------------------ center
@@ -878,8 +777,12 @@ Item {
             minimum: 200
             maximum: 640
             onMoved: function(width) {
+                view.rightDragging = true
                 view.rightPanelWidth = width
-                view.panelWidthRequested(width)
+            }
+            onReleased: function(width) {
+                view.rightDragging = false
+                view.layoutRequested({ rightWidth: Math.round(width) })
             }
         }
 
@@ -951,188 +854,6 @@ Item {
                     theme: view.theme
                     selectionCount: view.selectedImages
                 }
-            }
-        }
-    }
-
-    // ------------------------------------------------------- folder tree node
-    Component {
-        id: folderNode
-
-        Column {
-            id: node
-
-            property string nodePath: ""
-            property string nodeName: ""
-            property int depth: 0
-            property bool expanded: false
-            property var children: []
-
-            spacing: 0
-            width: parent ? parent.width : 200
-
-            function reset(path, name, level) {
-                nodePath = path;
-                nodeName = name;
-                depth = level;
-                children = [];
-                expanded = false;
-                if (path) {
-                    expanded = true;
-                    view.expandedPaths[path] = true;
-                    delete view.collapsedPaths[path];
-                    load();
-                }
-            }
-
-            function load() {
-                if (!nodePath) return;
-                var response = view.listFolders(nodePath);
-                children = (response && response.ok) ? response.folders : [];
-            }
-
-            /// Click or double-click: expand the node and show that folder in
-            /// the grid. This navigates — it never re-roots the tree, which only
-            /// quick access and "Open folder" do.
-            function activate() {
-                if (!nodePath) return;
-                expand();
-                view.command({ type: "navigate", path: nodePath });
-            }
-
-            function expand() {
-                if (!nodePath || expanded) return;
-                expanded = true;
-                view.expandedPaths[nodePath] = true;
-                delete view.collapsedPaths[nodePath];
-                load();
-            }
-
-            function collapse() {
-                if (!nodePath || !expanded) return;
-                expanded = false;
-                delete view.expandedPaths[nodePath];
-                // Remember the collapse so auto-reveal does not undo it.
-                view.collapsedPaths[nodePath] = true;
-            }
-
-            /// Collapse/expand from the disclosure arrow; the arrow only changes
-            /// the tree, it does not navigate.
-            function toggleExpanded() {
-                if (expanded) {
-                    collapse();
-                } else {
-                    expand();
-                }
-            }
-
-            /// Expand (never collapse) towards the folder shown in the grid, so
-            /// navigating from the grid, breadcrumbs or the toolbar reveals the
-            /// node. A node the user collapsed on purpose is left alone.
-            function followCurrent() {
-                if (!nodePath || view.collapsedPaths[nodePath]) return;
-                var current = view.state.currentFolder || "";
-                if (!current) return;
-                if (current !== nodePath && current.indexOf(nodePath + "/") !== 0) return;
-                expand();
-            }
-
-            /// Restore the expansion recorded before the tree was rebuilt.
-            function restoreExpansion() {
-                if (!nodePath) return;
-                if (view.expandedPaths[nodePath] === true) expand();
-            }
-
-            /// Rebuild this node's children from the filesystem, then refresh the
-            /// already-loaded subtree below it. A change deeper in the tree
-            /// leaves this listing identical, so no delegate would be recreated
-            /// and the stale grandchild rows would survive; recursing into the
-            /// live child nodes (which each reload their own children) reaches
-            /// every open level. The current folder and the expansion stay put.
-            function reloadChildren() {
-                if (!expanded) return;
-                load();
-                for (var i = 0; i < childRepeater.count; ++i) {
-                    var loader = childRepeater.itemAt(i);
-                    var child = loader ? loader.item : null;
-                    if (child) child.reloadChildren();
-                }
-            }
-
-            Rectangle {
-                objectName: "folderTreeRow"
-                width: node.width
-                height: 30
-                radius: 4
-                color: node.nodePath === (view.state.currentFolder || "")
-                       ? view.theme.selection
-                       : (nodeHover.hovered ? view.theme.hover : "transparent")
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 4 + Math.min(node.depth, 10) * 12
-                    anchors.rightMargin: 4
-                    spacing: 2
-
-                    ToolButton {
-                        implicitWidth: 20
-                        implicitHeight: 20
-                        text: node.expanded ? "▾" : "▸"
-                        display: AbstractButton.TextOnly
-                        focusPolicy: Qt.NoFocus
-                        activeFocusOnTab: false
-                        onClicked: node.toggleExpanded()
-                    }
-
-                    Icon {
-                        iconName: "folder-symbolic"
-                        iconSize: 15
-                        iconColor: view.theme.textMuted
-                    }
-
-                    Label {
-                        text: node.nodeName
-                        color: view.theme.text
-                        elide: Text.ElideMiddle
-                        Layout.fillWidth: true
-                    }
-                }
-
-                HoverHandler { id: nodeHover }
-                TapHandler {
-                    acceptedButtons: Qt.LeftButton
-                    // Both a click and a double-click expand the node; the tree
-                    // root and the grid folder stay where the user opened them.
-                    onSingleTapped: node.activate()
-                    onDoubleTapped: node.activate()
-                }
-                TapHandler {
-                    acceptedButtons: Qt.RightButton
-                    onSingleTapped: view.openFolderMenu(node.nodePath)
-                }
-            }
-
-            Repeater {
-                id: childRepeater
-                model: node.expanded ? node.children : []
-
-                delegate: Loader {
-                    width: node.width
-                    sourceComponent: folderNode
-                    onLoaded: {
-                        item.nodePath = modelData.path;
-                        item.nodeName = modelData.name;
-                        item.depth = node.depth + 1;
-                        item.expanded = false;
-                        item.restoreExpansion();
-                        item.followCurrent();
-                    }
-                }
-            }
-
-            Connections {
-                target: view
-                function onStateChanged() { node.followCurrent() }
             }
         }
     }
@@ -1333,14 +1054,6 @@ Item {
             icon.name: "folder-new-symbolic"
             onTriggered: view.promptNewFolder(view.state.currentFolder)
         }
-        MenuSeparator {}
-        MenuItem {
-            text: view.theme.menuEntries[33]
-            icon.name: "sidebar-show-symbolic"
-            checkable: true
-            checked: !!view.state.leftPanel
-            onTriggered: view.command({ type: "toggle_left_panel" })
-        }
     }
 
     Dialog {
@@ -1443,17 +1156,6 @@ Item {
             ToolbarSeparator {
                 theme: view.theme
                 visible: !view.miniToolbar
-            }
-            ToolbarButton {
-                theme: view.theme
-                visible: !view.miniToolbar
-                checkable: true
-                checked: !!view.state.leftPanel
-                icon.name: "sidebar-show-symbolic"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Toggle quick access and folder tree")
-                onClicked: view.command({ type: "toggle_left_panel" })
             }
             ToolbarButton {
                 objectName: "browserOverflowButton"

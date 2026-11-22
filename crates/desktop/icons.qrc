@@ -28,6 +28,10 @@
     <file alias="icons/flip-vertical.svg">qml/icons/flip-vertical.svg</file>
     <file alias="icons/columns-two.svg">qml/icons/columns-two.svg</file>
     <file alias="icons/columns-one.svg">qml/icons/columns-one.svg</file>
+    <file alias="icons/preferences.svg">qml/icons/preferences.svg</file>
+    <file alias="icons/browser.svg">qml/icons/browser.svg</file>
+    <file alias="icons/viewer.svg">qml/icons/viewer.svg</file>
+    <file alias="icons/editor.svg">qml/icons/editor.svg</file>
     <file alias="icons/info.svg">qml/icons/info.svg</file>
     <file alias="icons/history.svg">qml/icons/history.svg</file>
     <file alias="icons/preview.svg">qml/icons/preview.svg</file>

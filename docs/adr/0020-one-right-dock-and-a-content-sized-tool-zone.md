@@ -407,3 +407,21 @@ by the menu is opened by the menu, not by the strip's memory. `tst_settings`'s
 `View > Sidebar` menus, the `workspacePanelEntries` model and the
 `setWorkspacePanelVisible(modelData.key, checked)` route, because `Main.qml`
 needs the bridge and cannot be loaded in a test.
+
+## Revision — 2026-11-22 (ADR 0022)
+
+The dock's shape is unchanged; where its numbers come from is not:
+
+- **The panel list left `View > Sidebar`.** It is Settings › Appearance now, one
+  page per workspace, and `workspacePanelEntries`/`setWorkspacePanelVisible`
+  are deleted. A panel's visibility is part of Core's `LayoutState`, written by
+  `set_layout`, not a QML flag that the next launch forgets.
+- **The two widths are Core's too.** `rightPanelWidth` as one session value is
+  gone: `LayoutState.right_width` (200–640) is shared by the three docks, and
+  `left_width` (180–560) sizes the shared left dock ADR 0022 adds.
+- **The content-sized tool zone is no longer 340 px.** The reference dock takes
+  the height its page needs (`editorReferenceHeight: 0`) and the tool frame
+  absorbs the rest of the column; a dragged reference height is remembered.
+- **One frame is still one frame.** Pointer, Crop, Brush and Transform draw the
+  same heading and the same column, and a tool with fewer options leaves blank
+  space under its verbs rather than moving the rest of the dock.

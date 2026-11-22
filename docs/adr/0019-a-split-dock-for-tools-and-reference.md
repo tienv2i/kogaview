@@ -161,3 +161,22 @@ workspace's earlier shape. Two of its decisions are superseded:
 Everything else still stands: `PanelTabs` is still self-drawn, the tab strip
 still folds its labels under 240 px, the action row is still measured
 (`cropActionsStack`), and the pointer still owns no options.
+
+## Revision — 2026-11-22 (ADR 0022)
+
+The split this ADR describes is now a preference Core owns, not view state:
+
+- **The split, the tab and the rail's columns are `LayoutState` fields.** A drag
+  that ends, a tab click or the rail's fold sends `set_layout` through the
+  shell; a launch opens where the last one ended. `toolZoneHeight` is now
+  `editorReferenceHeight` and its `0` means "as tall as the open page needs",
+  which is the default.
+- **The fold is gone.** `toolZoneFolded` and `referenceFolded` had one job —
+  give half the column to the other half — and hiding the individual panels
+  (ADR 0022) does that and more, so the chevron and its two state flags are
+  deleted. The divider stays: height is not visibility.
+- **The tool rail is one of the layout's panels.** `editor.tools` can be hidden
+  like the reference pages, and the quick-edit grid below it goes with it.
+
+Everything else still stands: the tabs are self-drawn (`PanelTabs`), the action
+row is measured (`cropActionsStack`), and the pointer still owns no options.

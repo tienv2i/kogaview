@@ -17,6 +17,7 @@
 // real window), or that the modal obscurer blocks the rest of the app (a probe
 // did that with injected mouse/wheel/key events, see docs/M1-REPORT.md).
 
+#include <QColor>
 #include <QFile>
 #include <QGuiApplication>
 #include <QPointingDevice>
@@ -65,8 +66,9 @@ private slots:
   void theShellBindsTheCopyKeysItsMenusName();
   void theDiscardAnswerResetsTheDocumentBeforeLeaving();
   void theShellAsksBeforeReplacingAnUnsavedDocument();
-  void theShellSharesOneDockWidthAndRevealsThroughThePlatform();
-  void theShellListsTheSidebarPanelsInTheViewMenu();
+  void theShellSharesOneLayoutAndRevealsThroughThePlatform();
+  void theShellKeepsThePanelListInSettings();
+  void theAppearanceSectionsEditAndSaveTheLayout();
 
 private:
   /// The dialog is a `Popup`: its header, content and buttons are QObjects of
@@ -75,6 +77,10 @@ private:
   QQuickItem* visualItem(const QString& name) const;
   QQuickItem* item(const char* name) const;
   void openDialog();
+  /// The first `CheckBox` under `root`, in page order. The panel rows are a
+  /// `Repeater`, and a delegate is not a QObject child of the Repeater, so the
+  /// walk goes through the visual tree.
+  QQuickItem* firstCheckBox(QQuickItem* root) const;
   qreal property(const char* name) const { return m_dialog->property(name).toReal(); }
   bool dialogVisible() const { return m_dialog->property("visible").toBool(); }
 
@@ -141,6 +147,19 @@ QQuickItem* TestSettings::visualItem(const QString& name) const
 QQuickItem* TestSettings::item(const char* name) const
 {
   return visualItem(QString::fromLatin1(name));
+}
+
+QQuickItem* TestSettings::firstCheckBox(QQuickItem* root) const
+{
+  QList<QQuickItem*> pending{root};
+  while (!pending.isEmpty()) {
+    QQuickItem* candidate = pending.takeFirst();
+    if (candidate->inherits("QQuickCheckBox") && candidate->isVisible()) {
+      return candidate;
+    }
+    pending.append(candidate->childItems());
+  }
+  return nullptr;
 }
 
 void TestSettings::openDialog()
@@ -628,53 +647,228 @@ void TestSettings::theShellAsksBeforeReplacingAnUnsavedDocument()
                           .arg(direct)));
 }
 
-/// `Main.qml` owns the two things the three workspaces share about their right
-/// dock: one width, and the shell call that reveals a path in the desktop's own
-/// file manager. The views only ask (`panelWidthRequested`, `revealPath`); this
-/// pins the shell half, which cannot be instantiated here.
-void TestSettings::theShellSharesOneDockWidthAndRevealsThroughThePlatform()
+/// `Main.qml` owns the three things the workspaces share about their layout:
+/// the copy on screen (so a width dragged in the Browser is the width the
+/// Editor opens at), the one command that saves it, and the shell call that
+/// reveals a path in the desktop's own file manager. The views only report an
+/// interaction (`layoutRequested`, `revealPath`); this pins the shell half,
+/// which cannot be instantiated here.
+void TestSettings::theShellSharesOneLayoutAndRevealsThroughThePlatform()
 {
   QFile main(qmlDir() + QStringLiteral("/Main.qml"));
   QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
   const QString source = QString::fromUtf8(main.readAll());
 
-  QVERIFY2(source.contains(QStringLiteral("property real rightPanelWidth: appTheme.previewWidth")),
-           "the shell does not seed the shared dock width");
-  const int given = source.count(QStringLiteral("rightPanelWidth: root.rightPanelWidth"));
-  QVERIFY2(given == 3,
-           qPrintable(QStringLiteral("the shared width reaches %1 views, expected 3").arg(given)));
-  const int taken = source.count(
-    QStringLiteral("onPanelWidthRequested: function(width) { root.rightPanelWidth = width }"));
-  QVERIFY2(taken == 3,
-           qPrintable(QStringLiteral("%1 views ask for a new width, expected 3").arg(taken)));
+  // One layout, taken from Core's state and replaced by the preview while the
+  // Settings form is open.
+  QVERIFY2(source.contains(QStringLiteral("readonly property var activeLayout: root.previewLayout")),
+           "the shell does not merge the preview over the saved layout");
+  QVERIFY2(source.contains(QStringLiteral("|| root.state.layout")),
+           "the saved layout is not the fallback");
+  const int wired = source.count(QStringLiteral("layout: root.activeLayout"));
+  QVERIFY2(wired == 3,
+           qPrintable(QStringLiteral("the shared layout reaches %1 views, expected 3").arg(wired)));
+  const int asked = source.count(QStringLiteral("onLayoutRequested: function(patch) { root.requestLayout(patch) }"));
+  QVERIFY2(asked == 3,
+           qPrintable(QStringLiteral("%1 views ask for a layout change, expected 3").arg(asked)));
+  // Two writers, one command: a drag merges its patch into the layout on
+  // screen, the form sends the layout it edited. Nothing else writes it.
+  const int sent = source.count(QStringLiteral("{ type: \"set_layout\""));
+  QVERIFY2(sent == 2,
+           qPrintable(QStringLiteral("%1 places send set_layout, expected 2").arg(sent)));
+  QVERIFY2(source.contains(QStringLiteral("settingsDialog.adoptLayout(next)")),
+           "a change made while the form is open is not previewed there");
+
+  // A layout drag is not a command per pixel: the splitters report on release.
+  const QStringList views = { QStringLiteral("BrowserView.qml"),
+                              QStringLiteral("Viewer.qml"),
+                              QStringLiteral("EditorView.qml") };
+  for (const QString& name : views) {
+    QFile view(qmlDir() + QLatin1Char('/') + name);
+    QVERIFY2(view.open(QIODevice::ReadOnly | QIODevice::Text),
+             qPrintable(QStringLiteral("cannot read %1").arg(name)));
+    const QString text = QString::fromUtf8(view.readAll());
+    QVERIFY2(text.contains(QStringLiteral("signal layoutRequested(var patch)")),
+             qPrintable(QStringLiteral("%1 has no layout channel").arg(name)));
+    QVERIFY2(text.contains(QStringLiteral("onReleased: function(width)")),
+             qPrintable(QStringLiteral("%1 saves a drag before it ends").arg(name)));
+  }
 
   const int reveal = source.count(
     QStringLiteral("onRevealPath: function(path) { Platform.revealInFolder(path); }"));
-  QVERIFY2(reveal == 2,
-           qPrintable(QStringLiteral("%1 reveal requests reach the platform, expected 2")
+  QVERIFY2(reveal == 3,
+           qPrintable(QStringLiteral("%1 reveal requests reach the platform, expected 3")
                         .arg(reveal)));
 }
 
-/// Panel visibility lives in exactly one place: the burger menu's `View >
-/// Sidebar` submenu. `Main.qml` draws the rows from the open workspace's own
-/// list, and the three views no longer carry a sidebar toggle of their own —
-/// no checklist, no toolbar button, no context-menu entry, and no key that
-/// hides the Editor's panels.
-void TestSettings::theShellListsTheSidebarPanelsInTheViewMenu()
+/// Panel visibility has exactly one home: Settings › Appearance. The four
+/// sections are drawn from `SettingsDialog.qml`'s own lists, the shell seeds the
+/// form from the saved layout and sends it back through `set_layout`, and no
+/// workspace carries a checkbox, a gutter or a toolbar button of its own.
+/// Settings › Appearance is where the layout is edited. A row is a preview,
+/// Apply asks the shell to persist the layout *with* the rest of the form, and
+/// "Reset layout" restores Core's own defaults — the same numbers, not a second
+/// copy that drifts.
+void TestSettings::theAppearanceSectionsEditAndSaveTheLayout()
 {
+  m_dialog->setProperty("initialLayout",
+                        QVariantMap{
+                          {QStringLiteral("leftWidth"), 260},
+                          {QStringLiteral("rightWidth"), 300},
+                          {QStringLiteral("editorToolColumns"), 2},
+                          {QStringLiteral("editorReferenceHeight"), 0},
+                          {QStringLiteral("editorReferenceTab"), QStringLiteral("info")},
+                          {QStringLiteral("panels"),
+                           QVariantMap{{QStringLiteral("browser.quickAccess"), true}}}});
+  openDialog();
+
+  QSignalSpy previews(m_dialog, SIGNAL(layoutPreviewRequested(QVariant)));
+  QSignalSpy saves(m_dialog, SIGNAL(layoutSaveRequested(QVariant)));
+
+  // Four sections, each with its own page; the strip's `onActivated` writes
+  // `section`, which is what this does.
+  const QVector<QPair<QString, QString>> sections = {
+    {QStringLiteral("general"), QStringLiteral("settingsGeneralPage")},
+    {QStringLiteral("browser"), QStringLiteral("settingsBrowserPage")},
+    {QStringLiteral("editor"), QStringLiteral("settingsEditorPage")},
+    {QStringLiteral("viewer"), QStringLiteral("settingsViewerPage")}};
+  for (const auto& section : sections) {
+    m_dialog->setProperty("section", section.first);
+    QTest::qWait(20);
+    QQuickItem* page = item(section.second.toUtf8().constData());
+    QVERIFY2(page != nullptr,
+             qPrintable(QStringLiteral("the %1 section has no page").arg(section.first)));
+    QVERIFY2(page->isVisible(),
+             qPrintable(QStringLiteral("the %1 page is not drawn for its section")
+                          .arg(section.first)));
+  }
+
+  // One panel row: the first Browser checkbox is `browser.quickAccess`. Toggling
+  // it previews the new layout without writing anything.
+  m_dialog->setProperty("section", QStringLiteral("browser"));
+  QTest::qWait(20);
+  QQuickItem* page = item("settingsBrowserPage");
+  QVERIFY(page != nullptr);
+  QQuickItem* row = firstCheckBox(page);
+  QVERIFY2(row != nullptr, "the Browser section offers no panel rows");
+  QVERIFY2(row->property("checked").toBool(), "the saved visible panel opened unchecked");
+
+  // A `CheckBox` inside a `Popup` resolves the platform palette, so the stock
+  // content item drew near-black words on this dark form. The row now draws its
+  // own label in the theme's colour, and that is the fact asserted here: the
+  // text is the panel's name and it is legible against the dialog's surface.
+  QQuickItem* content = row->property("contentItem").value<QQuickItem*>();
+  QVERIFY2(content != nullptr, "the panel row draws no content item");
+  QVERIFY2(content->property("text").toString() == row->property("text").toString(),
+           "the panel row's words are not its panel's name");
+  QObject* theme = m_dialog->property("theme").value<QObject*>();
+  QVERIFY2(theme != nullptr, "the form has no theme to draw with");
+  const QColor label = content->property("color").value<QColor>();
+  const QColor surface = theme->property("surface").value<QColor>();
+  QCOMPARE(label, theme->property("text").value<QColor>());
+  QVERIFY2(qAbs(label.lightnessF() - surface.lightnessF()) > 0.35,
+           qPrintable(QStringLiteral("the panel row's words are not legible: %1 on %2")
+                        .arg(label.name(), surface.name())));
+  const QPoint rowCentre =
+    row->mapToScene(QPointF(row->width() / 2.0, row->height() / 2.0)).toPoint();
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, rowCentre);
+  QTest::qWait(30);
+  QVERIFY2(previews.count() >= 1, "a panel row did not preview its layout");
+  const QVariantMap previewed = previews.last().at(0).toMap();
+  QCOMPARE(previewed.value(QStringLiteral("panels")).toMap()
+             .value(QStringLiteral("browser.quickAccess")).toBool(),
+           false);
+  QCOMPARE(saves.count(), 0);
+
+  // Apply saves the form, layout included, and stays open.
+  QQuickItem* apply = item("settingsApply");
+  QVERIFY(apply != nullptr);
+  QVERIFY2(apply->isEnabled(), "Apply is disabled with a pending panel change");
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier,
+                    apply->mapToScene(QPointF(apply->width() / 2.0,
+                                              apply->height() / 2.0)).toPoint());
+  QTest::qWait(40);
+  QCOMPARE(saves.count(), 1);
+  const QVariantMap saved = saves.last().at(0).toMap();
+  QCOMPARE(saved.value(QStringLiteral("leftWidth")).toInt(), 260);
+  QCOMPARE(saved.value(QStringLiteral("panels")).toMap()
+             .value(QStringLiteral("browser.quickAccess")).toBool(),
+           false);
+  QVERIFY2(!m_dialog->property("hasPendingChanges").toBool(),
+           "Apply left the form with the change still pending");
+  QVERIFY(dialogVisible());
+
+  // "Reset layout" is a preview of Core's defaults, not a save: every panel
+  // back on, the shared left dock at 260 (the protocol's own default), the
+  // reference dock content-sized again.
+  m_dialog->setProperty("section", QStringLiteral("general"));
+  QTest::qWait(20);
+  QQuickItem* reset = item("settingsResetLayout");
+  QVERIFY(reset != nullptr);
+  QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier,
+                    reset->mapToScene(QPointF(reset->width() / 2.0,
+                                              reset->height() / 2.0)).toPoint());
+  QTest::qWait(30);
+  const QVariantMap defaults = m_dialog->property("editedLayout").toMap();
+  QCOMPARE(defaults.value(QStringLiteral("leftWidth")).toInt(), 260);
+  QCOMPARE(defaults.value(QStringLiteral("rightWidth")).toInt(), 300);
+  QCOMPARE(defaults.value(QStringLiteral("editorToolColumns")).toInt(), 2);
+  QCOMPARE(defaults.value(QStringLiteral("editorReferenceHeight")).toInt(), 0);
+  QCOMPARE(defaults.value(QStringLiteral("editorReferenceTab")).toString(),
+           QStringLiteral("info"));
+  const QVariantMap panels = defaults.value(QStringLiteral("panels")).toMap();
+  QCOMPARE(panels.size(), 14);
+  QCOMPARE(panels.value(QStringLiteral("browser.quickAccess")).toBool(), true);
+  QCOMPARE(saves.count(), 1);
+}
+
+void TestSettings::theShellKeepsThePanelListInSettings()
+{
+  QFile dialog(qmlDir() + QStringLiteral("/SettingsDialog.qml"));
+  QVERIFY2(dialog.open(QIODevice::ReadOnly | QIODevice::Text), "SettingsDialog.qml is missing");
+  const QString form = QString::fromUtf8(dialog.readAll());
+
+  QVERIFY2(form.contains(QStringLiteral("readonly property var sections")),
+           "the form has no section strip");
+  const QStringList sections = { QStringLiteral("general"), QStringLiteral("browser"),
+                                 QStringLiteral("editor"), QStringLiteral("viewer") };
+  for (const QString& key : sections) {
+    QVERIFY2(form.contains(QStringLiteral("key: \"%1\"").arg(key)),
+             qPrintable(QStringLiteral("the form has no %1 section").arg(key)));
+  }
+  // Every key the protocol knows must be offered, or a panel Core remembers
+  // could never be switched again.
+  const QStringList keys = {
+    QStringLiteral("browser.quickAccess"),  QStringLiteral("browser.explorer"),
+    QStringLiteral("browser.preview"),      QStringLiteral("browser.batch"),
+    QStringLiteral("viewer.quickAccess"),   QStringLiteral("viewer.explorer"),
+    QStringLiteral("viewer.info"),          QStringLiteral("editor.quickAccess"),
+    QStringLiteral("editor.explorer"),      QStringLiteral("editor.tools"),
+    QStringLiteral("editor.options"),       QStringLiteral("editor.info"),
+    QStringLiteral("editor.history"),       QStringLiteral("editor.original")
+  };
+  for (const QString& key : keys) {
+    QVERIFY2(form.contains(QLatin1Char('"') + key + QLatin1Char('"')),
+             qPrintable(QStringLiteral("the form never offers %1").arg(key)));
+  }
+  QVERIFY2(form.contains(QStringLiteral("signal layoutSaveRequested(var layout)")),
+           "the form cannot save a layout");
+  QVERIFY2(form.contains(QStringLiteral("function adoptLayout(layout)")),
+           "a dock change made behind the form is not adopted");
+
   QFile main(qmlDir() + QStringLiteral("/Main.qml"));
   QVERIFY2(main.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
   const QString source = QString::fromUtf8(main.readAll());
-
-  QVERIFY2(source.contains(QStringLiteral("title: qsTr(\"View\")")),
-           "the burger menu has no View entry");
-  QVERIFY2(source.contains(QStringLiteral("title: qsTr(\"Sidebar\")")),
-           "View has no Sidebar submenu");
-  QVERIFY2(source.contains(QStringLiteral("model: root.workspacePanelEntries")),
-           "the Sidebar submenu is not fed by the open workspace's panel list");
-  QVERIFY2(source.contains(
-             QStringLiteral("root.setWorkspacePanelVisible(modelData.key, checked)")),
-           "a Sidebar row does not route its toggle back to the workspace");
+  QVERIFY2(source.contains(QStringLiteral("settingsDialog.initialLayout = JSON.parse(JSON.stringify(root.state.layout")),
+           "the form does not open on the saved layout");
+  QVERIFY2(source.contains(QStringLiteral("onLayoutPreviewRequested: function(layout)")),
+           "the form's preview never reaches the window");
+  QVERIFY2(source.contains(QStringLiteral("onLayoutSaveRequested: function(layout)")),
+           "the form's save never reaches Core");
+  QVERIFY2(!source.contains(QStringLiteral("title: qsTr(\"View\")")),
+           "the burger menu still has a View submenu");
+  QVERIFY2(!source.contains(QStringLiteral("workspacePanelEntries")),
+           "the shell still draws a panel menu");
 
   const QStringList views = { QStringLiteral("BrowserView.qml"),
                               QStringLiteral("Viewer.qml"),
@@ -684,27 +878,25 @@ void TestSettings::theShellListsTheSidebarPanelsInTheViewMenu()
     QVERIFY2(view.open(QIODevice::ReadOnly | QIODevice::Text),
              qPrintable(QStringLiteral("cannot read %1").arg(name)));
     const QString text = QString::fromUtf8(view.readAll());
-    QVERIFY2(text.contains(QStringLiteral("readonly property var panelEntries")),
-             qPrintable(QStringLiteral("%1 exposes no panel list").arg(name)));
-    QVERIFY2(text.contains(
-               QStringLiteral("readonly property bool sidebarShown: view.visiblePanelCount > 0")),
-             qPrintable(QStringLiteral("%1 does not derive the sidebar from its panels")
-                          .arg(name)));
     QVERIFY2(!text.contains(QStringLiteral("toggle_right_panel")),
              qPrintable(QStringLiteral("%1 still sends a sidebar toggle command").arg(name)));
     QVERIFY2(!text.contains(QStringLiteral("PanelMenu")),
              qPrintable(QStringLiteral("%1 still draws the checklist gutter").arg(name)));
     QVERIFY2(!text.contains(QStringLiteral("sidebar-show-right-symbolic")),
              qPrintable(QStringLiteral("%1 still has a sidebar toolbar/menu button").arg(name)));
+    QVERIFY2(!text.contains(QStringLiteral("readonly property var panelEntries")),
+             qPrintable(QStringLiteral("%1 still publishes a menu-fed panel list").arg(name)));
   }
 
+  // The Editor's reference dock is content-sized at the bottom: a fixed
+  // tool-zone height would contradict "only as tall as the page needs".
   QFile editor(qmlDir() + QStringLiteral("/EditorView.qml"));
   QVERIFY(editor.open(QIODevice::ReadOnly | QIODevice::Text));
   const QString editorText = QString::fromUtf8(editor.readAll());
-  QVERIFY2(!editorText.contains(QStringLiteral("panelsHidden")),
-           "Tab still hides the Editor's panels behind the menu's back");
-  QVERIFY2(editorText.contains(QStringLiteral("toolZoneHeight")),
-           "the Editor has no fixed tool frame");
+  QVERIFY2(!editorText.contains(QStringLiteral("toolZoneHeight")),
+           "the Editor still has a fixed tool frame");
+  QVERIFY2(editorText.contains(QStringLiteral("editorReferenceHeight")),
+           "the reference dock's dragged height is not a layout value");
 }
 
 QTEST_MAIN(TestSettings)

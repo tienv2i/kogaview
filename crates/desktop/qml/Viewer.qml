@@ -14,6 +14,8 @@ Item {
     /// The `Thumbnails` context object (C++ `ThumbnailCache`). Null in the QML
     /// test harness, where the filmstrip decodes the originals as before.
     property var thumbnails: null
+    /// The folder tree's listing: C++ in the app, a stub in the QML suite.
+    property var listFolders: function(path) { return { ok: false, folders: [] }; }
 
     /// The filmstrip tiles are drawn from the cache, so it needs each file's
     /// size and mtime for the key; `viewerImages` carries paths only, so they
@@ -31,6 +33,18 @@ Item {
     ThumbnailBook {
         id: thumbs
         cache: view.thumbnails
+    }
+
+    FolderMenu {
+        id: folderMenu
+        theme: view.theme
+        onOpenInBrowser: view.command({ type: "open_folder", path: folderMenu.path })
+        onReveal: view.revealPath(folderMenu.path)
+    }
+
+    function openFolderMenu(path) {
+        folderMenu.path = path
+        folderMenu.popup()
     }
 
     property real zoom: 1
@@ -82,9 +96,9 @@ Item {
     signal requestDelete(var paths)
     /// Ask the shell to select the file in the desktop's file manager.
     signal revealPath(string path)
-    /// The user dragged the dock's splitter: the shell keeps one width for the
-    /// three workspaces, so the view reports the number rather than owning it.
-    signal panelWidthRequested(real width)
+    /// A layout interaction — a splitter, a panel from Settings' Appearance
+    /// tab — as a patch the shell merges into the saved layout.
+    signal layoutRequested(var patch)
 
     /// Keyboard ownership. The viewing area is the window's focus target while
     /// this workspace is up, so the shortcuts below reach the view instead of a
@@ -103,26 +117,50 @@ Item {
     /// toolbar keeps its navigation and folds the rest into `viewerOverflowMenu`.
     property bool miniToolbar: false
 
-    /// The right dock's width. Seeded from the theme, then owned by the drag
-    /// handle; the shell keeps one value for the three workspaces and this
-    /// view clamps it to its own range before drawing.
-    property real rightPanelWidth: theme.previewWidth
+    /// The saved layout. The shell owns one copy for the three workspaces; a
+    /// view reports an interaction and never writes it.
+    property var layout: ({})
+    readonly property var panels: view.layout.panels || ({})
+    function panelShown(key) { return view.panels[key] !== false }
+    readonly property bool quickAccessShown: view.panelShown("viewer.quickAccess")
+    readonly property bool explorerShown: view.panelShown("viewer.explorer")
+    readonly property bool leftDockShown: view.quickAccessShown || view.explorerShown
+    readonly property bool infoPanelVisible: view.panelShown("viewer.info")
+    readonly property bool sidebarShown: view.infoPanelVisible
+
+    // Widths: the saved layout is the source; a drag keeps a local value while
+    // the pointer is down and the shell saves the result once it comes up.
+    property real leftPanelWidth: view.layout.leftWidth || theme.panelWidth
+    property bool leftDragging: false
+    Binding {
+        target: view
+        property: "leftPanelWidth"
+        value: view.layout.leftWidth || view.theme.panelWidth
+        when: !view.leftDragging
+        restoreMode: Binding.RestoreNone
+    }
+    property real rightPanelWidth: view.layout.rightWidth || theme.previewWidth
+    property bool rightDragging: false
+    Binding {
+        target: view
+        property: "rightPanelWidth"
+        value: view.layout.rightWidth || view.theme.previewWidth
+        when: !view.rightDragging
+        restoreMode: Binding.RestoreNone
+    }
     readonly property real dockWidth:
         Math.max(200, Math.min(640, rightPanelWidth))
 
-    /// The Viewer's one page. Presentation state: no command, no file. The
-    /// burger menu's `View > Sidebar` submenu is where it is hidden or brought
-    /// back.
-    property bool infoPanelVisible: true
-    /// The rows the shell draws under `View > Sidebar`.
-    readonly property var panelEntries: [
-        { key: "info", label: qsTr("Info"), checked: view.infoPanelVisible }
-    ]
+    /// Settings' Appearance tab toggled one of this workspace's panels. The
+    /// layout is Core's, so the view only says which key changed.
     function setPanelVisible(key, visible) {
-        if (key === "info") view.infoPanelVisible = visible
+        var patch = { panels: {} }
+        if (key === "info") patch.panels["viewer.info"] = visible
+        else if (key === "quickAccess") patch.panels["viewer.quickAccess"] = visible
+        else if (key === "explorer") patch.panels["viewer.explorer"] = visible
+        else return
+        view.layoutRequested(patch)
     }
-    readonly property int visiblePanelCount: view.infoPanelVisible ? 1 : 0
-    readonly property bool sidebarShown: view.visiblePanelCount > 0
 
     property string currentPath: view.state.viewerPath || ""
     property var images: view.viewerImages || []
@@ -434,11 +472,53 @@ Item {
         anchors.fill: parent
         spacing: 0
 
+        // The files: the same two panels the Browser shows. A folder click
+        // here opens it in the Browser — the Viewer is about one picture, and
+        // silently re-rooting it would change what "previous/next" means.
+        LeftDock {
+            objectName: "viewerLeftPanel"
+            visible: view.leftDockShown
+            Layout.preferredWidth: view.leftPanelWidth
+            Layout.fillHeight: true
+            theme: view.theme
+            state: view.state
+            quickAccessShown: view.quickAccessShown
+            explorerShown: view.explorerShown
+            listFolders: view.listFolders
+            onOpenFolder: function(path) { view.command({ type: "open_folder", path: path }) }
+            onNavigateTo: function(path) { view.command({ type: "open_folder", path: path }) }
+            onOpenMenu: function(path) { view.openFolderMenu(path) }
+            onQuickMenu: function(path) { view.openFolderMenu(path) }
+        }
+
+        PanelSplitter {
+            objectName: "viewerLeftSplitter"
+            visible: view.leftDockShown
+            Layout.fillHeight: true
+            theme: view.theme
+            value: view.leftPanelWidth
+            defaultValue: view.theme.panelWidth
+            direction: 1
+            minimum: 180
+            maximum: 560
+            onMoved: function(width) {
+                view.leftDragging = true
+                view.leftPanelWidth = width
+            }
+            onReleased: function(width) {
+                view.leftDragging = false
+                view.layoutRequested({ leftWidth: Math.round(width) })
+            }
+        }
+
         // The picture and its filmstrip share the centre column; the right
-        // dock is a fourth column and can be revealed or hidden from the
-        // toolbar. Core remembers the choice per workspace.
+        // dock is a fourth column and can be revealed or hidden in Settings.
         ColumnLayout {
-            anchors.fill: parent
+            // A layout child, not an anchored one: `anchors.fill` would make
+            // this column cover the left dock declared before it, leaving the
+            // panel visible in its properties and nowhere on screen.
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             spacing: 0
 
             Item {
@@ -766,8 +846,12 @@ Item {
             minimum: 200
             maximum: 640
             onMoved: function(width) {
+                view.rightDragging = true
                 view.rightPanelWidth = width
-                view.panelWidthRequested(width)
+            }
+            onReleased: function(width) {
+                view.rightDragging = false
+                view.layoutRequested({ rightWidth: Math.round(width) })
             }
         }
 

@@ -29,6 +29,7 @@ QtObject {
         case "ready": return qsTr("Ready");
         case "refreshed": return qsTr("Refreshed");
         case "settings_saved": return qsTr("Settings saved");
+        case "layout_saved": return qsTr("Layout saved");
         case "language_set": return qsTr("Interface language: %1").arg(args[0]);
         case "quick_access_added": return qsTr("Added %1 to quick access").arg(args[0]);
         case "quick_access_removed": return qsTr("Removed from quick access");

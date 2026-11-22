@@ -182,19 +182,16 @@ impl Core {
         let journal = Journal::new(&paths.journal_dir);
         let config_path_label = config_path.to_string_lossy().into_owned();
         let (editor_tx, editor_rx) = mpsc::channel();
-        let mut state = UiState::new(
+        let state = UiState::new(
             config.theme,
             config.language,
             config.quick_access.clone(),
-            config.left_panel,
-            config.right_panel,
+            config.layout.clone(),
             config.filmstrip,
             config.remember_last_folder,
             config.background_thumbnails,
             config_path_label,
         );
-        state.right_panel_viewer = config.right_panel_viewer;
-        state.right_panel_editor = config.right_panel_editor;
 
         let mut core = Self {
             paths,
@@ -282,19 +279,16 @@ impl Core {
         };
         let journal = Journal::new(&paths.journal_dir);
         let (editor_tx, editor_rx) = mpsc::channel();
-        let mut state = UiState::new(
+        let state = UiState::new(
             config.theme,
             config.language,
             config.quick_access.clone(),
-            config.left_panel,
-            config.right_panel,
+            config.layout.clone(),
             config.filmstrip,
             config.remember_last_folder,
             config.background_thumbnails,
             config_path.to_string_lossy().into_owned(),
         );
-        state.right_panel_viewer = config.right_panel_viewer;
-        state.right_panel_editor = config.right_panel_editor;
         Self {
             paths,
             config,
@@ -699,9 +693,12 @@ impl Core {
                 Ok(None)
             }
             Command::ToggleLeftPanel => {
-                self.config.left_panel = !self.config.left_panel;
-                self.state.left_panel = self.config.left_panel;
-                self.save_config();
+                // Kept for a replayed journal and a future CLI. The window has
+                // no button for it: a panel is toggled by name through
+                // `set_layout`, so the left dock as a whole means "every panel
+                // on that side of the open workspace".
+                let workspace = self.state.workspace;
+                self.toggle_panels(&left_panel_keys(workspace));
                 Ok(None)
             }
             Command::ToggleRightPanel { workspace } => {
@@ -709,24 +706,22 @@ impl Core {
                 // metadata panel, the Viewer's information panel and the
                 // Editor's dock show different things and size the picture
                 // differently, so a toggle says which one it means. A front
-                // end that sends no workspace (the toolbar button) means the
-                // one on screen.
-                match workspace.unwrap_or(self.state.workspace) {
-                    Workspace::Browser => {
-                        self.config.right_panel = !self.config.right_panel;
-                        self.state.right_panel = self.config.right_panel;
-                    }
-                    Workspace::Viewer => {
-                        self.config.right_panel_viewer = !self.config.right_panel_viewer;
-                        self.state.right_panel_viewer = self.config.right_panel_viewer;
-                    }
-                    Workspace::Editor => {
-                        self.config.right_panel_editor = !self.config.right_panel_editor;
-                        self.state.right_panel_editor = self.config.right_panel_editor;
-                    }
-                }
-                self.save_config();
+                // end that sends no workspace means the one on screen.
+                let workspace = workspace.unwrap_or(self.state.workspace);
+                self.toggle_panels(&right_panel_keys(workspace));
                 Ok(None)
+            }
+            Command::SetLayout { layout } => {
+                // A layout is a preference, not a document fact: it is written
+                // as it arrives, so closing the window is not a save step. The
+                // command is validated here rather than by the view, so a CLI
+                // cannot save a width the splitter would never reach.
+                let layout = layout.sanitized();
+                self.config.layout = layout.clone();
+                self.state.layout = layout;
+                self.save_config();
+                self.state.bump();
+                Ok(Some(UiText::new("layout_saved")))
             }
             Command::ToggleFilmstrip => {
                 self.config.filmstrip = !self.config.filmstrip;
@@ -2514,9 +2509,50 @@ impl Core {
         &self.paths
     }
 
+    /// Hide or show a whole side of the open workspace.
+    ///
+    /// The old command toggled one boolean per dock. Now a side is a list of
+    /// panels: when any of them is visible, the command hides them all; when
+    /// none is, it shows them all, so one press still means "the other state"
+    /// and no panel is left behind in a half-shown dock.
+    fn toggle_panels(&mut self, keys: &[&str]) {
+        let any_shown = keys.iter().any(|key| self.config.layout.panel(key));
+        let mut layout = self.config.layout.clone();
+        for key in keys {
+            layout = layout.with_panel(key, !any_shown);
+        }
+        let layout = layout.sanitized();
+        self.config.layout = layout.clone();
+        self.state.layout = layout;
+        self.save_config();
+    }
+
     #[allow(dead_code)]
     pub fn state_value(&self) -> Value {
         serde_json::to_value(&self.state).unwrap_or(Value::Null)
+    }
+}
+
+/// The panels on the left edge of a workspace, in the order they are stacked.
+fn left_panel_keys(workspace: Workspace) -> [&'static str; 2] {
+    match workspace {
+        Workspace::Browser => ["browser.quickAccess", "browser.explorer"],
+        Workspace::Viewer => ["viewer.quickAccess", "viewer.explorer"],
+        Workspace::Editor => ["editor.quickAccess", "editor.explorer"],
+    }
+}
+
+/// The panels in a workspace's right dock.
+fn right_panel_keys(workspace: Workspace) -> &'static [&'static str] {
+    match workspace {
+        Workspace::Browser => &["browser.preview", "browser.batch"],
+        Workspace::Viewer => &["viewer.info"],
+        Workspace::Editor => &[
+            "editor.options",
+            "editor.info",
+            "editor.history",
+            "editor.original",
+        ],
     }
 }
 
@@ -4536,9 +4572,9 @@ mod tests {
         let runtime = base.join("runtime");
 
         let mut core = Core::for_test(&runtime);
-        assert!(core.state.right_panel);
-        assert!(core.state.right_panel_viewer);
-        assert!(core.state.right_panel_editor);
+        assert!(core.state.layout.panel("browser.preview"));
+        assert!(core.state.layout.panel("viewer.info"));
+        assert!(core.state.layout.panel("editor.info"));
 
         let response = dispatch_json(
             &mut core,
@@ -4546,10 +4582,13 @@ mod tests {
             r#"{"type":"toggle_right_panel","workspace":"viewer"}"#,
         );
         assert_eq!(response["ok"], true, "{response}");
-        assert!(!core.state.right_panel_viewer);
-        assert!(core.state.right_panel, "the Browser's panel moved with it");
+        assert!(!core.state.layout.panel("viewer.info"));
         assert!(
-            core.state.right_panel_editor,
+            core.state.layout.panel("browser.preview"),
+            "the Browser's panel moved with it"
+        );
+        assert!(
+            core.state.layout.panel("editor.info"),
             "the Editor's panel moved with it"
         );
 
@@ -4557,28 +4596,67 @@ mod tests {
         core.state.workspace = Workspace::Editor;
         let response = dispatch_json(&mut core, "panel-2", r#"{"type":"toggle_right_panel"}"#);
         assert_eq!(response["ok"], true, "{response}");
-        assert!(!core.state.right_panel_editor);
+        assert!(!core.state.layout.panel("editor.info"));
+        assert!(!core.state.layout.panel("editor.history"));
         assert!(
-            !core.state.right_panel_viewer,
+            !core.state.layout.panel("viewer.info"),
             "an unrelated toggle came back"
         );
 
-        // A new process reads the same three answers back.
+        // A new process reads the same answers back.
         let reloaded = Core::for_test(&runtime);
-        assert!(reloaded.config.right_panel);
-        assert!(!reloaded.config.right_panel_viewer);
-        assert!(!reloaded.config.right_panel_editor);
-        assert!(reloaded.state.right_panel);
-        assert!(!reloaded.state.right_panel_viewer);
-        assert!(!reloaded.state.right_panel_editor);
+        assert!(reloaded.config.layout.panel("browser.preview"));
+        assert!(!reloaded.config.layout.panel("viewer.info"));
+        assert!(!reloaded.config.layout.panel("editor.history"));
+        assert!(reloaded.state.layout.panel("browser.preview"));
+        assert!(!reloaded.state.layout.panel("viewer.info"));
+        assert!(!reloaded.state.layout.panel("editor.options"));
 
         remove_tree(&base);
     }
 
-    /// A config written before the two new flags existed still opens with both
-    /// panels showing, instead of failing to parse or defaulting to hidden.
+    /// A layout is a preference, so Core writes it, clamps it and publishes it.
     #[test]
-    fn a_config_from_before_the_new_panels_loads_with_both_open() {
+    fn a_saved_layout_is_clamped_written_and_published() {
+        let base = temp_dir();
+        let runtime = base.join("runtime");
+        let mut core = Core::for_test(&runtime);
+
+        let response = dispatch_json(
+            &mut core,
+            "layout-1",
+            r#"{"type":"set_layout","layout":{"leftWidth":9000,"rightWidth":10,
+                 "editorToolColumns":3,"editorReferenceHeight":9999,
+                 "editorReferenceTab":"history",
+                 "panels":{"editor.history":false,"not.a.panel":false}}}"#,
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(core.state.layout.left_width, 560);
+        assert_eq!(core.state.layout.right_width, 200);
+        assert_eq!(core.state.layout.editor_tool_columns, 2);
+        assert_eq!(core.state.layout.editor_reference_height, 900);
+        assert_eq!(core.state.layout.editor_reference_tab, "history");
+        assert!(!core.state.layout.panel("editor.history"));
+        assert!(core.state.layout.panel("editor.info"));
+
+        // The file has it, so the next run opens the same way …
+        let reloaded = Core::for_test(&runtime);
+        assert_eq!(reloaded.state.layout.left_width, 560);
+        assert!(!reloaded.state.layout.panel("editor.history"));
+        assert_eq!(reloaded.state.layout.editor_reference_tab, "history");
+        // … and the legacy booleans are not the source any more.
+        let text = std::fs::read_to_string(runtime.join("config.json")).unwrap();
+        assert!(text.contains("\"layout\""), "{text}");
+        assert!(!text.contains("left_panel"), "{text}");
+
+        remove_tree(&base);
+    }
+
+    /// A config written before a layout existed still opens with every panel
+    /// showing, instead of failing to parse or defaulting to hidden — except
+    /// for a dock the old flags said was closed.
+    #[test]
+    fn a_config_from_before_the_layout_loads_with_its_docks_open() {
         let base = temp_dir();
         let runtime = base.join("runtime");
         std::fs::create_dir_all(&runtime).unwrap();
@@ -4589,9 +4667,11 @@ mod tests {
         .unwrap();
 
         let core = Core::for_test(&runtime);
-        assert!(!core.state.right_panel);
-        assert!(core.state.right_panel_viewer);
-        assert!(core.state.right_panel_editor);
+        assert!(!core.state.layout.panel("browser.quickAccess"));
+        assert!(!core.state.layout.panel("browser.explorer"));
+        assert!(!core.state.layout.panel("browser.preview"));
+        assert!(core.state.layout.panel("viewer.info"));
+        assert!(core.state.layout.panel("editor.info"));
         remove_tree(&base);
     }
 

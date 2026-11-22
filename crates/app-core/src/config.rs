@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kogaview_protocol::{Language, Theme};
+use kogaview_protocol::{Language, LayoutState, Theme};
 use serde::{Deserialize, Serialize};
 
 use crate::paths;
@@ -30,14 +30,34 @@ pub struct Config {
     /// the user gets the same two-level view back (`~/Pictures` open in the
     /// sidebar, `~/Pictures/Child` in the list).
     pub tree_root: Option<String>,
-    pub left_panel: bool,
-    /// The Browser's right panel. The name is the one the config file has
-    /// always used for it; the Viewer and the Editor each keep their own,
-    /// because they show different things and a narrow Viewer may want its
-    /// information panel while the Browser's preview stays shut.
-    pub right_panel: bool,
-    pub right_panel_viewer: bool,
-    pub right_panel_editor: bool,
+    /// Which panels each workspace shows, the two dock widths and the Editor's
+    /// split. Visibility used to be four booleans here; the fields below are
+    /// what an older file meant and are read once, then dropped.
+    pub layout: LayoutState,
+    #[serde(
+        rename = "left_panel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_left_panel: Option<bool>,
+    #[serde(
+        rename = "right_panel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_right_panel: Option<bool>,
+    #[serde(
+        rename = "right_panel_viewer",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_right_panel_viewer: Option<bool>,
+    #[serde(
+        rename = "right_panel_editor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_right_panel_editor: Option<bool>,
     pub filmstrip: bool,
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,
@@ -51,10 +71,11 @@ impl Default for Config {
             quick_access: default_quick_access(),
             last_folder: None,
             tree_root: None,
-            left_panel: true,
-            right_panel: true,
-            right_panel_viewer: true,
-            right_panel_editor: true,
+            layout: LayoutState::default(),
+            legacy_left_panel: None,
+            legacy_right_panel: None,
+            legacy_right_panel_viewer: None,
+            legacy_right_panel_editor: None,
             filmstrip: true,
             remember_last_folder: true,
             background_thumbnails: true,
@@ -109,6 +130,19 @@ impl Config {
         if self.quick_access.is_empty() {
             self.quick_access = default_quick_access();
         }
+        // Four booleans used to say which docks were shown. A file written by
+        // that build is read once — `false` hides that dock's panels — and the
+        // fields are then dropped, so the next save carries only the layout.
+        let legacy = (
+            self.legacy_left_panel.take(),
+            self.legacy_right_panel.take(),
+            self.legacy_right_panel_viewer.take(),
+            self.legacy_right_panel_editor.take(),
+        );
+        if legacy.0.is_some() || legacy.1.is_some() || legacy.2.is_some() || legacy.3.is_some() {
+            self.layout = LayoutState::from_legacy(legacy.0, legacy.1, legacy.2, legacy.3);
+        }
+        self.layout = self.layout.sanitized();
         self
     }
 
@@ -183,7 +217,7 @@ mod tests {
         config.theme = Theme::Light;
         config.quick_access = vec!["/tmp".into(), "/home".into()];
         config.last_folder = Some("/tmp".into());
-        config.right_panel = false;
+        config.layout = config.layout.with_panel("browser.preview", false);
         config.save(&path).unwrap();
 
         let (loaded, warning) = Config::load_or_create(&path);
@@ -205,6 +239,77 @@ mod tests {
         let (reloaded, warning) = Config::load_or_create(&path);
         assert!(warning.is_none());
         assert_eq!(reloaded, config);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_older_configs_panel_flags_become_a_layout_once() {
+        let dir = temp_dir();
+        let path = dir.join("config.json");
+        // The shape the previous build wrote: four booleans, no layout.
+        fs::write(
+            &path,
+            r#"{"theme":"light","left_panel":false,"right_panel":true,
+                "right_panel_viewer":false,"right_panel_editor":true}"#,
+        )
+        .unwrap();
+        let (config, warning) = Config::load_or_create(&path);
+        assert!(warning.is_none());
+        assert_eq!(config.theme, Theme::Light);
+        assert!(!config.layout.panel("browser.quickAccess"));
+        assert!(!config.layout.panel("editor.explorer"));
+        assert!(config.layout.panel("browser.preview"));
+        assert!(!config.layout.panel("viewer.info"));
+        assert!(config.layout.panel("editor.info"));
+        // The flags are not written back: one source, the layout.
+        config.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("left_panel"), "{text}");
+        assert!(text.contains("\"layout\""), "{text}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_saved_layout_survives_a_restart() {
+        let dir = temp_dir();
+        let path = dir.join("config.json");
+        let mut config = Config::default();
+        config.layout = config
+            .layout
+            .with_panel("editor.history", false)
+            .with_panel("browser.explorer", false);
+        config.layout.left_width = 321;
+        config.layout.editor_reference_tab = "original".into();
+        config.save(&path).unwrap();
+        let (loaded, _) = Config::load_or_create(&path);
+        assert!(!loaded.layout.panel("editor.history"));
+        assert!(!loaded.layout.panel("browser.explorer"));
+        assert!(loaded.layout.panel("editor.info"));
+        assert_eq!(loaded.layout.left_width, 321);
+        assert_eq!(loaded.layout.editor_reference_tab, "original");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_layout_is_clamped_when_it_is_loaded() {
+        let dir = temp_dir();
+        let path = dir.join("config.json");
+        fs::write(
+            &path,
+            r#"{"layout":{"leftWidth":9,"rightWidth":4000,
+                 "editorToolColumns":9,"editorReferenceHeight":99999,
+                 "editorReferenceTab":"nope",
+                 "panels":{"editor.tools":false,"not.a.panel":false}}}"#,
+        )
+        .unwrap();
+        let (config, _) = Config::load_or_create(&path);
+        assert_eq!(config.layout.left_width, 180);
+        assert_eq!(config.layout.right_width, 640);
+        assert_eq!(config.layout.editor_tool_columns, 2);
+        assert_eq!(config.layout.editor_reference_height, 900);
+        assert_eq!(config.layout.editor_reference_tab, "info");
+        assert!(!config.layout.panel("editor.tools"));
+        assert!(config.layout.panel("editor.options"));
         fs::remove_dir_all(dir).unwrap();
     }
 

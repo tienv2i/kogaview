@@ -150,6 +150,9 @@ private:
   QQuickView* m_browser = nullptr;
   /// `baseState()`'s listings; a test puts them on the view with `showState`.
   QVariantList entryList;
+  /// The layout the view sees. The shell owns it in the app; this harness
+  /// merges the view's patches the way `Main.qml` does.
+  QVariantMap m_layout;
   /// Monotonic timestamp for injected wheel events, like a QPA plugin's.
   int m_timestamp = 0;
 
@@ -456,6 +459,52 @@ private:
   }
 
 private slots:
+  /// Merge a `layoutRequested` patch into `m_layout`, key by key, exactly as
+  /// `Main.qml`'s `mergeLayout` does; the view then sees the new layout.
+  void applyLayoutRequested(const QVariant& patch)
+  {
+    const QVariantMap changes = patch.toMap();
+    QVariantMap next = m_layout;
+    for (const QString& key : {QStringLiteral("leftWidth"), QStringLiteral("rightWidth"),
+                               QStringLiteral("editorToolColumns"),
+                               QStringLiteral("editorReferenceHeight"),
+                               QStringLiteral("editorReferenceTab")}) {
+      if (changes.contains(key)) next.insert(key, changes.value(key));
+    }
+    QVariantMap panels = m_layout.value(QStringLiteral("panels")).toMap();
+    const QVariantMap changedPanels = changes.value(QStringLiteral("panels")).toMap();
+    for (auto it = changedPanels.begin(); it != changedPanels.end(); ++it) {
+      panels.insert(it.key(), it.value());
+    }
+    next.insert(QStringLiteral("panels"), panels);
+    m_layout = next;
+    browserItem()->setProperty("layout", next);
+  }
+
+  /// The built-in layout a first launch opens with: both docks visible and the
+  /// theme's widths. Every case starts here.
+  void resetLayout()
+  {
+    QVariantMap panels;
+    for (const QString& key : {QStringLiteral("browser.quickAccess"),
+                               QStringLiteral("browser.explorer"),
+                               QStringLiteral("browser.preview"),
+                               QStringLiteral("browser.batch")}) {
+      panels.insert(key, true);
+    }
+    m_layout = QVariantMap{{QStringLiteral("leftWidth"), 260},
+                           {QStringLiteral("rightWidth"), 300},
+                           {QStringLiteral("panels"), panels}};
+    browserItem()->setProperty("layout", m_layout);
+  }
+
+  void setPanelShown(const QString& key, bool visible)
+  {
+    QVariantMap patch;
+    patch.insert(QStringLiteral("panels"), QVariantMap{{QStringLiteral("browser.") + key, visible}});
+    applyLayoutRequested(patch);
+  }
+
   void initTestCase()
   {
     m_switcher = new QQuickView(&m_engine, nullptr);
@@ -473,6 +522,8 @@ private slots:
     QCOMPARE(m_browser->status(), QQuickView::Ready);
     m_browser->show();
     QVERIFY(QTest::qWaitForWindowExposed(m_browser));
+    QVERIFY(QObject::connect(browserItem(), SIGNAL(layoutRequested(QVariant)),
+                             this, SLOT(applyLayoutRequested(QVariant))));
   }
 
   void init()
@@ -481,12 +532,17 @@ private slots:
     // tree can populate without touching the filesystem.
     installFolderStub();
     QQuickItem* view = browserItem();
-    // Expansion bookkeeping and the revision baseline live on the view, so a
-    // previous test would otherwise leak its expanded paths (and a folder it
-    // invented) into the next one.
-    view->setProperty("expandedPaths", QVariantMap());
-    view->setProperty("collapsedPaths", QVariantMap());
-    view->setProperty("lastTreeRevision", -1);
+    // The layout is the shell's; a drag or a hidden panel in one test must not
+    // decide where the next one starts.
+    resetLayout();
+    // Expansion bookkeeping and the revision baseline live on the Explorer
+    // panel, so a previous test would otherwise leak its expanded paths (and a
+    // folder it invented) into the next one.
+    if (QQuickItem* explorer = findItem(QStringLiteral("explorerPanel"))) {
+      explorer->setProperty("expandedPaths", QVariantMap());
+      explorer->setProperty("collapsedPaths", QVariantMap());
+      explorer->setProperty("lastTreeRevision", -1);
+    }
     view->setProperty("keyboardCursor", -1);
     // The stub cache of a previous test lived on its stack; drop it before it
     // dangles and before this test decides whether it wants a cache at all.
@@ -517,16 +573,9 @@ private slots:
     // Rebuild the tree from the stub just installed and wait out the coalesced
     // refresh, so every test starts from a settled tree built from its own
     // folder lister and no reload fires in the middle of a test.
-    // Sidebar widths live as long as the view does, so a drag in one test would
-    // otherwise decide where the next test starts.
-    if (QQuickItem* left = findItem(QStringLiteral("leftSplitter"))) {
-      view->setProperty("leftPanelWidth", left->property("defaultValue"));
-    }
-    if (QQuickItem* right = findItem(QStringLiteral("rightSplitter"))) {
-      view->setProperty("rightPanelWidth", right->property("defaultValue"));
-    }
-
-    QMetaObject::invokeMethod(view, "reloadTree", Qt::DirectConnection);
+    QQuickItem* explorer = findItem(QStringLiteral("explorerPanel"));
+    QVERIFY(explorer != nullptr);
+    QMetaObject::invokeMethod(explorer, "reload", Qt::DirectConnection);
     QTest::qWait(200);
     QVERIFY(findNode(QStringLiteral("/root/fresh")) == nullptr);
     QVERIFY(findNode(QStringLiteral("/root/dirA")) != nullptr);
@@ -702,17 +751,18 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 4 : 5);
+    // Up, refresh, Open folder and either New folder or the overflow button:
+    // the sidebar toggle is gone, its panels live in Settings.
+    QCOMPARE(buttons, 4);
 
     if (mini) {
       QVERIFY(QMetaObject::invokeMethod(overflow, "click"));
       QObject* menu = findPopup(QStringLiteral("browserOverflowMenu"));
       QVERIFY2(menu != nullptr, "the browser has no overflow menu");
       QTRY_VERIFY2(menu->property("visible").toBool(), "the overflow menu did not open");
-      // New folder, then the quick-access panel's toggle after a separator.
-      // The right dock has no toggle of its own any more: its panels live in
-      // the burger menu's `View > Sidebar` submenu.
-      QCOMPARE(menu->property("count").toInt(), 3);
+      // The only secondary action left is New folder: panel visibility moved
+      // to Settings › Appearance, so there is no toggle to fold here.
+      QCOMPARE(menu->property("count").toInt(), 1);
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
     }
@@ -794,15 +844,13 @@ private slots:
     QVERIFY(splitter != nullptr && panel != nullptr);
     QCOMPARE(splitter->isVisible(), true);
 
-    QVariantMap state = baseState();
-    state.insert(QStringLiteral("leftPanel"), false);
-    showState(browserItem(), state);
+    setPanelShown(QStringLiteral("quickAccess"), false);
+    setPanelShown(QStringLiteral("explorer"), false);
     settle();
     QCOMPARE(splitter->isVisible(), false);
     QCOMPARE(panel->isVisible(), false);
 
-    state.insert(QStringLiteral("leftPanel"), true);
-    showState(browserItem(), state);
+    setPanelShown(QStringLiteral("explorer"), true);
     settle();
     QCOMPARE(splitter->isVisible(), true);
   }
@@ -2188,16 +2236,11 @@ private slots:
     QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
     QVERIFY(!findItem(QStringLiteral("batchResize"))->isEnabled());
 
-    // The shell's `View > Sidebar` submenu drives the same panel list the view
-    // exposes: two rows, each a page. Hiding Preview keeps the dock on Batch
-    // action; hiding both hides the whole column, and showing one brings it
-    // back.
-    const QVariantList rows = browserRoot()->property("panelEntries").toList();
-    QCOMPARE(rows.size(), 2);
-    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("key")).toString(),
-             QStringLiteral("preview"));
-    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("key")).toString(),
-             QStringLiteral("batch"));
+    // Settings › Appearance drives the same two panels: both are visible on a
+    // fresh layout. Hiding Preview keeps the dock on Batch action; hiding both
+    // hides the whole column, and showing one brings it back.
+    QVERIFY(browserRoot()->property("previewPanelVisible").toBool());
+    QVERIFY(browserRoot()->property("batchPanelVisible").toBool());
 
     QQmlExpression hide(QQmlEngine::contextForObject(browserRoot()), browserRoot(),
                         QStringLiteral("setPanelVisible('preview', false)"));

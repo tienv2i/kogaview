@@ -41,6 +41,22 @@ Item {
     /// Prefix for each tab's `objectName`; the view chooses it so the suite can
     /// address three strips in one window.
     property string tabKeyPrefix: "editorTab"
+    /// The open page's natural height, measured by the view that owns the
+    /// pages. A dock that asks for its content uses this instead of guessing
+    /// from the stack, whose implicit height is the tallest page, not the one
+    /// on screen. `0` means the view has no answer and the dock keeps 220 px.
+    property real pageContentHeight: 0
+
+    /// The height this dock needs to show its open page whole: the page, the
+    /// margins around it, and the strip when there is one. The Editor pins its
+    /// reference dock to this (clamped) so Info does not leave a tall empty
+    /// column.
+    readonly property real contentHeight: {
+        var page = dock.pageContentHeight > 0 ? dock.pageContentHeight : 220
+        return Math.ceil(page + 2 * dock.pageMargin
+                         + (dock.stripShown
+                            ? strip.implicitHeight + dock.stripMargin + 2 : 0))
+    }
 
     /// The pages, in tab order. Each one fills the stack, so a page that
     /// scrolls owns its own `ScrollView`.

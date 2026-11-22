@@ -17,6 +17,13 @@ Item {
     property string language: ""
     property string listObjectName: "historyList"
 
+    /// The height the list needs to show every row. The Editor's reference dock
+    /// is content-sized, so its History page asks for this instead of the
+    /// viewport it happens to get; the dock clamps it to what the window can
+    /// give.
+    implicitHeight: historyList.contentHeight + 6
+                    + (historyEmpty.visible ? historyEmpty.implicitHeight : 0)
+
     UiLines {
         id: uiLines
     }
@@ -57,6 +64,7 @@ Item {
         }
 
         Label {
+            id: historyEmpty
             Layout.fillWidth: true
             visible: panel.history.length === 0
             text: panel.hasDocument ? qsTr("No edits yet") : qsTr("No image open")

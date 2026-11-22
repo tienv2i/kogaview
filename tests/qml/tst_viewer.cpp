@@ -342,6 +342,18 @@ private slots:
     // A stub cache from a previous test lived on its stack: drop the pointer
     // before it dangles and before this test decides whether it wants one.
     m_viewer->setProperty("thumbnails", QVariant::fromValue(static_cast<QObject*>(nullptr)));
+    // Most cases below measure the picture in the whole viewport and name a
+    // cursor in viewport coordinates. Both docks are real columns now, so put
+    // them away here; their own cases (`theLeftPanelsSitBesideThePicture`,
+    // `theSidebarIsOneInformationPage`) show them again and assert where the
+    // picture starts. Hiding the panels is layout state, the same answer
+    // Settings › Appearance writes.
+    m_viewer->setProperty("layout", QVariantMap{
+        {QStringLiteral("leftWidth"), 260},
+        {QStringLiteral("panels"), QVariantMap{
+             {QStringLiteral("viewer.quickAccess"), false},
+             {QStringLiteral("viewer.explorer"), false},
+             {QStringLiteral("viewer.info"), false}}}});
     loadImage(m_landscape);
     fitAndReset();
   }
@@ -1439,8 +1451,14 @@ private slots:
     QVariantMap state;
     state.insert(QStringLiteral("viewerPath"), m_landscape);
     state.insert(QStringLiteral("viewerIndex"), 0);
-    state.insert(QStringLiteral("rightPanelViewer"), true);
     m_viewer->setProperty("state", state);
+    QVariantMap panels;
+    panels.insert(QStringLiteral("viewer.quickAccess"), true);
+    panels.insert(QStringLiteral("viewer.explorer"), true);
+    panels.insert(QStringLiteral("viewer.info"), true);
+    QVariantMap layout;
+    layout.insert(QStringLiteral("panels"), panels);
+    m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
 
     QQuickItem* panel = item("viewerRightPanel");
@@ -1463,32 +1481,86 @@ private slots:
              QStringLiteral("1200 × 800"));
     QCOMPARE(item("infoPath")->property("text").toString(), m_landscape);
 
-    // The shell's `View > Sidebar` submenu hides the only page through the
-    // same `panelEntries`/`setPanelVisible` pair every workspace exposes. With
-    // no panel left, the whole column and its splitter go; showing Info brings
-    // both back.
-    const QVariantList rows = m_viewer->property("panelEntries").toList();
-    QCOMPARE(rows.size(), 1);
-    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("key")).toString(),
-             QStringLiteral("info"));
-    m_viewer->setProperty("infoPanelVisible", false);
+    // Settings › Appearance hides the only page through the same
+    // `setPanelVisible` every workspace exposes. With no panel left, the whole
+    // column and its splitter go; showing Info brings both back.
+    QVERIFY(m_viewer->property("infoPanelVisible").toBool());
+    QSignalSpy layouts(m_viewer, SIGNAL(layoutRequested(QVariant)));
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "setPanelVisible",
+                                      Q_ARG(QVariant, QStringLiteral("info")),
+                                      Q_ARG(QVariant, false)));
+    QCoreApplication::processEvents();
+    // The harness has no shell; the view reports the patch instead of writing
+    // its own layout, so apply it the way `Main.qml` would.
+    QVERIFY(layouts.count() >= 1);
+    panels.insert(QStringLiteral("viewer.info"), false);
+    layout.insert(QStringLiteral("panels"), panels);
+    m_viewer->setProperty("layout", layout);
     QTRY_VERIFY(!name->isVisible());
-    QCOMPARE(m_viewer->property("visiblePanelCount").toInt(), 0);
     QVERIFY(!m_viewer->property("sidebarShown").toBool());
     QVERIFY(!panel->isVisible());
     QVERIFY(!item("viewerRightSplitter")->isVisible());
-    m_viewer->setProperty("infoPanelVisible", true);
+    m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("panels"),
+        QVariantMap{{QStringLiteral("viewer.quickAccess"), true},
+                    {QStringLiteral("viewer.explorer"), true},
+                    {QStringLiteral("viewer.info"), true}}}});
     QTRY_VERIFY(name->isVisible());
 
     QQuickItem* splitter = item("viewerRightSplitter");
     QVERIFY2(splitter != nullptr, "the viewer has no dock splitter");
     QVERIFY(splitter->isVisible());
 
-    // A state flag no longer drives the sidebar: the panels do.
+    // A state flag no longer drives the sidebar: the layout's panels do.
     state.insert(QStringLiteral("rightPanelViewer"), false);
     m_viewer->setProperty("state", state);
     QTRY_VERIFY(panel->isVisible());
     QVERIFY2(splitter->isVisible(), "a stale state flag hid the splitter");
+  }
+
+  /// The Viewer's left panels are a column of their own, not a layer under the
+  /// picture: the viewport starts where the dock ends.
+  ///
+  /// This is the real-window defect the first layout grab showed — the dock
+  /// reported `visible: true` with a 260 px width while the centre column's
+  /// `anchors.fill: parent` painted the canvas over it, so the window looked
+  /// as if the new panels did not exist. Settings › Appearance hides them
+  /// through the layout, and the picture then takes the space they gave up.
+  void theLeftPanelsSitBesideThePicture()
+  {
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_landscape);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    state.insert(QStringLiteral("filmstrip"), false);
+    m_viewer->setProperty("state", state);
+
+    QVariantMap panels;
+    panels.insert(QStringLiteral("viewer.quickAccess"), true);
+    panels.insert(QStringLiteral("viewer.explorer"), true);
+    panels.insert(QStringLiteral("viewer.info"), true);
+    m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("leftWidth"), 260},
+                                                {QStringLiteral("panels"), panels}});
+    QCoreApplication::processEvents();
+
+    QQuickItem* dock = item("viewerLeftPanel");
+    QVERIFY2(dock != nullptr, "the viewer has no left dock");
+    QTRY_VERIFY(dock->isVisible());
+    QVERIFY2(dock->width() > 0, "the left dock has no width");
+    const qreal dockRight = dock->mapToScene(QPointF(dock->width(), 0)).x();
+    // The `RowLayout` positions its children on the next polish, so wait for
+    // the picture to actually start where the dock ends.
+    QTRY_VERIFY2(m_viewport->mapToScene(QPointF(0, 0)).x() >= dockRight - 0.5,
+                 qPrintable(QStringLiteral("the picture starts at %1, inside the dock that ends at %2")
+                                .arg(m_viewport->mapToScene(QPointF(0, 0)).x())
+                                .arg(dockRight)));
+
+    // Hiding both panels gives their width back to the picture; the dock is
+    // gone rather than merely transparent.
+    panels.insert(QStringLiteral("viewer.quickAccess"), false);
+    panels.insert(QStringLiteral("viewer.explorer"), false);
+    m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("leftWidth"), 260},
+                                                {QStringLiteral("panels"), panels}});
+    QTRY_VERIFY(!dock->isVisible());
+    QTRY_VERIFY(m_viewport->mapToScene(QPointF(0, 0)).x() < dockRight - 0.5);
   }
 
   /// "Show in folder" is the shell's job: the view only asks, and both the file

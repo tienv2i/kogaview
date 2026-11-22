@@ -3,7 +3,7 @@
 //! The UI renders this snapshot; it never mutates it. Every field here is
 //! produced by Core after a command or a completed background task.
 
-use kogaview_protocol::{Language, Theme, Workspace};
+use kogaview_protocol::{Language, LayoutState, Theme, Workspace};
 use serde::Serialize;
 
 // The line shape is part of the protocol: both a successful command result and
@@ -138,13 +138,10 @@ pub struct UiState {
     pub selection: Vec<String>,
     pub selection_info: Option<SelectionInfo>,
     pub favorites: Vec<String>,
-    pub left_panel: bool,
-    /// The Browser's right panel (preview and metadata).
-    pub right_panel: bool,
-    /// The Viewer's right panel (the file's information).
-    pub right_panel_viewer: bool,
-    /// The Editor's right dock (tool options and the reference tabs).
-    pub right_panel_editor: bool,
+    /// Which panels each workspace shows, the two dock widths and the Editor's
+    /// split. Core owns it because it is saved in `config.json`; a view reads it
+    /// and asks for a change with `set_layout`.
+    pub layout: LayoutState,
     pub filmstrip: bool,
     /// The two settings the Settings dialog edits besides the theme. They are
     /// published so the dialog opens on what is stored, not on a default.
@@ -177,8 +174,7 @@ impl UiState {
         theme: Theme,
         language: Language,
         favorites: Vec<String>,
-        left_panel: bool,
-        right_panel: bool,
+        layout: LayoutState,
         filmstrip: bool,
         remember_last_folder: bool,
         background_thumbnails: bool,
@@ -197,14 +193,7 @@ impl UiState {
             selection: Vec::new(),
             selection_info: None,
             favorites,
-            left_panel,
-            right_panel,
-            // The two workspace panels that are not the Browser's follow the
-            // same default and are assigned by `Core::new` from the config;
-            // the constructor keeps its arity because every side panel is a
-            // preference, not part of the snapshot's identity.
-            right_panel_viewer: true,
-            right_panel_editor: true,
+            layout,
             filmstrip,
             remember_last_folder,
             background_thumbnails,
@@ -248,10 +237,7 @@ impl UiState {
             selection: &self.selection,
             selection_info: &self.selection_info,
             favorites: &self.favorites,
-            left_panel: self.left_panel,
-            right_panel: self.right_panel,
-            right_panel_viewer: self.right_panel_viewer,
-            right_panel_editor: self.right_panel_editor,
+            layout: &self.layout,
             filmstrip: self.filmstrip,
             remember_last_folder: self.remember_last_folder,
             background_thumbnails: self.background_thumbnails,
@@ -301,10 +287,7 @@ pub struct StateMeta<'a> {
     pub selection: &'a [String],
     pub selection_info: &'a Option<SelectionInfo>,
     pub favorites: &'a [String],
-    pub left_panel: bool,
-    pub right_panel: bool,
-    pub right_panel_viewer: bool,
-    pub right_panel_editor: bool,
+    pub layout: &'a LayoutState,
     pub filmstrip: bool,
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,

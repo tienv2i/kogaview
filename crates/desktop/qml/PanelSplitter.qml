@@ -30,6 +30,9 @@ Item {
     property int orientation: Qt.Horizontal
 
     signal moved(real value)
+    /// The drag ended (or a double-click restored the default). A view that
+    /// saves the number waits for this instead of writing one every frame.
+    signal released(real value)
 
     readonly property bool horizontal: splitter.orientation === Qt.Horizontal
 
@@ -93,6 +96,11 @@ Item {
                     startValue + splitter.direction * (sceneY(mouse) - pressSceneY)));
             }
         }
-        onDoubleClicked: splitter.moved(splitter.clamp(splitter.defaultValue))
+        onReleased: splitter.released(splitter.value)
+        onDoubleClicked: {
+            var value = splitter.clamp(splitter.defaultValue)
+            splitter.moved(value)
+            splitter.released(value)
+        }
     }
 }
