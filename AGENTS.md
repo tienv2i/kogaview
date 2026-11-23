@@ -1,6 +1,6 @@
 # AI Agent Instructions — Photo Manager & Editor
 
-Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implementing features. Treat these as project requirements; record any deviation in an ADR.
+Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/UI-DESIGN-SYSTEM.md`, and `docs/WORKFLOW.md` before implementing features. Treat these as project requirements; record any deviation in an ADR.
 
 ## Agent configuration in this repository (OpenCode)
 - This file is the always-loaded rulebook. `opencode.json` adds `docs/WORKFLOW.md` and `docs/SESSION-STATE.md` as `instructions`, so both are in context from the first turn, and refuses the file-editing tools for anything under the generated trees `build/` and `target/` (verified: an edit tool write there is answered `Permission denied: edit`; shell redirection is not restricted — permissions police tools, not the OS). OpenCode V2 reads `AGENTS.md` only (no `CLAUDE.md` fallback); a nested `AGENTS.md` applies to the subtree it sits in.
