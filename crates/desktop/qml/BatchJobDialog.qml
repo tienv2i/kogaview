@@ -24,8 +24,10 @@ import QtQuick.Layouts
 /// "Replace the originals" is ticked. The dialog only formats the command
 /// (`batch_run`). Core resolves the folder, validates the whole job and
 /// publishes its progress; the Batch page draws that.
-Dialog {
+DialogFrame {
     id: dialog
+    namePrefix: "batch"
+    preferredWidth: 600
     property Theme theme: Theme {}
 
     /// `resize`, `crop` or `convert`. Each concrete dialog names its own, so
@@ -118,24 +120,14 @@ Dialog {
         { key: "qoi", label: ".qoi" }
     ]
 
-    modal: true
-    dim: true
-    width: Math.min(600, parent ? parent.width - 48 : 600)
-    height: Math.min(parent ? parent.height - 48 : 720,
-                     112 + batchColumn.implicitHeight + 40)
-    padding: 0
-    closePolicy: Popup.CloseOnEscape
+    /// The × is Cancel: the form sends nothing until Run, so closing it is
+    /// the whole undo.
+    onCloseRequested: dialog.close()
 
-    // x/y are set by hand for the same reason as `ResizeDialog.qml`: an anchor
-    // owns the position, which would also make the header drag impossible.
-    property bool moved: false
-    function centerInParent() {
-        if (!parent) return
-        x = Math.round((parent.width - width) / 2)
-        y = Math.round((parent.height - height) / 2)
+    /// The form opens on the action's own defaults.
+    function prepare() {
+        dialog.resetForm()
     }
-    onWidthChanged: if (!moved) centerInParent()
-    onHeightChanged: if (!moved) centerInParent()
 
     // --------------------------------------------------------------- helpers
     /// The suffix a fresh form starts on for `operation`. Convert changes the
@@ -544,709 +536,569 @@ Dialog {
         suffixField.text = dialog.defaultSuffix(dialog.operation)
     }
 
-    onAboutToShow: {
-        moved = false
-        centerInParent()
-        dialog.resetForm()
-    }
 
-    background: Rectangle {
-        color: dialog.theme.surface
-        border.color: dialog.theme.border
-        border.width: 1
-        radius: dialog.theme.radius
-    }
 
     ButtonGroup { id: inputGroup }
     ButtonGroup { id: outputGroup }
 
-    header: Rectangle {
-        objectName: "batchHeader"
-        implicitHeight: 52
-        color: dialog.theme.surfaceAlt
-        border.color: dialog.theme.border
-        border.width: 1
-        DragHandler {
-            target: null
-            property real originX: 0
-            property real originY: 0
-            onActiveChanged: if (active) { originX = dialog.x; originY = dialog.y; dialog.moved = true }
-            onActiveTranslationChanged: {
-                if (!active) return
-                var maxX = dialog.parent ? Math.max(0, dialog.parent.width - dialog.width) : dialog.x
-                var maxY = dialog.parent ? Math.max(0, dialog.parent.height - dialog.height) : dialog.y
-                dialog.x = Math.max(0, Math.min(maxX, originX + activeTranslation.x))
-                dialog.y = Math.max(0, Math.min(maxY, originY + activeTranslation.y))
-            }
-        }
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 18
-            anchors.rightMargin: 10
+    // ------------------------------------------- the action's options
+    // First, because it is what the dialog's title promises: the size,
+    // the rectangle or the format, exactly as the Editor's own tool
+    // asks for it. Only the fields of this dialog's action exist here.
+
+    // ------------------------------------------------------ resize
+    ColumnLayout {
+        Layout.fillWidth: true
+        visible: dialog.operation === "resize"
+        spacing: 8
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 3
+            columnSpacing: 8
+            rowSpacing: 6
+
             Label {
-                text: dialog.title
-                color: dialog.theme.text
-                font.pixelSize: 17
-                font.bold: true
+                text: qsTr("Width")
+                color: dialog.theme.textMuted
+                elide: Text.ElideRight
+                Layout.preferredWidth: dialog.labelWidth
+                Layout.maximumWidth: dialog.labelWidth
+            }
+            UnitField {
+                id: widthField
+                objectName: "batchResizeWidth"
                 Layout.fillWidth: true
+                font.pixelSize: 12
+                // A target size is absolute: `%` would name one
+                // picture's size and mean nothing for the others.
+                unitsVisible: false
+                minimumPixels: 1
+                maximumPixels: 20000
+                nextField: heightField
+                onTextEdited: dialog.linkHeightFromWidth()
+                onAccepted: dialog.run()
             }
             ToolButton {
-                objectName: "batchDialogClose"
-                text: qsTr("×")
-                font.pixelSize: 24
-                onClicked: dialog.close()
-            }
-        }
-    }
-
-    contentItem: Flickable {
-        objectName: "batchDialogContent"
-        clip: true
-        contentHeight: batchColumn.implicitHeight + 40
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-        ColumnLayout {
-            id: batchColumn
-            objectName: "batchColumn"
-            x: 20
-            y: 20
-            width: dialog.width - 40
-            spacing: 10
-
-            // ------------------------------------------- the action's options
-            // First, because it is what the dialog's title promises: the size,
-            // the rectangle or the format, exactly as the Editor's own tool
-            // asks for it. Only the fields of this dialog's action exist here.
-
-            // ------------------------------------------------------ resize
-            ColumnLayout {
-                Layout.fillWidth: true
-                visible: dialog.operation === "resize"
-                spacing: 8
-
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 3
-                    columnSpacing: 6
-                    rowSpacing: 6
-
-                    Label {
-                        text: qsTr("Width")
-                        color: dialog.theme.textMuted
+                id: constraintButton
+                objectName: "batchResizeConstraint"
+                Layout.rowSpan: 2
+                Layout.alignment: Qt.AlignVCenter
+                implicitWidth: 32
+                implicitHeight: 32
+                checkable: true
+                checked: dialog.constraint
+                focusPolicy: Qt.NoFocus
+                Accessible.name: qsTr("Constrain proportions")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Constrain proportions")
+                onToggled: dialog.setConstraint(checked)
+                contentItem: Canvas {
+                    id: chainCanvas
+                    implicitWidth: 20
+                    implicitHeight: 20
+                    Component.onCompleted: requestPaint()
+                    onWidthChanged: requestPaint()
+                    onHeightChanged: requestPaint()
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        ctx.strokeStyle = constraintButton.checked
+                                ? dialog.theme.accent : dialog.theme.text
+                        ctx.lineWidth = 1.5
+                        ctx.lineCap = "round"
+                        ctx.translate(width / 2, height / 2)
+                        ctx.rotate(-Math.PI / 4)
+                        drawLink(ctx, -3.7)
+                        drawLink(ctx, 3.7)
                     }
-                    UnitField {
-                        id: widthField
-                        objectName: "batchResizeWidth"
-                        Layout.fillWidth: true
-                        font.pixelSize: 12
-                        // A target size is absolute: `%` would name one
-                        // picture's size and mean nothing for the others.
-                        unitsVisible: false
-                        minimumPixels: 1
-                        maximumPixels: 20000
-                        nextField: heightField
-                        onTextEdited: dialog.linkHeightFromWidth()
-                        onAccepted: dialog.run()
+                    function drawLink(ctx, cx) {
+                        var span = 9
+                        var thick = 6
+                        var radius = thick / 2
+                        ctx.beginPath()
+                        ctx.moveTo(cx - span / 2 + radius, -radius)
+                        ctx.lineTo(cx + span / 2 - radius, -radius)
+                        ctx.arc(cx + span / 2 - radius, 0, radius,
+                                -Math.PI / 2, Math.PI / 2)
+                        ctx.lineTo(cx - span / 2 + radius, radius)
+                        ctx.arc(cx - span / 2 + radius, 0, radius,
+                                Math.PI / 2, -Math.PI / 2)
+                        ctx.closePath()
+                        ctx.stroke()
                     }
-                    ToolButton {
-                        id: constraintButton
-                        objectName: "batchResizeConstraint"
-                        Layout.rowSpan: 2
-                        Layout.alignment: Qt.AlignVCenter
-                        implicitWidth: 32
-                        implicitHeight: 32
-                        checkable: true
-                        checked: dialog.constraint
-                        focusPolicy: Qt.NoFocus
-                        Accessible.name: qsTr("Constrain proportions")
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Constrain proportions")
-                        onToggled: dialog.setConstraint(checked)
-                        contentItem: Canvas {
-                            id: chainCanvas
-                            implicitWidth: 20
-                            implicitHeight: 20
-                            Component.onCompleted: requestPaint()
-                            onWidthChanged: requestPaint()
-                            onHeightChanged: requestPaint()
-                            onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.reset()
-                                ctx.strokeStyle = constraintButton.checked
-                                        ? dialog.theme.accent : dialog.theme.text
-                                ctx.lineWidth = 1.5
-                                ctx.lineCap = "round"
-                                ctx.translate(width / 2, height / 2)
-                                ctx.rotate(-Math.PI / 4)
-                                drawLink(ctx, -3.7)
-                                drawLink(ctx, 3.7)
-                            }
-                            function drawLink(ctx, cx) {
-                                var span = 9
-                                var thick = 6
-                                var radius = thick / 2
-                                ctx.beginPath()
-                                ctx.moveTo(cx - span / 2 + radius, -radius)
-                                ctx.lineTo(cx + span / 2 - radius, -radius)
-                                ctx.arc(cx + span / 2 - radius, 0, radius,
-                                        -Math.PI / 2, Math.PI / 2)
-                                ctx.lineTo(cx - span / 2 + radius, radius)
-                                ctx.arc(cx - span / 2 + radius, 0, radius,
-                                        Math.PI / 2, -Math.PI / 2)
-                                ctx.closePath()
-                                ctx.stroke()
-                            }
-                            Connections {
-                                target: constraintButton
-                                function onCheckedChanged() { chainCanvas.requestPaint() }
-                            }
-                        }
-                    }
-                    Label {
-                        text: qsTr("Height")
-                        color: dialog.theme.textMuted
-                    }
-                    UnitField {
-                        id: heightField
-                        objectName: "batchResizeHeight"
-                        Layout.fillWidth: true
-                        font.pixelSize: 12
-                        unitsVisible: false
-                        minimumPixels: 1
-                        maximumPixels: 20000
-                        previousField: widthField
-                        onTextEdited: dialog.linkWidthFromHeight()
-                        onAccepted: dialog.run()
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Label {
-                        text: qsTr("Fit")
-                        color: dialog.theme.textMuted
-                    }
-                    ComboBox {
-                        id: fitBox
-                        objectName: "batchResizeFit"
-                        Layout.fillWidth: true
-                        model: dialog.fits
-                        textRole: "label"
-                        currentIndex: dialog.fillIndex()
-                        // `currentIndex` is bound to the state the handler
-                        // writes, so it still holds the old choice here; the
-                        // signal's index is the one the user picked.
-                        onActivated: function(index) { dialog.chooseFit(index) }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    visible: dialog.fitMode === "pad"
-
-                    Label {
-                        text: qsTr("Background")
-                        color: dialog.theme.textMuted
-                    }
-                    ComboBox {
-                        id: backgroundBox
-                        objectName: "batchResizeBackground"
-                        Layout.fillWidth: true
-                        model: dialog.backgrounds
-                        textRole: "label"
-                        currentIndex: dialog.backgroundIndex()
-                        onActivated: function(index) { dialog.chooseBackground(index) }
-                    }
-                    Rectangle {
-                        Layout.preferredWidth: 24
-                        Layout.preferredHeight: 24
-                        radius: 4
-                        color: dialog.backgroundColor()
-                        border.width: 1
-                        border.color: dialog.theme.border
-                        visible: dialog.backgroundMode !== "none"
-                        Label {
-                            anchors.centerIn: parent
-                            visible: dialog.backgroundMode === "transparent"
-                            text: "0"
-                            color: dialog.theme.textMuted
-                            font.pixelSize: 10
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Label {
-                        text: qsTr("Filter")
-                        color: dialog.theme.textMuted
-                    }
-                    ComboBox {
-                        id: filterBox
-                        objectName: "batchResizeFilter"
-                        Layout.fillWidth: true
-                        model: dialog.filters
-                        textRole: "label"
-                        currentIndex: dialog.filterIndex()
-                        onActivated: function(index) {
-                            dialog.filter = dialog.filters[index].key
-                        }
+                    Connections {
+                        target: constraintButton
+                        function onCheckedChanged() { chainCanvas.requestPaint() }
                     }
                 }
             }
-
-            // -------------------------------------------------------- crop
-            ColumnLayout {
-                Layout.fillWidth: true
-                visible: dialog.operation === "crop"
-                spacing: 8
-
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 4
-                    columnSpacing: 6
-                    rowSpacing: 6
-
-                    Label {
-                        text: qsTr("X")
-                        color: dialog.theme.textMuted
-                    }
-                    UnitField {
-                        id: cropXField
-                        objectName: "batchCropX"
-                        Layout.fillWidth: true
-                        font.pixelSize: 12
-                        unit: "%"
-                        unitsVisible: false
-                        unitReference: 100
-                        minimumPixels: 0
-                        maximumPixels: 100
-                    }
-                    Label {
-                        text: qsTr("Y")
-                        color: dialog.theme.textMuted
-                    }
-                    UnitField {
-                        id: cropYField
-                        objectName: "batchCropY"
-                        Layout.fillWidth: true
-                        font.pixelSize: 12
-                        unit: "%"
-                        unitsVisible: false
-                        unitReference: 100
-                        minimumPixels: 0
-                        maximumPixels: 100
-                    }
-
-                    Label {
-                        text: qsTr("Width")
-                        color: dialog.theme.textMuted
-                    }
-                    UnitField {
-                        id: cropWidthField
-                        objectName: "batchCropWidth"
-                        Layout.fillWidth: true
-                        font.pixelSize: 12
-                        unit: "%"
-                        unitsVisible: false
-                        unitReference: 100
-                        minimumPixels: 1
-                        maximumPixels: 100
-                    }
-                    Label {
-                        text: qsTr("Height")
-                        color: dialog.theme.textMuted
-                    }
-                    UnitField {
-                        id: cropHeightField
-                        objectName: "batchCropHeight"
-                        Layout.fillWidth: true
-                        font.pixelSize: 12
-                        unit: "%"
-                        unitsVisible: false
-                        unitReference: 100
-                        minimumPixels: 1
-                        maximumPixels: 100
-                    }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Percentages are of each image's own sides, so one rectangle trims the same relative area from every size.")
-                    color: dialog.theme.textMuted
-                    font.pixelSize: 11
-                    wrapMode: Text.WordWrap
-                }
-            }
-
-            // ----------------------------------------------------- convert
-            ColumnLayout {
-                Layout.fillWidth: true
-                visible: dialog.operation === "convert"
-                spacing: 8
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Label {
-                        text: qsTr("Format")
-                        color: dialog.theme.textMuted
-                    }
-                    ComboBox {
-                        id: formatBox
-                        objectName: "batchConvertFormat"
-                        Layout.fillWidth: true
-                        model: dialog.formats
-                        textRole: "label"
-                        currentIndex: dialog.formatIndex()
-                        // The signal carries the index; `currentIndex` is a
-                        // binding to `dialog.format`, so reading it here would
-                        // echo the old format back.
-                        onActivated: function(index) {
-                            dialog.format = dialog.formats[index].key
-                        }
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-                    // Only JPEG reads the quality; the other encoders are
-                    // lossless or fixed, so the row would be a lie there.
-                    visible: dialog.format === "jpeg"
-
-                    Label {
-                        text: qsTr("Quality")
-                        color: dialog.theme.textMuted
-                    }
-                    // The same slider the Editor's Export draws: the batch is
-                    // the editor's own encoder, so its one lossy setting should
-                    // look and read the same way, not as a white spin box on
-                    // the dark form.
-                    Slider {
-                        id: qualityBox
-                        objectName: "batchConvertQuality"
-                        Layout.fillWidth: true
-                        from: 10
-                        to: 100
-                        stepSize: 1
-                        value: dialog.quality
-                        onMoved: dialog.quality = Math.round(value)
-                    }
-                    Label {
-                        Layout.preferredWidth: 32
-                        text: String(Math.round(qualityBox.value))
-                        color: dialog.theme.text
-                        font.pixelSize: 12
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: dialog.theme.border
-            }
-
-            // ------------------------------------------------------- input
             Label {
-                Layout.fillWidth: true
-                text: qsTr("Images")
-                color: dialog.theme.text
-                font.bold: true
-                font.pixelSize: 12
-            }
-
-            // The three answers, in the order a user looks for them: what is
-            // picked, what is open, what is somewhere else.
-            RadioButton {
-                id: selectionRadio
-                objectName: "batchInputSelection"
-                Layout.fillWidth: true
-                text: qsTr("The selection (%1 image(s))").arg(dialog.selectionPaths.length)
-                focusPolicy: Qt.NoFocus
-                enabled: dialog.selectionPaths.length > 0
-                ButtonGroup.group: inputGroup
-                checked: dialog.inputKind === "selection"
-                onClicked: dialog.inputKind = "selection"
-                // The words take the theme's colour: a control inside a `Popup`
-                // resolves the *platform* palette, and this one's stock label
-                // drew near-black text on the dark form (measured `#26292e` on
-                // `#181b21`). The indicator stays the style's.
-                contentItem: Text {
-                    text: selectionRadio.text
-                    color: selectionRadio.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    font: selectionRadio.font
-                    leftPadding: selectionRadio.indicator.width + selectionRadio.spacing
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    opacity: selectionRadio.enabled ? 1.0 : 0.6
-                }
-            }
-            RadioButton {
-                id: folderRadio
-                objectName: "batchInputFolder"
-                Layout.fillWidth: true
-                text: qsTr("Every image in %1").arg(dialog.folderLabel())
-                focusPolicy: Qt.NoFocus
-                enabled: dialog.currentFolder.length > 0
-                ButtonGroup.group: inputGroup
-                checked: dialog.inputKind === "currentFolder"
-                onClicked: dialog.inputKind = "currentFolder"
-                contentItem: Text {
-                    text: folderRadio.text
-                    color: folderRadio.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    font: folderRadio.font
-                    leftPadding: folderRadio.indicator.width + folderRadio.spacing
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    opacity: folderRadio.enabled ? 1.0 : 0.6
-                }
-            }
-            RadioButton {
-                id: otherFolderRadio
-                objectName: "batchInputOtherFolder"
-                Layout.fillWidth: true
-                text: qsTr("Another folder")
-                focusPolicy: Qt.NoFocus
-                ButtonGroup.group: inputGroup
-                checked: dialog.inputKind === "otherFolder"
-                onClicked: dialog.inputKind = "otherFolder"
-                contentItem: Text {
-                    text: otherFolderRadio.text
-                    color: otherFolderRadio.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    font: otherFolderRadio.font
-                    leftPadding: otherFolderRadio.indicator.width + otherFolderRadio.spacing
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    opacity: otherFolderRadio.enabled ? 1.0 : 0.6
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 28
-                spacing: 8
-
-                Label {
-                    objectName: "batchInputFolderPath"
-                    Layout.fillWidth: true
-                    text: dialog.inputFolder.length > 0 ? dialog.inputFolder
-                                                        : qsTr("No folder chosen")
-                    color: dialog.inputFolder.length > 0 ? dialog.theme.text
-                                                         : dialog.theme.textMuted
-                    elide: Text.ElideMiddle
-                }
-                PanelAction {
-                    objectName: "batchChooseInputFolder"
-                    theme: dialog.theme
-                    text: qsTr("Choose…")
-                    implicitWidth: 96
-                    onClicked: {
-                        dialog.inputKind = "otherFolder"
-                        otherFolderRadio.checked = true
-                        inputFolderDialog.open()
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: dialog.theme.border
-            }
-
-            // ------------------------------------------------------- output
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Save to")
-                color: dialog.theme.text
-                font.bold: true
-                font.pixelSize: 12
-            }
-
-            RadioButton {
-                id: besideRadio
-                objectName: "batchOutputBeside"
-                Layout.fillWidth: true
-                text: qsTr("The images' folder (%1)").arg(dialog.sourceFolderLabel())
-                focusPolicy: Qt.NoFocus
-                enabled: !dialog.overwrite
-                ButtonGroup.group: outputGroup
-                // The two destination radios follow `outputKind` in both
-                // directions: whichever one is bound, the group cannot fall
-                // back to "nothing checked".
-                checked: dialog.outputKind === "source" && !dialog.overwrite
-                onClicked: dialog.outputKind = "source"
-                contentItem: Text {
-                    text: besideRadio.text
-                    color: besideRadio.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    font: besideRadio.font
-                    leftPadding: besideRadio.indicator.width + besideRadio.spacing
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    opacity: besideRadio.enabled ? 1.0 : 0.6
-                }
-            }
-
-            RadioButton {
-                id: folderDestinationRadio
-                objectName: "batchOutputFolder"
-                Layout.fillWidth: true
-                text: qsTr("Another folder")
-                focusPolicy: Qt.NoFocus
-                enabled: !dialog.overwrite
-                ButtonGroup.group: outputGroup
-                // The radio is the answer, not a notification: a folder chosen
-                // in `FolderDialog` or handed in by a host lands here too.
-                checked: dialog.outputKind === "folder" && !dialog.overwrite
-                onClicked: dialog.outputKind = "folder"
-                contentItem: Text {
-                    text: folderDestinationRadio.text
-                    color: folderDestinationRadio.enabled ? dialog.theme.text
-                                                          : dialog.theme.textMuted
-                    font: folderDestinationRadio.font
-                    leftPadding: folderDestinationRadio.indicator.width
-                                 + folderDestinationRadio.spacing
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    opacity: folderDestinationRadio.enabled ? 1.0 : 0.6
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 28
-                spacing: 8
-                enabled: !dialog.overwrite
-
-                Label {
-                    objectName: "batchOutputFolderPath"
-                    Layout.fillWidth: true
-                    text: dialog.outputFolder.length > 0 ? dialog.outputFolder
-                                                         : qsTr("No folder chosen")
-                    color: dialog.outputFolder.length > 0 ? dialog.theme.text
-                                                          : dialog.theme.textMuted
-                    elide: Text.ElideMiddle
-                }
-                PanelAction {
-                    objectName: "batchChooseFolder"
-                    theme: dialog.theme
-                    text: qsTr("Choose…")
-                    implicitWidth: 96
-                    onClicked: outputFolderDialog.open()
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: dialog.theme.border
-            }
-
-            // ------------------------------------------------------- options
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Options")
-                color: dialog.theme.text
-                font.bold: true
-                font.pixelSize: 12
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                enabled: !dialog.overwrite
-
-                Label {
-                    text: qsTr("Suffix")
-                    color: dialog.theme.textMuted
-                }
-                TextField {
-                    id: suffixField
-                    objectName: "batchOutputSuffix"
-                    Layout.fillWidth: true
-                    font.pixelSize: 12
-                    placeholderText: qsTr("(none)")
-                    onAccepted: dialog.run()
-                }
-            }
-
-            CheckBox {
-                id: overwriteBox
-                objectName: "batchOverwrite"
-                Layout.fillWidth: true
-                text: qsTr("Replace the originals (a .bak copy is kept)")
-                focusPolicy: Qt.NoFocus
-                onCheckedChanged: dialog.overwrite = checked
-                contentItem: Text {
-                    text: overwriteBox.text
-                    color: overwriteBox.enabled ? dialog.theme.text : dialog.theme.textMuted
-                    font: overwriteBox.font
-                    leftPadding: overwriteBox.indicator.width + overwriteBox.spacing
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    opacity: overwriteBox.enabled ? 1.0 : 0.6
-                }
-            }
-
-            Label {
-                objectName: "batchSummary"
-                Layout.fillWidth: true
-                text: dialog.summary()
+                text: qsTr("Height")
                 color: dialog.theme.textMuted
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
+                elide: Text.ElideRight
+                Layout.preferredWidth: dialog.labelWidth
+                Layout.maximumWidth: dialog.labelWidth
             }
-
-            Label {
-                objectName: "batchWarning"
+            UnitField {
+                id: heightField
+                objectName: "batchResizeHeight"
                 Layout.fillWidth: true
-                visible: dialog.validationError().length > 0
-                text: dialog.validationError()
-                color: dialog.theme.danger
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
+                font.pixelSize: 12
+                unitsVisible: false
+                minimumPixels: 1
+                maximumPixels: 20000
+                previousField: widthField
+                onTextEdited: dialog.linkWidthFromHeight()
+                onAccepted: dialog.run()
+            }
+        }
+
+        FormRow {
+            theme: dialog.theme
+            label: qsTr("Fit")
+            labelWidth: dialog.labelWidth
+            Layout.fillWidth: true
+
+            ComboBox {
+                id: fitBox
+                objectName: "batchResizeFit"
+                Layout.fillWidth: true
+                model: dialog.fits
+                textRole: "label"
+                currentIndex: dialog.fillIndex()
+                // `currentIndex` is bound to the state the handler
+                // writes, so it still holds the old choice here; the
+                // signal's index is the one the user picked.
+                onActivated: function(index) { dialog.chooseFit(index) }
+            }
+        }
+
+        FormRow {
+            theme: dialog.theme
+            label: qsTr("Background")
+            labelWidth: dialog.labelWidth
+            Layout.fillWidth: true
+            visible: dialog.fitMode === "pad"
+
+            ComboBox {
+                id: backgroundBox
+                objectName: "batchResizeBackground"
+                Layout.fillWidth: true
+                model: dialog.backgrounds
+                textRole: "label"
+                currentIndex: dialog.backgroundIndex()
+                onActivated: function(index) { dialog.chooseBackground(index) }
+            }
+            Rectangle {
+                Layout.preferredWidth: 24
+                Layout.preferredHeight: 24
+                radius: 4
+                color: dialog.backgroundColor()
+                border.width: 1
+                border.color: dialog.theme.border
+                visible: dialog.backgroundMode !== "none"
+                Label {
+                    anchors.centerIn: parent
+                    visible: dialog.backgroundMode === "transparent"
+                    text: "0"
+                    color: dialog.theme.textMuted
+                    font.pixelSize: 10
+                }
+            }
+        }
+
+        FormRow {
+            theme: dialog.theme
+            label: qsTr("Filter")
+            labelWidth: dialog.labelWidth
+            Layout.fillWidth: true
+
+            ComboBox {
+                id: filterBox
+                objectName: "batchResizeFilter"
+                Layout.fillWidth: true
+                model: dialog.filters
+                textRole: "label"
+                currentIndex: dialog.filterIndex()
+                onActivated: function(index) {
+                    dialog.filter = dialog.filters[index].key
+                }
             }
         }
     }
 
-    footer: Rectangle {
-        objectName: "batchButtons"
-        implicitHeight: 60
-        color: dialog.theme.surface
-        border.color: dialog.theme.border
-        border.width: 1
+    // -------------------------------------------------------- crop
+    ColumnLayout {
+        Layout.fillWidth: true
+        visible: dialog.operation === "crop"
+        spacing: 8
 
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 8
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 4
+            columnSpacing: 6
+            rowSpacing: 6
 
-            Item { Layout.fillWidth: true }
-            PanelAction {
-                objectName: "batchDialogCancel"
-                theme: dialog.theme
-                text: qsTr("Cancel")
-                implicitWidth: 96
-                onClicked: dialog.close()
+            Label {
+                text: qsTr("X")
+                color: dialog.theme.textMuted
             }
-            PanelAction {
-                objectName: "batchDialogRun"
-                theme: dialog.theme
-                text: qsTr("Run")
-                implicitWidth: 96
-                primary: true
-                enabled: dialog.validationError().length === 0
-                onClicked: dialog.run()
+            UnitField {
+                id: cropXField
+                objectName: "batchCropX"
+                Layout.fillWidth: true
+                font.pixelSize: 12
+                unit: "%"
+                unitsVisible: false
+                unitReference: 100
+                minimumPixels: 0
+                maximumPixels: 100
             }
+            Label {
+                text: qsTr("Y")
+                color: dialog.theme.textMuted
+            }
+            UnitField {
+                id: cropYField
+                objectName: "batchCropY"
+                Layout.fillWidth: true
+                font.pixelSize: 12
+                unit: "%"
+                unitsVisible: false
+                unitReference: 100
+                minimumPixels: 0
+                maximumPixels: 100
+            }
+
+            Label {
+                text: qsTr("Width")
+                color: dialog.theme.textMuted
+            }
+            UnitField {
+                id: cropWidthField
+                objectName: "batchCropWidth"
+                Layout.fillWidth: true
+                font.pixelSize: 12
+                unit: "%"
+                unitsVisible: false
+                unitReference: 100
+                minimumPixels: 1
+                maximumPixels: 100
+            }
+            Label {
+                text: qsTr("Height")
+                color: dialog.theme.textMuted
+            }
+            UnitField {
+                id: cropHeightField
+                objectName: "batchCropHeight"
+                Layout.fillWidth: true
+                font.pixelSize: 12
+                unit: "%"
+                unitsVisible: false
+                unitReference: 100
+                minimumPixels: 1
+                maximumPixels: 100
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("Percentages are of each image's own sides, so one rectangle trims the same relative area from every size.")
+            color: dialog.theme.textMuted
+            font.pixelSize: 11
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    // ----------------------------------------------------- convert
+    ColumnLayout {
+        Layout.fillWidth: true
+        visible: dialog.operation === "convert"
+        spacing: 8
+
+        FormRow {
+            theme: dialog.theme
+            label: qsTr("Format")
+            labelWidth: dialog.labelWidth
+            Layout.fillWidth: true
+
+            ComboBox {
+                id: formatBox
+                objectName: "batchConvertFormat"
+                Layout.fillWidth: true
+                model: dialog.formats
+                textRole: "label"
+                currentIndex: dialog.formatIndex()
+                // The signal carries the index; `currentIndex` is a
+                // binding to `dialog.format`, so reading it here would
+                // echo the old format back.
+                onActivated: function(index) {
+                    dialog.format = dialog.formats[index].key
+                }
+            }
+        }
+
+        FormRow {
+            theme: dialog.theme
+            label: qsTr("Quality")
+            labelWidth: dialog.labelWidth
+            Layout.fillWidth: true
+            // Only JPEG reads the quality; the other encoders are
+            // lossless or fixed, so the row would be a lie there.
+            visible: dialog.format === "jpeg"
+
+            // The same slider the Editor's Export draws: the batch is
+            // the editor's own encoder, so its one lossy setting should
+            // look and read the same way, not as a white spin box on
+            // the dark form.
+            Slider {
+                id: qualityBox
+                objectName: "batchConvertQuality"
+                Layout.fillWidth: true
+                from: 10
+                to: 100
+                stepSize: 1
+                value: dialog.quality
+                onMoved: dialog.quality = Math.round(value)
+            }
+            Label {
+                Layout.preferredWidth: 32
+                text: String(Math.round(qualityBox.value))
+                color: dialog.theme.text
+                font.pixelSize: 12
+            }
+        }
+    }
+
+    // ------------------------------------------------------- input
+    Label {
+        Layout.fillWidth: true
+        Layout.topMargin: 4
+        text: qsTr("Images")
+        color: dialog.theme.text
+        font.bold: true
+        font.pixelSize: 12
+    }
+    Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: 1
+        color: dialog.theme.border
+    }
+
+    // The three answers, in the order a user looks for them: what is
+    // picked, what is open, what is somewhere else.
+    FormRadio {
+        id: selectionRadio
+        theme: dialog.theme
+        objectName: "batchInputSelection"
+        Layout.fillWidth: true
+        text: qsTr("The selection (%1 image(s))").arg(dialog.selectionPaths.length)
+        enabled: dialog.selectionPaths.length > 0
+        ButtonGroup.group: inputGroup
+        checked: dialog.inputKind === "selection"
+        onClicked: dialog.inputKind = "selection"
+    }
+    FormRadio {
+        id: folderRadio
+        theme: dialog.theme
+        objectName: "batchInputFolder"
+        Layout.fillWidth: true
+        text: qsTr("Every image in %1").arg(dialog.folderLabel())
+        enabled: dialog.currentFolder.length > 0
+        ButtonGroup.group: inputGroup
+        checked: dialog.inputKind === "currentFolder"
+        onClicked: dialog.inputKind = "currentFolder"
+    }
+    FormRadio {
+        id: otherFolderRadio
+        theme: dialog.theme
+        objectName: "batchInputOtherFolder"
+        Layout.fillWidth: true
+        text: qsTr("Another folder")
+        ButtonGroup.group: inputGroup
+        checked: dialog.inputKind === "otherFolder"
+        onClicked: dialog.inputKind = "otherFolder"
+    }
+
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.leftMargin: 28
+        spacing: 8
+
+        Label {
+            objectName: "batchInputFolderPath"
+            Layout.fillWidth: true
+            text: dialog.inputFolder.length > 0 ? dialog.inputFolder
+                                                : qsTr("No folder chosen")
+            color: dialog.inputFolder.length > 0 ? dialog.theme.text
+                                                 : dialog.theme.textMuted
+            elide: Text.ElideMiddle
+        }
+        PanelAction {
+            objectName: "batchChooseInputFolder"
+            theme: dialog.theme
+            text: qsTr("Choose…")
+            implicitWidth: 96
+            onClicked: {
+                dialog.inputKind = "otherFolder"
+                otherFolderRadio.checked = true
+                inputFolderDialog.open()
+            }
+        }
+    }
+
+    // ------------------------------------------------------- output
+    Label {
+        Layout.fillWidth: true
+        Layout.topMargin: 4
+        text: qsTr("Save to")
+        color: dialog.theme.text
+        font.bold: true
+        font.pixelSize: 12
+    }
+    Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: 1
+        color: dialog.theme.border
+    }
+
+    FormRadio {
+        id: besideRadio
+        theme: dialog.theme
+        objectName: "batchOutputBeside"
+        Layout.fillWidth: true
+        text: qsTr("The images' folder (%1)").arg(dialog.sourceFolderLabel())
+        enabled: !dialog.overwrite
+        ButtonGroup.group: outputGroup
+        // The two destination radios follow `outputKind` in both
+        // directions: whichever one is bound, the group cannot fall
+        // back to "nothing checked".
+        checked: dialog.outputKind === "source" && !dialog.overwrite
+        onClicked: dialog.outputKind = "source"
+    }
+
+    FormRadio {
+        id: folderDestinationRadio
+        theme: dialog.theme
+        objectName: "batchOutputFolder"
+        Layout.fillWidth: true
+        text: qsTr("Another folder")
+        enabled: !dialog.overwrite
+        ButtonGroup.group: outputGroup
+        // The radio is the answer, not a notification: a folder chosen
+        // in `FolderDialog` or handed in by a host lands here too.
+        checked: dialog.outputKind === "folder" && !dialog.overwrite
+        onClicked: dialog.outputKind = "folder"
+    }
+
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.leftMargin: 28
+        spacing: 8
+        enabled: !dialog.overwrite
+
+        Label {
+            objectName: "batchOutputFolderPath"
+            Layout.fillWidth: true
+            text: dialog.outputFolder.length > 0 ? dialog.outputFolder
+                                                 : qsTr("No folder chosen")
+            color: dialog.outputFolder.length > 0 ? dialog.theme.text
+                                                  : dialog.theme.textMuted
+            elide: Text.ElideMiddle
+        }
+        PanelAction {
+            objectName: "batchChooseFolder"
+            theme: dialog.theme
+            text: qsTr("Choose…")
+            implicitWidth: 96
+            onClicked: outputFolderDialog.open()
+        }
+    }
+
+    // ------------------------------------------------------- options
+    Label {
+        Layout.fillWidth: true
+        Layout.topMargin: 4
+        text: qsTr("Options")
+        color: dialog.theme.text
+        font.bold: true
+        font.pixelSize: 12
+    }
+    Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: 1
+        color: dialog.theme.border
+    }
+
+    FormRow {
+        theme: dialog.theme
+        label: qsTr("Suffix")
+        labelWidth: dialog.labelWidth
+        Layout.fillWidth: true
+        enabled: !dialog.overwrite
+
+        TextField {
+            id: suffixField
+            objectName: "batchOutputSuffix"
+            Layout.fillWidth: true
+            font.pixelSize: 12
+            placeholderText: qsTr("(none)")
+            onAccepted: dialog.run()
+        }
+    }
+
+    FormCheck {
+        id: overwriteBox
+        theme: dialog.theme
+        objectName: "batchOverwrite"
+        Layout.fillWidth: true
+        text: qsTr("Replace the originals (a .bak copy is kept)")
+        onCheckedChanged: dialog.overwrite = checked
+    }
+
+    Label {
+        objectName: "batchSummary"
+        Layout.fillWidth: true
+        text: dialog.summary()
+        color: dialog.theme.textMuted
+        font.pixelSize: 11
+        wrapMode: Text.WordWrap
+    }
+
+    Label {
+        objectName: "batchWarning"
+        Layout.fillWidth: true
+        visible: dialog.validationError().length > 0
+        text: dialog.validationError()
+        color: dialog.theme.danger
+        font.pixelSize: 11
+        wrapMode: Text.WordWrap
+    }
+
+
+    footer: DialogFooter {
+        namePrefix: "batch"
+        theme: dialog.theme
+        height: dialog.footerHeight
+
+        Item { Layout.fillWidth: true }
+        PanelAction {
+            objectName: "batchDialogCancel"
+            theme: dialog.theme
+            text: qsTr("Cancel")
+            implicitWidth: 88
+            onClicked: dialog.close()
+        }
+        PanelAction {
+            objectName: "batchDialogRun"
+            theme: dialog.theme
+            text: qsTr("Run")
+            implicitWidth: 88
+            primary: true
+            enabled: dialog.validationError().length === 0
+            onClicked: dialog.run()
         }
     }
 

@@ -1229,57 +1229,68 @@ Item {
         }
     }
 
-    Dialog {
+    DialogFrame {
         id: newFolderDialog
+        objectName: "newFolderDialog"
+        namePrefix: "newFolder"
         title: qsTr("New folder")
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: 380
-        // Explicit buttons for the same reason as the settings dialog: Qt's own
-        // "OK"/"Cancel" are the system's translations, and the app's own
-        // catalogue travels with it.
-        footer: DialogButtonBox {
-            alignment: Qt.AlignRight
-            Button {
-                text: qsTr("Cancel")
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-                onClicked: newFolderDialog.reject()
-            }
-            Button {
-                objectName: "newFolderCreate"
-                text: qsTr("Create")
-                highlighted: true
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-                onClicked: newFolderDialog.accept()
-            }
+        preferredWidth: 380
+
+        /// An empty name is not a folder: Create stays disabled until there is
+        /// something to name.
+        function create() {
+            var name = nameField.text.trim();
+            if (name.length === 0) return;
+            view.command({
+                type: "new_folder",
+                parent: view.newFolderParent,
+                name: name
+            });
+            newFolderDialog.close();
         }
 
-        onOpened: {
+        /// Every open starts on an empty field with the keyboard in it.
+        function prepare() {
             nameField.text = "";
             nameField.forceActiveFocus();
         }
-        onAccepted: {
-            var name = nameField.text.trim();
-            if (name.length > 0) {
-                view.command({
-                    type: "new_folder",
-                    parent: view.newFolderParent,
-                    name: name
-                });
+
+        FormRow {
+            theme: view.theme
+            label: qsTr("Folder name")
+            labelWidth: newFolderDialog.labelWidth
+            Layout.fillWidth: true
+
+            TextField {
+                id: nameField
+                objectName: "newFolderName"
+                Layout.fillWidth: true
+                placeholderText: qsTr("New folder")
+                onAccepted: newFolderDialog.create()
             }
         }
 
-        contentItem: ColumnLayout {
-            spacing: 8
-            Label {
-                text: qsTr("Folder name")
-                color: view.theme.textMuted
+        footer: DialogFooter {
+            namePrefix: "newFolder"
+            theme: view.theme
+            height: newFolderDialog.footerHeight
+
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "newFolderCancel"
+                theme: view.theme
+                text: qsTr("Cancel")
+                implicitWidth: 88
+                onClicked: newFolderDialog.close()
             }
-            TextField {
-                id: nameField
-                Layout.fillWidth: true
-                placeholderText: qsTr("New folder")
-                onAccepted: newFolderDialog.accept()
+            PanelAction {
+                objectName: "newFolderCreate"
+                theme: view.theme
+                text: qsTr("Create")
+                implicitWidth: 88
+                primary: true
+                enabled: nameField.text.trim().length > 0
+                onClicked: newFolderDialog.create()
             }
         }
     }

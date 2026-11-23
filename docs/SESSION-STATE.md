@@ -2280,6 +2280,88 @@ no protocol type, no Core rule and no journal line changed.
   colours, no eyedropper, no `Shift+X` to bring the background forward, and the
   arbitrary-angle rotate still adds its corners the way it did.
 
+## Design decisions, one dialog frame for every form (row 111, ADR 0026)
+
+Six modal forms had been copied one from the next and had drifted: the × sat at
+two distances from the edge, each form carried its own drag clamp, padding was
+remembered per form, some rows used a fixed label column and others natural
+width, and the verb row had three shapes — including a stock `Button` row and a
+`MessageDialog`, whose words come from the platform's `qtbase_<locale>.qm`. The
+chrome now lives in four components plus two leaf controls, and every form
+supplies only its fields. QML, tests, translations and docs; no protocol, Core
+rule, journal line or layout value changed.
+
+- **`DialogFrame.qml` owns the chrome.** A 52 px title bar (title, ×, one
+  `DragHandler` with one clamp), a body that keeps 20 px on all four sides and
+  scrolls, a 60 px verb row, and one centring rule called from `onAboutToShow`
+  and from every size change until the user drags (`moved`). Height is computed:
+  `min(limit, chrome + column)` for a form that fits, `min(limit,
+  preferredHeight)` for a tabbed one, `limit = max(240, parent.height - 48)`;
+  width is `min(preferredWidth, parent.width - 48)`.
+- **A body cannot run under the footer.** The first test found it: a 320 px body
+  inside a 252 px frame on a 300 px window. `bodyRoom()` is the height left once
+  the chrome has had its share, and the body's `implicitHeight` is clamped by it
+  — the overshoot is said out loud with a scroll bar rather than by a row cut in
+  half at the fold.
+- **The verbs are the app's own and there is one primary.** `DialogFooter.qml`
+  is 60 px with 12 px margins and an 8 px gap; verbs are `PanelAction`s, the
+  default one `primary` (the accent verb, and the last child, which is where the
+  eye and Enter land). A value-restoring verb apart on the left (Defaults,
+  Reset) is separated by the unnamed `Item { Layout.fillWidth: true }` spacer
+  every dialog already wrote.
+- **One label column, one section shape.** `FormRow.qml` puts the label in a
+  96 px column (`labelWidth`) so every control in a form starts at one x, with
+  `labelFill: true` for a checkbox row and Settings' two right-aligned rows.
+  `FormSection.qml` is a 12 px bold heading in `theme.text`, one hairline, then
+  its rows.
+- **The words inside a popup are the app's.** A stock `CheckBox`/`RadioButton`
+  in a `Popup` resolves the *platform* palette — measured `#26292e` on
+  `#181b21` in the Batch form — and each form had grown its own `contentItem`
+  copy while Export had none. `FormCheck.qml`/`FormRadio.qml` draw that sentence
+  in the theme's ink, muted when disabled; the indicator stays the style's.
+- **Object names survive, through `namePrefix`.** `<prefix>Header`, `Content`,
+  `Column`, `Footer`, `Title`, `Close` (`resizeHeader`, `settingsClose`,
+  `batchDialogClose`), so every test and dev hook that names a part still names
+  it. A form no longer writes `onAboutToShow` — the frame owns that handler and
+  calls `prepare()` from it *after* centring: Batch clears its form, Resize fills
+  from the document and focuses Width, Settings snapshots its values, New folder
+  clears and focuses its field.
+- **Nothing is closed by the frame.** The × emits `closeRequested` and the form
+  decides — Settings' × is Cancel, which reverts before it closes
+  (`theCrossIsCancelInEveryForm`).
+- **Resize's sections were renamed while they were grouped.** `Size` →
+  `Dimensions` (the catalogue's `Size` is `Dung lượng`, a file's size, and one
+  English string owns one translation), and the filter row became its own
+  `Resampling` section with its hint. `Fitting` and the new `Dimensions`,
+  `Resampling`, `Close`, `Delete` and `×` were hand-added to the `.ts` and then
+  checked against an `lupdate6` extraction.
+- **Export's size field stopped being drawn by the app.** A `Label` in the
+  theme's near-white ink on the style's white field was invisible on the real
+  window, so the list is a string model and the closed field is the style's own.
+- **Ten cases in `tst_dialogs`** (`just test dialogs`): the 52 px bar and its
+  margins, the 20 px inset and the scroll range, one 60 px `PanelAction` footer
+  with exactly one primary and it last, the label column at 96 + 8 in Resize and
+  Batch, a tall form scrolling on a 300 px window (bar visible, `size < 1`), a
+  narrow window narrowing the form, × acting as Cancel in all three, and a
+  source guard: no `.qml` may declare a bare `Dialog`, name a `DialogButtonBox`
+  or `MessageDialog`, or write `onAboutToShow` — the four dialogs inside
+  `Main.qml`, `EditorView.qml` and `BrowserView.qml` need the bridge to load, so
+  their half is read, not instantiated.
+- **Four mutations, each run and restored:** `bodyPadding` 20 → 12 and
+  `headerHeight` 52 → 56; `SettingsDialog.qml` declaring a `Dialog` (fails at
+  load); `Main.qml` declaring a `Dialog`, and a form writing `onAboutToShow`
+  (each fails the guard alone).
+- **Evidence it runs:** the real dev binary on an isolated `XDG_*`, Vietnamese —
+  Settings (`docs/evidence/M1-dialog-settings-vi.png`), the Batch form with its
+  scroll bar and pinned verbs (`…-dialog-batch-vi.png`), Resize's three sections
+  (`…-dialog-resize-vi.png`), Export with `1280 px cạnh dài` readable in the
+  closed field (`…-dialog-export-vi.png`), and the unsaved question after a real
+  `editor_rotate` (`…-dialog-unsaved-vi.png`). Every grab was opened and read
+  before it was kept.
+- **Not built:** no dialog-level keyboard scrolling, no icon on the two
+  questions, no remembered dialog position (a written `x`/`y` still wins because
+  the centring rule does not anchor), and Delete was not photographed.
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was

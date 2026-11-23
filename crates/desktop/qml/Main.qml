@@ -1368,18 +1368,63 @@ ApplicationWindow {
         }
     }
 
-    MessageDialog {
+    /// A destructive question, asked in the same frame as every other form: a
+    /// `MessageDialog` would draw the system's "Yes"/"Cancel", which a machine
+    /// without `qtbase_<locale>.qm` renders in English inside a Vietnamese
+    /// window — and "Yes" does not say what it will do.
+    DialogFrame {
         id: deleteDialog
+        objectName: "deleteDialog"
+        namePrefix: "delete"
         title: qsTr("Delete permanently?")
-        text: root.pendingDelete
-              ? (qsTr("Permanently delete %1 item(s)? This cannot be undone.").arg(root.pendingDelete.length))
-              : ""
-        buttons: MessageDialog.Yes | MessageDialog.Cancel
-        onAccepted: {
-            root.send({ type: "delete_permanently", paths: root.pendingDelete || [] });
+        preferredWidth: 420
+
+        /// Escape and the × cancel: a destructive answer is given only by
+        /// naming it.
+        onCloseRequested: {
             root.pendingDelete = null;
+            deleteDialog.close();
         }
-        onRejected: root.pendingDelete = null
+        onClosed: root.pendingDelete = null
+
+        Label {
+            Layout.fillWidth: true
+            text: root.pendingDelete
+                  ? (qsTr("Permanently delete %1 item(s)? This cannot be undone.").arg(root.pendingDelete.length))
+                  : ""
+            color: appTheme.text
+            wrapMode: Text.WordWrap
+        }
+
+        footer: DialogFooter {
+            namePrefix: "delete"
+            theme: appTheme
+            height: deleteDialog.footerHeight
+
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "deleteCancel"
+                theme: appTheme
+                text: qsTr("Cancel")
+                implicitWidth: 88
+                onClicked: {
+                    root.pendingDelete = null;
+                    deleteDialog.close();
+                }
+            }
+            PanelAction {
+                objectName: "deleteConfirm"
+                theme: appTheme
+                text: qsTr("Delete")
+                implicitWidth: 88
+                primary: true
+                onClicked: {
+                    root.send({ type: "delete_permanently", paths: root.pendingDelete || [] });
+                    root.pendingDelete = null;
+                    deleteDialog.close();
+                }
+            }
+        }
     }
 
     onClosing: function(close) {
@@ -1420,48 +1465,51 @@ ApplicationWindow {
     // Discard, Cancel — while `MessageDialog` offers only Accept/Reject, and
     // `MessageDialog.Save`/`Discard` do not exist on this Qt. So the dialog is a
     // plain `Dialog` with the three buttons placed by this file.
-    Dialog {
+    DialogFrame {
         id: unsavedDialog
         objectName: "unsavedDialog"
+        namePrefix: "unsaved"
         title: qsTr("Unsaved changes")
-        modal: true
-        closePolicy: Popup.CloseOnEscape
-        anchors.centerIn: Overlay.overlay
-        width: 420
+        preferredWidth: 420
         // Cancel and Escape both mean "stay here": no command, and no stale
         // answer left for the next question.
+        onCloseRequested: unsavedDialog.close()
         onClosed: root.pendingLeave = null
 
-        contentItem: ColumnLayout {
-            spacing: 10
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("The editor has changes that are not saved to a file. Save them first?")
+            color: appTheme.text
+            wrapMode: Text.WordWrap
+        }
 
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("The editor has changes that are not saved to a file. Save them first?")
-                wrapMode: Text.WordWrap
+        footer: DialogFooter {
+            namePrefix: "unsaved"
+            theme: appTheme
+            height: unsavedDialog.footerHeight
+
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "unsavedDiscard"
+                theme: appTheme
+                text: qsTr("Discard")
+                implicitWidth: 88
+                onClicked: root.leaveAfterDiscard()
             }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Item { Layout.fillWidth: true }
-                Button {
-                    objectName: "unsavedDiscard"
-                    text: qsTr("Discard")
-                    onClicked: root.leaveAfterDiscard()
-                }
-                Button {
-                    objectName: "unsavedCancel"
-                    text: qsTr("Cancel")
-                    onClicked: unsavedDialog.close()
-                }
-                Button {
-                    objectName: "unsavedSave"
-                    text: qsTr("Save")
-                    highlighted: true
-                    onClicked: root.leaveAfterSave()
-                }
+            PanelAction {
+                objectName: "unsavedCancel"
+                theme: appTheme
+                text: qsTr("Cancel")
+                implicitWidth: 88
+                onClicked: unsavedDialog.close()
+            }
+            PanelAction {
+                objectName: "unsavedSave"
+                theme: appTheme
+                text: qsTr("Save")
+                implicitWidth: 88
+                primary: true
+                onClicked: root.leaveAfterSave()
             }
         }
     }

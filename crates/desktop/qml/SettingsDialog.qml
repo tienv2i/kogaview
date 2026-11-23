@@ -26,8 +26,16 @@ import QtQuick.Layouts
 /// The order of the buttons (Defaults | Cancel · Apply · OK) follows GTK and
 /// KDE: the value-restoring button sits apart on the left, the exit buttons on
 /// the right, and the default action is the rightmost one.
-Dialog {
+DialogFrame {
     id: dialog
+    namePrefix: "settings"
+    title: qsTr("Settings")
+    preferredWidth: 620
+    // Four tabs share one fixed body, so the dialog keeps the height it asks
+    // for instead of growing and shrinking as a page is switched.
+    fitToContent: false
+    preferredHeight: 520
+
     property Theme theme: Theme {}
     property string initialTheme: "dark"
     property bool initialRemember: true
@@ -235,52 +243,20 @@ Dialog {
         dialog.emitPreview()
     }
 
-    /// One panel row, shared by the three workspace pages.
-    ///
-    /// The words take the theme's own colour: a `CheckBox` inside a `Popup`
-    /// resolves the *platform* palette (light on this desktop), and its stock
-    /// content item drew near-black text on the dark form — measured at
-    /// `#2b2f36` on `#181b21`, which is a list a user cannot read. The
-    /// indicator stays the style's, so the check mark keeps its accent.
+    /// One panel row, shared by the three workspace pages. The words and their
+    /// colour are `FormCheck`'s (a stock `CheckBox` in a popup drew near-black
+    /// text on the dark form); the row only says which panel it is.
     Component {
         id: panelRow
-        CheckBox {
+        FormCheck {
             id: row
+            theme: dialog.theme
             required property var modelData
             text: modelData.label
             checked: dialog.panelValue(modelData.key)
             Layout.fillWidth: true
             onToggled: dialog.setPanel(modelData.key, checked)
-            contentItem: Text {
-                text: row.text
-                color: row.enabled ? dialog.theme.text : dialog.theme.textMuted
-                font: row.font
-                leftPadding: row.indicator.width + row.spacing
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-                opacity: row.enabled ? 1.0 : 0.6
-            }
         }
-    }
-
-    title: qsTr("Settings")
-    modal: true
-    dim: true
-    width: Math.min(620, parent ? parent.width - 48 : 620)
-    height: Math.min(520, parent ? parent.height - 48 : 520)
-    padding: 0
-    // Escape reverts like Cancel; a click outside still does not dismiss, so a
-    // stray click cannot silently discard a previewed change.
-    closePolicy: Popup.CloseOnEscape
-    // x/y are set by hand instead of `anchors.centerIn`: an anchor owns the
-    // position and snaps a written x back within one frame (measured in a probe:
-    // 10 -> 90), which also makes a header drag impossible. `moved` keeps a
-    // dialog the user placed where they dropped it.
-    property bool moved: false
-    function centerInParent() {
-        if (!parent) return
-        x = Math.round((parent.width - width) / 2)
-        y = Math.round((parent.height - height) / 2)
     }
 
     /// Report the form's current values for a live preview. Emitted on every
@@ -298,14 +274,10 @@ Dialog {
         dialog.editedLayout = dialog.copyLayout(layout)
     }
 
-    // Position and fill the form before it becomes visible. `opened` is emitted
-    // only after the style's enter transition, so centring there made the
-    // first frames appear at the positioner's default corner and then jump to
-    // the middle. `aboutToShow` fires before `visibleChanged`, while the popup
-    // already has its parent and its size.
-    onAboutToShow: {
-        moved = false
-        centerInParent()
+    /// The opening values, captured before the first visible frame. The frame
+    /// has already centred the form and dropped a previous drag by the time
+    /// this runs.
+    function prepare() {
         dialog.saved = false
         dialog.section = "general"
         if (dialog.languageChoices && dialog.languageChoices.length > 0) {
@@ -323,6 +295,7 @@ Dialog {
         dialog.seenBackground = backgroundChoice.checked
         dialog.seenLanguage = dialog.languageCode()
     }
+
     /// Every way out of the dialog ends here — OK, Cancel, ×, Escape and the
     /// shell closing it. If nothing was saved, whatever was previewed on the
     /// way is undone: the form goes back to the opening values and the shell is
@@ -335,312 +308,284 @@ Dialog {
                              dialog.openedBackground, dialog.openedLanguage)
         dialog.revertRequested()
     }
-    onWidthChanged: if (!moved) centerInParent()
-    onHeightChanged: if (!moved) centerInParent()
-    background: Rectangle { color: dialog.theme.surface; border.color: dialog.theme.border; border.width: 1; radius: dialog.theme.radius }
 
-    header: Rectangle {
-        objectName: "settingsHeader"
-        implicitHeight: 52; color: dialog.theme.surfaceAlt
-        border.color: dialog.theme.border; border.width: 1
-        // Drag the dialog by its title bar. `target: null` keeps the handler off
-        // the header's own coordinates and moves the dialog instead; the clamp
-        // stops a drag from parking it outside the window.
-        DragHandler {
-            target: null
-            property real originX: 0
-            property real originY: 0
-            onActiveChanged: if (active) { originX = dialog.x; originY = dialog.y; dialog.moved = true }
-            onActiveTranslationChanged: {
-                if (!active) return
-                var maxX = dialog.parent ? Math.max(0, dialog.parent.width - dialog.width) : dialog.x
-                var maxY = dialog.parent ? Math.max(0, dialog.parent.height - dialog.height) : dialog.y
-                dialog.x = Math.max(0, Math.min(maxX, originX + activeTranslation.x))
-                dialog.y = Math.max(0, Math.min(maxY, originY + activeTranslation.y))
+    /// The × is Cancel: everything previewed is put back before the form
+    /// closes, so a stray click cannot keep a change the user never saved.
+    onCloseRequested: dialog.revertAndClose()
+
+    /// The tab strip is the frame's `headerStrip`: it sits between the title
+    /// bar and the scrolling body, and does not scroll with the body.
+    headerStrip: Component {
+        Item {
+            objectName: "settingsStrip"
+            implicitHeight: settingsTabs.implicitHeight + 12
+
+            PanelTabs {
+                id: settingsTabs
+                objectName: "settingsTabs"
+                x: dialog.bodyPadding
+                y: 6
+                width: parent.width - 2 * dialog.bodyPadding
+                theme: dialog.theme
+                tabs: dialog.sections
+                currentKey: dialog.section
+                keyPrefix: "settingsTab"
+                onActivated: function(key) { dialog.section = key }
             }
-        }
-        RowLayout { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 10
-            Label { text: dialog.title; color: dialog.theme.text; font.pixelSize: 17; font.bold: true; Layout.fillWidth: true }
-            // Closing with the title bar's × is Cancel, not OK.
-            ToolButton { objectName: "settingsClose"; text: qsTr("×"); font.pixelSize: 24; onClicked: dialog.revertAndClose() }
         }
     }
 
-    contentItem: ColumnLayout {
-        spacing: 0
+    // -------------------------------------------------- General
+    ColumnLayout {
+        objectName: "settingsGeneralPage"
+        Layout.fillWidth: true
+        spacing: 10
+        visible: dialog.section === "general"
 
-        PanelTabs {
-            objectName: "settingsTabs"
-            Layout.fillWidth: true
-            Layout.leftMargin: 20
-            Layout.rightMargin: 20
-            Layout.topMargin: 12
+        FormSection {
             theme: dialog.theme
-            tabs: dialog.sections
-            currentKey: dialog.section
-            keyPrefix: "settingsTab"
-            onActivated: function(key) { dialog.section = key }
+            title: qsTr("Look")
+            Layout.fillWidth: true
+
+            FormRow {
+                theme: dialog.theme
+                label: qsTr("Theme")
+                labelFill: true
+                Layout.fillWidth: true
+
+                ComboBox {
+                id: themeChoice
+                objectName: "settingsTheme"
+                model: [qsTr("Dark"), qsTr("Light")]
+                currentIndex: dialog.initialTheme === "light" ? 1 : 0
+                    Layout.preferredWidth: 220
+                    // Preview as soon as it changes, not when it is saved.
+                    onCurrentIndexChanged: if (dialog.visible) dialog.changed()
+                }
+            }
+
+            FormRow {
+                theme: dialog.theme
+                label: qsTr("Language")
+                labelFill: true
+                Layout.fillWidth: true
+
+                ComboBox {
+                id: languageChoice
+                objectName: "languageChoice"
+                Layout.preferredWidth: 220
+                // A picker you can only read in the language you do not
+                // speak yet is useless, so an entry names its language in
+                // that language and, in parentheses, in English. The
+                // entries come from C++ (`Platform.languages()`); the list
+                // is copied once on open instead of bound, because
+                // `textRole` on a plain JS array is what makes every entry
+                // render.
+                textRole: "label"
+                model: []
+                /// Which code the picker will report: the chosen entry, or
+                /// `system` when the model was never filled (the dialog is
+                /// used without a shell, as in the QML tests).
+                function selectedCode() {
+                    return currentIndex >= 0 && model[currentIndex]
+                           ? model[currentIndex].code : "system";
+                }
+                function refresh(choices, current) {
+                    var entries = [];
+                    var index = 0;
+                    var selected = 0;
+                    for (var choice = 0; choice < choices.length; choice++) {
+                        var entry = choices[choice];
+                        entries.push({
+                            code: entry.code,
+                            label: entry.code === "vi"
+                                  ? entry.vietnamese
+                                  : entry.english + " (" + entry.vietnamese + ")"
+                        });
+                        if (entry.code === current) selected = index;
+                        index++;
+                    }
+                    model = entries;
+                    currentIndex = selected;
+                }
+                    onCurrentIndexChanged: if (dialog.visible) dialog.changed()
+                }
+            }
         }
 
-        Flickable {
-            objectName: "settingsContent"
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Panels")
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-            contentHeight: settingsColumn.implicitHeight + 40
 
-            ColumnLayout {
-                id: settingsColumn
-                objectName: "settingsColumn"
-                x: 20
-                y: 20
-                width: parent.width - 40
-                spacing: 10
-
-                // -------------------------------------------------- General
-                ColumnLayout {
-                    objectName: "settingsGeneralPage"
-                    Layout.fillWidth: true
-                    spacing: 10
-                    visible: dialog.section === "general"
-
-                    Label { text: qsTr("Look"); color: dialog.theme.accent; font.bold: true }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
-                    RowLayout { Layout.fillWidth: true
-                        Label { text: qsTr("Theme"); color: dialog.theme.text; Layout.fillWidth: true }
-                        ComboBox {
-                            id: themeChoice
-                            objectName: "settingsTheme"
-                            model: [qsTr("Dark"), qsTr("Light")]
-                            currentIndex: dialog.initialTheme === "light" ? 1 : 0
-                            Layout.preferredWidth: 220
-                            // Preview as soon as it changes, not when it is saved.
-                            onCurrentIndexChanged: if (dialog.visible) dialog.changed()
-                        }
-                    }
-                    RowLayout { Layout.fillWidth: true
-                        Label { text: qsTr("Language"); color: dialog.theme.text; Layout.fillWidth: true }
-                        ComboBox {
-                            id: languageChoice
-                            objectName: "languageChoice"
-                            Layout.preferredWidth: 220
-                            // A picker you can only read in the language you do not
-                            // speak yet is useless, so an entry names its language in
-                            // that language and, in parentheses, in English. The
-                            // entries come from C++ (`Platform.languages()`); the list
-                            // is copied once on open instead of bound, because
-                            // `textRole` on a plain JS array is what makes every entry
-                            // render.
-                            textRole: "label"
-                            model: []
-                            /// Which code the picker will report: the chosen entry, or
-                            /// `system` when the model was never filled (the dialog is
-                            /// used without a shell, as in the QML tests).
-                            function selectedCode() {
-                                return currentIndex >= 0 && model[currentIndex]
-                                       ? model[currentIndex].code : "system";
-                            }
-                            function refresh(choices, current) {
-                                var entries = [];
-                                var index = 0;
-                                var selected = 0;
-                                for (var choice = 0; choice < choices.length; choice++) {
-                                    var entry = choices[choice];
-                                    entries.push({
-                                        code: entry.code,
-                                        label: entry.code === "vi"
-                                              ? entry.vietnamese
-                                              : entry.english + " (" + entry.vietnamese + ")"
-                                    });
-                                    if (entry.code === current) selected = index;
-                                    index++;
-                                }
-                                model = entries;
-                                currentIndex = selected;
-                            }
-                            onCurrentIndexChanged: if (dialog.visible) dialog.changed()
-                        }
-                    }
-
-                    Label { text: qsTr("Panels"); color: dialog.theme.accent; font.bold: true; Layout.topMargin: 6 }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
-                    Label {
-                        text: qsTr("The sidebar and detail panel widths are dragged on the window; the saved layout keeps them.")
-                        color: dialog.theme.textMuted
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Button {
-                            objectName: "settingsResetLayout"
-                            text: qsTr("Reset layout")
-                            onClicked: {
-                                dialog.resetLayout()
-                                dialog.restoreValues(dialog.themeCode(), rememberChoice.checked,
-                                                     backgroundChoice.checked,
-                                                     dialog.languageCode())
-                            }
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    Label { text: qsTr("Browsing"); color: dialog.theme.accent; font.bold: true; Layout.topMargin: 6 }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
-                    // These two are stored in `config.json` and obeyed by Core; the
-                    // dialog is the only place they can be changed, so they live here
-                    // rather than being passed through untouched from the snapshot.
-                    CheckBox {
-                        id: rememberChoice
-                        objectName: "settingsRemember"
-                        text: qsTr("Remember the last opened folder")
-                        checked: dialog.initialRemember
-                        Layout.fillWidth: true
-                        onToggled: if (dialog.visible) dialog.changed()
-                        contentItem: Text {
-                            text: rememberChoice.text
-                            color: rememberChoice.enabled ? dialog.theme.text
-                                                          : dialog.theme.textMuted
-                            font: rememberChoice.font
-                            leftPadding: rememberChoice.indicator.width
-                                         + rememberChoice.spacing
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
-                    }
-                    CheckBox {
-                        id: backgroundChoice
-                        objectName: "settingsBackground"
-                        text: qsTr("Generate thumbnails in the background")
-                        checked: dialog.initialBackground
-                        Layout.fillWidth: true
-                        onToggled: if (dialog.visible) dialog.changed()
-                        contentItem: Text {
-                            text: backgroundChoice.text
-                            color: backgroundChoice.enabled ? dialog.theme.text
-                                                            : dialog.theme.textMuted
-                            font: backgroundChoice.font
-                            leftPadding: backgroundChoice.indicator.width
-                                         + backgroundChoice.spacing
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
+            Label {
+                text: qsTr("The sidebar and detail panel widths are dragged on the window; the saved layout keeps them.")
+                color: dialog.theme.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                PanelAction {
+                    objectName: "settingsResetLayout"
+                    theme: dialog.theme
+                    text: qsTr("Reset layout")
+                    implicitWidth: 120
+                    onClicked: {
+                        dialog.resetLayout()
+                        dialog.restoreValues(dialog.themeCode(), rememberChoice.checked,
+                                             backgroundChoice.checked,
+                                             dialog.languageCode())
                     }
                 }
+                Item { Layout.fillWidth: true }
+            }
+        }
 
-                // -------------------------------------------------- Browser
-                ColumnLayout {
-                    objectName: "settingsBrowserPage"
-                    Layout.fillWidth: true
-                    spacing: 6
-                    visible: dialog.section === "browser"
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Browsing")
+            Layout.fillWidth: true
 
-                    Label { text: qsTr("Panels"); color: dialog.theme.accent; font.bold: true }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
-                    Repeater {
-                        model: dialog.browserPanels
-                        delegate: panelRow
-                    }
-                }
-
-                // -------------------------------------------------- Editor
-                ColumnLayout {
-                    objectName: "settingsEditorPage"
-                    Layout.fillWidth: true
-                    spacing: 6
-                    visible: dialog.section === "editor"
-
-                    Label { text: qsTr("Panels"); color: dialog.theme.accent; font.bold: true }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
-                    Repeater {
-                        model: dialog.editorPanels
-                        delegate: panelRow
-                    }
-                }
-
-                // -------------------------------------------------- Viewer
-                ColumnLayout {
-                    objectName: "settingsViewerPage"
-                    Layout.fillWidth: true
-                    spacing: 6
-                    visible: dialog.section === "viewer"
-
-                    Label { text: qsTr("Panels"); color: dialog.theme.accent; font.bold: true }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dialog.theme.border }
-                    Repeater {
-                        model: dialog.viewerPanels
-                        delegate: panelRow
-                    }
-                }
-
-                Label {
-                    text: qsTr("Changes are previewed as you make them. Apply saves them; OK saves and closes.")
-                    color: dialog.theme.textMuted
-                    font.pixelSize: 11
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                }
+            // These two are stored in `config.json` and obeyed by Core; the
+            // dialog is the only place they can be changed, so they live here
+            // rather than being passed through untouched from the snapshot.
+            FormCheck {
+                id: rememberChoice
+                theme: dialog.theme
+                objectName: "settingsRemember"
+                text: qsTr("Remember the last opened folder")
+                checked: dialog.initialRemember
+                Layout.fillWidth: true
+                onToggled: if (dialog.visible) dialog.changed()
+            }
+            FormCheck {
+                id: backgroundChoice
+                theme: dialog.theme
+                objectName: "settingsBackground"
+                text: qsTr("Generate thumbnails in the background")
+                checked: dialog.initialBackground
+                Layout.fillWidth: true
+                onToggled: if (dialog.visible) dialog.changed()
             }
         }
     }
 
-    footer: Rectangle {
-        // A plain footer instead of `DialogButtonBox`: that template re-sorts
-        // its buttons by role (Accept first, then Reject, Apply, Reset), so the
-        // declaration order is not the drawn order — measured: OK landed at
-        // x=446, left of everything. Here the order is literal.
-        objectName: "settingsButtons"
-        implicitHeight: 60
-        color: dialog.theme.surface
-        border.color: dialog.theme.border
-        border.width: 1
-        // Explicit `Button`s, not `standardButtons`: Qt draws "OK"/"Cancel"
-        // from the system's `qtbase_<locale>.qm`, and a machine without that
-        // file (this one ships no `qtbase_vi`) leaves a Vietnamese dialog with
-        // English buttons. These read the app's own catalogue, which travels
-        // inside the binary.
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 8
+    // -------------------------------------------------- Browser
+    ColumnLayout {
+        objectName: "settingsBrowserPage"
+        Layout.fillWidth: true
+        spacing: 6
+        visible: dialog.section === "browser"
 
-            // Restores the built-in values into the form and previews them. It
-            // deliberately does not save: a user who only wanted to look at the
-            // defaults can still press Cancel. It sits apart on the left, the
-            // way GTK and KDE put the value-restoring button.
-            Button {
-                objectName: "settingsDefaults"
-                text: qsTr("Defaults")
-                onClicked: {
-                    dialog.resetLayout()
-                    dialog.restoreValues(dialog.defaultTheme, dialog.defaultRemember,
-                                         dialog.defaultBackground, dialog.defaultLanguage)
-                }
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Panels")
+            Layout.fillWidth: true
+
+            Repeater {
+                model: dialog.browserPanels
+                delegate: panelRow
             }
-            Item { Layout.fillWidth: true }
-            Button {
-                objectName: "settingsCancel"
-                text: qsTr("Cancel")
-                onClicked: dialog.revertAndClose()
+        }
+    }
+
+    // -------------------------------------------------- Editor
+    ColumnLayout {
+        objectName: "settingsEditorPage"
+        Layout.fillWidth: true
+        spacing: 6
+        visible: dialog.section === "editor"
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Panels")
+            Layout.fillWidth: true
+
+            Repeater {
+                model: dialog.editorPanels
+                delegate: panelRow
             }
-            Button {
-                objectName: "settingsApply"
-                text: qsTr("Apply")
-                // Enabled only while the form differs from what was last saved,
-                // so the button says whether pressing it would do anything.
-                enabled: dialog.hasPendingChanges
-                onClicked: dialog.commit()
+        }
+    }
+
+    // -------------------------------------------------- Viewer
+    ColumnLayout {
+        objectName: "settingsViewerPage"
+        Layout.fillWidth: true
+        spacing: 6
+        visible: dialog.section === "viewer"
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Panels")
+            Layout.fillWidth: true
+
+            Repeater {
+                model: dialog.viewerPanels
+                delegate: panelRow
             }
-            Button {
-                objectName: "settingsOk"
-                text: qsTr("OK")
-                highlighted: true
-                onClicked: {
-                    dialog.commit();
-                    dialog.close();
-                }
+        }
+    }
+
+    Label {
+        text: qsTr("Changes are previewed as you make them. Apply saves them; OK saves and closes.")
+        color: dialog.theme.textMuted
+        font.pixelSize: 11
+        wrapMode: Text.WordWrap
+        Layout.fillWidth: true
+    }
+
+    footer: DialogFooter {
+        namePrefix: "settings"
+        theme: dialog.theme
+        height: dialog.footerHeight
+
+        // Restores the built-in values into the form and previews them. It
+        // deliberately does not save: a user who only wanted to look at the
+        // defaults can still press Cancel. It sits apart on the left, the way
+        // GTK and KDE put the value-restoring button.
+        PanelAction {
+            objectName: "settingsDefaults"
+            theme: dialog.theme
+            text: qsTr("Defaults")
+            implicitWidth: 88
+            onClicked: {
+                dialog.resetLayout()
+                dialog.restoreValues(dialog.defaultTheme, dialog.defaultRemember,
+                                     dialog.defaultBackground, dialog.defaultLanguage)
+            }
+        }
+        Item { Layout.fillWidth: true }
+        PanelAction {
+            objectName: "settingsCancel"
+            theme: dialog.theme
+            text: qsTr("Cancel")
+            implicitWidth: 88
+            onClicked: dialog.revertAndClose()
+        }
+        PanelAction {
+            objectName: "settingsApply"
+            theme: dialog.theme
+            text: qsTr("Apply")
+            implicitWidth: 88
+            // Enabled only while the form differs from what was last saved,
+            // so the button says whether pressing it would do anything.
+            enabled: dialog.hasPendingChanges
+            onClicked: dialog.commit()
+        }
+        PanelAction {
+            objectName: "settingsOk"
+            theme: dialog.theme
+            text: qsTr("OK")
+            implicitWidth: 88
+            // The default action: it saves and closes, and it is the one verb
+            // painted with the accent.
+            primary: true
+            onClicked: {
+                dialog.commit();
+                dialog.close();
             }
         }
     }

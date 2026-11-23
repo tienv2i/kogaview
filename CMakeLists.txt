@@ -196,6 +196,7 @@ if(KOGAVIEW_BUILD_TESTS)
     "kogaview_browser_cache_tests:tst_thumbnails.cpp"
     "kogaview_state_tests:tst_statesnapshot.cpp"
     "kogaview_settings_tests:tst_settings.cpp"
+    "kogaview_dialogs_tests:tst_dialogs.cpp"
     "kogaview_editor_tests:tst_editor.cpp"
     "kogaview_language_tests:tst_language.cpp"
     "kogaview_toolbar_tests:tst_toolbar.cpp")

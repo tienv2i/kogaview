@@ -243,11 +243,6 @@
     </message>
     <message>
       <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
-      <source>×</source>
-      <translation>×</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
       <source>Width</source>
       <translation>Rộng</translation>
     </message>
@@ -689,6 +684,19 @@
       <location filename="../crates/desktop/qml/ColourPair.qml" />
       <source>Reset the colours to black and white (D)</source>
       <translation>Đặt lại màu về đen và trắng (D)</translation>
+    </message>
+  </context>
+  <context>
+    <name>DialogFrame</name>
+    <message>
+      <location filename="../crates/desktop/qml/DialogFrame.qml" />
+      <source>×</source>
+      <translation>×</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/DialogFrame.qml" />
+      <source>Close</source>
+      <translation>Đóng</translation>
     </message>
   </context>
   <context>
@@ -1357,6 +1365,11 @@
       <translation>Xoá vĩnh viễn %1 mục? Không thể hoàn tác thao tác này.</translation>
     </message>
     <message>
+      <location filename="../crates/desktop/qml/Main.qml" line="1209" />
+      <source>Delete</source>
+      <translation>Xoá</translation>
+    </message>
+    <message>
       <location filename="../crates/desktop/qml/Main.qml" line="1231" />
       <source>Save image as</source>
       <translation>Lưu ảnh thành</translation>
@@ -1451,11 +1464,6 @@
       <translation>Đổi kích thước ảnh</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/ResizeDialog.qml" line="396" />
-      <source>×</source>
-      <translation>×</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="426" />
       <source>Width</source>
       <translation>Rộng</translation>
@@ -1522,6 +1530,16 @@
       <translation>Vừa khung kèm nền</translation>
     </message>
     <message>
+      <location filename="../crates/desktop/qml/ResizeDialog.qml" />
+      <source>Dimensions</source>
+      <translation>Kích thước</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ResizeDialog.qml" />
+      <source>Fitting</source>
+      <translation>Khớp khung</translation>
+    </message>
+    <message>
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="538" />
       <source>Size preset</source>
       <translation>Mẫu kích thước</translation>
@@ -1545,6 +1563,16 @@
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="678" />
       <source>Apply</source>
       <translation>Áp dụng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ResizeDialog.qml" />
+      <source>Resampling</source>
+      <translation>Lấy mẫu lại</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ResizeDialog.qml" />
+      <source>The resampling filter decides how the pixels are combined when the size changes.</source>
+      <translation>Bộ lọc lấy mẫu quyết định cách các điểm ảnh được gộp lại khi kích thước thay đổi.</translation>
     </message>
   </context>
   <context>
@@ -1653,11 +1681,6 @@
       <location filename="../crates/desktop/qml/SettingsDialog.qml" line="238" />
       <source>Settings</source>
       <translation>Cài đặt</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/SettingsDialog.qml" line="337" />
-      <source>×</source>
-      <translation>×</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/SettingsDialog.qml" line="381" />

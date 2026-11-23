@@ -316,9 +316,9 @@ void TestSettings::theButtonsReadDefaultsCancelApplyOk()
   QVERIFY2(leftOf(defaults, cancel), "Defaults is not left of Cancel");
   QVERIFY2(leftOf(cancel, apply), "Cancel is not left of Apply");
   QVERIFY2(leftOf(apply, ok), "Apply is not left of OK");
-  // OK is the default action.
-  QVERIFY(ok->property("highlighted").toBool());
-  QVERIFY(!apply->property("highlighted").toBool());
+  // OK is the default action: the one verb painted with the accent.
+  QVERIFY2(ok->property("primary").toBool(), "OK is not the default action");
+  QVERIFY(!apply->property("primary").toBool());
   // Nothing has changed yet, so Apply has nothing to do.
   QVERIFY2(!apply->property("enabled").toBool(),
            "Apply is enabled with nothing pending");

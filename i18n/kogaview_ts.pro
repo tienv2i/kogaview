@@ -37,6 +37,12 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/UiLines.qml \
           ../crates/desktop/qml/ToolbarMetrics.qml \
           ../crates/desktop/qml/MenuShortcut.qml \
+          ../crates/desktop/qml/DialogFrame.qml \
+          ../crates/desktop/qml/DialogFooter.qml \
+          ../crates/desktop/qml/FormRow.qml \
+          ../crates/desktop/qml/FormSection.qml \
+          ../crates/desktop/qml/FormCheck.qml \
+          ../crates/desktop/qml/FormRadio.qml \
           ../crates/desktop/qml/ColourPair.qml \
           ../crates/desktop/qml/BackgroundPopup.qml \
           ../crates/desktop/qml/Theme.qml

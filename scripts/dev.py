@@ -34,6 +34,9 @@ QML_TEST_SUITES = {
     ),
     "state": ("kogaview_state_tests", BUILD_DIR / "bin" / "kogaview_state_tests"),
     "settings": ("kogaview_settings_tests", BUILD_DIR / "bin" / "kogaview_settings_tests"),
+    # The chrome every form wears: one title bar, one body inset, one action
+    # row. Its own suite because it spans the three forms.
+    "dialogs": ("kogaview_dialogs_tests", BUILD_DIR / "bin" / "kogaview_dialogs_tests"),
     "editor": ("kogaview_editor_tests", BUILD_DIR / "bin" / "kogaview_editor_tests"),
     "language": (
         "kogaview_language_tests",
@@ -825,7 +828,7 @@ def uninstall() -> int:
 
 TEST_USAGE = (
     "usage: just test [cargo|translations|packaging|qml|viewer|browser|cache|"
-    "state|settings|editor|language|toolbar]"
+    "state|settings|dialogs|editor|language|toolbar]"
 )
 
 

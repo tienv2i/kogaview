@@ -1,0 +1,273 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+/// The chrome every modal form in this window wears.
+///
+/// The forms were built in three sittings and their chrome drifted: the title
+/// bar was 52 px in all of them, but the × sat at a different distance from the
+/// edge and the drag clamp was copy-pasted; two bodies kept 20 px and the batch
+/// form kept it too but with its own scroll range; two footers were 60 px and
+/// the third was a stock button row, so Settings' verbs were a different shape
+/// from the Batch form's. Copying is what made them differ, so the chrome lives
+/// here once and a form supplies only its body:
+///
+/// - a 52 px title bar (`headerHeight`): the title, a ×, and a drag handler that
+///   moves the dialog and clamps it inside the window;
+/// - a body that keeps `bodyPadding` (20 px) on all four sides and scrolls, so a
+///   form taller than the window says so with a scroll bar instead of clipping
+///   under the footer;
+/// - a 60 px action row (`footerHeight`) drawn by `DialogFooter.qml`;
+/// - one centring rule (`centreInParent`) that runs before the first visible
+///   frame, because centring in `opened` made the form jump after the style's
+///   fade.
+///
+/// A form declares its fields as children — they land in the body's column — and
+/// its verbs by overriding `footer`, which keeps the declaration order on
+/// screen. `namePrefix` roots the chrome's own object names (`resizeHeader`,
+/// `resizeContent`, `resizeColumn`), so a test and a dev hook can still name the
+/// part they mean. `prepare()` is the form's own opening work (its values, its
+/// focused field): the frame calls it from `onAboutToShow`, because that
+/// handler is the frame's and a form cannot also write it.
+Dialog {
+    id: frame
+
+    property Theme theme: Theme {}
+
+    /// Root of this frame's object names: `namePrefix + "Header"`, `"Content"`,
+    /// `"Column"`, `"Footer"`.
+    property string namePrefix: ""
+
+    /// The width the form asks for. The window may force it narrower.
+    property int preferredWidth: 520
+    /// `true`: as tall as the form needs, up to the window — the shape a form of
+    /// fields has, because a short form should not leave a blank page under its
+    /// verbs. `false`: the height a tabbed form wants (`preferredHeight`), so
+    /// its body does not jump when a page is switched.
+    property bool fitToContent: true
+    property int preferredHeight: 520
+
+    /// A strip between the title bar and the scrolling body, for a form with
+    /// pages: `Component { PanelTabs { … } }`. It takes the height it needs and
+    /// does not scroll with the body. `null` for a plain form.
+    property Component headerStrip: null
+
+    readonly property int headerHeight: 52
+    readonly property int footerHeight: 60
+    /// Space the body keeps around its column, on all four sides.
+    readonly property int bodyPadding: 20
+    /// The width of a row's label column. A form passes this to every `FormRow`,
+    /// which is what makes two rows line up.
+    readonly property int labelWidth: 96
+    /// The gap between two rows of a body.
+    readonly property int rowSpacing: 10
+
+    /// The × was pressed. The frame does not close itself: Settings' × is
+    /// Cancel, which reverts before it closes, and only the form knows that.
+    signal closeRequested()
+
+    /// The form's fields. They are added to the body's `ColumnLayout`, so a form
+    /// writes them exactly as it would write a column.
+    default property alias content: bodyColumn.data
+
+    /// Whether the user has moved the dialog by its title bar, which is what
+    /// stops the centring rule from snapping it back on the next size change.
+    property bool moved: false
+
+    /// Centre the dialog in its parent. Called from `aboutToShow` — before the
+    /// first frame — and from every size change until the user drags it.
+    function centreInParent() {
+        if (!parent) return
+        x = Math.round((parent.width - width) / 2)
+        y = Math.round((parent.height - height) / 2)
+    }
+
+    /// The form's own opening work, in the form's own file. The frame calls it
+    /// from `aboutToShow`, after the centred position is written.
+    function prepare() {}
+
+    title: ""
+    modal: true
+    dim: true
+    padding: 0
+    // Escape is Cancel; a click outside does not dismiss, because a form should
+    // be left on purpose.
+    closePolicy: Popup.CloseOnEscape
+    width: Math.min(frame.preferredWidth, parent ? parent.width - 48 : frame.preferredWidth)
+    // The header and the footer are constant, the body is measured on the column
+    // it holds, and the window always wins: a form may be clipped (the body then
+    // scrolls) but never drawn outside the window.
+    height: {
+        var limit = parent ? Math.max(240, parent.height - 48) : 800
+        var chrome = frame.headerHeight + frame.footerHeight
+                     + 2 * frame.bodyPadding + frame.stripHeight()
+        if (!frame.fitToContent) return Math.min(limit, frame.preferredHeight)
+        return Math.min(limit, chrome + bodyColumn.implicitHeight)
+    }
+
+    /// The strip's height, or zero when the form has no strip.
+    function stripHeight() {
+        if (!stripLoader.item) return 0
+        var item = stripLoader.item
+        return item.implicitHeight > 0 ? item.implicitHeight : item.height
+    }
+
+    /// Everything the body does not own: the two bars, and the strip between
+    /// them when the form has pages.
+    function chromeHeight() {
+        return frame.headerHeight + frame.footerHeight + frame.stripHeight()
+    }
+
+    /// The height the body may take inside the frame. A form that fits asks for
+    /// its column's height — but never for more than is left once the chrome has
+    /// had its share. Without this the body kept the height its column wanted
+    /// and ran underneath the footer on a window too short for it: measured on a
+    /// 300 px window, a 320 px body inside a 252 px frame.
+    function bodyRoom() {
+        return Math.max(0, frame.height - frame.chromeHeight())
+    }
+
+    onWidthChanged: if (!moved) centreInParent()
+    onHeightChanged: if (!moved) centreInParent()
+    onAboutToShow: {
+        moved = false
+        centreInParent()
+        frame.prepare()
+    }
+
+    background: Rectangle {
+        color: frame.theme.surface
+        border.color: frame.theme.border
+        border.width: 1
+        radius: frame.theme.radius
+    }
+
+    header: Rectangle {
+        objectName: frame.namePrefix + "Header"
+        implicitHeight: frame.headerHeight
+        color: frame.theme.surfaceAlt
+        border.color: frame.theme.border
+        border.width: 1
+
+        // The title bar moves the dialog. `target: null` keeps the handler off
+        // the header's own coordinates and moves the dialog instead; the clamp
+        // stops a drag from parking it outside the window.
+        DragHandler {
+            target: null
+            property real originX: 0
+            property real originY: 0
+            onActiveChanged: if (active) {
+                originX = frame.x
+                originY = frame.y
+                frame.moved = true
+            }
+            onActiveTranslationChanged: {
+                if (!active) return
+                var maxX = frame.parent ? Math.max(0, frame.parent.width - frame.width) : frame.x
+                var maxY = frame.parent ? Math.max(0, frame.parent.height - frame.height) : frame.y
+                frame.x = Math.max(0, Math.min(maxX, originX + activeTranslation.x))
+                frame.y = Math.max(0, Math.min(maxY, originY + activeTranslation.y))
+            }
+        }
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 18
+            anchors.rightMargin: 10
+            spacing: 8
+
+            Label {
+                objectName: frame.namePrefix + "Title"
+                text: frame.title
+                color: frame.theme.text
+                font.pixelSize: 17
+                font.bold: true
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+            }
+            ToolButton {
+                objectName: frame.namePrefix + "Close"
+                implicitWidth: 32
+                implicitHeight: 32
+                focusPolicy: Qt.NoFocus
+                activeFocusOnTab: false
+                Accessible.name: qsTr("Close")
+                onClicked: frame.closeRequested()
+
+                // The glyph and its ink are the app's own. A stock `ToolButton`
+                // draws its label with the platform palette's button text, which
+                // on this window is black on a near-black bar: measured on the
+                // real window, the × was an invisible smudge until it was drawn
+                // here.
+                contentItem: Text {
+                    text: qsTr("×")
+                    color: closeHover.hovered ? frame.theme.text : frame.theme.textMuted
+                    font.pixelSize: 22
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: frame.theme.radius
+                    color: closeHover.hovered ? frame.theme.hover : "transparent"
+                }
+                HoverHandler { id: closeHover }
+            }
+        }
+    }
+
+    contentItem: ColumnLayout {
+        spacing: 0
+
+        Loader {
+            id: stripLoader
+            Layout.fillWidth: true
+            active: frame.headerStrip !== null
+            sourceComponent: frame.headerStrip
+        }
+
+        Flickable {
+            id: body
+            objectName: frame.namePrefix + "Content"
+            Layout.fillWidth: true
+            // A form that fits takes only the height its column needs, so the
+            // dialog is exactly as tall as its content; a tabbed form claims the
+            // rest of the height it asked for.
+            Layout.fillHeight: !frame.fitToContent
+            implicitHeight: frame.fitToContent
+                            ? Math.min(bodyColumn.implicitHeight + 2 * frame.bodyPadding,
+                                       frame.bodyRoom()) : 0
+            contentHeight: bodyColumn.implicitHeight + 2 * frame.bodyPadding
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            // The bar is drawn here, not left to the style: the platform
+            // scrollbar paints its own greys, which on this dialog's surface are
+            // the same grey as the surface itself — measured on the real window,
+            // a form that overflows said nothing.
+            ScrollBar.vertical: ScrollBar {
+                id: bodyBar
+                policy: ScrollBar.AsNeeded
+                contentItem: Rectangle {
+                    implicitWidth: 6
+                    radius: 3
+                    color: frame.theme.textMuted
+                    opacity: bodyBar.active ? 0.9 : 0.45
+                }
+            }
+
+            ColumnLayout {
+                id: bodyColumn
+                objectName: frame.namePrefix + "Column"
+                x: frame.bodyPadding
+                y: frame.bodyPadding
+                width: body.width - 2 * frame.bodyPadding
+                spacing: frame.rowSpacing
+            }
+        }
+    }
+
+    footer: DialogFooter {
+        namePrefix: frame.namePrefix
+        theme: frame.theme
+        height: frame.footerHeight
+    }
+}

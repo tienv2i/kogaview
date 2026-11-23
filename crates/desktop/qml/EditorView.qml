@@ -2021,6 +2021,14 @@ Item {
     function exportEdgeLabel(edge) {
         return edge > 0 ? qsTr("%1 px long edge").arg(edge) : qsTr("Original size")
     }
+    /// The same list, as the words the combo box draws. A string model lets the
+    /// field and its rows be the platform's own: the closed box needs a matching
+    /// ink/background pair, and only the style that paints the field knows it.
+    /// Written as a `Label` in the theme's ink, the value was near-white on the
+    /// style's white field on the real window — the choice was invisible.
+    readonly property var exportEdgeLabels: exportEdges.map(function(edge) {
+        return view.exportEdgeLabel(edge)
+    })
 
     /// Pick a delivery size by its index in `exportEdges`. The ComboBox's
     /// `onActivated` calls this, and so does a test: the visible list and the
@@ -4654,154 +4662,134 @@ Item {
     /// Export is a delivery copy: it never moves the document's save target.
     /// The options are the ones ADR 0004 deferred — a JPEG quality and the
     /// source's metadata — and the dialog says which target honours them.
-    Dialog {
+    DialogFrame {
         id: exportDialog
         objectName: "exportDialog"
+        namePrefix: "export"
         title: qsTr("Export image")
-        modal: true
-        closePolicy: Popup.CloseOnEscape
-        anchors.centerIn: Overlay.overlay
-        width: 460
-        padding: 12
+        preferredWidth: 460
 
-        contentItem: ColumnLayout {
-            spacing: 10
+        /// The copy's destination and name. Browse asks the shell, which owns
+        /// the platform chooser; a typed path and a chosen one are the same
+        /// field.
+        FormRow {
+            theme: view.theme
+            label: qsTr("File")
+            labelWidth: exportDialog.labelWidth
+            Layout.fillWidth: true
 
+            TextField {
+                id: exportPathField
+                objectName: "exportPathField"
+                Layout.fillWidth: true
+                text: view.exportPath
+                placeholderText: qsTr("Choose where the copy goes")
+                onTextEdited: view.exportPath = text
+            }
+            PanelAction {
+                objectName: "exportBrowse"
+                theme: view.theme
+                text: qsTr("Browse…")
+                implicitWidth: 88
+                onClicked: view.requestExportPath()
+            }
+        }
+
+        FormRow {
+            theme: view.theme
+            label: qsTr("Quality")
+            labelWidth: exportDialog.labelWidth
+            Layout.fillWidth: true
+
+            Slider {
+                id: exportQualitySlider
+                objectName: "exportQuality"
+                Layout.fillWidth: true
+                from: 10
+                to: 100
+                stepSize: 1
+                value: view.exportQuality
+                enabled: view.exportTargetIsLossy
+                onMoved: view.exportQuality = Math.round(value)
+            }
             Label {
-                text: qsTr("File")
-                color: view.theme.textMuted
+                objectName: "exportQualityValue"
+                text: String(Math.round(exportQualitySlider.value))
+                color: view.theme.text
                 font.pixelSize: 12
+                Layout.preferredWidth: 32
             }
+        }
 
-            RowLayout {
+        FormRow {
+            theme: view.theme
+            // Not the bare "Size": the browser's column header owns that
+            // word, and the catalogue gives one translation per English
+            // string. This row is about the copy's output.
+            label: qsTr("Output size")
+            labelWidth: exportDialog.labelWidth
+            Layout.fillWidth: true
+
+            ComboBox {
+                id: exportSizeCombo
+                objectName: "exportSize"
                 Layout.fillWidth: true
-                spacing: 8
-
-                TextField {
-                    id: exportPathField
-                    objectName: "exportPathField"
-                    Layout.fillWidth: true
-                    text: view.exportPath
-                    placeholderText: qsTr("Choose where the copy goes")
-                    onTextEdited: view.exportPath = text
-                }
-
-                Button {
-                    objectName: "exportBrowse"
-                    text: qsTr("Browse…")
-                    onClicked: view.requestExportPath()
-                }
+                model: view.exportEdgeLabels
+                // `currentIndex` is set in `openExportDialog`, never bound:
+                // ComboBox owns the index once the user picks a row, and a
+                // binding would be broken by that first pick.
+                onActivated: view.chooseExportSize(index)
             }
+        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
+        FormCheck {
+            id: exportMetadataBox
+            theme: view.theme
+            objectName: "exportMetadata"
+            Layout.fillWidth: true
+            text: qsTr("Keep the source metadata (JPEG only)")
+            checked: view.exportMetadata
+            enabled: view.exportTargetIsJpeg
+            onToggled: view.exportMetadata = checked
+        }
 
-                Label {
-                    text: qsTr("Quality")
-                    color: view.theme.textMuted
-                    font.pixelSize: 12
+        Label {
+            Layout.fillWidth: true
+            text: {
+                var hint = view.exportTargetIsLossy
+                    ? qsTr("Quality applies to JPEG. Other formats are written losslessly.")
+                    : qsTr("This format is written losslessly; the quality slider does not apply.")
+                if (view.exportLongEdge > 0 && view.exportKeepsMetadata) {
+                    hint += "\n" + qsTr("A resized copy keeps the colour profile but drops EXIF, which would still name the old size.")
                 }
-
-                Slider {
-                    id: exportQualitySlider
-                    objectName: "exportQuality"
-                    Layout.fillWidth: true
-                    from: 10
-                    to: 100
-                    stepSize: 1
-                    value: view.exportQuality
-                    enabled: view.exportTargetIsLossy
-                    onMoved: view.exportQuality = Math.round(value)
-                }
-
-                Label {
-                    objectName: "exportQualityValue"
-                    text: String(Math.round(exportQualitySlider.value))
-                    color: view.theme.text
-                    font.pixelSize: 12
-                    Layout.preferredWidth: 32
-                }
+                return hint
             }
+            color: view.theme.textMuted
+            font.pixelSize: 11
+            wrapMode: Text.WordWrap
+        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
+        footer: DialogFooter {
+            namePrefix: "export"
+            theme: view.theme
+            height: exportDialog.footerHeight
 
-                Label {
-                    // Not the bare "Size": the browser's column header owns that
-                    // word, and the catalogue gives one translation per English
-                    // string. This row is about the copy's output.
-                    text: qsTr("Output size")
-                    color: view.theme.textMuted
-                    font.pixelSize: 12
-                }
-
-                ComboBox {
-                    id: exportSizeCombo
-                    objectName: "exportSize"
-                    Layout.fillWidth: true
-                    model: view.exportEdges.length
-                    // `currentIndex` is set in `openExportDialog`, never bound:
-                    // ComboBox owns the index once the user picks a row, and a
-                    // binding would be broken by that first pick.
-                    onActivated: view.chooseExportSize(index)
-                    delegate: ItemDelegate {
-                        required property int index
-                        width: exportSizeCombo.width
-                        text: view.exportEdgeLabel(view.exportEdges[index])
-                        highlighted: exportSizeCombo.highlightedIndex === index
-                    }
-                    contentItem: Label {
-                        leftPadding: 8
-                        text: view.exportEdgeLabel(view.exportEdges[exportSizeCombo.currentIndex])
-                        color: view.theme.text
-                        font.pixelSize: 12
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "exportCancel"
+                theme: view.theme
+                text: qsTr("Cancel")
+                implicitWidth: 88
+                onClicked: exportDialog.close()
             }
-
-            CheckBox {
-                id: exportMetadataBox
-                objectName: "exportMetadata"
-                text: qsTr("Keep the source metadata (JPEG only)")
-                checked: view.exportMetadata
-                enabled: view.exportTargetIsJpeg
-                onToggled: view.exportMetadata = checked
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: {
-                    var hint = view.exportTargetIsLossy
-                        ? qsTr("Quality applies to JPEG. Other formats are written losslessly.")
-                        : qsTr("This format is written losslessly; the quality slider does not apply.")
-                    if (view.exportLongEdge > 0 && view.exportKeepsMetadata) {
-                        hint += "\n" + qsTr("A resized copy keeps the colour profile but drops EXIF, which would still name the old size.")
-                    }
-                    return hint
-                }
-                color: view.theme.textMuted
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Item { Layout.fillWidth: true }
-                Button {
-                    text: qsTr("Cancel")
-                    onClicked: exportDialog.close()
-                }
-                Button {
-                    objectName: "exportConfirm"
-                    text: qsTr("Export")
-                    highlighted: true
-                    enabled: view.exportPathValid
-                    onClicked: view.confirmExport()
-                }
+            PanelAction {
+                objectName: "exportConfirm"
+                theme: view.theme
+                text: qsTr("Export")
+                implicitWidth: 88
+                primary: true
+                enabled: view.exportPathValid
+                onClicked: view.confirmExport()
             }
         }
     }
