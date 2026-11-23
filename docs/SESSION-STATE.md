@@ -196,14 +196,28 @@ lines under a module comment that already described a crate boundary — "this
 module owns pixels and history only; file paths, the command gateway and UI
 state stay in Core". Core re-exports it as `kogaview_core::editor`, so no
 handler, no protocol type and no batch worker changed, and the whole gate is
-green with the same 38 Editor cases in their new home (ADR 0023).
+green with the same 38 Editor cases in their new home (ADR 0023). The same
+pass then split what was left: `app-core/src/core.rs` (5,217 lines) is now
+`app-core/src/core/` — `mod.rs` for `Core` and the state every area shares,
+then `gateway`, `browsing`, `viewing`, `editing`, `jobs` and `tests` — with no
+command, payload or journal line changed (ADR 0024). Core is deliberately not
+a crate of its own: the one ordered gateway is the feature, and the desktop
+bridge names `Core` directly.
 
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The Editor is a **crate of its own**, uncommitted on top of
-  `a7c9d7e`: `crates/app-editor/` (`kogaview-editor`, new workspace member) with
+- Branch `main`. `core.rs` is **uncommitted** on top of `8f5d104`: it is now
+  `crates/app-core/src/core/` (`mod.rs` for `Core` and the shared state,
+  `gateway.rs`, `browsing.rs`, `viewing.rs`, `editing.rs`, `jobs.rs`,
+  `tests.rs`), with `crates/app-core/src/core.rs` deleted;
+  `scripts/check_translations.py` scans each source directory recursively and
+  truncates only an inline `#[cfg(test)] mod tests {`, not `mod tests;`; ADR
+  0024, `docs/M1-REPORT.md` row 108 and
+  `docs/evidence/M1-core-split.png`. `git status` is the authority.
+- Branch `main`. The Editor is a **crate of its own**, committed as `8f5d104`:
+  `crates/app-editor/` (`kogaview-editor`, new workspace member) with
   `lib.rs`, `operation.rs`, `document.rs`, `validate.rs`, `pixels.rs`,
   `codec.rs`, `render.rs`, `tasks.rs` and `tests.rs`, and a `Cargo.toml` that
   takes the `image` feature list and the `jpeg-decoder` reader with it;
@@ -2065,6 +2079,50 @@ protocol type changed.
   No hand was on that window; the dev commands are the harness's own gateway
   calls, which is why the *code move* is what this proves and not a new feature.
 
+## Design decisions, Core is one module per area (ADR 0024)
+
+`app-core/src/core.rs` (5,217 lines) is now `app-core/src/core/`. This one did
+not become a crate, and that is the decision, not an omission.
+
+- **Core cannot leave `app-core` the way the Editor left it.** The Editor is a
+  library of pixels and history; Core is the one ordered gateway, the one state
+  owner and the ordering between them. `AGENTS.md` calls the command bus the
+  nervous system, and `crates/desktop/src/bridge.rs` names `kogaview_core::Core`
+  directly. Splitting `Core` into cooperating crates would split the ordering
+  rule, which is the feature. So the boundary drawn here is *inside* the crate:
+  one module per command area, one struct, one gateway.
+- **The module map follows the commands, not the line count**: `gateway`
+  (`dispatch`, `query_json`, `execute`'s match, `poll`, `start_operation`),
+  `browsing` (folders, scans, selection, files, favourites, theme, panels,
+  `save_config`), `viewing` (path, selection, step), `editing` (open/close,
+  apply/preview, undo/redo/reset, save, export, preview cache, every editor
+  worker message), `jobs` (`batch_run` and its input set). `poll` stays whole in
+  `gateway` because it is where the three worker kinds meet the state they
+  publish into.
+- **The fields stay private to `mod.rs`.** Every area module is a child of
+  `core`, so it reads the fields exactly as the original `impl` did, and nothing
+  outside `core` gained a way in. Only methods a sibling calls became
+  `pub(super)` — the smallest visibility that crosses the module line, and it
+  does not widen `Core`'s public API (the bridge sees the same functions).
+- **The gate caught both halves of its own fix, in order.** The first run after
+  the move failed with `translations: 88 problem(s)` because
+  `check_translations.py` globbed `*.rs` and no longer saw the moved codes;
+  switching it to `rglob` left exactly one: `needs_a_document`, because
+  `#[cfg(test)] mod tests;` in `core/mod.rs` was mistaken for an inline test
+  module and cut the file at line 180, hiding `no_editor_document()` at 488.
+  The truncation now matches only an inline `mod tests {`. Both are recorded in
+  row 108 as what happened, not as a hypothetical.
+- **The suite is still one file** (2,379 lines). Its fixtures — a temp
+  directory, a scan settle, a batch settle, a command helper, a JPEG writer —
+  are used across areas, and splitting the cases without moving those to a
+  shared module would turn every case into an import list. It is the next
+  candidate, not this change.
+- **Evidence it runs:** the dev binary opened `wide.png` in the Editor and ran a
+  real `batch_run` convert over three files; the journal reads `open_folder`
+  rev 1 → `editor_open` rev 3 → `batch_run ok:true` rev 5, the output has the
+  three `-c.png` copies at their own sizes, and the grab shows the Editor at
+  `rev 10` (`docs/evidence/M1-core-split.png`).
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was
@@ -2775,12 +2833,14 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     form are pointer-reached like the rest of the compact toolbar. A person who
     wants "History but not Info" now has one place to say so, and a CLI can say
     it with `set_layout`, but neither has been driven by a hand here.
-20. **`core.rs` is the last 5,217-line file.** The Editor's split (ADR 0023)
-    moved the pixels, the operations, the document, the codecs and the workers
-    out; what is left is the gateway, every handler, the scan and the task
-    registry in one file, plus 1,900 lines of suite. It is not the same move:
-    `crates/desktop/src/bridge.rs` names `Core` directly, so the boundary has to
-    be drawn around what a front end can call (dispatch, state, cache paths)
-    rather than around what happens to be long. Nothing was attempted here —
-    the Editor's crate was the boundary that had already been written down, and
-    this one has not been.
+20. **Core's suite is the last long file.** `core/tests.rs` is 2,379 lines; the
+    production side is now 108–968 lines per area (`editing.rs` is the largest).
+    Splitting the suite by area is the natural next move, and the reason it was
+    not done here is the fixtures: a temp directory, a scan settle, a batch
+    settle, a command helper and a JPEG writer are shared across areas, so they
+    have to move to a `tests/mod.rs` first or every case grows an import list.
+    `editing.rs` is the module to watch: if it passes the size the old file had,
+    the question becomes whether the Editor's *place in Core* (save target,
+    preview cache, lifecycle) can be a small crate of its own, with
+    `kogaview-editor` doing the pixels. That one is unproven; nothing here
+    assumes it will happen.
