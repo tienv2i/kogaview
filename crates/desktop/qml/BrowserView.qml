@@ -1901,6 +1901,7 @@ Item {
         namePrefix: "newFolder"
         title: qsTr("New folder")
         preferredWidth: 380
+        onCloseRequested: newFolderDialog.close()
 
         /// An empty name is not a folder: Create stays disabled until there is
         /// something to name.

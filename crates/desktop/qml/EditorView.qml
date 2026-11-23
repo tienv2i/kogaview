@@ -5445,6 +5445,7 @@ Item {
         namePrefix: "export"
         title: qsTr("Export image")
         preferredWidth: 460
+        onCloseRequested: exportDialog.close()
 
         /// The copy's destination and name. Browse asks the shell, which owns
         /// the platform chooser; a typed path and a chosen one are the same

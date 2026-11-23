@@ -410,10 +410,8 @@ Dialog {
             id: body
             objectName: frame.namePrefix + "Content"
             Layout.fillWidth: true
-            // A form that fits takes only the height its column needs, so the
-            // dialog is exactly as tall as its content; a tabbed form claims the
-            // rest of the height it asked for.
-            Layout.fillHeight: !frame.fitToContent
+            Layout.fillHeight: true
+            Layout.alignment: Qt.AlignTop
             implicitHeight: frame.fitToContent
                             ? Math.min(bodyColumn.implicitHeight + 2 * frame.bodyPadding,
                                        frame.bodyRoom()) : 0
