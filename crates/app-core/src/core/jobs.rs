@@ -26,9 +26,9 @@ impl Core {
             ));
         }
         let inputs = self.batch_inputs(source)?;
+        let name = operation.name();
         let plan = batch::BatchPlan::build(operation, inputs, output)?;
         let total = plan.total();
-        let name = operation.name();
 
         let (sender, receiver) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));

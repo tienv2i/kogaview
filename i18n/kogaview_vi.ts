@@ -58,6 +58,61 @@
     <name>BatchJobDialog</name>
     <message>
       <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Percent (%)</source>
+      <translation>Phần trăm (%)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Pixels (px)</source>
+      <translation>Điểm ảnh (px)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Ratio</source>
+      <translation>Tỉ lệ</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Optional (e.g. 1:1, 16:9, 1.5)</source>
+      <translation>Tùy chọn (vd. 1:1, 16:9, 1.5)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Position</source>
+      <translation>Vị trí neo</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Anchor</source>
+      <translation>Neo</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Coordinates (X, Y)</source>
+      <translation>Tọa độ (X, Y)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Enter a valid ratio such as 1:1, 16:9 or 1.5.</source>
+      <translation>Nhập tỉ lệ hợp lệ như 1:1, 16:9 hoặc 1.5.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Crop values cannot be negative.</source>
+      <translation>Giá trị cắt không được âm.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>X and Y cannot be negative.</source>
+      <translation>X và Y không được âm.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Pixel sizes are clamped to each image if larger. Set an optional ratio to cut the largest matching frame.</source>
+      <translation>Kích thước pixel sẽ tự giới hạn theo từng ảnh nếu lớn hơn. Nhập tỉ lệ tùy chọn để cắt khung lớn nhất khớp tỉ lệ.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
       <source>Stretch to size</source>
       <translation>Giãn đúng cỡ</translation>
     </message>

@@ -198,7 +198,7 @@ impl ImageFormat {
 /// operations share the input list, the output policy, the progress counter and
 /// the cancellation flag, and a front end that sent a hundred commands could
 /// neither cancel them together nor say "12 of 40" honestly.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum BatchOperation {
     /// Scale every image to exactly `width` × `height`.
@@ -223,10 +223,25 @@ pub enum BatchOperation {
     /// describes the same trim on a folder of mixed sizes: `0,0,100,100` is the
     /// whole picture and `10,10,80,80` trims ten percent from each side.
     Crop {
+        #[serde(default)]
         x: f64,
+        #[serde(default)]
         y: f64,
+        #[serde(default)]
         width: f64,
+        #[serde(default)]
         height: f64,
+        /// `"percent"` (default, 0–100) or `"pixels"` (absolute pixels).
+        #[serde(default = "default_crop_unit")]
+        unit: String,
+        /// Optional 9-point anchor (`top_left`..`bottom_right`). When set,
+        /// placement is computed per image from this anchor instead of `x, y`.
+        #[serde(default)]
+        anchor: Option<String>,
+        /// Optional aspect ratio (`width / height`). When set without explicit
+        /// width/height, cuts the largest rectangle of this ratio from each image.
+        #[serde(default)]
+        ratio: Option<f64>,
     },
     /// Re-encode every image in `format`, with `quality` for the lossy encoder.
     Convert {
@@ -238,7 +253,7 @@ pub enum BatchOperation {
 
 impl BatchOperation {
     /// Stable name for the journal, the progress label and the logs.
-    pub const fn name(self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::Resize { .. } => "resize",
             Self::Crop { .. } => "crop",
@@ -396,6 +411,10 @@ pub const LAYOUT_THUMB_SIZES: [&str; 5] = ["xs", "s", "m", "l", "xl"];
 
 fn default_true() -> bool {
     true
+}
+
+fn default_crop_unit() -> String {
+    "percent".to_owned()
 }
 
 fn default_canvas_anchor() -> String {
@@ -1115,7 +1134,10 @@ mod tests {
                         x: 10.0,
                         y: 10.0,
                         width: 80.0,
-                        height: 80.0
+                        height: 80.0,
+                        unit: "percent".to_owned(),
+                        anchor: None,
+                        ratio: None,
                     }
                 );
                 assert_eq!(

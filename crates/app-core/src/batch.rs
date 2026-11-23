@@ -93,12 +93,12 @@ impl BatchPlan {
                 UiText::with("batch_too_many", [MAX_BATCH_FILES.to_string()]),
             ));
         }
-        validate_operation(operation)?;
-        validate_policy(operation, &inputs, &output)?;
+        validate_operation(&operation)?;
+        validate_policy(&operation, &inputs, &output)?;
 
         let mut outputs = Vec::with_capacity(inputs.len());
         for source in &inputs {
-            outputs.push(destination(source, operation, &output)?);
+            outputs.push(destination(source, &operation, &output)?);
         }
 
         // Two inputs can share a stem (a folder of `a.png` and `a.jpg`), and a
@@ -229,8 +229,21 @@ fn process(source: &Path, destination: &Path, operation: &BatchOperation) -> Res
             y,
             width,
             height,
+            unit,
+            anchor,
+            ratio,
         } => {
-            let rect = crop_rect(image.width(), image.height(), *x, *y, *width, *height);
+            let rect = crop_rect_full(
+                image.width(),
+                image.height(),
+                *x,
+                *y,
+                *width,
+                *height,
+                unit,
+                anchor.as_deref(),
+                *ratio,
+            );
             let edit = EditOperation::Crop {
                 x: rect.0 as i32,
                 y: rect.1 as i32,
@@ -256,6 +269,88 @@ fn process(source: &Path, destination: &Path, operation: &BatchOperation) -> Res
 /// 4000 × 3000 photo and a 800 × 800 icon. Rounding can land a pixel outside
 /// the frame, so the right and bottom edges are clamped rather than trusted;
 /// a zero-sized side can never reach the renderer.
+fn anchor_offset(container: u32, size: u32, pos: &str) -> u32 {
+    let slack = container.saturating_sub(size);
+    match pos {
+        "start" => 0,
+        "end" => slack,
+        _ => slack / 2,
+    }
+}
+
+fn crop_rect_full(
+    image_width: u32,
+    image_height: u32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    unit: &str,
+    anchor: Option<&str>,
+    ratio: Option<f64>,
+) -> (u32, u32, u32, u32) {
+    let is_pixels = unit == "pixels";
+    let to_px = |value: f64, length: u32| -> u32 {
+        if is_pixels {
+            value.round().clamp(0.0, f64::from(length)) as u32
+        } else {
+            (f64::from(length) * value / 100.0)
+                .round()
+                .clamp(0.0, f64::from(length)) as u32
+        }
+    };
+
+    let (crop_w, crop_h) = if let Some(aspect) = ratio.filter(|r| r.is_finite() && *r > 0.0) {
+        let max_w = if width > 0.0 {
+            to_px(width, image_width).max(1).min(image_width)
+        } else {
+            image_width
+        };
+        let max_h = if height > 0.0 {
+            to_px(height, image_height).max(1).min(image_height)
+        } else {
+            image_height
+        };
+        let box_w = f64::from(max_w);
+        let box_h = f64::from(max_h);
+        if box_w / box_h > aspect {
+            let w = (box_h * aspect).round().clamp(1.0, box_w) as u32;
+            (w, max_h)
+        } else {
+            let h = (box_w / aspect).round().clamp(1.0, box_h) as u32;
+            (max_w, h)
+        }
+    } else {
+        (
+            to_px(width, image_width).max(1).min(image_width),
+            to_px(height, image_height).max(1).min(image_height),
+        )
+    };
+
+    if let Some(a) = anchor {
+        let h_pos = match a {
+            "top_left" | "left" | "bottom_left" => "start",
+            "top_right" | "right" | "bottom_right" => "end",
+            _ => "center",
+        };
+        let v_pos = match a {
+            "top_left" | "top" | "top_right" => "start",
+            "bottom_left" | "bottom" | "bottom_right" => "end",
+            _ => "center",
+        };
+        let left = anchor_offset(image_width, crop_w, h_pos);
+        let top = anchor_offset(image_height, crop_h, v_pos);
+        return (left, top, crop_w, crop_h);
+    }
+
+    let left = to_px(x, image_width).min(image_width.saturating_sub(1));
+    let top = to_px(y, image_height).min(image_height.saturating_sub(1));
+    let right = (left + crop_w).min(image_width);
+    let bottom = (top + crop_h).min(image_height);
+    (left, top, (right - left).max(1), (bottom - top).max(1))
+}
+
+#[cfg(test)]
 fn crop_rect(
     image_width: u32,
     image_height: u32,
@@ -264,20 +359,21 @@ fn crop_rect(
     width: f64,
     height: f64,
 ) -> (u32, u32, u32, u32) {
-    let side = |percent: f64, length: u32| -> u32 {
-        (f64::from(length) * percent / 100.0)
-            .round()
-            .clamp(0.0, f64::from(length)) as u32
-    };
-    let left = side(x, image_width).min(image_width.saturating_sub(1));
-    let top = side(y, image_height).min(image_height.saturating_sub(1));
-    let right = (left + side(width, image_width).max(1)).min(image_width);
-    let bottom = (top + side(height, image_height).max(1)).min(image_height);
-    (left, top, right - left, bottom - top)
+    crop_rect_full(
+        image_width,
+        image_height,
+        x,
+        y,
+        width,
+        height,
+        "percent",
+        None,
+        None,
+    )
 }
 
 /// The format a resize or a crop keeps, or the one a convert names.
-fn output_format(source: &Path, operation: BatchOperation) -> Result<String, ProtocolError> {
+fn output_format(source: &Path, operation: &BatchOperation) -> Result<String, ProtocolError> {
     match operation {
         BatchOperation::Convert { format, .. } => Ok(format.extension().to_owned()),
         _ => source
@@ -296,7 +392,7 @@ fn output_format(source: &Path, operation: BatchOperation) -> Result<String, Pro
 /// Where one input is written.
 fn destination(
     source: &Path,
-    operation: BatchOperation,
+    operation: &BatchOperation,
     output: &BatchOutput,
 ) -> Result<PathBuf, ProtocolError> {
     if output.overwrite {
@@ -304,7 +400,7 @@ fn destination(
         // data would be a file that lies about itself, so a convert that
         // replaces the original must already target its format.
         if let BatchOperation::Convert { format, .. } = operation {
-            let wanted = SaveFormat::from_image_format(format);
+            let wanted = SaveFormat::from_image_format(*format);
             if SaveFormat::from_path(source) != Some(wanted) {
                 return Err(ProtocolError::line(
                     "convert_overwrite",
@@ -346,7 +442,7 @@ fn destination(
 }
 
 /// Refuse a job whose operation cannot mean anything, before it touches a file.
-fn validate_operation(operation: BatchOperation) -> Result<(), ProtocolError> {
+fn validate_operation(operation: &BatchOperation) -> Result<(), ProtocolError> {
     match operation {
         BatchOperation::Resize {
             width,
@@ -355,9 +451,9 @@ fn validate_operation(operation: BatchOperation) -> Result<(), ProtocolError> {
             fill,
             ..
         } => {
-            editor::validate_resize(width, height)
+            editor::validate_resize(*width, *height)
                 .map_err(|line| ProtocolError::line("invalid_resize", line))?;
-            editor::validate_resize_mode(mode, fill)
+            editor::validate_resize_mode(*mode, *fill)
                 .map_err(|line| ProtocolError::line("invalid_resize", line))?;
             Ok(())
         }
@@ -366,24 +462,82 @@ fn validate_operation(operation: BatchOperation) -> Result<(), ProtocolError> {
             y,
             width,
             height,
+            unit,
+            anchor,
+            ratio,
         } => {
+            let (x, y, width, height) = (*x, *y, *width, *height);
+            let ratio = *ratio;
+            const VALID_ANCHORS: &[&str] = &[
+                "top_left",
+                "top",
+                "top_right",
+                "left",
+                "center",
+                "right",
+                "bottom_left",
+                "bottom",
+                "bottom_right",
+            ];
+            let valid_unit = unit == "percent" || unit == "pixels";
+            let valid_anchor = anchor.as_deref().is_none_or(|a| VALID_ANCHORS.contains(&a));
+            let valid_ratio = ratio.is_none_or(|r| r.is_finite() && r > 0.0);
             let finite = [x, y, width, height].iter().all(|value| value.is_finite());
-            // A tenth of a percent of slack: the form's fields carry two
-            // decimals, and 100.0 must stay reachable after a round trip.
-            let inside = x >= -0.05
-                && y >= -0.05
-                && width > 0.0
-                && height > 0.0
-                && x + width <= 100.05
-                && y + height <= 100.05;
-            if !finite || !inside {
+            if !valid_unit || !valid_anchor || !valid_ratio || !finite {
                 return Err(ProtocolError::line(
                     "invalid_crop",
                     UiText::new("batch_crop_outside"),
                 ));
             }
-            if x.abs() < f64::EPSILON
-                && y.abs() < f64::EPSILON
+            let is_pixels = unit == "pixels";
+            let has_anchor = anchor.is_some();
+            if ratio.is_some() {
+                let valid_bounds = if is_pixels {
+                    width >= 0.0 && height >= 0.0 && (has_anchor || (x >= 0.0 && y >= 0.0))
+                } else {
+                    width >= 0.0
+                        && height >= 0.0
+                        && width <= 100.05
+                        && height <= 100.05
+                        && (has_anchor || (x >= -0.05 && y >= -0.05 && x < 100.0 && y < 100.0))
+                };
+                if !valid_bounds {
+                    return Err(ProtocolError::line(
+                        "invalid_crop",
+                        UiText::new("batch_crop_outside"),
+                    ));
+                }
+                return Ok(());
+            }
+            if is_pixels {
+                if width < 1.0 || height < 1.0 || (!has_anchor && (x < 0.0 || y < 0.0)) {
+                    return Err(ProtocolError::line(
+                        "invalid_crop",
+                        UiText::new("batch_crop_outside"),
+                    ));
+                }
+                return Ok(());
+            }
+            // Percent mode without ratio.
+            // A tenth of a percent of slack: the form's fields carry two
+            // decimals, and 100.0 must stay reachable after a round trip.
+            let inside = if has_anchor {
+                width > 0.0 && height > 0.0 && width <= 100.05 && height <= 100.05
+            } else {
+                x >= -0.05
+                    && y >= -0.05
+                    && width > 0.0
+                    && height > 0.0
+                    && x + width <= 100.05
+                    && y + height <= 100.05
+            };
+            if !inside {
+                return Err(ProtocolError::line(
+                    "invalid_crop",
+                    UiText::new("batch_crop_outside"),
+                ));
+            }
+            if (has_anchor || (x.abs() < f64::EPSILON && y.abs() < f64::EPSILON))
                 && (width - 100.0).abs() < f64::EPSILON
                 && (height - 100.0).abs() < f64::EPSILON
             {
@@ -408,7 +562,7 @@ fn validate_operation(operation: BatchOperation) -> Result<(), ProtocolError> {
 
 /// Refuse an output policy that cannot be honoured.
 fn validate_policy(
-    operation: BatchOperation,
+    operation: &BatchOperation,
     inputs: &[PathBuf],
     output: &BatchOutput,
 ) -> Result<(), ProtocolError> {
@@ -437,7 +591,7 @@ fn validate_policy(
         // `destination` checks this per file too; doing it once here keeps a
         // mixed selection from failing halfway through the batch.
         if let BatchOperation::Convert { format, .. } = operation {
-            let wanted = SaveFormat::from_image_format(format);
+            let wanted = SaveFormat::from_image_format(*format);
             if let Some(source) = inputs
                 .iter()
                 .find(|source| SaveFormat::from_path(source) != Some(wanted))
@@ -482,6 +636,151 @@ mod tests {
     }
 
     #[test]
+    fn anchor_crop_places_rectangle_at_requested_corner_or_center() {
+        assert_eq!(
+            crop_rect_full(
+                1000,
+                800,
+                0.0,
+                0.0,
+                50.0,
+                50.0,
+                "percent",
+                Some("center"),
+                None
+            ),
+            (250, 200, 500, 400)
+        );
+        assert_eq!(
+            crop_rect_full(
+                1000,
+                800,
+                0.0,
+                0.0,
+                50.0,
+                50.0,
+                "percent",
+                Some("bottom_right"),
+                None
+            ),
+            (500, 400, 500, 400)
+        );
+        assert_eq!(
+            crop_rect_full(
+                1000,
+                800,
+                0.0,
+                0.0,
+                400.0,
+                300.0,
+                "pixels",
+                Some("top_right"),
+                None
+            ),
+            (600, 0, 400, 300)
+        );
+        // Oversized pixel crop clamps cleanly to the image.
+        assert_eq!(
+            crop_rect_full(
+                200,
+                150,
+                0.0,
+                0.0,
+                400.0,
+                300.0,
+                "pixels",
+                Some("center"),
+                None
+            ),
+            (0, 0, 200, 150)
+        );
+    }
+
+    #[test]
+    fn ratio_crop_fits_largest_aspect_rectangle_inside_bounds() {
+        // 1:1 on landscape 1000x600 centered -> 600x600 at (200, 0)
+        assert_eq!(
+            crop_rect_full(
+                1000,
+                600,
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+                "percent",
+                Some("center"),
+                Some(1.0)
+            ),
+            (200, 0, 600, 600)
+        );
+        // 1:1 on portrait 600x1000 anchored top -> 600x600 at (0, 0)
+        assert_eq!(
+            crop_rect_full(
+                600,
+                1000,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                "percent",
+                Some("top"),
+                Some(1.0)
+            ),
+            (0, 0, 600, 600)
+        );
+        // 16:9 inside 800px width cap on 1600x1200 -> 800x450 centered
+        assert_eq!(
+            crop_rect_full(
+                1600,
+                1200,
+                0.0,
+                0.0,
+                800.0,
+                0.0,
+                "pixels",
+                Some("center"),
+                Some(16.0 / 9.0)
+            ),
+            (400, 375, 800, 450)
+        );
+    }
+
+    #[test]
+    fn validation_accepts_ratio_and_pixel_crops_and_refuses_anchor_noop() {
+        assert!(validate_operation(&BatchOperation::Crop {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            unit: "percent".to_owned(),
+            anchor: Some("center".to_owned()),
+            ratio: Some(1.0),
+        })
+        .is_ok());
+        assert!(validate_operation(&BatchOperation::Crop {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 500.0,
+            unit: "pixels".to_owned(),
+            anchor: Some("center".to_owned()),
+            ratio: None,
+        })
+        .is_ok());
+        let err = validate_operation(&BatchOperation::Crop {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            unit: "percent".to_owned(),
+            anchor: Some("center".to_owned()),
+            ratio: None,
+        })
+        .unwrap_err();
+        assert_eq!(err.code, "crop_noop");
+    }
+
+    #[test]
     fn a_suffix_cannot_name_another_folder() {
         let output = BatchOutput {
             folder: None,
@@ -494,6 +793,9 @@ mod tests {
                 y: 0.0,
                 width: 50.0,
                 height: 50.0,
+                unit: "percent".to_owned(),
+                anchor: None,
+                ratio: None,
             },
             vec![PathBuf::from("/pics/a.png")],
             output,
@@ -510,6 +812,9 @@ mod tests {
                 y: 0.0,
                 width: 50.0,
                 height: 50.0,
+                unit: "percent".to_owned(),
+                anchor: None,
+                ratio: None,
             },
             vec![PathBuf::from("/pics/a.png")],
             BatchOutput::default(),

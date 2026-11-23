@@ -203,7 +203,8 @@ private slots:
     close();
 
     open(QStringLiteral("crop"), { QStringLiteral("/pics/a.png") });
-    QVERIFY(expectItem("batchCropX")->property("visible").toBool());
+    QVERIFY(expectItem("batchCropWidth")->property("visible").toBool());
+    QVERIFY(expectItem("batchCropAnchorGrid")->property("visible").toBool());
     QVERIFY(!expectItem("batchResizeWidth")->property("visible").toBool());
     close();
 
@@ -289,6 +290,44 @@ private slots:
     QCOMPARE(operation.value(QStringLiteral("y")).toDouble(), 5.0);
     QCOMPARE(operation.value(QStringLiteral("width")).toDouble(), 80.0);
     QCOMPARE(operation.value(QStringLiteral("height")).toDouble(), 90.0);
+  }
+
+  /// Batch crop also supports 9-point anchor placement, pixel units, and
+  /// optional aspect ratios (`1:1`, `16:9`, etc.).
+  void aCropSupportsAnchorPixelsAndRatio()
+  {
+    open(QStringLiteral("crop"), { QStringLiteral("/pics/a.png") });
+    QSignalSpy spy(m_dialog, SIGNAL(runRequested(QVariant)));
+    QQuickItem* runButton = expectItem("batchDialogRun");
+
+    // Typing a ratio like "1:1" makes the default 100%x100% centered crop valid.
+    expectItem("batchCropRatio")->setProperty("text", QStringLiteral("1:1"));
+    QVERIFY2(runButton->isEnabled(), qPrintable(validationError()));
+    QQuickItem* topRight = nullptr;
+    for (QQuickItem* child : expectItem("batchCropAnchorGrid")->childItems()) {
+      if (child->objectName() == QStringLiteral("batchCropAnchor_top_right")) {
+        topRight = child;
+        break;
+      }
+    }
+    clickItem(topRight);
+    QVERIFY(QMetaObject::invokeMethod(expectItem("batchCropUnitPixels"), "click"));
+    expectItem("batchCropWidth")->property("inputField").value<QQuickItem*>()
+      ->setProperty("text", QStringLiteral("800"));
+    expectItem("batchCropHeight")->property("inputField").value<QQuickItem*>()
+      ->setProperty("text", QStringLiteral("0"));
+    QVERIFY2(runButton->isEnabled(), qPrintable(validationError()));
+
+    QVERIFY(QMetaObject::invokeMethod(runButton, "click"));
+    QCOMPARE(spy.count(), 1);
+    const QVariantMap op = spy.at(0).at(0).toMap()
+                             .value(QStringLiteral("operation")).toMap();
+    QCOMPARE(op.value(QStringLiteral("operation")).toString(), QStringLiteral("crop"));
+    QCOMPARE(op.value(QStringLiteral("unit")).toString(), QStringLiteral("pixels"));
+    QCOMPARE(op.value(QStringLiteral("anchor")).toString(), QStringLiteral("top_right"));
+    QCOMPARE(op.value(QStringLiteral("ratio")).toDouble(), 1.0);
+    QCOMPARE(op.value(QStringLiteral("width")).toDouble(), 800.0);
+    QCOMPARE(op.value(QStringLiteral("height")).toDouble(), 0.0);
   }
 
   /// Convert names the format; a JPEG carries its quality and a lossless one

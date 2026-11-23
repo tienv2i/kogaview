@@ -70,6 +70,13 @@ DialogFrame {
     property string format: "png"
     property int quality: 90
 
+    // Crop state: unit (`percent` | `pixels`), placement (`anchor` | `coordinates`),
+    // 9-point anchor, and optional aspect ratio (`a:b`, `a/b`, or decimal).
+    property string cropUnit: "percent"
+    property string cropPositionMode: "anchor"
+    property string cropAnchor: "center"
+    property bool _resettingCrop: false
+
     /// The suffix field is the source of truth: it is typed, not derived.
     // The fields below are declared inside the dialog's content item, so a
     // function in this scope cannot name them directly: a plain identifier here
@@ -83,8 +90,21 @@ DialogFrame {
     readonly property alias cropYBox: cropYField
     readonly property alias cropWidthBox: cropWidthField
     readonly property alias cropHeightBox: cropHeightField
+    readonly property alias cropRatioBox: cropRatioField
     readonly property alias widthBox: widthField
     readonly property alias heightBox: heightField
+
+    readonly property var cropAnchorCells: [
+        { key: "top_left", glyph: "↖" },
+        { key: "top", glyph: "↑" },
+        { key: "top_right", glyph: "↗" },
+        { key: "left", glyph: "←" },
+        { key: "center", glyph: "•" },
+        { key: "right", glyph: "→" },
+        { key: "bottom_left", glyph: "↙" },
+        { key: "bottom", glyph: "↓" },
+        { key: "bottom_right", glyph: "↘" }
+    ]
 
     readonly property var fits: [
         { key: "stretch", label: qsTr("Stretch to size") },
@@ -140,12 +160,51 @@ DialogFrame {
         }
     }
 
-    /// The percentage a crop field holds. The fields are `%` only, so this is
-    /// the value the command carries; `UnitField.pixels()` would round it to a
-    /// whole percent of a reference image, which is not what a batch means.
+    /// The numeric value a crop field holds (`%` or `px`, depending on `cropUnit`).
     function percentOf(field) {
         var value = parseFloat(String(field.text).trim())
         return isFinite(value) ? value : NaN
+    }
+
+    /// Parse an optional aspect ratio (`1:1`, `16/9`, `1.5`). Empty text
+    /// returns `0` (no ratio); malformed or non-positive text returns `NaN`.
+    function parseCropRatio(text) {
+        var trimmed = String(text || "").trim()
+        if (trimmed.length === 0) return 0
+        var parts = trimmed.split(/[:\/×xX]/)
+        if (parts.length === 2) {
+            var w = parseFloat(parts[0].trim())
+            var h = parseFloat(parts[1].trim())
+            if (isFinite(w) && isFinite(h) && w > 0 && h > 0) return w / h
+            return NaN
+        }
+        if (parts.length === 1) {
+            var v = parseFloat(trimmed)
+            if (isFinite(v) && v > 0) return v
+        }
+        return NaN
+    }
+
+    /// Switch crop units between `"percent"` and `"pixels"`, seeding sensible
+    /// defaults when toggling off the 100% initial state.
+    function switchCropUnit(nextUnit) {
+        if (dialog.cropUnit === nextUnit) return
+        dialog._resettingCrop = true
+        dialog.cropUnit = nextUnit
+        if (nextUnit === "pixels") {
+            var w = dialog.sampleWidth > 0 ? dialog.sampleWidth : 800
+            var h = dialog.sampleHeight > 0 ? dialog.sampleHeight : 600
+            cropWidthField.text = String(w)
+            cropHeightField.text = String(h)
+            cropXField.text = "0"
+            cropYField.text = "0"
+        } else {
+            cropWidthField.text = "100"
+            cropHeightField.text = "100"
+            cropXField.text = "0"
+            cropYField.text = "0"
+        }
+        dialog._resettingCrop = false
     }
 
     function fillIndex() {
@@ -322,21 +381,55 @@ DialogFrame {
                 return qsTr("Width and height must be at least 1 pixel.")
             }
         } else if (dialog.operation === "crop") {
-            var x = dialog.percentOf(dialog.cropXBox)
-            var y = dialog.percentOf(dialog.cropYBox)
-            var width = dialog.percentOf(dialog.cropWidthBox)
-            var height = dialog.percentOf(dialog.cropHeightBox)
+            var ratio = dialog.parseCropRatio(dialog.cropRatioBox.text)
+            if (!isFinite(ratio)) {
+                return qsTr("Enter a valid ratio such as 1:1, 16:9 or 1.5.")
+            }
+            var hasRatio = ratio > 0
+            var isPixels = dialog.cropUnit === "pixels"
+            var isAnchor = dialog.cropPositionMode === "anchor"
+            var wText = String(dialog.cropWidthBox.text).trim()
+            var hText = String(dialog.cropHeightBox.text).trim()
+            var width = (hasRatio && wText.length === 0) ? 0 : dialog.percentOf(dialog.cropWidthBox)
+            var height = (hasRatio && hText.length === 0) ? 0 : dialog.percentOf(dialog.cropHeightBox)
+            var x = isAnchor ? 0 : dialog.percentOf(dialog.cropXBox)
+            var y = isAnchor ? 0 : dialog.percentOf(dialog.cropYBox)
             if (!isFinite(x) || !isFinite(y) || !isFinite(width) || !isFinite(height)) {
                 return qsTr("Enter a number for X, Y, width and height.")
             }
-            if (width <= 0 || height <= 0) {
-                return qsTr("Width and height must be above 0 %.")
-            }
-            if (x < 0 || y < 0 || x + width > 100 || y + height > 100) {
-                return qsTr("The rectangle must stay inside the image: X + width and Y + height cannot pass 100 %.")
-            }
-            if (x === 0 && y === 0 && width === 100 && height === 100) {
-                return qsTr("That rectangle covers the whole image; set a width or height below 100 %.")
+            if (hasRatio) {
+                if (width < 0 || height < 0 || (!isAnchor && (x < 0 || y < 0))) {
+                    return qsTr("Crop values cannot be negative.")
+                }
+                if (!isPixels && (width > 100 || height > 100 || (!isAnchor && (x >= 100 || y >= 100)))) {
+                    return qsTr("The rectangle must stay inside the image: X + width and Y + height cannot pass 100 %.")
+                }
+            } else if (isPixels) {
+                if (width < 1 || height < 1) {
+                    return qsTr("Width and height must be at least 1 pixel.")
+                }
+                if (!isAnchor && (x < 0 || y < 0)) {
+                    return qsTr("X and Y cannot be negative.")
+                }
+            } else {
+                if (width <= 0 || height <= 0) {
+                    return qsTr("Width and height must be above 0 %.")
+                }
+                if (isAnchor) {
+                    if (width > 100 || height > 100) {
+                        return qsTr("The rectangle must stay inside the image: X + width and Y + height cannot pass 100 %.")
+                    }
+                    if (width === 100 && height === 100) {
+                        return qsTr("That rectangle covers the whole image; set a width or height below 100 %.")
+                    }
+                } else {
+                    if (x < 0 || y < 0 || x + width > 100 || y + height > 100) {
+                        return qsTr("The rectangle must stay inside the image: X + width and Y + height cannot pass 100 %.")
+                    }
+                    if (x === 0 && y === 0 && width === 100 && height === 100) {
+                        return qsTr("That rectangle covers the whole image; set a width or height below 100 %.")
+                    }
+                }
             }
         }
 
@@ -431,12 +524,20 @@ DialogFrame {
                 fill_alpha: dialog.fillAlpha()
             }
         } else if (dialog.operation === "crop") {
+            var ratioValue = dialog.parseCropRatio(dialog.cropRatioBox.text)
+            var hasRatio = isFinite(ratioValue) && ratioValue > 0
+            var wStr = String(dialog.cropWidthBox.text).trim()
+            var hStr = String(dialog.cropHeightBox.text).trim()
+            var isAnchor = dialog.cropPositionMode === "anchor"
             operation = {
                 operation: "crop",
-                x: dialog.percentOf(dialog.cropXBox),
-                y: dialog.percentOf(dialog.cropYBox),
-                width: dialog.percentOf(dialog.cropWidthBox),
-                height: dialog.percentOf(dialog.cropHeightBox)
+                x: isAnchor ? 0 : dialog.percentOf(dialog.cropXBox),
+                y: isAnchor ? 0 : dialog.percentOf(dialog.cropYBox),
+                width: (hasRatio && wStr.length === 0) ? 0 : dialog.percentOf(dialog.cropWidthBox),
+                height: (hasRatio && hStr.length === 0) ? 0 : dialog.percentOf(dialog.cropHeightBox),
+                unit: dialog.cropUnit,
+                anchor: isAnchor ? dialog.cropAnchor : null,
+                ratio: hasRatio ? ratioValue : null
             }
         } else {
             operation = {
@@ -512,12 +613,23 @@ DialogFrame {
         backgroundBox.currentIndex = 0
         filterBox.currentIndex = 0
 
-        // Crop starts on the whole image. Run stays disabled until the
-        // rectangle trims something, because Core refuses a no-op crop.
+        // Crop starts on the whole image (percent + center anchor). Run stays
+        // disabled until the rectangle or ratio trims something, because Core
+        // refuses a no-op crop.
+        dialog._resettingCrop = true
+        dialog.cropUnit = "percent"
+        dialog.cropPositionMode = "anchor"
+        dialog.cropAnchor = "center"
+        cropUnitPercentRadio.checked = true
+        cropUnitPixelsRadio.checked = false
+        cropModeAnchorRadio.checked = true
+        cropModeCoordsRadio.checked = false
         cropXField.text = "0"
         cropYField.text = "0"
         cropWidthField.text = "100"
         cropHeightField.text = "100"
+        cropRatioField.text = ""
+        dialog._resettingCrop = false
 
         dialog.format = "png"
         formatBox.currentIndex = 0
@@ -539,6 +651,8 @@ DialogFrame {
 
     ButtonGroup { id: inputGroup }
     ButtonGroup { id: outputGroup }
+    ButtonGroup { id: cropUnitGroup }
+    ButtonGroup { id: cropModeGroup }
 
     // ------------------------------------------- the action's options
     // First, because it is what the dialog's title promises: the size,
@@ -731,44 +845,12 @@ DialogFrame {
     ColumnLayout {
         Layout.fillWidth: true
         visible: dialog.operation === "crop"
-        spacing: 8
+        spacing: 4
 
-        GridLayout {
+        // Size + Unit on one compact row.
+        RowLayout {
             Layout.fillWidth: true
-            columns: 4
-            columnSpacing: 6
-            rowSpacing: 6
-
-            Label {
-                text: qsTr("X")
-                color: dialog.theme.textMuted
-            }
-            UnitField {
-                id: cropXField
-                objectName: "batchCropX"
-                Layout.fillWidth: true
-                font.pixelSize: 12
-                unit: "%"
-                unitsVisible: false
-                unitReference: 100
-                minimumPixels: 0
-                maximumPixels: 100
-            }
-            Label {
-                text: qsTr("Y")
-                color: dialog.theme.textMuted
-            }
-            UnitField {
-                id: cropYField
-                objectName: "batchCropY"
-                Layout.fillWidth: true
-                font.pixelSize: 12
-                unit: "%"
-                unitsVisible: false
-                unitReference: 100
-                minimumPixels: 0
-                maximumPixels: 100
-            }
+            spacing: 6
 
             Label {
                 text: qsTr("Width")
@@ -779,11 +861,11 @@ DialogFrame {
                 objectName: "batchCropWidth"
                 Layout.fillWidth: true
                 font.pixelSize: 12
-                unit: "%"
+                unit: dialog.cropUnit === "pixels" ? "px" : "%"
                 unitsVisible: false
                 unitReference: 100
-                minimumPixels: 1
-                maximumPixels: 100
+                minimumPixels: 0
+                maximumPixels: dialog.cropUnit === "pixels" ? 16384 : 100
             }
             Label {
                 text: qsTr("Height")
@@ -794,17 +876,182 @@ DialogFrame {
                 objectName: "batchCropHeight"
                 Layout.fillWidth: true
                 font.pixelSize: 12
-                unit: "%"
+                unit: dialog.cropUnit === "pixels" ? "px" : "%"
                 unitsVisible: false
                 unitReference: 100
-                minimumPixels: 1
-                maximumPixels: 100
+                minimumPixels: 0
+                maximumPixels: dialog.cropUnit === "pixels" ? 16384 : 100
+            }
+            FormRadio {
+                id: cropUnitPercentRadio
+                theme: dialog.theme
+                objectName: "batchCropUnitPercent"
+                text: qsTr("Percent (%)")
+                ButtonGroup.group: cropUnitGroup
+                checked: dialog.cropUnit === "percent"
+                onClicked: dialog.switchCropUnit("percent")
+            }
+            FormRadio {
+                id: cropUnitPixelsRadio
+                theme: dialog.theme
+                objectName: "batchCropUnitPixels"
+                text: qsTr("Pixels (px)")
+                ButtonGroup.group: cropUnitGroup
+                checked: dialog.cropUnit === "pixels"
+                onClicked: dialog.switchCropUnit("pixels")
+            }
+        }
+
+        // Ratio + Position mode on the left; 3×3 anchor grid or X/Y on the right.
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                spacing: 4
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Label {
+                        text: qsTr("Ratio")
+                        color: dialog.theme.textMuted
+                    }
+                    TextField {
+                        id: cropRatioField
+                        objectName: "batchCropRatio"
+                        Layout.fillWidth: true
+                        font.pixelSize: 12
+                        placeholderText: qsTr("Optional (e.g. 1:1, 16:9, 1.5)")
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Label {
+                        text: qsTr("Position")
+                        color: dialog.theme.textMuted
+                    }
+                    FormRadio {
+                        id: cropModeAnchorRadio
+                        theme: dialog.theme
+                        objectName: "batchCropModeAnchor"
+                        text: qsTr("Anchor")
+                        ButtonGroup.group: cropModeGroup
+                        checked: dialog.cropPositionMode === "anchor"
+                        onClicked: dialog.cropPositionMode = "anchor"
+                    }
+                    FormRadio {
+                        id: cropModeCoordsRadio
+                        theme: dialog.theme
+                        objectName: "batchCropModeCoords"
+                        text: qsTr("Coordinates (X, Y)")
+                        ButtonGroup.group: cropModeGroup
+                        checked: dialog.cropPositionMode === "coordinates"
+                        onClicked: dialog.cropPositionMode = "coordinates"
+                    }
+                }
+            }
+
+            // 3×3 anchor grid — same glyphs as Canvas Size panel.
+            GridLayout {
+                objectName: "batchCropAnchorGrid"
+                visible: dialog.cropPositionMode === "anchor"
+                Layout.alignment: Qt.AlignVCenter
+                columns: 3
+                columnSpacing: 2
+                rowSpacing: 2
+
+                Repeater {
+                    model: dialog.cropAnchorCells
+                    delegate: Button {
+                        required property var modelData
+                        objectName: "batchCropAnchor_" + modelData.key
+                        readonly property bool selected: dialog.cropAnchor === modelData.key
+                        implicitWidth: 26
+                        implicitHeight: 18
+                        padding: 0
+                        font.pixelSize: 11
+                        text: modelData.glyph
+                        focusPolicy: Qt.NoFocus
+                        highlighted: selected
+                        onClicked: dialog.cropAnchor = modelData.key
+                    }
+                }
+            }
+
+            // Explicit X, Y coordinates when the user chooses Coordinates mode.
+            GridLayout {
+                Layout.preferredWidth: 180
+                Layout.alignment: Qt.AlignVCenter
+                visible: dialog.cropPositionMode === "coordinates"
+                columns: 2
+                columnSpacing: 4
+                rowSpacing: 4
+
+                Label {
+                    text: qsTr("X")
+                    color: dialog.theme.textMuted
+                }
+                UnitField {
+                    id: cropXField
+                    objectName: "batchCropX"
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    unit: dialog.cropUnit === "pixels" ? "px" : "%"
+                    unitsVisible: false
+                    unitReference: 100
+                    minimumPixels: 0
+                    maximumPixels: dialog.cropUnit === "pixels" ? 16384 : 100
+                    onTextChanged: {
+                        if (!dialog._resettingCrop && dialog.cropPositionMode === "anchor") {
+                            var v = parseFloat(String(text).trim())
+                            if (isFinite(v) && v !== 0) {
+                                dialog.cropPositionMode = "coordinates"
+                                cropModeCoordsRadio.checked = true
+                                cropModeAnchorRadio.checked = false
+                            }
+                        }
+                    }
+                }
+                Label {
+                    text: qsTr("Y")
+                    color: dialog.theme.textMuted
+                }
+                UnitField {
+                    id: cropYField
+                    objectName: "batchCropY"
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    unit: dialog.cropUnit === "pixels" ? "px" : "%"
+                    unitsVisible: false
+                    unitReference: 100
+                    minimumPixels: 0
+                    maximumPixels: dialog.cropUnit === "pixels" ? 16384 : 100
+                    onTextChanged: {
+                        if (!dialog._resettingCrop && dialog.cropPositionMode === "anchor") {
+                            var v = parseFloat(String(text).trim())
+                            if (isFinite(v) && v !== 0) {
+                                dialog.cropPositionMode = "coordinates"
+                                cropModeCoordsRadio.checked = true
+                                cropModeAnchorRadio.checked = false
+                            }
+                        }
+                    }
+                }
             }
         }
 
         Label {
             Layout.fillWidth: true
-            text: qsTr("Percentages are of each image's own sides, so one rectangle trims the same relative area from every size.")
+            text: dialog.cropUnit === "pixels"
+                    ? qsTr("Pixel sizes are clamped to each image if larger. Set an optional ratio to cut the largest matching frame.")
+                    : qsTr("Percentages are of each image's own sides, so one rectangle trims the same relative area from every size.")
             color: dialog.theme.textMuted
             font.pixelSize: 11
             wrapMode: Text.WordWrap
