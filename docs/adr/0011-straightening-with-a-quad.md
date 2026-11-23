@@ -238,3 +238,56 @@ the moment a rectangle exists — so "nothing chosen" and "this part is kept" ar
 two different pictures. The dim is one rectangle sized from the same document
 projection the frame and the four strips read, so it cannot disagree with the
 picture.
+
+## Revision — Transform is a frame first, and its preview is always drawn (2026-11-23)
+
+Row 82 shipped Transform as a keystone quad with a `Live preview` switch: four
+corners that each go wherever the pointer goes, and a draft that replaced the
+canvas while the frame stepped aside. The owner asked for two things this
+revision answers: the drag should behave like a window border — the side across
+from the pointer stays where it is — and the preview should not be a switch at
+all, because "phải luôn ở live preview". No protocol or Core change belongs to
+this pass: the wire still carries four corners in document pixels and Core still
+warps them onto the document's own frame.
+
+- **Two modes, one of them built.** `transformMode` is `frame` (the default) or
+  `perspective`. `frame` keeps the four corners on an axis-aligned rectangle;
+  `perspective` is row 82's quad, kept in the code and in the suite but drawn
+  **disabled**, with the reason under the row: putting the four sides on four
+  planes is a layers question the Editor has not answered yet. An option that
+  exists and cannot be armed is information; one that is missing is a question
+  the window refuses to answer.
+- **`frame` is a live resize.** A corner drag moves that corner and pins the one
+  across from it; an edge drag puts the whole side where the pointer is and
+  leaves the opposite side alone. Both write the same four corners through
+  `setTransformFrame`, which keeps the box inside the picture, never narrower or
+  shorter than a pixel, and rounds to the tenth of a pixel the command carries,
+  so a drag and a typed number agree. This is the gesture that straightens a
+  photograph of a page, which is the common case; a keystone needs the quad and
+  the quad needs layers.
+- **The preview is asked for, never armed.** The `Live preview` button and
+  `transformLivePreview` are gone. The frame requests a draft as soon as it
+  leaves the identity (`onTransformCornersChanged` → the same 200 ms
+  `draftDebounce` a typed crop side uses), and `requestDraft` still refuses a
+  frame equal to the document because there is nothing to show.
+- **The draft is a thumbnail in the tool options, not the canvas.** This
+  supersedes row 82's "both overlays hide while their own draft is on the
+  canvas" for Transform. A draft fills the canvas and describes pixels that are
+  no longer on screen, which is why the frame had to step aside; with the
+  preview in the options the corners stay the command and stay draggable while
+  the answer is visible. `transformPreview` gates it on the tool, on
+  `kind: "transform"` and on a frame that has actually moved, so a draft of
+  another kind, or a frame put back on the identity, hides it without sending
+  anything.
+- **The canvas never draws a draft.** `displayedWidth`/`displayedHeight` are the
+  document's own size and the canvas image is `editor.previewPath`, so the
+  picture under the pointer is always the source. The gates that hid the Crop and
+  Paint overlays while `previewDraft !== null` were the toggle's leftovers —
+  Crop's draft left the UI in row 92 — and are removed with it.
+- **Consequences.** Keystone correction of a real photograph (four independent
+  corners) is not reachable from the window in this build; the model and the
+  command are untouched, so the day layers land the mode is a switch away. The
+  draft is still a full warp on the worker per settle — the thumbnail is drawn
+  smaller, not computed smaller — so the cost of a 27 MP document is what row
+  82 recorded. The tool rail's tooltip now says what the tool does in this build
+  (`Straighten the picture by dragging the frame's corners and edges`).

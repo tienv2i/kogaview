@@ -346,8 +346,15 @@ Item {
     /// canvas takes the Editor's own background (`backgroundColor` /
     /// `backgroundTransparent`), the same one a resize pads with. Only read in
     /// `grow` mode.
-    /// And for Transform: the canvas shows the straightened frame before Apply.
-    property bool transformLivePreview: false
+    /// How Transform takes its four corners. `frame` is a rectangle: a corner
+    /// or an edge drag moves that side and leaves the side across exactly where
+    /// it was, the way a window border resizes — which is why one gesture is
+    /// enough to straighten a photograph of a page. `perspective` is the
+    /// keystone quad, where each corner goes wherever the pointer goes; it is
+    /// shut in this build, because putting four sides on four planes is a
+    /// layers question the Editor has not answered — the tool options draw it
+    /// disabled and say so.
+    property string transformMode: "frame"
     /// The transform quad in document pixels, clockwise from the top left:
     /// every corner must stay inside the picture, and the four of them are the
     /// whole command. The frame's own corners are the identity, so opening a
@@ -408,8 +415,7 @@ Item {
 
     /// Whether a left press paints instead of panning.
     function paintArmed() {
-        return view.tool === "paint" && view.documentReady
-            && view.previewDraft === null && !view.spacePanning
+        return view.tool === "paint" && view.documentReady && !view.spacePanning
     }
 
     /// The three bytes for a `#rrggbb` colour. Core carries RGB, not a QML
@@ -728,6 +734,12 @@ Item {
         }
     }
 
+    /// The frame is the preview's input: a corner or an edge moving asks Core
+    /// for the straightened result through the debounce a typed crop side uses,
+    /// so a drag renders once per pause instead of once per pixel. The identity
+    /// asks for nothing — `requestDraft` refuses a frame that changes nothing.
+    onTransformCornersChanged: view.requestDraft()
+
     /// The quad that changes nothing: the document's own frame.
     function identityCorners() {
         return [[0, 0],
@@ -738,6 +750,110 @@ Item {
 
     function resetTransformCorners() {
         view.transformCorners = view.identityCorners()
+    }
+
+    /// The frame's rectangle in document pixels: `frame` mode keeps the four
+    /// corners on an axis-aligned box, so the box is the four of them read
+    /// back. Read through `min`/`max` rather than by index so a corner array
+    /// that came from anywhere but a frame drag still yields a box, not a
+    /// negative size.
+    function transformRect() {
+        var corners = view.transformCorners
+        if (!corners || corners.length !== 4) return null
+        var left = Math.min(corners[0][0], corners[3][0])
+        var top = Math.min(corners[0][1], corners[1][1])
+        var right = Math.max(corners[1][0], corners[2][0])
+        var bottom = Math.max(corners[2][1], corners[3][1])
+        return { x: left, y: top, width: right - left, height: bottom - top }
+    }
+
+    /// Write the frame from a rectangle in document pixels, clamped inside the
+    /// picture and never smaller than one pixel on either side, then rounded
+    /// the way a corner drag rounds — so a drag and a typed number agree to the
+    /// tenth of a pixel the command carries.
+    function setTransformFrame(x, y, width, height) {
+        var w = Math.min(Math.max(1, width), view.documentWidth)
+        var h = Math.min(Math.max(1, height), view.documentHeight)
+        var left = Math.max(0, Math.min(view.documentWidth - w, x))
+        var top = Math.max(0, Math.min(view.documentHeight - h, y))
+        function round(value) { return Math.round(value * 10) / 10 }
+        view.transformCorners = [[round(left), round(top)],
+                                 [round(left + w), round(top)],
+                                 [round(left + w), round(top + h)],
+                                 [round(left), round(top + h)]]
+    }
+
+    /// The frame's eight handles in the crop pad's own coordinates: `column`/
+    /// `row` 0 is the left/top side, 2 the right/bottom side, 1 the middle of
+    /// that axis. The first four are the corners (clockwise from the top left),
+    /// the last four the edges (from corner `i` to corner `i + 1`), so one drag
+    /// function serves all eight in `frame` mode.
+    readonly property var transformFrameHandles: [
+        { column: 0, row: 0 }, { column: 2, row: 0 },
+        { column: 2, row: 2 }, { column: 0, row: 2 },
+        { column: 1, row: 0 }, { column: 2, row: 1 },
+        { column: 1, row: 2 }, { column: 0, row: 1 }
+    ]
+
+    /// One frame handle's drag: the side under the pointer follows it, the side
+    /// across keeps its own place, and the frame stays a rectangle inside the
+    /// picture. This is the live resize a window border does, and the whole of
+    /// `frame` mode.
+    function dragFrameHandle(column, row, hostX, hostY) {
+        var rect = view.transformRect()
+        if (!rect) return
+        var pointerX = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(hostX)))
+        var pointerY = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(hostY)))
+        var x = rect.x
+        var y = rect.y
+        var width = rect.width
+        var height = rect.height
+        if (column === 0) {
+            var right = x + width
+            x = Math.min(pointerX, right - 1)
+            width = right - x
+        } else if (column === 2) {
+            width = Math.max(1, pointerX - x)
+        }
+        if (row === 0) {
+            var bottom = y + height
+            y = Math.min(pointerY, bottom - 1)
+            height = bottom - y
+        } else if (row === 2) {
+            height = Math.max(1, pointerY - y)
+        }
+        view.setTransformFrame(x, y, width, height)
+    }
+
+    /// Arm one of the tool's two modes. `perspective` is shut in this build, so
+    /// nothing on screen reaches it; the value is still accepted because the
+    /// option is a real one and the suite drives it through the property.
+    function setTransformMode(mode) {
+        if (mode !== "frame" && mode !== "perspective") return
+        view.transformMode = mode
+    }
+
+    /// A corner drag, routed by the mode: `frame` resizes the box with the
+    /// opposite corner anchored, `perspective` moves that one point.
+    function dragTransformCorner(index, hostX, hostY) {
+        if (view.transformMode === "perspective") {
+            view.setTransformCorner(index, hostX, hostY)
+            return
+        }
+        var handle = view.transformFrameHandles[index]
+        view.dragFrameHandle(handle.column, handle.row, hostX, hostY)
+    }
+
+    /// An edge drag, routed the same way: the frame's side follows the pointer
+    /// as a whole, and the quad's edge moves the two corners that form it by
+    /// the same offset.
+    function dragTransformEdge(index, hostX, hostY) {
+        if (view.transformMode === "perspective") {
+            view.moveTransformEdge(index, hostX, hostY)
+            return
+        }
+        var handle = view.transformFrameHandles[4 + index]
+        view.dragFrameHandle(handle.column, handle.row, hostX, hostY)
     }
 
     function cornerX(index) {
@@ -1705,22 +1821,16 @@ Item {
         view.setCropRect(x, y, width, height)
     }
 
-    /// The quad is drawn on the source picture. A transform draft is the
-    /// straightened result and fills the canvas, so the corners would describe
-    /// pixels that are no longer on screen — the same reason the crop frame
-    /// hides while its draft is shown.
+    /// The frame is drawn on the source picture and stays there: the straightened
+    /// result is previewed in the tool options (`transformPreview`), not over
+    /// the canvas, because the corners are the command and a picture drawn under
+    /// the pointer would be a picture you cannot aim at.
     readonly property bool transformFrameShown:
         view.tool === "transform" && view.documentReady
-        && view.previewDraft === null
         && view.transformCorners && view.transformCorners.length === 4
 
     readonly property bool cropFrameShown:
         view.tool === "crop" && view.documentReady
-        // A crop draft replaces the canvas with the cut result, so the
-        // rectangle would describe pixels that are no longer on screen. The
-        // frame is the source's rectangle; the draft is the answer. One at a
-        // time, and the toggle is the way between them.
-        && view.previewDraft === null
         && view.cropRect.width > 0 && view.cropRect.height > 0
 
     /// The eight frame handles. `column`/`row` are the same 0/1/2 edge
@@ -1923,14 +2033,14 @@ Item {
     }
 
     /// Ask Core to render the selected tool's draft without applying it. The
-    /// debounce keeps a typed width from spawning a render per key: the previous
-    /// draft stays on screen until the newest one lands. Crop no longer has a
-    /// draft: its panel is the rectangle, and the canvas draws that rectangle
-    /// directly. Transform still previews the straightened frame before Apply.
+    /// debounce keeps a drag from spawning a render per pixel: the previous
+    /// draft stays in the options until the newest one lands. Crop no longer has
+    /// a draft — its panel is the rectangle — and Transform's is always asked
+    /// for, because its preview is not an option (see `transformPreview`).
     function requestDraft() {
         draftDebounce.stop()
         if (!view.hasDocument) return
-        if (view.tool === "transform" && view.transformLivePreview
+        if (view.tool === "transform"
                 && view.transformUsable() && view.transformChanged()) {
             view.command({
                 type: "editor_transform_preview",
@@ -2112,18 +2222,24 @@ Item {
     readonly property real documentWidth: hasDocument ? editor.width : 0
     readonly property real documentHeight: hasDocument ? editor.height : 0
 
-    /// The live-preview draft the canvas should be showing, if any. It is
-    /// presentation gating on purpose: Core keeps the draft until an edit lands
-    /// or the document changes, and leaving the tool must hide it again without
-    /// another command. The draft's own `kind` is checked as well, so a switch
-    /// from Crop to Transform cannot paint the crop result for a frame. A resize
-    /// draft is not here at all: nothing in the window asks for one.
-    readonly property var previewDraft: {
+    /// The straightened result Core rendered for the frame on screen, shown in
+    /// the tool options. Live preview is not an option any more: the answer is
+    /// always drawn, because a frame whose result you have to ask for is a frame
+    /// you are aiming blind. It is a thumbnail rather than the canvas because
+    /// the corners are the command — drawing the result over the picture would
+    /// describe pixels that are no longer on screen.
+    ///
+    /// The gating is presentation-only: Core keeps the draft until an edit lands
+    /// or the document changes, so the tool being put down, a draft of another
+    /// kind, or a frame back on the identity all hide it here without sending a
+    /// command. A stale draft therefore cannot outlive the frame it answers.
+    readonly property var transformPreview: {
         if (!editor || !editor.previewDraft) return null
         var draft = editor.previewDraft
-        if (tool === "transform" && transformLivePreview
-                && draft.kind === "transform") return draft
-        return null
+        if (view.tool !== "transform") return null
+        if (draft.kind !== "transform") return null
+        if (!view.transformUsable() || !view.transformChanged()) return null
+        return draft
     }
     /// True while the Resize dialog is up. It is the Editor's own modal, not one
     /// the shell owns, so the canvas handlers read it directly: Qt delivers
@@ -2140,10 +2256,10 @@ Item {
         view.tool = "pointer"
         resizeDialog.open()
     }
-    /// What the canvas draws: the draft's target size while an edit is being
-    /// previewed, the document's own size otherwise.
-    readonly property real displayedWidth: previewDraft ? previewDraft.width : documentWidth
-    readonly property real displayedHeight: previewDraft ? previewDraft.height : documentHeight
+    /// What the canvas draws: the document's own size. No draft replaces the
+    /// picture any more — Transform's answer is in the tool options.
+    readonly property real displayedWidth: documentWidth
+    readonly property real displayedHeight: documentHeight
 
     // The document is drawn by a scaled `Image`, so a point in document pixels
     // sits `x * zoom` from the picture's visual corner. `Image.scale` grows
@@ -2716,7 +2832,7 @@ Item {
                         objectName: "toolTransform"
                         theme: view.theme
                         iconSource: "icons/transform.svg"
-                        tooltip: qsTr("Drag the corners onto the picture's edges to straighten it")
+                        tooltip: qsTr("Straighten the picture by dragging the frame's corners and edges")
                         active: view.tool === "transform"
                         enabled: view.documentReady
                         onClicked: view.tool = view.tool === "transform" ? "pointer" : "transform"
@@ -2892,11 +3008,9 @@ Item {
                 fillMode: Image.Stretch
                 asynchronous: false
                 cache: false
-                source: view.previewDraft
-                        ? "file://" + view.previewDraft.path
-                        : (view.editor && view.editor.previewPath
-                           ? "file://" + view.editor.previewPath
-                           : "")
+                source: view.editor && view.editor.previewPath
+                        ? "file://" + view.editor.previewPath
+                        : ""
                 opacity: view.rendering ? 0.65 : 1.0
                 Behavior on opacity {
                     NumberAnimation { duration: 120 }
@@ -3009,7 +3123,6 @@ Item {
                     // if they were the source's, and a new rectangle would be
                     // placed inside the preview instead of the picture.
                     visible: view.tool === "crop" && view.documentReady
-                             && view.previewDraft === null
                     enabled: visible
 
                     // The picture outside the rectangle is dimmed, the way a
@@ -3376,7 +3489,7 @@ Item {
                                 onPositionChanged: function(mouse) {
                                     if (!pressed) return
                                     var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                    view.setTransformCorner(index, point.x, point.y)
+                                    view.dragTransformCorner(index, point.x, point.y)
                                 }
                             }
                         }
@@ -3407,7 +3520,7 @@ Item {
                                 onPositionChanged: function(mouse) {
                                     if (!pressed) return
                                     var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                    view.moveTransformEdge(index, point.x, point.y)
+                                    view.dragTransformEdge(index, point.x, point.y)
                                 }
                             }
                         }
@@ -3424,7 +3537,6 @@ Item {
                     objectName: "paintOverlay"
                     anchors.fill: parent
                     visible: view.tool === "paint" && view.documentReady
-                             && view.previewDraft === null
                     enabled: visible && !view.spacePanning
 
                     Canvas {
@@ -4231,18 +4343,66 @@ Item {
                                 color: view.theme.border
                             }
 
-                            // Transform: the quad is the command, so there is
-                            // nothing to type. The four corners and four edges on
-                            // the canvas are the only controls; the panel names
-                            // what they do and offers the two buttons that matter.
+                            // Transform: the frame on the canvas is the
+                            // command, so there is nothing to type. The options
+                            // are how it is taken (one frame shape, one quad
+                            // shape that is not built yet) and the answer, which
+                            // is always drawn — never asked for.
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 visible: view.tool === "transform"
                                 spacing: 6
 
+                                // The two modes as one row: the armed one is
+                                // painted with the accent, like the active
+                                // segment of any segmented control. Perspective
+                                // is drawn and disabled rather than hidden —
+                                // an option that exists and cannot be armed is
+                                // information; one that is not there is a
+                                // question the window refuses to answer.
+                                RowLayout {
+                                    objectName: "transformModeSwitch"
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    PanelAction {
+                                        objectName: "transformModeFrame"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Frame")
+                                        primary: view.transformMode === "frame"
+                                        enabled: view.documentReady
+                                        onClicked: view.setTransformMode("frame")
+                                    }
+                                    PanelAction {
+                                        objectName: "transformModePerspective"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        // The quad would need layers, which the
+                                        // Editor does not have; the line under
+                                        // the row says so instead of leaving a
+                                        // dead button to guess at.
+                                        enabled: false
+                                        text: qsTr("Perspective")
+                                        primary: view.transformMode === "perspective"
+                                        onClicked: view.setTransformMode("perspective")
+                                    }
+                                }
+
                                 Label {
                                     Layout.fillWidth: true
-                                    text: qsTr("Drag a corner, or an edge, onto the picture's own corner to straighten it.")
+                                    objectName: "transformPerspectiveReason"
+                                    text: qsTr("Perspective puts the four sides on four planes, which needs layers; it stays off until the Editor has them.")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    objectName: "transformHint"
+                                    visible: view.transformMode === "frame"
+                                    text: qsTr("Drag a corner or an edge: the side across from it stays where it is.")
                                     color: view.theme.textMuted
                                     font.pixelSize: 11
                                     wrapMode: Text.WordWrap
@@ -4257,29 +4417,45 @@ Item {
                                     wrapMode: Text.WordWrap
                                 }
 
-                                Label {
+                                // The live preview: the straightened result
+                                // Core rendered for the frame on the canvas,
+                                // always drawn while there is one. A thumbnail
+                                // in the options, not the canvas, because the
+                                // corners are the command and stay draggable.
+                                ColumnLayout {
+                                    objectName: "transformPreview"
                                     Layout.fillWidth: true
-                                    visible: view.tool === "transform"
-                                    && view.previewDraft !== null
-                                    text: qsTr("Turn Live preview off to move the corners on the picture.")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
+                                    spacing: 4
+                                    visible: view.transformPreview !== null
 
-                                Button {
-                                    objectName: "transformLivePreviewButton"
-                                    Layout.fillWidth: true
-                                    enabled: view.documentReady
-                                    text: qsTr("Live preview")
-                                    checkable: true
-                                    checked: view.transformLivePreview
-                                    highlighted: checked
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: qsTr("Show the straightened image before applying it")
-                                    onToggled: {
-                                        view.transformLivePreview = checked
-                                        draftDebounce.restart()
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: qsTr("Live preview")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                    }
+
+                                    Rectangle {
+                                        objectName: "transformPreviewBox"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 104
+                                        radius: 4
+                                        color: view.theme.thumb
+                                        border.width: 1
+                                        border.color: view.theme.border
+                                        clip: true
+
+                                        Image {
+                                            objectName: "transformPreviewImage"
+                                            anchors.fill: parent
+                                            anchors.margins: 3
+                                            fillMode: Image.PreserveAspectFit
+                                            asynchronous: false
+                                            cache: false
+                                            source: view.transformPreview
+                                                    ? "file://" + view.transformPreview.path
+                                                    : ""
+                                        }
                                     }
                                 }
                             }
@@ -4363,7 +4539,6 @@ Item {
                                     type: "editor_transform",
                                     corners: view.transformCorners
                                 })
-                                view.transformLivePreview = false
                                 view.resetTransformCorners()
                             }
                         }

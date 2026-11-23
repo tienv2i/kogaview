@@ -953,11 +953,6 @@
       <translation>Biến đổi</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="2633" />
-      <source>Drag the corners onto the picture's edges to straighten it</source>
-      <translation>Kéo các góc vào đúng mép ảnh để làm thẳng ảnh</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="3480" />
       <location filename="../crates/desktop/qml/EditorView.qml" line="3604" />
       <source>Brush</source>
@@ -1040,29 +1035,39 @@
       <translation>Mẫu kích thước</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="4124" />
-      <source>Live preview</source>
-      <translation>Xem trước trực tiếp</translation>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="4366" />
+      <source>Frame</source>
+      <translation>Khung</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="4095" />
-      <source>Drag a corner, or an edge, onto the picture's own corner to straighten it.</source>
-      <translation>Kéo một góc, hoặc một cạnh, vào đúng góc của ảnh để làm thẳng ảnh.</translation>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="4380" />
+      <source>Perspective</source>
+      <translation>Phối cảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="4389" />
+      <source>Perspective puts the four sides on four planes, which needs layers; it stays off until the Editor has them.</source>
+      <translation>Phối cảnh đặt bốn cạnh lên bốn mặt phẳng, việc đó cần lớp; tạm tắt cho tới khi trình sửa ảnh có lớp.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="4399" />
+      <source>Drag a corner or an edge: the side across from it stays where it is.</source>
+      <translation>Kéo một góc hoặc một cạnh: cạnh đối diện đứng yên.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="2829" />
+      <source>Straighten the picture by dragging the frame's corners and edges</source>
+      <translation>Làm thẳng ảnh bằng cách kéo các góc và cạnh của khung</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="4427" />
+      <source>Live preview</source>
+      <translation>Xem trước trực tiếp</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="4104" />
       <source>The result keeps the document's size.</source>
       <translation>Kết quả giữ nguyên kích thước tài liệu.</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="4114" />
-      <source>Turn Live preview off to move the corners on the picture.</source>
-      <translation>Tắt Xem trước trực tiếp để di chuyển các góc trên ảnh.</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="4129" />
-      <source>Show the straightened image before applying it</source>
-      <translation>Xem trước ảnh đã làm thẳng trước khi áp dụng</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="4483" />

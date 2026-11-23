@@ -2429,6 +2429,72 @@ cache or selection protocol moved.
   **Not verified:** the glyphs' colours on the light theme; a folder of thousands
   of entries timed in the details shape.
 
+## Design decisions, a frame you resize and a preview you cannot turn off (row 113, ADR 0011)
+
+Transform was a keystone quad and a `Live preview` switch: every corner went
+wherever the pointer went, straightening a photograph of a page took four
+independent guesses, the result only appeared after pressing the switch, and the
+frame stepped aside while the draft was on the canvas — the thing being aimed at
+disappeared the moment the answer did. The owner asked for the drag a window
+border does and for the preview to be always live, and said the perspective quad
+belongs to layers. Two modes now, one of them built; the protocol is untouched.
+
+- **`transformMode`: `frame` (default) or `perspective`, and only one is
+  armable.** `frame` keeps the four corners on an axis-aligned box; a corner drag
+  pins the one across from it, an edge drag puts the whole side where the pointer
+  is and leaves the opposite side exactly where it was. Both write the same four
+  corners through `setTransformFrame`, which keeps the box inside the picture,
+  never under a pixel, and rounds to the tenth of a pixel the command carries.
+  `perspective` is row 82's quad, still in the code and in the suite, drawn
+  **disabled** with the reason under it: four sides on four planes is a layers
+  question the Editor has not answered. An option that exists and cannot be
+  armed is information; a missing one is a question the window refuses to answer.
+- **Live preview is not an option any more.** The button, `transformLivePreview`
+  and Apply's reset of it are gone. `onTransformCornersChanged` asks for the
+  draft through the 200 ms `draftDebounce` a typed crop side already used, and
+  `requestDraft` still refuses a frame equal to the document — the identity has
+  no answer to show.
+- **The answer is a thumbnail in the tool options, not the canvas.** This
+  supersedes row 82's "the overlay hides while its own draft is on the canvas"
+  for Transform. The corners are the command, so the picture under them has to
+  stay the source: `displayedWidth`/`displayedHeight` are the document's own size
+  and the canvas image is `editor.previewPath`, while `transformPreview` — gated
+  on the tool, on `kind: "transform"` and on a frame that actually moved — feeds
+  a 104 px box in the options. A stale draft, another tool's draft, or a frame
+  put back on the identity hides it without a command.
+- **The toggle's leftovers went with it.** The `previewDraft === null` gates on
+  the crop frame, the paint overlay and `paintArmed()` were dead — Crop's draft
+  left the UI in row 92 — and are removed, so nothing hides a frame for a draft
+  the canvas no longer draws.
+- **Two of the three editor cases are new.** `theTransformToolDragsCornersAndEdges`
+  now argues from the anchored frame (a corner drag moves one corner and the box
+  stays a box; an edge drag puts the side under the pointer while the opposite
+  side stays), `theTransformPreviewIsAlwaysDrawnBesideTheFrame` proves the
+  thumbnail appears with nothing armed and that the canvas is still the
+  document, and `thePerspectiveQuadIsKeptBehindItsMode` keeps row 82's quad
+  honest while no control can reach it. Editor 72 → 73.
+- **The suite was blind until the binding existed.** Every corner move changed
+  `transformCorners` and asked for nothing: the preview only ever appeared if
+  something else touched `draftDebounce`. `onTransformCornersChanged` is what
+  makes "always live" true; removing it fails both transform cases.
+- **Five mutations, each run and restored:** the corner drag routed to
+  `setTransformCorner`, the edge drag moving by a delta, the corners-changed
+  request removed, the preview box pinned `visible: true`, the perspective button
+  `enabled: true`.
+- **Evidence it runs:** the dev binary, isolated `XDG_*`, Vietnamese — the frame
+  at `[[140,90],[1254,90],[1254,1254],[140,1254]]` with the anchored sides on the
+  document's own edges and the thumbnail drawing the straightening
+  (`docs/evidence/M1-transform-frame-vi.png`), then Apply, the journal holding
+  `editor_transform_preview` → `editor_transform`, the document still
+  `1254 × 1254` and the frame back on its own corners
+  (`docs/evidence/M1-transform-applied-vi.png`). Both grabs were opened and read
+  before they were kept.
+- **Not built:** keystone correction from the window — the model, the command and
+  the maths are exactly row 82's, so the day layers land the mode is a switch
+  away. **Not verified:** no hand dragged a handle (the hook calls the same two
+  functions the canvas handles call), and there is no screenshot of an armed
+  perspective because nothing on screen can arm it.
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was
