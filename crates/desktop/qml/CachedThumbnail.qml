@@ -22,6 +22,9 @@ Image {
     property real fileSize: 0
     /// False for folders and for entries that are not images at all.
     property bool thumbnailable: true
+    /// False while the enclosing view is hidden: pauses new cache requests
+    /// while keeping already-resolved thumbnails warm for instant mode switching.
+    property bool active: true
 
     /// The url the cache answered with; empty while it is being produced.
     property string resolved: ""
@@ -46,7 +49,11 @@ Image {
         thumb.resolved = url !== "" ? url : thumb.fallbackSource;
     }
 
-    onCacheKeyChanged: {
+    function _resolveNow() {
+        if (!thumb.active) {
+            settle.stop();
+            return;
+        }
         if (thumb.cacheKey === "") {
             settle.stop();
             thumb.resolved = "";
@@ -62,6 +69,15 @@ Image {
         settle.restart();
     }
 
+    onCacheKeyChanged: thumb._resolveNow()
+    onActiveChanged: {
+        if (thumb.active && thumb.resolved === "" && thumb.cacheKey !== "") {
+            thumb._resolveNow();
+        } else if (!thumb.active) {
+            settle.stop();
+        }
+    }
+
     /// The key settles over several property assignments — the caller sets the
     /// path, then the version and size it came with, and the tile only gets its
     /// drawn size once it is laid out. Asking on the first change would ask once
@@ -71,7 +87,7 @@ Image {
         id: settle
         interval: 0
         onTriggered: {
-            if (thumb.cacheKey !== "") {
+            if (thumb.active && thumb.cacheKey !== "") {
                 book.request(thumb, path, edge, modified, fileSize);
             }
         }
@@ -81,9 +97,10 @@ Image {
     // Cached thumbnail URLs carry the (path, edge, modified, size) key in their
     // filename, so Qt's in-memory pixmap cache never serves stale pixels and
     // scrolling back over already-loaded rows stays instant instead of re-decoding.
+    // Thumbnails are already pre-scaled to their bucket size, so skip GPU mipmap
+    // chain generation to keep mode switches and scrolling stall-free.
     cache: true
     smooth: true
-    mipmap: true
     fillMode: Image.PreserveAspectFit
     opacity: status === Image.Ready ? 1.0 : 0.0
     Behavior on opacity { NumberAnimation { duration: 130; easing.type: Easing.OutQuad } }

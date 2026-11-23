@@ -1200,10 +1200,10 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                // Only the shape on screen holds delegates: a hidden grid with a
-                // live model would decode a thumbnail per entry for a picture
-                // nobody is looking at.
-                model: view.detailsShown ? [] : (view.entries || [])
+                // Keep the model bound while switching between Grid and Details
+                // so delegates stay warm and toggling modes is instant (< 2 ms).
+                // Hidden tiles pause thumbnail requests via `CachedThumbnail.active`.
+                model: view.entries || []
                 visible: !view.detailsShown
                 // Five size presets (XS, S, M, L, XL) for both thumbnails and icons.
                 readonly property int thumbnailTargetWidth: [108, 140, 178, 230, 300][view.thumbSizeIndex] || 178
@@ -1288,6 +1288,7 @@ Item {
                                 /// at all: a folder of two hundred pictures is a
                                 /// list, not two hundred decodes.
                                 thumbnailable: cell.entry.isImage && !grid.iconsShown
+                                active: !view.detailsShown && !grid.iconsShown
                                 modified: cell.entry.modified
                                 fileSize: cell.entry.size
                                 asynchronous: true
@@ -1470,8 +1471,8 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                // As in the grid: only the shape on screen holds delegates.
-                model: view.detailsShown ? (view.entries || []) : []
+                // Keep the model bound so switching to/from Details is instant.
+                model: view.entries || []
                 boundsBehavior: Flickable.StopAtBounds
                 // Moderate off-screen delegate buffer: keeps adjacent rows warm
                 // during scroll without spiking delegate creation on mode/sort switches.

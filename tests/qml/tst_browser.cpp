@@ -2707,7 +2707,6 @@ private slots:
     QVERIFY(!list->isVisible());
     QVERIFY(!header->isVisible());
     QTRY_COMPARE(grid->property("count").toInt(), 2);
-    QCOMPARE(list->property("count").toInt(), 0);
     const qreal thumbnailCell = grid->property("cellWidth").toReal();
     QVERIFY2(thumbnailCell > 100, "the thumbnail cell is not a tile");
     // The thumbnail shape is the one that asks the cache for a picture.
@@ -2764,15 +2763,17 @@ private slots:
                      QStringLiteral("iconName")).toString(),
              QStringLiteral("folder-symbolic"));
 
-    // Pressing `Details` moves the listing to the list shape: the grid empties
-    // and the header names the columns.
+    // Pressing `Details` shows the list shape while keeping grid delegates warm
+    // with thumbnail requests paused (`active == false`) for instant switching.
     click(m_browser, findItem(QStringLiteral("viewModeDetails")));
     QTRY_COMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("details"));
     settle();
     QVERIFY2(list->isVisible(), "the details list is not on screen");
     QVERIFY(header->isVisible());
     QVERIFY(!grid->isVisible());
-    QCOMPARE(grid->property("count").toInt(), 0);
+    QVERIFY(!findImage(findCell(QStringLiteral("/root/img.png")),
+                       QStringLiteral("gridThumbnail"))
+               ->property("active").toBool());
     QTRY_COMPARE(list->property("count").toInt(), 2);
     QCOMPARE(findItem(QStringLiteral("viewModeDetails"))->property("armed").toBool(), true);
     QCOMPARE(findItem(QStringLiteral("viewModeThumbnails"))->property("armed").toBool(), false);
@@ -2785,7 +2786,6 @@ private slots:
     settle();
     QVERIFY(grid->isVisible());
     QVERIFY(!list->isVisible());
-    QCOMPARE(list->property("count").toInt(), 0);
   }
 
   /// The details list says what a file manager's list says: the name, the kind
