@@ -80,14 +80,13 @@ WheelHandler {
             // gesture keeps up with a modern desktop list). Not quantized, so
             // it stays smooth.
             if (event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0) {
-                scroller.scrollBy(event.pixelDelta.x * 2, event.pixelDelta.y * 2);
+                scroller.scrollBy(event.pixelDelta.x * 1.2, event.pixelDelta.y * 1.2);
             }
             return;
         }
-        // Three row-sized steps per notch, so a physical mouse wheel moves a
-        // dense Browser grid at a usable pace. Touchpad pixel deltas take the
-        // continuous path above and are not multiplied by this.
-        var distance = notches * scroller.notchStep * 3;
+        // ~1.25 row-sized steps per mouse wheel notch for comfortable, controlled
+        // scrolling in Browser grids and lists.
+        var distance = notches * scroller.notchStep * 1.25;
         if (scroller.horizontal) {
             scroller.scrollBy(distance, 0);
         } else {
