@@ -1253,6 +1253,7 @@ Item {
                                             : (cellHover.hovered ? view.theme.hover : "transparent")
                         border.width: cell.selected ? 1 : 0
                         border.color: view.theme.accent
+                        Behavior on color { ColorAnimation { duration: 95; easing.type: Easing.OutQuad } }
                     }
 
                     Item {
@@ -1496,6 +1497,7 @@ Item {
                     color: selected ? view.theme.selection
                          : rowHover.hovered ? view.theme.hover
                          : "transparent"
+                    Behavior on color { ColorAnimation { duration: 95; easing.type: Easing.OutQuad } }
 
                     Rectangle {
                         anchors.bottom: parent.bottom

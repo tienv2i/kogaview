@@ -85,5 +85,7 @@ Image {
     smooth: true
     mipmap: true
     fillMode: Image.PreserveAspectFit
+    opacity: status === Image.Ready ? 1.0 : 0.0
+    Behavior on opacity { NumberAnimation { duration: 130; easing.type: Easing.OutQuad } }
     source: thumb.cached ? thumb.resolved : thumb.fallbackSource
 }

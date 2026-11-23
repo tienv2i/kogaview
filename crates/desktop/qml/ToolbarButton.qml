@@ -47,5 +47,6 @@ ToolButton {
              : (root.hovered ? root.theme.hover : "transparent")
         border.width: root.checked ? 1 : 0
         border.color: root.theme.accent
+        Behavior on color { ColorAnimation { duration: 110; easing.type: Easing.OutQuad } }
     }
 }

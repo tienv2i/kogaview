@@ -27,6 +27,7 @@ AbstractButton {
 
     background: Rectangle {
         radius: root.theme.radius
+        scale: root.down && root.enabled ? 0.97 : 1.0
         color: !root.enabled ? "transparent"
              : root.primary ? (root.hovered ? Qt.lighter(root.theme.accent, 1.1)
                                             : root.theme.accent)
@@ -36,6 +37,8 @@ AbstractButton {
         border.color: root.enabled ? (root.primary ? root.theme.accent : root.theme.border)
                                    : Qt.rgba(root.theme.border.r, root.theme.border.g,
                                              root.theme.border.b, 0.5)
+        Behavior on color { ColorAnimation { duration: 110; easing.type: Easing.OutQuad } }
+        Behavior on scale { NumberAnimation { duration: 80; easing.type: Easing.OutQuad } }
     }
 
     contentItem: Text {

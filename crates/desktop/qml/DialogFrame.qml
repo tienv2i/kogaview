@@ -32,6 +32,13 @@ import QtQuick.Layouts
 Dialog {
     id: frame
 
+    enter: Transition {
+        ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 120; easing.type: Easing.OutCubic }
+            NumberAnimation { property: "scale"; from: 0.97; to: 1.0; duration: 120; easing.type: Easing.OutCubic }
+        }
+    }
+
     property Theme theme: Theme {}
 
     /// Root of this frame's object names: `namePrefix + "Header"`, `"Content"`,

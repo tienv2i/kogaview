@@ -76,10 +76,13 @@ ToolButton {
 
     background: Rectangle {
         radius: root.theme.radius
+        scale: root.down ? 0.94 : 1.0
         color: root.active ? root.theme.selection
              : root.hovered ? root.theme.hover
              : "transparent"
         border.width: root.active ? 1 : 0
         border.color: root.theme.accent
+        Behavior on color { ColorAnimation { duration: 110; easing.type: Easing.OutQuad } }
+        Behavior on scale { NumberAnimation { duration: 80; easing.type: Easing.OutQuad } }
     }
 }

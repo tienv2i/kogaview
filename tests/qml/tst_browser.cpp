@@ -1516,6 +1516,9 @@ private slots:
 
     injectWheel(centreOf(grid), QPoint(0, -10), QPoint(0, -120));
     QTRY_VERIFY(grid->property("contentY").toReal() > 0);
+    // Allow the smooth inertial wheel glide (130 ms) to finish before sampling
+    // the settled position.
+    QTest::qWait(180);
     const qreal afterOne = grid->property("contentY").toReal();
     settle();
     QTRY_COMPARE_WITH_TIMEOUT(grid->property("contentY").toReal(), afterOne, 400);
