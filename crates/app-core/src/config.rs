@@ -280,6 +280,7 @@ mod tests {
             .with_panel("browser.explorer", false);
         config.layout.left_width = 321;
         config.layout.editor_reference_tab = "original".into();
+        config.layout.browser_view = "details".into();
         config.save(&path).unwrap();
         let (loaded, _) = Config::load_or_create(&path);
         assert!(!loaded.layout.panel("editor.history"));
@@ -287,6 +288,9 @@ mod tests {
         assert!(loaded.layout.panel("editor.info"));
         assert_eq!(loaded.layout.left_width, 321);
         assert_eq!(loaded.layout.editor_reference_tab, "original");
+        // The Browser's view mode is remembered too: a file manager that
+        // forgets how a folder was being shown re-asks every launch.
+        assert_eq!(loaded.layout.browser_view, "details");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -298,7 +302,7 @@ mod tests {
             &path,
             r#"{"layout":{"leftWidth":9,"rightWidth":4000,
                  "editorToolColumns":9,"editorReferenceHeight":99999,
-                 "editorReferenceTab":"nope",
+                 "editorReferenceTab":"nope","browserView":"gallery",
                  "panels":{"editor.tools":false,"not.a.panel":false}}}"#,
         )
         .unwrap();
@@ -308,6 +312,7 @@ mod tests {
         assert_eq!(config.layout.editor_tool_columns, 2);
         assert_eq!(config.layout.editor_reference_height, 900);
         assert_eq!(config.layout.editor_reference_tab, "info");
+        assert_eq!(config.layout.browser_view, "thumbnails");
         assert!(!config.layout.panel("editor.tools"));
         assert!(config.layout.panel("editor.options"));
         fs::remove_dir_all(dir).unwrap();

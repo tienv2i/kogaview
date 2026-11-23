@@ -153,4 +153,15 @@ QtObject {
         if (!seconds) return "—";
         return new Date(Number(seconds) * 1000).toLocaleString();
     }
+
+    /// A date for a table cell. `formatDate` draws the whole localised line —
+    /// weekday, zone and all — which needs the width of a panel; a list column
+    /// has a fixed one, and a date that ends in an ellipsis is not a date. So a
+    /// cell gets the locale's short date and the time, which fits at any size.
+    function formatDateShort(seconds) {
+        if (!seconds) return "—";
+        const date = new Date(Number(seconds) * 1000);
+        const locale = Qt.locale();
+        return date.toLocaleString(locale, locale.dateFormat(Locale.ShortFormat) + " HH:mm");
+    }
 }

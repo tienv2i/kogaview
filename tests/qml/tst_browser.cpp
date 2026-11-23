@@ -325,6 +325,14 @@ private:
     return nullptr;
   }
 
+  /// The words one column of a details row is drawing. The rows are the
+  /// delegates; each column is a `Label` inside them, named for its column.
+  QString rowText(QQuickItem* row, const QString& column) const
+  {
+    const QList<QQuickItem*> found = items(row, column);
+    return found.isEmpty() ? QString() : found.first()->property("text").toString();
+  }
+
   /// The first item with `objectName: name`, or nullptr.
   QQuickItem* findItem(const QString& name)
   {
@@ -517,7 +525,8 @@ private slots:
     for (const QString& key : {QStringLiteral("leftWidth"), QStringLiteral("rightWidth"),
                                QStringLiteral("editorToolColumns"),
                                QStringLiteral("editorReferenceHeight"),
-                               QStringLiteral("editorReferenceTab")}) {
+                               QStringLiteral("editorReferenceTab"),
+                               QStringLiteral("browserView")}) {
       if (changes.contains(key)) next.insert(key, changes.value(key));
     }
     QVariantMap panels = m_layout.value(QStringLiteral("panels")).toMap();
@@ -543,8 +552,20 @@ private slots:
     }
     m_layout = QVariantMap{{QStringLiteral("leftWidth"), 260},
                            {QStringLiteral("rightWidth"), 300},
+                           {QStringLiteral("browserView"), QStringLiteral("thumbnails")},
                            {QStringLiteral("panels"), panels}};
     browserItem()->setProperty("layout", m_layout);
+  }
+
+  /// Put the folder in a shape the way the switch does — one layout value, the
+  /// same one `set_layout` carries — and wait for the view to read it.
+  void showViewMode(const QString& mode)
+  {
+    QVariantMap patch;
+    patch.insert(QStringLiteral("browserView"), mode);
+    applyLayoutRequested(patch);
+    settle();
+    QCOMPARE(browserItem()->property("viewMode").toString(), mode);
   }
 
   void setPanelShown(const QString& key, bool visible)
@@ -2681,6 +2702,252 @@ private slots:
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
     }
+  }
+
+  // ------------------------------------------------------------- view modes
+
+  /// A folder is drawn three ways, the way a file manager draws it: large cells
+  /// with the picture decoded (`thumbnails`), small cells with the file type's
+  /// drawing (`icons`), or one line per entry under a named header (`details`).
+  /// The switch sits at the end of the path bar, and the choice is a layout
+  /// value — the button asks the shell for it, it does not write a QML variable
+  /// — so it is remembered across launches like a dock's width.
+  void theFolderHasThreeShapes()
+  {
+    QQuickItem* grid = findItem(QStringLiteral("fileGrid"));
+    QVERIFY(grid != nullptr);
+    QQuickItem* list = findItem(QStringLiteral("fileList"));
+    QVERIFY2(list != nullptr, "the details list does not exist");
+    QQuickItem* header = findItem(QStringLiteral("detailsHeader"));
+    QVERIFY2(header != nullptr, "the details header does not exist");
+
+    // A first launch rests on thumbnails, and the shapes that are not on screen
+    // hold no delegates: a hidden grid with a live model would decode a
+    // thumbnail per entry for a picture nobody is looking at.
+    QCOMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("thumbnails"));
+    QVERIFY2(grid->isVisible(), "the grid is not on screen in the default shape");
+    QVERIFY(!list->isVisible());
+    QVERIFY(!header->isVisible());
+    QTRY_COMPARE(grid->property("count").toInt(), 2);
+    QCOMPARE(list->property("count").toInt(), 0);
+    const qreal thumbnailCell = grid->property("cellWidth").toReal();
+    QVERIFY2(thumbnailCell > 100, "the thumbnail cell is not a tile");
+    // The thumbnail shape is the one that asks the cache for a picture.
+    QVERIFY(findImage(findCell(QStringLiteral("/root/img.png")),
+                      QStringLiteral("gridThumbnail"))
+              ->property("thumbnailable").toBool());
+
+    // The three buttons are in the path bar, in the order a file manager lists
+    // them, and the one that is showing is armed.
+    for (const char* name : { "viewModeThumbnails", "viewModeIcons", "viewModeDetails" }) {
+      QQuickItem* button = findItem(QString::fromLatin1(name));
+      QVERIFY2(button != nullptr, name);
+    }
+    QCOMPARE(findItem(QStringLiteral("viewModeThumbnails"))->property("armed").toBool(), true);
+    QCOMPARE(findItem(QStringLiteral("viewModeDetails"))->property("armed").toBool(), false);
+
+    // Pressing `Icons` is one layout request carrying the new value — the same
+    // patch a CLI's `set_layout` would carry — and Core's copy comes back.
+    QSignalSpy layouts(browserRoot(), SIGNAL(layoutRequested(QVariant)));
+    click(m_browser, findItem(QStringLiteral("viewModeIcons")));
+    QTRY_COMPARE(layouts.count(), 1);
+    QCOMPARE(layouts.at(0).at(0).toMap().value(QStringLiteral("browserView")).toString(),
+             QStringLiteral("icons"));
+    QTRY_COMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("icons"));
+    settle();
+
+    // The icon shape: still the grid, a smaller cell, and the file type's own
+    // drawing instead of a decoded picture.
+    QVERIFY(grid->isVisible());
+    QVERIFY(!list->isVisible());
+    const qreal iconCell = grid->property("cellWidth").toReal();
+    QVERIFY2(iconCell < thumbnailCell,
+             qPrintable(QStringLiteral("the icon cell is %1 px, the thumbnail cell %2 px")
+                          .arg(iconCell).arg(thumbnailCell)));
+    QTRY_COMPARE(grid->property("count").toInt(), 2);
+    QQuickItem* imageCell = findCell(QStringLiteral("/root/img.png"));
+    QVERIFY(imageCell != nullptr);
+    QQuickItem* thumb = findImage(imageCell, QStringLiteral("gridThumbnail"));
+    QVERIFY(thumb != nullptr);
+    QVERIFY2(!thumb->isVisible(), "the icon shape drew a picture");
+    // Not merely hidden: the tile asks for no thumbnail, so the cache is not
+    // asked to mint one for a drawing that will never show it.
+    QVERIFY2(!thumb->property("thumbnailable").toBool(),
+             "the icon shape still asks the cache for a thumbnail");
+    QQuickItem* icon = findImage(imageCell, QStringLiteral("gridIcon"));
+    QVERIFY2(icon != nullptr, "the cell draws no icon");
+    QVERIFY(icon->isVisible());
+    QCOMPARE(readQml(icon, QStringLiteral("iconName")).toString(),
+             QStringLiteral("image-x-generic-symbolic"));
+    // A folder keeps its own drawing in both shapes.
+    QQuickItem* folderCell = findCell(QStringLiteral("/root/dirA"));
+    QVERIFY(folderCell != nullptr);
+    QCOMPARE(readQml(findImage(folderCell, QStringLiteral("gridIcon")),
+                     QStringLiteral("iconName")).toString(),
+             QStringLiteral("folder-symbolic"));
+
+    // Pressing `Details` moves the listing to the list shape: the grid empties
+    // and the header names the columns.
+    click(m_browser, findItem(QStringLiteral("viewModeDetails")));
+    QTRY_COMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("details"));
+    settle();
+    QVERIFY2(list->isVisible(), "the details list is not on screen");
+    QVERIFY(header->isVisible());
+    QVERIFY(!grid->isVisible());
+    QCOMPARE(grid->property("count").toInt(), 0);
+    QTRY_COMPARE(list->property("count").toInt(), 2);
+    QCOMPARE(findItem(QStringLiteral("viewModeDetails"))->property("armed").toBool(), true);
+    QCOMPARE(findItem(QStringLiteral("viewModeThumbnails"))->property("armed").toBool(), false);
+    // The header sits above the list, not scrolling away with it.
+    QVERIFY(header->y() + header->height() <= list->y() + 1.0);
+
+    // And back: the shape is a value, not a one-way switch.
+    click(m_browser, findItem(QStringLiteral("viewModeThumbnails")));
+    QTRY_COMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("thumbnails"));
+    settle();
+    QVERIFY(grid->isVisible());
+    QVERIFY(!list->isVisible());
+    QCOMPARE(list->property("count").toInt(), 0);
+  }
+
+  /// The details list says what a file manager's list says: the name, the kind
+  /// of file, how big it is and when it changed — and the header names the four
+  /// columns in the same order and at the same x as the rows below it.
+  void theDetailsRowsNameTheFourColumns()
+  {
+    showViewMode(QStringLiteral("details"));
+
+    const QList<QPair<QString, QString>> columns = {
+      { QStringLiteral("detailsNameColumn"), QStringLiteral("Name") },
+      { QStringLiteral("detailsTypeColumn"), QStringLiteral("Type") },
+      { QStringLiteral("detailsSizeColumn"), QStringLiteral("Size") },
+      { QStringLiteral("detailsModifiedColumn"), QStringLiteral("Modified") },
+    };
+    for (const auto& column : columns) {
+      QQuickItem* label = findItem(column.first);
+      QVERIFY2(label != nullptr, qPrintable(column.first));
+      QCOMPARE(label->property("text").toString(), column.second);
+    }
+
+    // The rows: a folder first, then an image, in the listing's own order.
+    const QList<QQuickItem*> rows = items(browserItem(), QStringLiteral("fileRow"));
+    QTRY_COMPARE(rows.size(), 2);
+    QCOMPARE(rowText(rows.at(0), QStringLiteral("rowName")),
+             QStringLiteral("dirA"));
+    QCOMPARE(rowText(rows.at(0), QStringLiteral("rowType")),
+             QStringLiteral("Folder"));
+    // A folder has no size of its own to report.
+    QCOMPARE(rowText(rows.at(0), QStringLiteral("rowSize")), QStringLiteral("—"));
+    QCOMPARE(rowText(rows.at(1), QStringLiteral("rowName")),
+             QStringLiteral("img.png"));
+    // An image is named by its extension — the same token Core's `kind` carries.
+    QCOMPARE(rowText(rows.at(1), QStringLiteral("rowType")),
+             QStringLiteral(".png"));
+    QCOMPARE(rowText(rows.at(1), QStringLiteral("rowSize")),
+             QStringLiteral("4.0 KB"));
+    // The modification time is the theme's own formatting, in its short form —
+    // the same clock the Info panel reads, in the width a column has.
+    QObject* theme = browserItem()->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    QVariant date;
+    QVERIFY(QMetaObject::invokeMethod(theme, "formatDateShort", Q_RETURN_ARG(QVariant, date),
+                                      Q_ARG(QVariant, QVariant(1731000000))));
+    QCOMPARE(rowText(rows.at(1), QStringLiteral("rowModified")),
+             date.toString());
+    // ... and it fits: a fixed-width column is only a column if the date inside
+    // it is whole rather than an ellipsis.
+    QQuickItem* modified = items(rows.at(1), QStringLiteral("rowModified")).value(0);
+    QVERIFY(modified != nullptr);
+    QVERIFY2(modified->implicitWidth() <= modified->width() + 0.5,
+             qPrintable(QStringLiteral("the date needs %1 px in a %2 px column")
+                          .arg(modified->implicitWidth()).arg(modified->width())));
+
+    // Each row is a target: a click selects what it names, exactly as a cell
+    // does.
+    QSignalSpy commands(browserRoot(), SIGNAL(command(QVariant)));
+    click(m_browser, rows.at(1));
+    QTRY_COMPARE(commands.count(), 1);
+    const QVariantMap sent = commands.at(0).at(0).toMap();
+    QCOMPARE(sent.value(QStringLiteral("type")).toString(), QStringLiteral("select"));
+    QCOMPARE(sent.value(QStringLiteral("paths")).toStringList(),
+             QList<QString>{ QStringLiteral("/root/img.png") });
+
+    // ... and a double click opens it: the image goes to the Viewer. The click
+    // half of the gesture still selects, which is why the *last* command is the
+    // one that opens.
+    QSignalSpy opened(browserRoot(), SIGNAL(command(QVariant)));
+    click(m_browser, rows.at(1), true);
+    QTRY_VERIFY(opened.count() >= 1);
+    QCOMPARE(opened.last().at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("open_file"));
+    QCOMPARE(opened.last().at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QList<QString>{ QStringLiteral("/root/img.png") });
+  }
+
+  /// The keyboard walks the details list one line at a time, which is what
+  /// "a row step" means in a list of lines rather than a grid of tiles.
+  void theKeyboardWalksTheDetailsList()
+  {
+    showFourImages();
+    showViewMode(QStringLiteral("details"));
+    giveKeyboardFocus();
+
+    // One column of lines: Up and Down move one entry, not one grid row.
+    QCOMPARE(readQml(browserItem(), QStringLiteral("gridColumns()")).toInt(), 1);
+    QCOMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("details"));
+
+    QSignalSpy commands(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_Down);
+    QTRY_VERIFY(commands.count() >= 1);
+    QCOMPARE(commands.last().at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("select"));
+    QCOMPARE(commands.last().at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QList<QString>{ QStringLiteral("/root/pic0.png") });
+
+    QTest::keyClick(m_browser, Qt::Key_Down);
+    QTRY_VERIFY(commands.count() >= 2);
+    QCOMPARE(commands.last().at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QList<QString>{ QStringLiteral("/root/pic1.png") });
+
+    // End lands on the last line, Home on the first.
+    QTest::keyClick(m_browser, Qt::Key_End);
+    QTRY_VERIFY(commands.count() >= 3);
+    QCOMPARE(commands.last().at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QList<QString>{ QStringLiteral("/root/pic3.png") });
+    QTest::keyClick(m_browser, Qt::Key_Home);
+    QTRY_VERIFY(commands.count() >= 4);
+    QCOMPARE(commands.last().at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QList<QString>{ QStringLiteral("/root/pic0.png") });
+
+    // The cursor is visible in the list, not in the grid that is not showing.
+    QCOMPARE(findItem(QStringLiteral("fileList"))->property("currentIndex").toInt(), 0);
+  }
+
+  /// The shape is Core's value, so it comes back from `set_layout` — and a
+  /// value this build does not know reads as the default instead of a blank
+  /// listing.
+  void aSavedViewModeIsRestoredAndAnUnknownOneRests()
+  {
+    showViewMode(QStringLiteral("details"));
+    QVERIFY(findItem(QStringLiteral("fileList"))->isVisible());
+
+    // What a second launch does: the layout arrives with the value in it.
+    QVariantMap patch;
+    patch.insert(QStringLiteral("browserView"), QStringLiteral("icons"));
+    applyLayoutRequested(patch);
+    settle();
+    QCOMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("icons"));
+    QVERIFY(findItem(QStringLiteral("fileGrid"))->isVisible());
+    QVERIFY(!findItem(QStringLiteral("fileList"))->isVisible());
+
+    // A newer build's name for a shape this one cannot draw: the folder still
+    // opens, as thumbnails.
+    patch.insert(QStringLiteral("browserView"), QStringLiteral("gallery"));
+    applyLayoutRequested(patch);
+    settle();
+    QCOMPARE(browserItem()->property("viewMode").toString(), QStringLiteral("thumbnails"));
+    QVERIFY(findItem(QStringLiteral("fileGrid"))->isVisible());
+    QTRY_COMPARE(findItem(QStringLiteral("fileGrid"))->property("count").toInt(), 2);
   }
 };
 

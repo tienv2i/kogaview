@@ -379,6 +379,12 @@ pub const LAYOUT_PANEL_KEYS: [&str; 14] = [
 /// back to `info` when the layout is sanitized.
 pub const LAYOUT_REFERENCE_TABS: [&str; 3] = ["info", "history", "original"];
 
+/// How the Browser draws a folder: large cells with the picture decoded
+/// (`thumbnails`), small cells with the file type's icon (`icons`), or one line
+/// per entry with its type, size and modification time (`details`). An unknown
+/// value falls back to `thumbnails` when the layout is sanitized.
+pub const LAYOUT_VIEW_MODES: [&str; 3] = ["thumbnails", "icons", "details"];
+
 /// The persisted layout: which panels each workspace shows, how wide its docks
 /// are, and how the Editor splits its two halves.
 ///
@@ -403,6 +409,8 @@ pub struct LayoutState {
     pub editor_reference_height: u32,
     /// The open reference tab: one of `LAYOUT_REFERENCE_TABS`.
     pub editor_reference_tab: String,
+    /// How the Browser draws a folder: one of `LAYOUT_VIEW_MODES`.
+    pub browser_view: String,
 }
 
 impl Default for LayoutState {
@@ -417,6 +425,7 @@ impl Default for LayoutState {
             editor_tool_columns: 2,
             editor_reference_height: 0,
             editor_reference_tab: "info".to_owned(),
+            browser_view: "thumbnails".to_owned(),
         }
     }
 }
@@ -435,6 +444,9 @@ impl LayoutState {
         self.editor_reference_height = self.editor_reference_height.min(900);
         if !LAYOUT_REFERENCE_TABS.contains(&self.editor_reference_tab.as_str()) {
             self.editor_reference_tab = "info".to_owned();
+        }
+        if !LAYOUT_VIEW_MODES.contains(&self.browser_view.as_str()) {
+            self.browser_view = "thumbnails".to_owned();
         }
         let mut panels = BTreeMap::new();
         for key in LAYOUT_PANEL_KEYS {
@@ -1123,6 +1135,7 @@ mod tests {
             editor_tool_columns: 7,
             editor_reference_height: 9999,
             editor_reference_tab: "elsewhere".into(),
+            browser_view: "gallery".into(),
             ..LayoutState::default()
         }
         .sanitized();
@@ -1131,6 +1144,19 @@ mod tests {
         assert_eq!(wild.editor_tool_columns, 2);
         assert_eq!(wild.editor_reference_height, 900);
         assert_eq!(wild.editor_reference_tab, "info");
+        // The Browser's view mode is one of the three the window draws; a value
+        // from a newer build reads as the default rather than as a blank grid.
+        assert_eq!(wild.browser_view, "thumbnails");
+        // It travels in camelCase like every other layout field, so the window
+        // and the CLI name the same thing.
+        let json = serde_json::to_string(&Command::SetLayout {
+            layout: LayoutState {
+                browser_view: "details".into(),
+                ..LayoutState::default()
+            },
+        })
+        .unwrap();
+        assert!(json.contains("\"browserView\":\"details\""), "{json}");
 
         // An older config's booleans hide the dock they described.
         let legacy = LayoutState::from_legacy(Some(false), Some(true), Some(false), Some(false));

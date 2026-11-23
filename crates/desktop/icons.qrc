@@ -37,6 +37,9 @@
     <file alias="icons/preview.svg">qml/icons/preview.svg</file>
     <file alias="icons/original.svg">qml/icons/original.svg</file>
     <file alias="icons/batch.svg">qml/icons/batch.svg</file>
+    <file alias="icons/view-thumbnails.svg">qml/icons/view-thumbnails.svg</file>
+    <file alias="icons/view-icons.svg">qml/icons/view-icons.svg</file>
+    <file alias="icons/view-details.svg">qml/icons/view-details.svg</file>
     <file alias="icons/chevron.svg">qml/icons/chevron.svg</file>
   </qresource>
 </RCC>

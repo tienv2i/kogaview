@@ -558,7 +558,7 @@ fn a_saved_layout_is_clamped_written_and_published() {
         "layout-1",
         r#"{"type":"set_layout","layout":{"leftWidth":9000,"rightWidth":10,
              "editorToolColumns":3,"editorReferenceHeight":9999,
-             "editorReferenceTab":"history",
+             "editorReferenceTab":"history","browserView":"details",
              "panels":{"editor.history":false,"not.a.panel":false}}}"#,
     );
     assert_eq!(response["ok"], true, "{response}");
@@ -567,6 +567,7 @@ fn a_saved_layout_is_clamped_written_and_published() {
     assert_eq!(core.state.layout.editor_tool_columns, 2);
     assert_eq!(core.state.layout.editor_reference_height, 900);
     assert_eq!(core.state.layout.editor_reference_tab, "history");
+    assert_eq!(core.state.layout.browser_view, "details");
     assert!(!core.state.layout.panel("editor.history"));
     assert!(core.state.layout.panel("editor.info"));
 
@@ -575,6 +576,8 @@ fn a_saved_layout_is_clamped_written_and_published() {
     assert_eq!(reloaded.state.layout.left_width, 560);
     assert!(!reloaded.state.layout.panel("editor.history"));
     assert_eq!(reloaded.state.layout.editor_reference_tab, "history");
+    // The Browser's view mode survives the restart, like the tab does.
+    assert_eq!(reloaded.state.layout.browser_view, "details");
     // … and the legacy booleans are not the source any more.
     let text = std::fs::read_to_string(runtime.join("config.json")).unwrap();
     assert!(text.contains("\"layout\""), "{text}");

@@ -38,6 +38,7 @@
 #endif
 
 #include <algorithm>
+#include <functional>
 #include <cstdio>
 
 #include <kogaview_desktop/src/bridge.cxxqt.h>
@@ -519,6 +520,11 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     can be started on a multi-selection. It logs the command the form
   //     produced and the `batch` slot Core published, which is what the page
   //     draws.
+  //   KOGAVIEW_DEV_UI_REQUEST=browser-view      -> `_ARG` names how the folder
+  //     is drawn (`thumbnails`, `icons` or `details`) and the switch's own
+  //     button is `click()`ed, so the layout request the shell sends is the one
+  //     a press sends; without `_ARG` the request only reports the shape on
+  //     screen
   //   KOGAVIEW_DEV_UI_REQUEST=sidebar-dock     -> the Browser's or the Viewer's
   //     sidebar without a pointer: `_ARG` names a page (`preview`, `batch`,
   //     `info`), `_ARG2`/`_ARG5` are comma-separated lists of panels to
@@ -551,6 +557,49 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         qInfo().noquote() << "KogaView dev ui request settings"
                           << (opened ? "emitted" : "not supported")
                           << "section" << (chosen ? section : QStringLiteral("not set"));
+        return;
+      }
+      if (uiRequest == QLatin1String("browser-view")) {
+        // The switch, not a property write: the buttons are what a person
+        // presses, and the click runs the same handler that emits the layout
+        // request. The Browser is the shell's `browser` object (`BrowserView` is
+        // named for the workspace it draws, as the Viewer and the Editor are),
+        // and its `viewMode` is the shape on screen, so the log line reports what
+        // Core's layout says the folder is drawn as.
+        QObject* view = rootObject->findChild<QObject*>(QStringLiteral("browser"));
+        const QString mode = requestArg;
+        if (!mode.isEmpty() && view != nullptr) {
+          const QString button = QStringLiteral("viewMode") + mode.at(0).toUpper()
+                                 + mode.mid(1);
+          // The buttons are delegates of a `Repeater`: they are drawn as children
+          // of the row but carry no QObject parent, so `findChild` cannot see
+          // them and the item tree is walked instead.
+          std::function<QQuickItem*(QQuickItem*, const QString&)> locate =
+            [&locate](QQuickItem* from, const QString& name) -> QQuickItem* {
+              if (from == nullptr) {
+                return nullptr;
+              }
+              if (from->objectName() == name) {
+                return from;
+              }
+              for (QQuickItem* child : from->childItems()) {
+                if (QQuickItem* hit = locate(child, name)) {
+                  return hit;
+                }
+              }
+              return nullptr;
+            };
+          QQuickItem* target = locate(qobject_cast<QQuickItem*>(view), button);
+          const bool clicked = target != nullptr
+                               && QMetaObject::invokeMethod(target, "click");
+          qInfo().noquote() << "KogaView dev ui request browser-view clicked" << button
+                            << (clicked ? "ok" : "not clickable");
+        }
+        const QString shown = view != nullptr
+                              ? view->property("viewMode").toString() : QString();
+        qInfo().noquote() << "KogaView dev ui request browser-view"
+                          << (view != nullptr ? "found" : "not found")
+                          << "mode" << shown;
         return;
       }
       bool emitted = false;

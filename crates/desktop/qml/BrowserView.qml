@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 Item {
@@ -112,6 +113,74 @@ Item {
     /// within its own range, so a width dragged in the Editor cannot become a
     /// sliver here.
     readonly property real dockWidth: Math.max(200, Math.min(640, rightPanelWidth))
+
+    // ---------------------------------------------------------- view modes
+    //
+    // A folder can be shown three ways, as a file manager does it: large cells
+    // with the picture decoded (`thumbnails`), small cells with the file type's
+    // icon (`icons`), or one line per entry with its type, size and modification
+    // time (`details`). The choice is a layout value (`browserView`), not a QML
+    // variable, for the same reason a panel's visibility is: a file manager that
+    // forgets how you asked to see a folder asks again every launch. The view
+    // only reports the choice.
+    readonly property var viewModes: ["thumbnails", "icons", "details"]
+    readonly property string viewMode: {
+        var saved = "" + (view.layout.browserView || "")
+        return view.viewModes.indexOf(saved) >= 0 ? saved : "thumbnails"
+    }
+    readonly property bool detailsShown: view.viewMode === "details"
+    /// The three switch buttons, in the order a file manager draws them.
+    readonly property var viewModeEntries: [
+        { key: "thumbnails", label: qsTr("Thumbnails"), icon: "icons/view-thumbnails.svg" },
+        { key: "icons", label: qsTr("Icons"), icon: "icons/view-icons.svg" },
+        { key: "details", label: qsTr("Details"), icon: "icons/view-details.svg" }
+    ]
+    function setViewMode(mode) {
+        if (view.viewModes.indexOf(mode) < 0 || mode === view.viewMode) return
+        view.layoutRequested({ browserView: mode })
+    }
+    /// One line of the details list, and the height of its header row.
+    readonly property int detailsRowHeight: 30
+    /// The details columns that do not take the leftover width: type, size and
+    /// modification time. The header and the rows read the same numbers, so the
+    /// two cannot drift into a stair-step.
+    readonly property int detailsTypeWidth: 116
+    readonly property int detailsSizeWidth: 96
+    readonly property int detailsModifiedWidth: 136
+    /// The kind-of-file drawing that starts every row; the header leaves the
+    /// same gap so its columns sit above the rows' own.
+    readonly property int detailsIconWidth: 16
+
+    /// How many entries the shape on screen is showing, for the empty-folder
+    /// sentence: the grid counts cells, the details list counts lines.
+    readonly property int listedCount: view.detailsShown ? fileList.count : grid.count
+
+    /// The type column's words. A folder is a folder, a file is named by its
+    /// extension — the same token Core's `kind` carries (`.jpg`) — and a name
+    /// without one says so. Only the two words are translated: an extension is
+    /// the same in every language.
+    function entryKind(entry) {
+        if (!entry) return "—"
+        if (entry.isDir) return qsTr("Folder")
+        var name = "" + (entry.name || "")
+        var dot = name.lastIndexOf(".")
+        if (dot <= 0 || dot === name.length - 1) return qsTr("File")
+        return name.substring(dot).toLowerCase()
+    }
+
+    /// The list the keyboard and a click act on: the grid in the two grid
+    /// shapes, the details list in the third. Both have `currentIndex` and
+    /// `positionViewAtIndex`, which is the whole interface the helpers need.
+    readonly property var activeView: view.detailsShown ? fileList : grid
+    /// Move the cursor to `index` and bring it into view before the next state
+    /// snapshot arrives.
+    function revealIndex(index) {
+        var target = view.activeView
+        if (!target) return
+        target.currentIndex = index
+        target.positionViewAtIndex(index, view.detailsShown ? ListView.Contain
+                                                            : GridView.Contain)
+    }
 
     property var selectionInfo: view.state.selectionInfo || null
 
@@ -295,16 +364,15 @@ Item {
     }
 
     /// Move the keyboard cursor to `index` and select exactly that entry.
-    /// `grid.currentIndex` and `positionViewAtIndex` make the movement visible
-    /// before the next state snapshot arrives.
+    /// `revealIndex` makes the movement visible before the next state snapshot
+    /// arrives, in whichever of the three shapes is showing.
     function selectIndex(index) {
         var list = view.entries || [];
         if (list.length === 0) return;
         index = Math.max(0, Math.min(list.length - 1, index));
         view.keyboardCursor = index;
         view.selectionAnchor = index;
-        grid.currentIndex = index;
-        grid.positionViewAtIndex(index, GridView.Contain);
+        view.revealIndex(index);
         var selection = view.state.selection || [];
         if (selection.length === 1 && selection[0] === list[index].path) return;
         view.command({ type: "select", paths: [list[index].path] });
@@ -326,7 +394,7 @@ Item {
         }
         view.keyboardCursor = index;
         view.selectionAnchor = index;
-        grid.currentIndex = index;
+        view.activeView.currentIndex = index;
         if ((modifiers & Qt.ControlModifier) !== 0) {
             var at = selection.indexOf(path);
             if (at >= 0) {
@@ -337,7 +405,7 @@ Item {
             view.command({ type: "select", paths: selection });
             return;
         }
-        grid.positionViewAtIndex(index, GridView.Contain);
+        view.revealIndex(index);
         if (selection.length === 1 && selection[0] === path) return;
         view.command({ type: "select", paths: [path] });
     }
@@ -370,17 +438,21 @@ Item {
             if (list[step]) paths.push(list[step].path);
         }
         view.keyboardCursor = index;
-        grid.currentIndex = index;
-        grid.positionViewAtIndex(index, GridView.Contain);
+        view.revealIndex(index);
         view.command({ type: "select", paths: paths });
     }
 
-    /// How many cells fit in a row, so Up/Down move by a real row.
+    /// How many cells fit in a row, so Up/Down move by a real row. The details
+    /// list is one column of lines, so a row step is one entry there.
     function gridColumns() {
+        if (view.detailsShown) return 1;
         return Math.max(1, Math.floor(grid.width / Math.max(1, grid.cellWidth)));
     }
 
     function gridPageRows() {
+        if (view.detailsShown) {
+            return Math.max(1, Math.floor(fileList.height / view.detailsRowHeight));
+        }
         return Math.max(1, Math.floor(grid.height / Math.max(1, grid.cellHeight)));
     }
 
@@ -778,6 +850,68 @@ Item {
                         text: qsTr("Loading…")
                         color: view.theme.textMuted
                     }
+
+                    // How the folder is drawn, where a file manager puts it: at
+                    // the end of the path bar. The three buttons are the app's
+                    // own (the platform's `ToolButton` drew its icons with the
+                    // palette, and the drawings are this repository's), the
+                    // current one is armed, and each names itself for a reader
+                    // who cannot see the drawing.
+                    RowLayout {
+                        objectName: "viewModeSwitch"
+                        spacing: 2
+
+                        Repeater {
+                            model: view.viewModeEntries
+
+                            delegate: AbstractButton {
+                                id: modeButton
+
+                                required property var modelData
+
+                                objectName: "viewMode" + modelData.key.charAt(0).toUpperCase()
+                                            + modelData.key.slice(1)
+                                readonly property bool armed: view.viewMode === modelData.key
+
+                                implicitWidth: 30
+                                implicitHeight: 28
+                                padding: 0
+                                focusPolicy: Qt.NoFocus
+                                activeFocusOnTab: false
+                                hoverEnabled: true
+
+                                Accessible.name: modelData.label
+                                Accessible.role: Accessible.Button
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Show as %1").arg(modelData.label)
+
+                                onClicked: view.setViewMode(modelData.key)
+
+                                background: Rectangle {
+                                    radius: view.theme.radius
+                                    color: modeButton.armed ? view.theme.selection
+                                         : modeButton.hovered ? view.theme.hover
+                                         : "transparent"
+                                    border.width: modeButton.armed ? 1 : 0
+                                    border.color: view.theme.accent
+                                }
+
+                                contentItem: Item {
+                                    IconImage {
+                                        anchors.centerIn: parent
+                                        source: modelData.icon
+                                        sourceSize: Qt.size(32, 32)
+                                        width: 16
+                                        height: 16
+                                        fillMode: Image.PreserveAspectFit
+                                        color: modeButton.armed ? view.theme.accent
+                                             : modeButton.hovered ? view.theme.text
+                                             : view.theme.textMuted
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Menu {
@@ -803,9 +937,25 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                model: view.entries || []
-                cellWidth: Math.max(132, Math.floor(width / Math.max(1, Math.floor(width / 178))))
-                cellHeight: Math.round(cellWidth * 0.78) + 32
+                // Only the shape on screen holds delegates: a hidden grid with a
+                // live model would decode a thumbnail per entry for a picture
+                // nobody is looking at.
+                model: view.detailsShown ? [] : (view.entries || [])
+                visible: !view.detailsShown
+                // Two sizes, one grid. Thumbnails get the room a picture needs;
+                // icons are a folder's furniture, so a row of them fits in half
+                // the width.
+                readonly property int thumbnailCellWidth:
+                    Math.max(132, Math.floor(width / Math.max(1, Math.floor(width / 178))))
+                readonly property int iconCellWidth:
+                    Math.max(96, Math.floor(width / Math.max(1, Math.floor(width / 116))))
+                readonly property bool iconsShown: view.viewMode === "icons"
+                cellWidth: iconsShown ? iconCellWidth : thumbnailCellWidth
+                // An icon cell is a drawing and a name, not a picture and a
+                // caption, so it is shorter than it is wide: a row of them reads
+                // as a list of kinds rather than a wall of empty tiles.
+                cellHeight: iconsShown ? Math.round(iconCellWidth * 0.78)
+                                       : Math.round(cellWidth * 0.78) + 32
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 /// A notch moves exactly one row of cells, so the wheel keeps
@@ -839,15 +989,15 @@ Item {
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.top: parent.top
-                        anchors.leftMargin: 10
-                        anchors.rightMargin: 10
-                        anchors.topMargin: 10
-                        height: parent.height - 42
+                        anchors.leftMargin: grid.iconsShown ? 6 : 10
+                        anchors.rightMargin: grid.iconsShown ? 6 : 10
+                        anchors.topMargin: grid.iconsShown ? 6 : 10
+                        height: parent.height - (grid.iconsShown ? 32 : 42)
 
                         Rectangle {
                             anchors.fill: parent
                             radius: 4
-                            color: view.theme.thumb
+                            color: grid.iconsShown ? "transparent" : view.theme.thumb
                             clip: true
 
                             CachedThumbnail {
@@ -860,21 +1010,29 @@ Item {
                                 /// The size bucket is the cache key's size
                                 /// component: one per tile shape, not one per
                                 /// pixel width.
-                                thumbnailable: cell.entry.isImage
+                                ///
+                                /// The icon shape names the kind of file rather
+                                /// than showing it, so it asks for no thumbnail
+                                /// at all: a folder of two hundred pictures is a
+                                /// list, not two hundred decodes.
+                                thumbnailable: cell.entry.isImage && !grid.iconsShown
                                 modified: cell.entry.modified
                                 fileSize: cell.entry.size
                                 asynchronous: true
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize.width: Math.max(64, Math.ceil(thumbFrame.width * 2))
                                 sourceSize.height: Math.max(64, Math.ceil(thumbFrame.height * 2))
+                                visible: !grid.iconsShown
                             }
 
                             Icon {
-                                visible: entry.isDir || !entry.isImage
+                                objectName: "gridIcon"
+                                visible: grid.iconsShown || entry.isDir || !entry.isImage
                                 anchors.centerIn: parent
                                 iconName: entry.isDir ? "folder-symbolic"
-                                                      : "image-missing-symbolic"
-                                iconSize: 44
+                                                      : entry.isImage ? "image-x-generic-symbolic"
+                                                                      : "text-x-generic-symbolic"
+                                iconSize: grid.iconsShown ? 32 : 44
                                 iconColor: view.theme.textMuted
                             }
                         }
@@ -922,11 +1080,191 @@ Item {
                 }
             }
 
+            // The details shape: a header row naming the four columns, then one
+            // line per entry. The header does not scroll with the list — a
+            // column you cannot name once you are past the first screenful is a
+            // column you have to remember — and it reads the same column widths
+            // as every row.
+            Rectangle {
+                id: detailsHeader
+                objectName: "detailsHeader"
+                visible: view.detailsShown
+                Layout.fillWidth: true
+                Layout.preferredHeight: view.detailsRowHeight
+                color: view.theme.surfaceAlt
+                border.width: 1
+                border.color: view.theme.border
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 8
+
+                    // The rows start with a 16 px drawing; the header starts with
+                    // its width in blank, so `Tên` sits over the names.
+                    Item {
+                        Layout.preferredWidth: view.detailsIconWidth
+                        Layout.preferredHeight: 1
+                    }
+                    Label {
+                        objectName: "detailsNameColumn"
+                        Layout.fillWidth: true
+                        text: qsTr("Name")
+                        color: view.theme.textMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+                    Label {
+                        objectName: "detailsTypeColumn"
+                        Layout.preferredWidth: view.detailsTypeWidth
+                        text: qsTr("Type")
+                        color: view.theme.textMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+                    Label {
+                        objectName: "detailsSizeColumn"
+                        Layout.preferredWidth: view.detailsSizeWidth
+                        text: qsTr("Size")
+                        color: view.theme.textMuted
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
+                    }
+                    Label {
+                        objectName: "detailsModifiedColumn"
+                        Layout.preferredWidth: view.detailsModifiedWidth
+                        text: qsTr("Modified")
+                        color: view.theme.textMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+
+            ListView {
+                id: fileList
+                objectName: "fileList"
+                visible: view.detailsShown
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                // As in the grid: only the shape on screen holds delegates.
+                model: view.detailsShown ? (view.entries || []) : []
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                WheelScroll {
+                    view: fileList
+                    step: view.detailsRowHeight
+                }
+
+                delegate: Rectangle {
+                    id: fileRowRow
+                    objectName: "fileRow"
+                    width: fileList.width
+                    height: view.detailsRowHeight
+
+                    required property int index
+                    required property var modelData
+
+                    property var entry: modelData
+                    property bool selected: (view.state.selection || []).indexOf(entry.path) >= 0
+
+                    color: selected ? view.theme.selection
+                         : rowHover.hovered ? view.theme.hover
+                         : "transparent"
+
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: 1
+                        color: view.theme.border
+                        opacity: 0.4
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        spacing: 8
+
+                        // The kind of file, as the folder's own drawing: a
+                        // folder for a folder, the picture the format for an
+                        // image, a page for anything else.
+                        Icon {
+                            objectName: "rowIcon"
+                            Layout.preferredWidth: view.detailsIconWidth
+                            Layout.preferredHeight: view.detailsIconWidth
+                            iconName: fileRowRow.entry.isDir ? "folder-symbolic"
+                                    : fileRowRow.entry.isImage ? "image-x-generic-symbolic"
+                                                               : "text-x-generic-symbolic"
+                            iconSize: 16
+                            iconColor: view.theme.textMuted
+                        }
+                        Label {
+                            objectName: "rowName"
+                            Layout.fillWidth: true
+                            text: fileRowRow.entry.name
+                            color: view.theme.text
+                            font.pixelSize: 12
+                            elide: Text.ElideMiddle
+                        }
+                        Label {
+                            objectName: "rowType"
+                            Layout.preferredWidth: view.detailsTypeWidth
+                            text: view.entryKind(fileRowRow.entry)
+                            color: view.theme.textMuted
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            objectName: "rowSize"
+                            Layout.preferredWidth: view.detailsSizeWidth
+                            text: fileRowRow.entry.isDir ? "—"
+                                                        : view.theme.formatBytes(fileRowRow.entry.size)
+                            color: view.theme.textMuted
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            objectName: "rowModified"
+                            Layout.preferredWidth: view.detailsModifiedWidth
+                            text: view.theme.formatDateShort(fileRowRow.entry.modified)
+                            color: view.theme.textMuted
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    HoverHandler { id: rowHover }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: function(mouse) { view.clickIndex(index, mouse.modifiers) }
+                        onDoubleClicked: view.openEntry(fileRowRow.entry)
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onSingleTapped: {
+                            var selection = view.state.selection || [];
+                            if (selection.indexOf(fileRowRow.entry.path) < 0) {
+                                view.selectionAnchor = index;
+                                view.command({ type: "select", paths: [fileRowRow.entry.path] });
+                            }
+                            view.openFileMenu(fileRowRow.entry);
+                        }
+                    }
+                }
+            }
+
             Label {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.topMargin: 8
                 Layout.bottomMargin: 8
-                visible: grid.count === 0 && !view.state.busy
+                visible: view.listedCount === 0 && !view.state.busy
                 text: view.state.currentFolder
                       ? qsTr("This folder has no visible images or subfolders.")
                       : qsTr("Open a folder to start browsing your photos.")

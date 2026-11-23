@@ -128,6 +128,10 @@ ApplicationWindow {
                                    : source.editorReferenceHeight,
             editorReferenceTab: changes.editorReferenceTab !== undefined
                                 ? changes.editorReferenceTab : source.editorReferenceTab,
+            // How the Browser draws a folder: a layout value, so it is
+            // remembered across launches like a dock's width.
+            browserView: changes.browserView !== undefined
+                         ? changes.browserView : source.browserView,
             panels: {}
         }
         var panels = source.panels || ({})

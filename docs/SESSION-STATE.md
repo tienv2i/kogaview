@@ -2362,6 +2362,73 @@ rule, journal line or layout value changed.
   questions, no remembered dialog position (a written `x`/`y` still wins because
   the centring rule does not anchor), and Delete was not photographed.
 
+## Design decisions, a folder has three shapes (row 112, ADR 0027)
+
+The Browser drew a folder one way: a `GridView` of large cells, each a decoded
+thumbnail under its name. Right for picking a photo, wrong for the other three
+questions a file manager answers — what is in here, what kind of file is that,
+how big is it and when did it change. The owner asked for the modes a file
+explorer has. Three shapes now, one listing, one remembered value; no scan,
+cache or selection protocol moved.
+
+- **`thumbnails` | `icons` | `details`, and `viewMode` is the only switch.** The
+  grid keeps its large cell in the first, takes a smaller cell in the second and
+  draws the *kind* of file rather than the file (a folder for a folder, the image
+  glyph for an image, a page for anything else), and gives way to a `ListView` of
+  30 px lines in the third. Only the shape on screen holds delegates — a hidden
+  grid with a live model decodes a thumbnail per entry for a picture nobody is
+  looking at — and the icon shape asks the cache for nothing at all
+  (`thumbnailable: entry.isImage && !iconsShown`).
+- **The details list is a table with a fixed header.** `Name`, `Type`, `Size`,
+  `Modified` are read from the same `detailsTypeWidth`/`…Size…`/`…Modified…`
+  numbers as the rows, and the header does not scroll with the list. `Type` is
+  named the way Core names a file: `Folder`, or the extension (`.png` — the token
+  `kind` carries), or `File`. `Size` is `theme.formatBytes`, a folder showing
+  `—`. `Modified` is the new `theme.formatDateShort` — the locale's short date
+  and the time — because `formatDate` draws the whole localised line (weekday
+  and zone included) and a fixed column that ends in an ellipsis is not a date.
+- **The shape is Core's value, not a view preference.** `LayoutState` gained
+  `browser_view` (wire `browserView`, one of `LAYOUT_VIEW_MODES`, sanitized to
+  `thumbnails` when a build does not know the value). The switch emits
+  `layoutRequested({browserView: …})` → `set_layout`, exactly what a splitter
+  drag emits, so the choice is remembered across launches and a CLI can set it.
+  A file manager that forgets how you asked to see a folder asks again every
+  launch.
+- **The switch is in the path bar**, where a file manager puts it: three 30 × 28
+  app-drawn buttons (`viewModeThumbnails`/`…Icons`/`…Details`), the current one
+  armed in the accent, each with `Accessible.name` and `Show as <shape>` on hover,
+  over three new SVGs in `qml/icons/` registered in `icons.qrc`.
+- **One list the keyboard and a click act on.** The helpers used
+  `grid.currentIndex`/`grid.positionViewAtIndex` directly — a `GridView`
+  interface. They go through `activeView` and one `revealIndex()`, so `↑`/`↓`/
+  `Home`/`End`/type-ahead/`Ctrl`-range behave in all three shapes, and
+  `gridColumns()` answers `1` in the list, where a row step is one entry.
+- **Four cases in `tst_browser`** (63, from 59): the three buttons and their
+  armed state, the shapes that are not showing holding no delegates, the icon
+  shape asking for no thumbnail and drawing the folder's and the image's own
+  glyph, the three shapes switching both ways, the details rows' four columns,
+  their click and double-click, the date fitting its column
+  (`implicitWidth <= width`), the keyboard walking the list line by line, and an
+  unknown saved value resting on thumbnails rather than a blank listing.
+- **Five mutations, each run and restored:** `detailsShown` fixed at `false`,
+  `viewMode` answering `"thumbnails"` always, `gridColumns()` losing its list
+  case, `entryKind` losing the folder word, `detailsModifiedWidth` 136 → 60 px.
+- **A bug the suite could not see, found by a grab.** The `browser-view` hook
+  clicked the switch with `findChild`, which reaches nothing inside a `Repeater`
+  — a delegate is drawn but has no QObject parent. The log said "not clickable"
+  while the three buttons were plainly on screen; the hook walks the item tree
+  now. The first real grabs also showed two layout faults the suite now holds:
+  `Tên` sat 24 px right of the names (the header had no icon column) and the date
+  clipped to `20…` (152 px under `formatDate`'s full line).
+- **Evidence it runs:** the same 85-entry folder in all three shapes, on the
+  real dev binary with an isolated `XDG_*` and Vietnamese —
+  `docs/evidence/M1-browser-view-thumbnails-vi.png`,
+  `…-icons-vi.png`, `…-details-vi.png`. Each grab was opened and read before it
+  was kept.
+- **Not built:** no sorting by column, no per-folder mode, no column resizing.
+  **Not verified:** the glyphs' colours on the light theme; a folder of thousands
+  of entries timed in the details shape.
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was

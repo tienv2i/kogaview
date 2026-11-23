@@ -503,6 +503,56 @@
       <translation>Đang tải…</translation>
     </message>
     <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="134" />
+      <source>Thumbnails</source>
+      <translation>Ảnh thu nhỏ</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="135" />
+      <source>Icons</source>
+      <translation>Biểu tượng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="136" />
+      <source>Details</source>
+      <translation>Chi tiết</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="883" />
+      <source>Show as %1</source>
+      <translation>Hiện dạng %1</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="1097" />
+      <source>Name</source>
+      <translation>Tên</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="1104" />
+      <source>Type</source>
+      <translation>Loại</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="1111" />
+      <source>Size</source>
+      <translation>Dung lượng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="1119" />
+      <source>Modified</source>
+      <translation>Đã sửa lúc</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="161" />
+      <source>Folder</source>
+      <translation>Thư mục</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BrowserView.qml" line="164" />
+      <source>File</source>
+      <translation>Tệp</translation>
+    </message>
+    <message>
       <location filename="../crates/desktop/qml/BrowserView.qml" line="758" />
       <source>This folder has no visible images or subfolders.</source>
       <translation>Thư mục này không có ảnh hay thư mục con nào hiển thị.</translation>
