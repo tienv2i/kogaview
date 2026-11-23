@@ -36,7 +36,6 @@ DialogFrame {
     fitToContent: false
     preferredHeight: 520
 
-    property Theme theme: Theme {}
     property string initialTheme: "dark"
     property bool initialRemember: true
     property bool initialBackground: true
@@ -280,6 +279,21 @@ DialogFrame {
     function prepare() {
         dialog.saved = false
         dialog.section = "general"
+        // The form *is* the stored configuration on open, and it is written
+        // here rather than left to the controls' declarations: a `ComboBox`
+        // writes its own `currentIndex` when its model is re-evaluated, and the
+        // theme picker's model is `[Dark, Light]` — two translated strings — so
+        // the language landing after boot reset the picker to its first entry
+        // while the stored theme was light. `themeCode()` then answered `dark`,
+        // and simply opening Settings flipped the whole window to dark and drew
+        // a dark form around the desktop's light controls. Measured on the real
+        // window in light mode. `restoring` keeps the writes from emitting a
+        // preview of a form that has not been touched yet.
+        dialog.restoring = true
+        themeChoice.currentIndex = dialog.initialTheme === "light" ? 1 : 0
+        rememberChoice.checked = dialog.initialRemember
+        backgroundChoice.checked = dialog.initialBackground
+        dialog.restoring = false
         if (dialog.languageChoices && dialog.languageChoices.length > 0) {
             languageChoice.refresh(dialog.languageChoices, dialog.initialLanguage)
         }
@@ -354,11 +368,28 @@ DialogFrame {
                 Layout.fillWidth: true
 
                 ComboBox {
-                id: themeChoice
-                objectName: "settingsTheme"
-                model: [qsTr("Dark"), qsTr("Light")]
-                currentIndex: dialog.initialTheme === "light" ? 1 : 0
+                    id: themeChoice
+                    objectName: "settingsTheme"
                     Layout.preferredWidth: 220
+                    // The two entries are *values* — the labels are only what
+                    // they are called in the current interface language. The
+                    // model used to be `[qsTr("Dark"), qsTr("Light")]`, which
+                    // made the words the entries: any retranslation (the
+                    // language lands after boot, and the picker below changes
+                    // it) rebuilt the model, a `ComboBox` answers a rebuilt
+                    // model by going back to its first row, and the picker then
+                    // claimed Dark while the stored theme was Light. Measured on
+                    // the real window in light mode: opening Settings answered
+                    // `themeCode()` = dark and flipped the whole window dark.
+                    model: ["dark", "light"]
+                    currentIndex: dialog.initialTheme === "light" ? 1 : 0
+                    displayText: themeChoice.currentIndex === 1 ? qsTr("Light") : qsTr("Dark")
+                    delegate: ItemDelegate {
+                        required property int index
+                        width: themeChoice.width
+                        text: index === 1 ? qsTr("Light") : qsTr("Dark")
+                        highlighted: themeChoice.highlightedIndex === index
+                    }
                     // Preview as soon as it changes, not when it is saved.
                     onCurrentIndexChanged: if (dialog.visible) dialog.changed()
                 }
@@ -530,9 +561,10 @@ DialogFrame {
     }
 
     Label {
+        objectName: "settingsHint"
         text: qsTr("Changes are previewed as you make them. Apply saves them; OK saves and closes.")
         color: dialog.theme.textMuted
-        font.pixelSize: 11
+        font.pixelSize: 12
         wrapMode: Text.WordWrap
         Layout.fillWidth: true
     }

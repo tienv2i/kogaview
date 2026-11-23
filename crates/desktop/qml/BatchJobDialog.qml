@@ -28,7 +28,6 @@ DialogFrame {
     id: dialog
     namePrefix: "batch"
     preferredWidth: 600
-    property Theme theme: Theme {}
 
     /// `resize`, `crop` or `convert`. Each concrete dialog names its own, so
     /// this file draws the fields of one action and cannot be talked into

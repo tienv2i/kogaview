@@ -17,6 +17,8 @@
 #include <QDir>
 #include <QGuiApplication>
 #include <QFile>
+#include <QColor>
+#include <QQmlExpression>
 #include <QHash>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -73,6 +75,7 @@ private slots:
   void aFormTallerThanTheWindowScrolls();
   void aNarrowWindowNarrowsTheForm();
   void theCrossIsCancelInEveryForm();
+  void everyFormPaintsItsControlsInTheTheme();
   void cleanupTestCase();
 
 private:
@@ -194,6 +197,52 @@ void TestDialogs::clickItem(QQuickItem* target)
   const QPointF centre =
     target->mapToScene(QPointF(target->width() / 2, target->height() / 2));
   QTest::mouseClick(m_view, Qt::LeftButton, Qt::NoModifier, centre.toPoint());
+}
+
+/// A form is a popup, and a popup's content hangs off the window's overlay
+/// instead of off the window's own item tree — so it inherits neither the
+/// shell's palette (`Main.qml` writes one from `appTheme`) nor the app's ink.
+/// Every stock control a form still needs was therefore painted by the
+/// desktop's own palette: white boxes with near-black text on a dark form, and
+/// in light mode a dark form around light boxes. The frame writes the palette
+/// from its theme now, in both themes and for every form.
+void TestDialogs::everyFormPaintsItsControlsInTheTheme()
+{
+  for (const Form& entry : kForms) {
+    QObject* dialog = form(entry.prefix);
+    QVERIFY2(dialog != nullptr, qPrintable(entry.prefix));
+    QObject* theme = dialog->property("theme").value<QObject*>();
+    QVERIFY2(theme != nullptr, qPrintable(entry.prefix));
+    // A popup's palette is resolved when its content is built, so the form has
+    // to be on screen: a closed popup answers with the desktop's default.
+    openForm(entry.prefix);
+
+    for (const bool dark : { true, false }) {
+      theme->setProperty("dark", dark);
+      QTest::qWait(20);
+      const auto colour = [theme](const char* name) {
+        return theme->property(name).value<QColor>();
+      };
+      // Read through QML: a popup's palette is the one its content resolves, and
+      // that is the value a stock control inside the form ends up drawing with.
+      const auto paletteColour = [dialog](const char* role) {
+        QQmlExpression probe(QQmlEngine::contextForObject(dialog), dialog,
+                             QStringLiteral("String(palette.%1)").arg(QLatin1String(role)));
+        return QColor(probe.evaluate().toString());
+      };
+      QCOMPARE(paletteColour("window"), colour("surface"));
+      QCOMPARE(paletteColour("windowText"), colour("text"));
+      QCOMPARE(paletteColour("text"), colour("text"));
+      QCOMPARE(paletteColour("base"), colour("thumb"));
+      QCOMPARE(paletteColour("buttonText"), colour("text"));
+      QCOMPARE(paletteColour("highlight"), colour("accent"));
+      QCOMPARE(paletteColour("highlightedText"), colour("accentText"));
+      QCOMPARE(paletteColour("placeholderText"), colour("textMuted"));
+    }
+    theme->setProperty("dark", true);
+    QTest::qWait(20);
+    closeForm(entry.prefix);
+  }
 }
 
 /// One title bar: 52 px, the form's own title, and a × at the same distance

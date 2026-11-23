@@ -2495,6 +2495,78 @@ belongs to layers. Two modes now, one of them built; the protocol is untouched.
   functions the canvas handles call), and there is no screenshot of an armed
   perspective because nothing on screen can arm it.
 
+## Design decisions, a form's controls wear the theme (row 114, ADR 0026 revision)
+
+The light theme was reported broken in the words "có lỗi chế độ light mode, màu
+text, màu dialog không cân xứng". It was three faults wearing one symptom, and
+two of them were not colours at all.
+
+- **A dialog is a popup, so its palette is nobody's.** A `Popup`'s content is
+  parented to the window's *overlay*, not to the window's item tree, so it
+  inherits neither the palette `Main.qml` writes from `appTheme` nor the app's
+  ink. Every stock control a form still needs — a `ComboBox`, a field, a slider —
+  was painted by the desktop's own palette: near-black text on white boxes in the
+  dark form, and in light mode a dark form around the desktop's light boxes.
+  `DialogFrame` writes the palette from its theme now (window, windowText, base,
+  alternateBase, text, button, buttonText, highlight, highlightedText,
+  placeholderText, toolTip*, mid/dark/light/shadow).
+- **`palette` is a grouped property, so the palette is a function.** A binding on
+  `palette.*` is evaluated once and never again when the theme under it changes —
+  measured: with the binding in place the form stayed dark after the theme turned
+  light. `applyPalette()` runs from `Component.onCompleted`, from
+  `Theme.onDarkChanged` (Settings switches the theme while its own form is open)
+  and again from `onAboutToShow`, so a theme changed while the form was shut is
+  not worn by the next open.
+- **A form's `theme` is the frame's single property.** `SettingsDialog.qml` and
+  `BatchJobDialog.qml` each declared a second `property Theme theme: Theme {}` on
+  top of the frame's, so the form resolved its own `Theme {}` (dark by default)
+  while the shell's `theme: appTheme` binding went to the other one. The duplicate
+  is deleted; a form that needs the theme reads `dialog.theme`.
+- **A translated label is not a value.** The theme picker's model was
+  `[qsTr("Dark"), qsTr("Light")]`, which makes the *words* the entries: the
+  interface language lands after boot, the model is rebuilt, and a `ComboBox`
+  answers a rebuilt model by going back to its first row. The picker then claimed
+  Dark while the stored theme was Light, `themeCode()` answered `dark`, and
+  simply opening Settings threw the whole window into the dark theme. The model is
+  `["dark", "light"]` with a translated `displayText` and delegate; `prepare()`
+  also writes the form from `initialTheme` under a `restoring` guard, so the
+  opening state is the stored one whatever the controls were left holding.
+- **A prose line keeps a line box that fits its language.** The hint under the
+  form was 11 px, and at that size the box was shorter than the Vietnamese marks:
+  every accented word had its top and bottom bitten off — `Thay đổi được xem
+  trước…` lost the hook of `ổ` and the dot of `ụ`. 12 px is the smallest size in
+  this window that leaves them whole, and `theHintLineLeavesRoomForItsDiacritics`
+  pins it.
+- **Two cases, both mutation-checked:** `tst_dialogs`'s
+  `everyFormPaintsItsControlsInTheTheme` opens every form in both themes and reads
+  the eight palette roles through a QML `QQmlExpression` (a closed popup answers
+  with the desktop's default, so the form has to be open); `tst_settings`'s
+  `theThemePickerOpensOnTheStoredTheme` puts the picker back on row 0 with
+  `initialTheme` light, opens the form and asserts index 1, `themeCode()` = light
+  and *no* preview. Palettes 0 → 11 cases, settings 21 → 23.
+- **The probe named the cause after two wrong guesses.** A dev-hook
+  `QQmlExpression` printed `theme.dark true`, `String(theme)` the *same object* as
+  `appTheme`, `state.theme light` and `previewTheme dark` — the dialog was not
+  wearing a stray theme, the *stored* theme was being previewed away — and a
+  `console.log` in `emitPreview` then showed `index 1 → preview light`
+  immediately followed by `index 0 → preview dark` after `languageChoice.refresh`.
+- **Three mutations, each run and restored:** the palette write replaced by
+  `return` (`paletteColour("window")` = `#ffefefef`, the desktop's default, not
+  the theme's surface); the `prepare()` write deleted (the picker stays on row 0);
+  the hint back to 11 px.
+- **Evidence it runs:** the dev binary, isolated `XDG_*`, Vietnamese, a
+  `config.json` holding `{"theme":"light"}` — the window boots light and stays
+  light when Settings opens, the form light with `Sáng` in the picker, dark ink on
+  the light surface, the two combos matching the form, the accent on `OK` only,
+  and the hint line whole down to the hook of `ổ` (`docs/evidence/
+  M1-light-settings-vi.png`), plus the Editor in the same theme with Transform
+  armed (`M1-light-transform-vi.png`).
+- **Not verified:** only two of the six forms were grabbed in light mode
+  (Settings and the Editor's canvas); the platform style's own metrics (a
+  `ComboBox`'s popup, a slider's groove) are untouched by the palette, so only
+  colours are proven; and the 12 px floor was judged on this desktop's font at
+  this DPI, not measured against another font.
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was

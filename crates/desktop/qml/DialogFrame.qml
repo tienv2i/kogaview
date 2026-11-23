@@ -132,8 +132,52 @@ Dialog {
     onAboutToShow: {
         moved = false
         centreInParent()
+        // The palette is written again on every opening: a theme switched while
+        // the form was shut must not be worn by the next open.
+        frame.applyPalette()
         frame.prepare()
     }
+
+    // A dialog is a popup, and a popup's content is parented to the window's
+    // overlay instead of to the window's own item tree, so it inherits neither
+    // the shell's palette (`Main.qml` writes one from `appTheme`) nor the app's
+    // ink. Without this the stock controls a form still needs — a `ComboBox`, a
+    // field, a slider — were painted by the desktop's palette: white boxes with
+    // near-black text on the dark form, and in light mode a dark form under
+    // light boxes, which is what "the dialog and its text do not match" looked
+    // like on the real window. Measured in both themes.
+    //
+    // It is a function rather than a binding on purpose. `palette` is a grouped
+    // property, and a grouped binding here is evaluated once and never again
+    // when the theme under it changes — measured: with the binding in place the
+    // palette stayed dark while the theme turned light, and Settings switches
+    // the theme *while this form is open*.
+    function applyPalette() {
+        palette.window = frame.theme.surface
+        palette.windowText = frame.theme.text
+        palette.base = frame.theme.thumb
+        palette.alternateBase = frame.theme.surfaceAlt
+        palette.text = frame.theme.text
+        palette.button = frame.theme.surfaceAlt
+        palette.buttonText = frame.theme.text
+        palette.highlight = frame.theme.accent
+        palette.highlightedText = frame.theme.accentText
+        palette.placeholderText = frame.theme.textMuted
+        palette.toolTipBase = frame.theme.surfaceAlt
+        palette.toolTipText = frame.theme.text
+        palette.mid = frame.theme.border
+        palette.dark = frame.theme.border
+        palette.light = frame.theme.surface
+        palette.shadow = frame.theme.border
+    }
+
+    /// The theme's own switch: `Theme.dark` is the one value every colour is
+    /// derived from, and it is the one a live preview flips first.
+    Connections {
+        target: frame.theme
+        function onDarkChanged() { frame.applyPalette() }
+    }
+    Component.onCompleted: frame.applyPalette()
 
     background: Rectangle {
         color: frame.theme.surface

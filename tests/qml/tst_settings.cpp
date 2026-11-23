@@ -18,6 +18,7 @@
 // did that with injected mouse/wheel/key events, see docs/M1-REPORT.md).
 
 #include <QColor>
+#include <QFont>
 #include <QFile>
 #include <QGuiApplication>
 #include <QPointingDevice>
@@ -61,6 +62,8 @@ private slots:
   void defaultsRestoreTheBuiltInValuesWithoutSaving();
   void everyChangePreviewsImmediately();
   void cancelUndoesThePreview();
+  void theThemePickerOpensOnTheStoredTheme();
+  void theHintLineLeavesRoomForItsDiacritics();
   void theCloseButtonStillClicksThroughTheDragHandler();
   void theShellSuspendsTheWorkspaceWhileAModalDialogIsOpen();
   void theShellBindsTheCopyKeysItsMenusName();
@@ -455,6 +458,60 @@ void TestSettings::everyChangePreviewsImmediately()
   QCOMPARE(previewed.count(), 2);
   QCOMPARE(previewed.last().at(1).toBool(), !initialRemember);
   QCOMPARE(saved.count(), 0);
+}
+
+/// The form opens on what is stored, whatever the controls happen to hold. A
+/// `ComboBox` writes its own `currentIndex` when its model is re-evaluated, and
+/// the theme picker's model is two translated strings — the interface language
+/// lands after boot, so the picker was left on `Dark` while the stored theme was
+/// light. `themeCode()` then answered `dark`, and simply opening Settings
+/// flipped the whole window to dark, around a dark form and the desktop's light
+/// controls. Measured on the real window in light mode.
+/// The line under the form is prose, not a caption. At 11 px its line box was
+/// shorter than the Vietnamese marks: every accented word had its top and its
+/// bottom bitten off — measured on the real window, `Thay đổi được xem trước…`
+/// lost the hook of `ổ` and the dot of `ụ`. It is 12 px now, the smallest size
+/// in this window that leaves the marks whole, so the size is pinned rather than
+/// left to the next tidy-up.
+void TestSettings::theHintLineLeavesRoomForItsDiacritics()
+{
+  openDialog();
+  QQuickItem* hint = item("settingsHint");
+  QVERIFY2(hint != nullptr, "the form has no hint line");
+  const QFont font = hint->property("font").value<QFont>();
+  QVERIFY2(font.pixelSize() >= 12,
+           qPrintable(QStringLiteral("the hint line is %1 px, which clips the marks")
+                        .arg(font.pixelSize())));
+}
+
+void TestSettings::theThemePickerOpensOnTheStoredTheme()
+{
+  // The popup's content is built on the first open, so the picker has to be
+  // fetched once before the form can be put back the way boot leaves it.
+  openDialog();
+  QQuickItem* themeChoice = item("settingsTheme");
+  QVERIFY(themeChoice != nullptr);
+  m_dialog->setProperty("visible", false);
+  QTest::qWait(20);
+  QVERIFY(!dialogVisible());
+
+  m_dialog->setProperty("initialTheme", QStringLiteral("light"));
+  // What the control's own model reset does to the picker: the wrong entry,
+  // silently, with no change event to correct it.
+  themeChoice->setProperty("currentIndex", 0);
+  QTest::qWait(20);
+
+  QSignalSpy previewed(m_dialog, SIGNAL(previewRequested(QString, bool, bool, QString)));
+  openDialog();
+
+  QCOMPARE(themeChoice->property("currentIndex").toInt(), 1);
+  QQmlExpression code(QQmlEngine::contextForObject(m_dialog), m_dialog,
+                      QStringLiteral("themeCode()"));
+  QCOMPARE(code.evaluate().toString(), QStringLiteral("light"));
+  // Opening a form is not a change: nothing is previewed before the user
+  // touches it, so the window keeps the theme it had.
+  QCOMPARE(previewed.count(), 0);
+  m_dialog->setProperty("initialTheme", QStringLiteral("dark"));
 }
 
 /// Cancel puts the preview back the way the dialog found it: the form and the

@@ -157,3 +157,52 @@ no word in them comes from `qtbase_<locale>.qm`.
 - **Not built:** no dialog-level scroll keyboard handling beyond the form's
   fields, no form-level validation display beyond what each form already had, and
   the two yes/no questions still have no icon.
+
+## Revision — a form's controls wear the theme too (2026-11-23)
+
+The frame unified the chrome and left the *controls* to the platform, and the
+light theme found it: the owner reported that text and dialog colours do not
+match ("có lỗi chế độ light mode, màu text, màu dialog không cân xứng"). Two
+faults and one knock-on, all measured on the real window in light mode.
+
+- **A dialog is a popup, so its palette is nobody's.** A popup's content is
+  parented to the window's overlay, not to the window's item tree, so it
+  inherits neither the palette `Main.qml` writes from `appTheme` nor the app's
+  ink. Every stock control a form still needs — a `ComboBox`, a field, a slider —
+  was painted by the desktop's palette: near-black text on white boxes inside the
+  dark form, and in light mode a dark form around the desktop's light boxes.
+  `DialogFrame` writes the palette from its theme now (window, windowText, base,
+  alternateBase, text, button, buttonText, highlight, highlightedText,
+  placeholderText, toolTip*, mid/dark/light/shadow).
+- **`palette` is a grouped property, so the palette is a function, not a
+  binding.** A binding on `palette.*` is evaluated once and never again when the
+  theme under it changes — measured: with the binding in place the form stayed
+  dark while the theme turned light. `applyPalette()` runs from
+  `Component.onCompleted`, from `Theme.onDarkChanged` (Settings switches the
+  theme while its own form is open) and again from `onAboutToShow`, so a theme
+  changed while the form was shut is not worn by the next open.
+- **A form's `theme` is the frame's single property.** `SettingsDialog.qml` and
+  `BatchJobDialog.qml` declared a second `property Theme theme: Theme {}` on top
+  of the frame's, so the form resolved its own `Theme {}` (dark, by default)
+  while the shell's `theme: appTheme` binding went to the other one. The
+  duplicate is deleted; a form that needs the theme reads `dialog.theme`.
+- **A translated label is not a value.** Settings' theme picker was
+  `model: [qsTr("Dark"), qsTr("Light")]`, which makes the words the entries:
+  the interface language lands after boot, the model is rebuilt, and a `ComboBox`
+  answers a rebuilt model by going back to its first row. The picker then claimed
+  Dark while the stored theme was Light, `themeCode()` answered `dark`, and
+  simply opening Settings threw the whole window into the dark theme around a
+  dark form. The model is `["dark", "light"]` with a translated `displayText` and
+  delegate; `prepare()` also writes the form from `initialTheme` so the opening
+  state is the stored one, whatever the controls were left holding.
+- **A prose line keeps a line box that fits its language.** The hint under the
+  form was 11 px, and at that size the box was shorter than the Vietnamese marks:
+  every accented word had its top and its bottom bitten off — `Thay đổi được xem
+  trước…` lost the hook of `ổ` and the dot of `ụ`, measured on the real window.
+  12 px is the smallest size in this window that leaves them whole.
+- **Consequences.** The frame now owns the ink of everything inside it, so a new
+  form gets readable controls by not doing anything. A stock control's own
+  metrics (a `ComboBox`'s popup height, a slider's groove) still come from the
+  platform style — only the colours are ours. `tst_dialogs` asserts the palette
+  in both themes for every form, `tst_settings` asserts the picker opens on the
+  stored theme and that the hint line is at least 12 px.
