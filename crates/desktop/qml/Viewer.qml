@@ -200,8 +200,13 @@ Item {
         view.layoutRequested(patch)
     }
 
-    /// Toggle the right-side Color & Light panel directly from the toolbar.
-    function toggleColorAdjustPanel() {
+    /// Toggle Color & Light: in Standard mode opens the RightDock Color tab;
+    /// in Simple / Compact / Fullscreen opens the floating Color popover.
+    function toggleColorAdjustPanel(anchor) {
+        if (!view.standardChrome) {
+            viewerColorPopover.toggleNear(anchor || view, "top")
+            return
+        }
         if (!view.infoPanelVisible) {
             view.viewerRightTab = "adjust"
             view.setPanelVisible("info", true)
@@ -1133,7 +1138,36 @@ Item {
             onTriggered: view.toggleFlipV()
             MenuShortcut { text: "V" }
         }
+        MenuItem {
+            text: qsTr("Reset view")
+            icon.name: "view-refresh-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.resetView()
+        }
         MenuSeparator {}
+        MenuItem {
+            text: qsTr("Color & light")
+            icon.source: "icons/adjust.svg"
+            checkable: true
+            checked: view.standardChrome
+                     ? (view.infoPanelVisible && view.viewerRightTab === "adjust")
+                     : (viewerColorPopover.visible || viewerAdjustPanel.changed)
+            onTriggered: view.toggleColorAdjustPanel(view._overflowAnchor)
+        }
+        MenuItem {
+            text: qsTr("Viewer mode & layout")
+            icon.source: "icons/viewer-mode.svg"
+            onTriggered: viewerModePopup.toggleBelow(view._overflowAnchor || view)
+            MenuShortcut { text: "M" }
+        }
+        MenuItem {
+            text: qsTr("Fullscreen")
+            icon.source: view.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
+            checkable: true
+            checked: view.fullscreen
+            onTriggered: view.toggleFullscreen()
+            MenuShortcut { text: "F11" }
+        }
         MenuItem {
             text: view.theme.menuEntries[32]
             icon.name: "view-list-symbolic"
@@ -1142,7 +1176,17 @@ Item {
             onTriggered: view.command({ type: "toggle_filmstrip" })
             MenuShortcut { text: "T" }
         }
+        MenuItem {
+            text: qsTr("Canvas background")
+            onTriggered: {
+                viewerBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
+                viewerBgPopup.colour = view.canvasBgColor
+                viewerBgPopup.showBelow(view._overflowAnchor || view)
+            }
+        }
     }
+
+    property Item _overflowAnchor: null
 
     Connections {
         target: view
@@ -1255,12 +1299,14 @@ Item {
                 objectName: "viewerColorAdjustButton"
                 theme: view.theme
                 visible: !view.miniToolbar
-                checked: view.infoPanelVisible && view.viewerRightTab === "adjust"
+                checked: view.standardChrome
+                         ? (view.infoPanelVisible && view.viewerRightTab === "adjust")
+                         : (viewerColorPopover.visible || viewerAdjustPanel.changed)
                 icon.source: "icons/adjust.svg"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Color & light")
-                onClicked: view.toggleColorAdjustPanel()
+                onClicked: view.toggleColorAdjustPanel(this)
             }
             ToolbarButton {
                 objectName: "viewerUiModeButton"
@@ -1337,7 +1383,10 @@ Item {
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("More viewer actions")
-                onClicked: viewerOverflow.toggleFrom(this)
+                onClicked: {
+                    view._overflowAnchor = this
+                    viewerOverflow.toggleFrom(this)
+                }
             }
         }
     }

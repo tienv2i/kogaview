@@ -1428,10 +1428,10 @@ private slots:
       const int rows = menu->property("count").toInt();
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
-      // Zoom in/out, actual size, rotate left/right, flip horizontal/vertical
-      // and the filmstrip, with two separators. The dock is no longer a
-      // toolbar action: panel visibility lives in the burger menu.
-      QCOMPARE(rows, 10);
+      // Zoom in/out, actual size, rotate left/right, flip horizontal/vertical,
+      // reset view, color & light, viewer mode & layout, fullscreen, filmstrip,
+      // and canvas background, with two separators.
+      QCOMPARE(rows, 15);
     }
     m_viewer->setProperty("miniToolbar", false);
   }
@@ -1540,7 +1540,7 @@ private slots:
     m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("panels"), panels}});
     QCoreApplication::processEvents();
 
-    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel"));
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel", Q_ARG(QVariant, QVariant())));
     QCOMPARE(m_viewer->property("viewerRightTab").toString(), QStringLiteral("adjust"));
     QCOMPARE(layoutSpy.count(), 1);
   }
