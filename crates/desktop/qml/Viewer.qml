@@ -1192,7 +1192,7 @@ Item {
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("More viewer actions")
-                onClicked: viewerOverflow.popup(this)
+                onClicked: viewerOverflow.toggleFrom(this)
             }
         }
     }

@@ -17,6 +17,42 @@ Menu {
 
     property Theme theme: Theme {}
 
+    /// Configurable guard window (ms) that prevents a click on the menu's
+    /// trigger button from closing on press (`CloseOnPressOutside`) and
+    /// immediately reopening on release (`onClicked`).
+    property int toggleGuardMs: 250
+    /// The button that last opened this menu via `toggleFrom()`.
+    property Item _toggleAnchor: null
+    /// Timestamp (ms) of the last dismissal while the pointer was over
+    /// `_toggleAnchor`, used to suppress immediate reopen on the same click.
+    property double _dismissedAtMs: 0
+    /// Distinguishes an explicit `close()` from `toggleFrom()` itself so the
+    /// next click opens immediately without waiting for `toggleGuardMs`.
+    property bool _selfClosed: false
+
+    /// Toggle the menu from its trigger button: 1st click opens, 2nd click
+    /// closes, never stuck open (press-outside + release-reopen) or stuck
+    /// closed (stale guard flag).
+    function toggleFrom(anchorItem) {
+        if (menu.visible) {
+            menu._selfClosed = true
+            menu.close()
+            return
+        }
+        var now = Date.now()
+        if (menu._dismissedAtMs > 0 && (now - menu._dismissedAtMs) < menu.toggleGuardMs) {
+            menu._dismissedAtMs = 0
+            return
+        }
+        menu._dismissedAtMs = 0
+        menu._toggleAnchor = anchorItem || null
+        if (anchorItem) {
+            menu.popup(anchorItem, 0, anchorItem.height)
+        } else {
+            menu.popup()
+        }
+    }
+
     function applyTheme() {
         palette.window = menu.theme.surface
         palette.windowText = menu.theme.text
@@ -51,4 +87,16 @@ Menu {
 
     Component.onCompleted: menu.applyTheme()
     onAboutToShow: menu.applyTheme()
+    onClosed: {
+        if (menu._selfClosed) {
+            menu._selfClosed = false
+            menu._dismissedAtMs = 0
+            return
+        }
+        if (!menu._toggleAnchor || menu._toggleAnchor.hovered === true) {
+            menu._dismissedAtMs = Date.now()
+        } else {
+            menu._dismissedAtMs = 0
+        }
+    }
 }

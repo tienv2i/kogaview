@@ -1084,7 +1084,7 @@ ApplicationWindow {
                 text: qsTr("Menu")
                 ToolTip.visible: hovered && !useText
                 ToolTip.text: qsTr("Main menu")
-                onClicked: mainMenu.popup()
+                onClicked: mainMenu.toggleFrom(this)
             }
         }
     }

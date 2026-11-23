@@ -50,6 +50,24 @@ Popup {
     // A click outside or Escape leaves the background as it was. It is a list,
     // not a form: there is nothing to cancel.
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    property int toggleGuardMs: 250
+    property Item _toggleAnchor: null
+    property double _dismissedAtMs: 0
+    property bool _selfClosed: false
+
+    onClosed: {
+        if (popup._selfClosed) {
+            popup._selfClosed = false
+            popup._dismissedAtMs = 0
+            return
+        }
+        if (!popup._toggleAnchor || popup._toggleAnchor.hovered === true) {
+            popup._dismissedAtMs = Date.now()
+        } else {
+            popup._dismissedAtMs = 0
+        }
+    }
+
     background: Rectangle {
         color: popup.theme.surface
         border.width: 1
@@ -57,12 +75,25 @@ Popup {
         radius: 6
     }
 
-    /// Open under `anchor` — a swatch in the rail, in the Crop panel or in the
-    /// Resize form — clamped to the space its parent has. The popup keeps the
-    /// parent it was declared in, so a list opened from a modal form is a child
-    /// of that form and not something the form's own modality blocks.
+    /// Toggle under `anchor` — a swatch in the rail, in the Crop panel or in the
+    /// Resize form — clamped to the space its parent has. Clicking the same
+    /// swatch a second time closes the popup cleanly without reopening.
     function showBelow(anchor) {
         if (!anchor) return
+        if (popup.visible && popup._toggleAnchor === anchor) {
+            popup._selfClosed = true
+            popup.close()
+            return
+        }
+        var now = Date.now()
+        if (popup._dismissedAtMs > 0
+                && popup._toggleAnchor === anchor
+                && (now - popup._dismissedAtMs) < popup.toggleGuardMs) {
+            popup._dismissedAtMs = 0
+            return
+        }
+        popup._dismissedAtMs = 0
+        popup._toggleAnchor = anchor
         var space = popup.parent
         var origin = anchor.mapToItem(space, 0, 0)
         popup.x = Math.round(origin.x)

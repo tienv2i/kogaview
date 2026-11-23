@@ -2763,7 +2763,7 @@ Item {
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("More editor actions")
-                onClicked: editorOverflow.popup(this)
+                onClicked: editorOverflow.toggleFrom(this)
             }
         }
     }

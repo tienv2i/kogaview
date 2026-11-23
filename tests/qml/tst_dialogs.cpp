@@ -594,6 +594,30 @@ void TestDialogs::everyMenuAppliesTheActiveTheme()
   QCOMPARE(itemIconColour(0), theme->property("textMuted").value<QColor>());
   QCOMPARE(itemIconColour(1), theme->property("text").value<QColor>());
 
+  // Toggle logic: 1st call opens, 2nd call closes, and a CloseOnPressOutside
+  // dismissal over the trigger button suppresses immediate reopen on release
+  // without getting stuck closed on the following click.
+  QVERIFY(!menu->property("visible").toBool());
+  QVERIFY(QMetaObject::invokeMethod(menu, "toggleFrom", Q_ARG(QVariant, QVariant())));
+  QTRY_VERIFY(menu->property("visible").toBool());
+  QVERIFY(QMetaObject::invokeMethod(menu, "toggleFrom", Q_ARG(QVariant, QVariant())));
+  QTRY_VERIFY(!menu->property("visible").toBool());
+
+  // Reopen immediately after self-close (must not be stuck closed).
+  QVERIFY(QMetaObject::invokeMethod(menu, "toggleFrom", Q_ARG(QVariant, QVariant())));
+  QTRY_VERIFY(menu->property("visible").toBool());
+  // Simulate CloseOnPressOutside closing the menu right before release fires toggleFrom().
+  QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+  QTRY_VERIFY(!menu->property("visible").toBool());
+  QVERIFY(QMetaObject::invokeMethod(menu, "toggleFrom", Q_ARG(QVariant, QVariant())));
+  QTest::qWait(20);
+  QVERIFY(!menu->property("visible").toBool());
+  // The next click after the suppressed release must open immediately.
+  QVERIFY(QMetaObject::invokeMethod(menu, "toggleFrom", Q_ARG(QVariant, QVariant())));
+  QTRY_VERIFY(menu->property("visible").toBool());
+  QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+  QTRY_VERIFY(!menu->property("visible").toBool());
+
   delete menu;
 
   // Source guard: every menu outside `AppMenu.qml` must use `AppMenu`, never a

@@ -860,7 +860,7 @@ Item {
                         activeFocusOnTab: false
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Hidden parent folders")
-                        onClicked: hiddenMenu.popup()
+                        onClicked: hiddenMenu.toggleFrom(this)
                     }
 
                     Label {
@@ -922,11 +922,7 @@ Item {
                         hoverEnabled: true
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Sort files")
-                        onClicked: {
-                            sortPopup.x = Math.max(6, Math.min(crumbBar.width - sortPopup.width - 6, sortButton.x))
-                            sortPopup.y = crumbBar.height + 2
-                            sortPopup.open()
-                        }
+                        onClicked: sortPopup.toggleFrom()
 
                         background: Rectangle {
                             radius: view.theme.radius
@@ -1080,6 +1076,40 @@ Item {
                     padding: 6
                     width: 190
                     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                    property int toggleGuardMs: 250
+                    property double _dismissedAtMs: 0
+                    property bool _selfClosed: false
+
+                    function toggleFrom() {
+                        if (sortPopup.visible) {
+                            sortPopup._selfClosed = true
+                            sortPopup.close()
+                            return
+                        }
+                        var now = Date.now()
+                        if (sortPopup._dismissedAtMs > 0
+                                && (now - sortPopup._dismissedAtMs) < sortPopup.toggleGuardMs) {
+                            sortPopup._dismissedAtMs = 0
+                            return
+                        }
+                        sortPopup._dismissedAtMs = 0
+                        sortPopup.x = Math.max(6, Math.min(crumbBar.width - sortPopup.width - 6, sortButton.x))
+                        sortPopup.y = crumbBar.height + 2
+                        sortPopup.open()
+                    }
+
+                    onClosed: {
+                        if (sortPopup._selfClosed) {
+                            sortPopup._selfClosed = false
+                            sortPopup._dismissedAtMs = 0
+                            return
+                        }
+                        if (sortButton.hovered) {
+                            sortPopup._dismissedAtMs = Date.now()
+                        } else {
+                            sortPopup._dismissedAtMs = 0
+                        }
+                    }
 
                     background: Rectangle {
                         radius: view.theme.radius
@@ -2017,7 +2047,7 @@ Item {
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("More browser actions")
-                onClicked: browserOverflow.popup(this)
+                onClicked: browserOverflow.toggleFrom(this)
             }
         }
     }
