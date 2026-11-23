@@ -82,6 +82,8 @@ Image {
     // filename, so Qt's in-memory pixmap cache never serves stale pixels and
     // scrolling back over already-loaded rows stays instant instead of re-decoding.
     cache: true
+    smooth: true
+    mipmap: true
     fillMode: Image.PreserveAspectFit
     source: thumb.cached ? thumb.resolved : thumb.fallbackSource
 }

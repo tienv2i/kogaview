@@ -507,6 +507,8 @@ Item {
                                 : ""
                         asynchronous: true
                         cache: false
+                        smooth: view.state.antiAliasing !== false
+                        mipmap: view.state.antiAliasing !== false
                         fillMode: Image.PreserveAspectFit
                         // Presentation-only light & colour preview (never saved).
                         layer.enabled: viewerAdjustPanel.changed

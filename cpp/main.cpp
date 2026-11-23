@@ -25,7 +25,10 @@
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QShortcutEvent>
+#include <QStandardPaths>
+#include <QSurfaceFormat>
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
@@ -2187,10 +2190,57 @@ public:
     return false;
   }
 };
+struct StartupGraphicsConfig
+{
+  bool hardwareAcceleration = true;
+  bool antiAliasing = true;
+};
+
+StartupGraphicsConfig readStartupGraphicsConfig()
+{
+  StartupGraphicsConfig cfg;
+  const QString xdg = qEnvironmentVariable("XDG_CONFIG_HOME");
+  const QString base =
+    xdg.isEmpty() ? (QDir::homePath() + QStringLiteral("/.config")) : xdg;
+  const QString profileEnv = qEnvironmentVariable("KOGAVIEW_PROFILE").trimmed().toLower();
+#ifdef KOGAVIEW_DEV_HARNESS
+  const bool devProfile = (profileEnv != QLatin1String("prod"));
+#else
+  const bool devProfile = (profileEnv == QLatin1String("dev"));
+#endif
+  const QString dirName =
+    devProfile ? QStringLiteral("kogaview-dev") : QStringLiteral("kogaview");
+  QFile file(base + QLatin1Char('/') + dirName + QStringLiteral("/config.json"));
+  if (!file.open(QIODevice::ReadOnly)) {
+    return cfg;
+  }
+  const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+  if (!doc.isObject()) {
+    return cfg;
+  }
+  const QJsonObject obj = doc.object();
+  if (obj.contains(QStringLiteral("hardware_acceleration"))) {
+    cfg.hardwareAcceleration = obj.value(QStringLiteral("hardware_acceleration")).toBool(true);
+  }
+  if (obj.contains(QStringLiteral("anti_aliasing"))) {
+    cfg.antiAliasing = obj.value(QStringLiteral("anti_aliasing")).toBool(true);
+  }
+  return cfg;
+}
 } // namespace
 
 int main(int argc, char* argv[])
 {
+  const StartupGraphicsConfig graphicsCfg = readStartupGraphicsConfig();
+  if (!graphicsCfg.hardwareAcceleration) {
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+  } else if (graphicsCfg.antiAliasing) {
+    QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+    format.setSamples(4);
+    format.setSwapInterval(1);
+    QSurfaceFormat::setDefaultFormat(format);
+  }
+
   QGuiApplication app(argc, argv);
 
   // On KDE Plasma 6, KDEPlasmaPlatformTheme6 forces `org.kde.breeze`, whose

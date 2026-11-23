@@ -167,6 +167,8 @@ pub struct UiState {
     /// published so the dialog opens on what is stored, not on a default.
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,
+    pub hardware_acceleration: bool,
+    pub anti_aliasing: bool,
     pub viewer_images: Vec<String>,
     pub viewer_index: Option<usize>,
     pub viewer_path: Option<String>,
@@ -201,6 +203,8 @@ impl UiState {
         filmstrip: bool,
         remember_last_folder: bool,
         background_thumbnails: bool,
+        hardware_acceleration: bool,
+        anti_aliasing: bool,
         config_path: String,
     ) -> Self {
         Self {
@@ -220,6 +224,8 @@ impl UiState {
             filmstrip,
             remember_last_folder,
             background_thumbnails,
+            hardware_acceleration,
+            anti_aliasing,
             viewer_images: Vec::new(),
             viewer_index: None,
             viewer_path: None,
@@ -265,6 +271,8 @@ impl UiState {
             filmstrip: self.filmstrip,
             remember_last_folder: self.remember_last_folder,
             background_thumbnails: self.background_thumbnails,
+            hardware_acceleration: self.hardware_acceleration,
+            anti_aliasing: self.anti_aliasing,
             viewer_index: self.viewer_index,
             viewer_path: &self.viewer_path,
             viewer_modified: self.viewer_modified,
@@ -316,6 +324,8 @@ pub struct StateMeta<'a> {
     pub filmstrip: bool,
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,
+    pub hardware_acceleration: bool,
+    pub anti_aliasing: bool,
     pub viewer_index: Option<usize>,
     pub viewer_path: &'a Option<String>,
     /// The bytes behind `viewer_path`; see `UiState::viewer_modified`.

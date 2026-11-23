@@ -1972,6 +1972,26 @@
       <source>Generate thumbnails in the background</source>
       <translation>Tạo hình thu nhỏ ở chế độ nền</translation>
     </message>
+    <message>
+      <location filename="../crates/desktop/qml/SettingsDialog.qml" />
+      <source>Performance</source>
+      <translation>Hiệu năng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/SettingsDialog.qml" />
+      <source>Hardware acceleration (GPU)</source>
+      <translation>Tăng tốc phần cứng (GPU)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/SettingsDialog.qml" />
+      <source>Anti-aliasing and smooth image filtering</source>
+      <translation>Khử răng cưa và lọc ảnh mượt (Anti-aliasing)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/SettingsDialog.qml" />
+      <source>Hardware acceleration changes apply on next restart.</source>
+      <translation>Thay đổi tăng tốc phần cứng sẽ có hiệu lực sau khi khởi động lại.</translation>
+    </message>
   </context>
   <context>
     <name>Theme</name>

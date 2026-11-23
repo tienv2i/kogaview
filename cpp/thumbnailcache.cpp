@@ -229,7 +229,7 @@ void ThumbnailCache::produce(const Job& job)
   }
   // Atomic rename on commit, so a half-written file can never be picked up by
   // the next lookup.
-  const bool written = keepAlpha ? image.save(&file, "PNG") : image.save(&file, "JPG", 85);
+  const bool written = keepAlpha ? image.save(&file, "PNG") : image.save(&file, "JPG", 82);
   if (!written || !file.commit()) {
     finish(job.key, QString(), QStringLiteral("cannot encode thumbnail"));
     return;

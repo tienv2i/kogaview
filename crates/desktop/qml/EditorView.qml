@@ -3210,6 +3210,8 @@ Item {
                 fillMode: Image.Stretch
                 asynchronous: false
                 cache: false
+                smooth: view.state.antiAliasing !== false
+                mipmap: view.state.antiAliasing !== false
                 source: view.editor && view.editor.previewPath
                         ? "file://" + view.editor.previewPath
                         : ""

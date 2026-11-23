@@ -61,6 +61,14 @@ pub struct Config {
     pub filmstrip: bool,
     pub remember_last_folder: bool,
     pub background_thumbnails: bool,
+    #[serde(default = "default_true")]
+    pub hardware_acceleration: bool,
+    #[serde(default = "default_true")]
+    pub anti_aliasing: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -79,6 +87,8 @@ impl Default for Config {
             filmstrip: true,
             remember_last_folder: true,
             background_thumbnails: true,
+            hardware_acceleration: true,
+            anti_aliasing: true,
         }
     }
 }

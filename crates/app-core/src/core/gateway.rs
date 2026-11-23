@@ -318,6 +318,8 @@ impl Core {
                 remember_last_folder,
                 background_thumbnails,
                 language,
+                hardware_acceleration,
+                anti_aliasing,
             } => {
                 // `remember_last_folder` is what decides whether the explorer
                 // folders are written at all, so it is committed in one place:
@@ -328,10 +330,14 @@ impl Core {
                 self.config.language = language;
                 self.config.remember_last_folder = remember_last_folder;
                 self.config.background_thumbnails = background_thumbnails;
+                self.config.hardware_acceleration = hardware_acceleration;
+                self.config.anti_aliasing = anti_aliasing;
                 self.state.theme = theme;
                 self.state.language = language;
                 self.state.remember_last_folder = remember_last_folder;
                 self.state.background_thumbnails = background_thumbnails;
+                self.state.hardware_acceleration = hardware_acceleration;
+                self.state.anti_aliasing = anti_aliasing;
                 self.remember_explorer_folders();
                 self.save_config();
                 self.state.bump();

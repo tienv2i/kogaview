@@ -221,6 +221,8 @@ impl Core {
             config.filmstrip,
             config.remember_last_folder,
             config.background_thumbnails,
+            config.hardware_acceleration,
+            config.anti_aliasing,
             config_path_label,
         );
 
@@ -320,6 +322,8 @@ impl Core {
             config.filmstrip,
             config.remember_last_folder,
             config.background_thumbnails,
+            config.hardware_acceleration,
+            config.anti_aliasing,
             config_path.to_string_lossy().into_owned(),
         );
         Self {

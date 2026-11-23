@@ -388,6 +388,8 @@ ApplicationWindow {
         settingsDialog.initialTheme = root.state.theme || "dark";
         settingsDialog.initialRemember = root.state.rememberLastFolder !== false;
         settingsDialog.initialBackground = root.state.backgroundThumbnails !== false;
+        settingsDialog.initialHardwareAcceleration = root.state.hardwareAcceleration !== false;
+        settingsDialog.initialAntiAliasing = root.state.antiAliasing !== false;
         settingsDialog.initialLanguage = root.state.language || "system";
         settingsDialog.initialLayout = JSON.parse(JSON.stringify(root.state.layout || ({})));
         settingsDialog.languageChoices = Platform.languages();
@@ -1341,6 +1343,8 @@ ApplicationWindow {
             root.send({ type: "set_settings", theme: themeName,
                         remember_last_folder: rememberLastFolder,
                         background_thumbnails: backgroundThumbnails,
+                        hardware_acceleration: settingsDialog.hardwareAccelerationValue,
+                        anti_aliasing: settingsDialog.antiAliasingValue,
                         language: language });
         }
         onLayoutSaveRequested: function(layout) {

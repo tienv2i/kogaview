@@ -39,6 +39,8 @@ DialogFrame {
     property string initialTheme: "dark"
     property bool initialRemember: true
     property bool initialBackground: true
+    property bool initialHardwareAcceleration: true
+    property bool initialAntiAliasing: true
     /// The stored interface language (`system`, `en`, `vi`).
     property string initialLanguage: "system"
     /// The languages the picker offers, `Platform.languages()` in the app and
@@ -55,6 +57,7 @@ DialogFrame {
     /// with no icons for them.
     readonly property var sections: [
         { key: "general", label: qsTr("General"), icon: "icons/preferences.svg" },
+        { key: "performance", label: qsTr("Performance"), icon: "icons/adjust.svg" },
         { key: "browser", label: qsTr("Browser"), icon: "icons/browser.svg" },
         { key: "editor", label: qsTr("Editor"), icon: "icons/editor.svg" },
         { key: "viewer", label: qsTr("Viewer"), icon: "icons/viewer.svg" }
@@ -111,11 +114,16 @@ DialogFrame {
     readonly property string defaultTheme: "dark"
     readonly property bool defaultRemember: true
     readonly property bool defaultBackground: true
+    readonly property bool defaultHardwareAcceleration: true
+    readonly property bool defaultAntiAliasing: true
     readonly property string defaultLanguage: "system"
     readonly property var defaultLayout: ({
         leftWidth: 260, rightWidth: 300, editorToolColumns: 2,
         editorReferenceHeight: 0, editorReferenceTab: "info", panels: ({})
     })
+
+    readonly property bool hardwareAccelerationValue: hwAccelChoice.checked
+    readonly property bool antiAliasingValue: antiAliasingChoice.checked
 
     /// True while the form differs from what is stored *and* saved. Drives the
     /// Apply button: pressing it with nothing pending would be a no-op, and an
@@ -123,6 +131,8 @@ DialogFrame {
     readonly property bool hasPendingChanges: themeChoice.currentIndex !== seenTheme
                                               || rememberChoice.checked !== seenRemember
                                               || backgroundChoice.checked !== seenBackground
+                                              || hwAccelChoice.checked !== seenHardwareAcceleration
+                                              || antiAliasingChoice.checked !== seenAntiAliasing
                                               || languageChoice.selectedCode() !== seenLanguage
                                               || !dialog.layoutsEqual(dialog.editedLayout,
                                                                       dialog.seenLayout)
@@ -132,6 +142,8 @@ DialogFrame {
     property int seenTheme: 0
     property bool seenRemember: true
     property bool seenBackground: true
+    property bool seenHardwareAcceleration: true
+    property bool seenAntiAliasing: true
     property string seenLanguage: "system"
     property var seenLayout: ({})
 
@@ -198,6 +210,8 @@ DialogFrame {
         dialog.seenTheme = themeChoice.currentIndex
         dialog.seenRemember = rememberChoice.checked
         dialog.seenBackground = backgroundChoice.checked
+        dialog.seenHardwareAcceleration = hwAccelChoice.checked
+        dialog.seenAntiAliasing = antiAliasingChoice.checked
         dialog.seenLanguage = dialog.languageCode()
         dialog.seenLayout = dialog.copyLayout(dialog.editedLayout)
         // From now on the form *is* the stored configuration, so closing must
@@ -293,6 +307,8 @@ DialogFrame {
         themeChoice.currentIndex = dialog.initialTheme === "light" ? 1 : 0
         rememberChoice.checked = dialog.initialRemember
         backgroundChoice.checked = dialog.initialBackground
+        hwAccelChoice.checked = dialog.initialHardwareAcceleration
+        antiAliasingChoice.checked = dialog.initialAntiAliasing
         dialog.restoring = false
         if (dialog.languageChoices && dialog.languageChoices.length > 0) {
             languageChoice.refresh(dialog.languageChoices, dialog.initialLanguage)
@@ -307,6 +323,8 @@ DialogFrame {
         dialog.seenTheme = themeChoice.currentIndex
         dialog.seenRemember = rememberChoice.checked
         dialog.seenBackground = backgroundChoice.checked
+        dialog.seenHardwareAcceleration = hwAccelChoice.checked
+        dialog.seenAntiAliasing = antiAliasingChoice.checked
         dialog.seenLanguage = dialog.languageCode()
     }
 
@@ -503,6 +521,46 @@ DialogFrame {
         }
     }
 
+    // -------------------------------------------------- Performance
+    ColumnLayout {
+        objectName: "settingsPerformancePage"
+        Layout.fillWidth: true
+        spacing: 12
+        visible: dialog.section === "performance"
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Performance")
+            Layout.fillWidth: true
+
+            FormCheck {
+                id: hwAccelChoice
+                theme: dialog.theme
+                objectName: "settingsHardwareAcceleration"
+                text: qsTr("Hardware acceleration (GPU)")
+                checked: dialog.initialHardwareAcceleration
+                Layout.fillWidth: true
+                onToggled: if (dialog.visible) dialog.changed()
+            }
+            FormCheck {
+                id: antiAliasingChoice
+                theme: dialog.theme
+                objectName: "settingsAntiAliasing"
+                text: qsTr("Anti-aliasing and smooth image filtering")
+                checked: dialog.initialAntiAliasing
+                Layout.fillWidth: true
+                onToggled: if (dialog.visible) dialog.changed()
+            }
+            Label {
+                text: qsTr("Hardware acceleration changes apply on next restart.")
+                color: dialog.theme.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+        }
+    }
+
     // -------------------------------------------------- Browser
     ColumnLayout {
         objectName: "settingsBrowserPage"
@@ -585,6 +643,8 @@ DialogFrame {
             implicitWidth: 88
             onClicked: {
                 dialog.resetLayout()
+                hwAccelChoice.checked = dialog.defaultHardwareAcceleration
+                antiAliasingChoice.checked = dialog.defaultAntiAliasing
                 dialog.restoreValues(dialog.defaultTheme, dialog.defaultRemember,
                                      dialog.defaultBackground, dialog.defaultLanguage)
             }

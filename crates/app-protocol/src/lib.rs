@@ -394,6 +394,10 @@ pub const LAYOUT_SORT_ORDERS: [&str; 2] = ["asc", "desc"];
 /// Discrete Browser thumbnail/item size presets: very small, small, medium, large, very large.
 pub const LAYOUT_THUMB_SIZES: [&str; 5] = ["xs", "s", "m", "l", "xl"];
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_canvas_anchor() -> String {
     "center".to_owned()
 }
@@ -597,6 +601,10 @@ pub enum Command {
         background_thumbnails: bool,
         #[serde(default)]
         language: Language,
+        #[serde(default = "default_true")]
+        hardware_acceleration: bool,
+        #[serde(default = "default_true")]
+        anti_aliasing: bool,
     },
     ToggleTheme,
     /// Set the interface language (`system`, `editor`, `en` or `vi`).
