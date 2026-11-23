@@ -5203,6 +5203,44 @@ Item {
                 }
             }
         }
+
+        RightPanelRail {
+            objectName: "editorRightRail"
+            theme: view.theme
+            buttonPrefix: "editorRail"
+            entries: [
+                { key: "options", label: qsTr("Tool options"), icon: "icons/preferences.svg",
+                  active: view.toolOptionsVisible },
+                { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
+                  separatorBefore: true,
+                  active: view.infoVisible && view.rightTabIndex === 0 },
+                { key: "history", label: qsTr("History"), icon: "icons/history.svg",
+                  active: view.historyVisible && view.rightTabIndex === 1 },
+                { key: "original", label: qsTr("Original"), icon: "icons/original.svg",
+                  active: view.originalVisible && view.rightTabIndex === 2 }
+            ]
+            onToggled: function(key) {
+                if (key === "options") {
+                    view.setPanelVisible("options", !view.toolOptionsVisible)
+                    return
+                }
+                var shown = (key === "info" && view.infoVisible)
+                    || (key === "history" && view.historyVisible)
+                    || (key === "original" && view.originalVisible)
+                var isCurrent = (key === "info" && view.rightTabIndex === 0)
+                    || (key === "history" && view.rightTabIndex === 1)
+                    || (key === "original" && view.rightTabIndex === 2)
+                if (!shown) {
+                    var panels = {}
+                    panels["editor." + key] = true
+                    view.layoutRequested({ panels: panels, editorReferenceTab: key })
+                } else if (!isCurrent) {
+                    view.showRightTab(key)
+                } else {
+                    view.setPanelVisible(key, false)
+                }
+            }
+        }
     }
 
     /// Resize is a dialog, not a tool: choosing a size is a question with a

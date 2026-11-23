@@ -27,6 +27,7 @@ fn main() {
         "qml/FormCheck.qml",
         "qml/FormRadio.qml",
         "qml/RightDock.qml",
+        "qml/RightPanelRail.qml",
         "qml/InfoPanel.qml",
         "qml/PreviewPanel.qml",
         "qml/HistoryPanel.qml",

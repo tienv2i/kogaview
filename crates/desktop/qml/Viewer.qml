@@ -807,6 +807,28 @@ Item {
                 }
             }
         }
+
+        RightPanelRail {
+            objectName: "viewerRightRail"
+            theme: view.theme
+            buttonPrefix: "viewerRail"
+            entries: [
+                { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
+                  active: view.infoPanelVisible && view.viewerRightTab === "info" },
+                { key: "adjust", label: qsTr("Color"), icon: "icons/adjust.svg",
+                  active: view.infoPanelVisible && view.viewerRightTab === "adjust" }
+            ]
+            onToggled: function(key) {
+                if (!view.infoPanelVisible) {
+                    view.viewerRightTab = key
+                    view.setPanelVisible("info", true)
+                } else if (view.viewerRightTab !== key) {
+                    view.viewerRightTab = key
+                } else {
+                    view.setPanelVisible("info", false)
+                }
+            }
+        }
     }
 
     /// The right-click menu on the image itself. The first block is the file
