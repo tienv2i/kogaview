@@ -304,15 +304,6 @@ DialogFrame {
         // window in light mode. `restoring` keeps the writes from emitting a
         // preview of a form that has not been touched yet.
         dialog.restoring = true
-        themeChoice.currentIndex = dialog.initialTheme === "light" ? 1 : 0
-        rememberChoice.checked = dialog.initialRemember
-        backgroundChoice.checked = dialog.initialBackground
-        hwAccelChoice.checked = dialog.initialHardwareAcceleration
-        antiAliasingChoice.checked = dialog.initialAntiAliasing
-        dialog.restoring = false
-        if (dialog.languageChoices && dialog.languageChoices.length > 0) {
-            languageChoice.refresh(dialog.languageChoices, dialog.initialLanguage)
-        }
         dialog.openedTheme = dialog.initialTheme
         dialog.openedRemember = dialog.initialRemember
         dialog.openedBackground = dialog.initialBackground
@@ -320,12 +311,21 @@ DialogFrame {
         dialog.openedLayout = dialog.copyLayout(dialog.initialLayout)
         dialog.editedLayout = dialog.copyLayout(dialog.initialLayout)
         dialog.seenLayout = dialog.copyLayout(dialog.initialLayout)
+        themeChoice.currentIndex = dialog.initialTheme === "light" ? 1 : 0
+        rememberChoice.checked = dialog.initialRemember
+        backgroundChoice.checked = dialog.initialBackground
+        hwAccelChoice.checked = dialog.initialHardwareAcceleration
+        antiAliasingChoice.checked = dialog.initialAntiAliasing
+        if (dialog.languageChoices && dialog.languageChoices.length > 0) {
+            languageChoice.refresh(dialog.languageChoices, dialog.initialLanguage)
+        }
         dialog.seenTheme = themeChoice.currentIndex
         dialog.seenRemember = rememberChoice.checked
         dialog.seenBackground = backgroundChoice.checked
         dialog.seenHardwareAcceleration = hwAccelChoice.checked
         dialog.seenAntiAliasing = antiAliasingChoice.checked
         dialog.seenLanguage = dialog.languageCode()
+        dialog.restoring = false
     }
 
     /// Every way out of the dialog ends here — OK, Cancel, ×, Escape and the
