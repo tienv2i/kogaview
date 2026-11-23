@@ -253,14 +253,15 @@ private:
   {
     zoomTo(0.6);
     const QPointF probe = m_canvas->mapFromItem(m_viewport, cursor);
+    const QPointF scenePos = m_viewport->mapToScene(cursor);
     const qreal before = zoom();
     if (midGesture) {
-      dispatchWheel(device, cursor, QPoint(0, 15), QPoint(0, 0), Qt::ScrollBegin);
-      dispatchWheel(device, cursor, QPoint(0, 15), QPoint(0, 0), Qt::ScrollUpdate);
-      dispatchWheel(device, cursor, QPoint(0, 15), QPoint(0, 0), Qt::ScrollUpdate);
-      dispatchWheel(device, cursor, QPoint(0, 0), QPoint(0, 0), Qt::ScrollEnd);
+      dispatchWheel(device, scenePos, QPoint(0, 15), QPoint(0, 0), Qt::ScrollBegin);
+      dispatchWheel(device, scenePos, QPoint(0, 15), QPoint(0, 0), Qt::ScrollUpdate);
+      dispatchWheel(device, scenePos, QPoint(0, 15), QPoint(0, 0), Qt::ScrollUpdate);
+      dispatchWheel(device, scenePos, QPoint(0, 0), QPoint(0, 0), Qt::ScrollEnd);
     } else {
-      injectWheel(device, cursor, QPoint(0, 15), QPoint(0, 0));
+      injectWheel(device, scenePos, QPoint(0, 15), QPoint(0, 0));
     }
     QVERIFY2(zoom() > before, "the touchpad scroll did not zoom in");
     const QPointF after = m_canvas->mapToItem(m_viewport, probe);
@@ -754,14 +755,15 @@ private slots:
     const QPointF cursor(700, 400);
     zoomTo(0.6);
     const QPointF probe = m_canvas->mapFromItem(m_viewport, cursor);
-    injectWheel(mouse, cursor, QPoint(0, 0), QPoint(0, 120));
+    const QPointF scenePos = m_viewport->mapToScene(cursor);
+    injectWheel(mouse, scenePos, QPoint(0, 0), QPoint(0, 120));
     QVERIFY2(zoom() > 0.6, "mouse angleDelta did not zoom in");
     const QPointF after = m_canvas->mapToItem(m_viewport, probe);
     QVERIFY2(qAbs(after.x() - cursor.x()) <= 0.5, "cursor anchor drifted horizontally");
     QVERIFY2(qAbs(after.y() - cursor.y()) <= 0.5, "cursor anchor drifted vertically");
 
     const qreal zoomedIn = zoom();
-    injectWheel(mouse, cursor, QPoint(0, 0), QPoint(0, -120));
+    injectWheel(mouse, scenePos, QPoint(0, 0), QPoint(0, -120));
     QVERIFY2(zoom() < zoomedIn, "mouse angleDelta did not zoom out");
     delete mouse;
   }
@@ -1109,11 +1111,13 @@ private slots:
     QTest::mouseClick(m_view, Qt::RightButton, Qt::NoModifier, corner.toPoint());
     QTRY_VERIFY2(menu->property("visible").toBool(),
                  "the second right click did not reopen the canvas menu");
-    QVERIFY2(qAbs(menu->property("x").toReal() - 80) <= 2.0 &&
-               qAbs(menu->property("y").toReal() - 60) <= 2.0,
-             qPrintable(QStringLiteral("the menu opened at %1,%2 instead of the click at 80,60")
+    QVERIFY2(qAbs(menu->property("x").toReal() - corner.x()) <= 2.0 &&
+               qAbs(menu->property("y").toReal() - corner.y()) <= 2.0,
+             qPrintable(QStringLiteral("the menu opened at %1,%2 instead of the click at %3,%4")
                           .arg(menu->property("x").toReal())
-                          .arg(menu->property("y").toReal())));
+                          .arg(menu->property("y").toReal())
+                          .arg(corner.x())
+                          .arg(corner.y())));
     QMetaObject::invokeMethod(menu, "close");
     QTRY_VERIFY(!menu->property("visible").toBool());
   }
@@ -1302,16 +1306,14 @@ private slots:
       { QStringLiteral("zoom-fit-best-symbolic"), QStringLiteral("Fit to window (F)") },
       { QStringLiteral("zoom-original-symbolic"),
         QStringLiteral("Actual size at 100% (0/1)") },
-      { QStringLiteral("object-rotate-left-symbolic"),
-        QStringLiteral("Rotate left (Shift+R)") },
-      { QStringLiteral("object-rotate-right-symbolic"),
-        QStringLiteral("Rotate right (R)") },
-      { QStringLiteral("object-flip-horizontal-symbolic"),
-        QStringLiteral("Flip horizontally (H)") },
-      { QStringLiteral("object-flip-vertical-symbolic"),
-        QStringLiteral("Flip vertically (V)") },
-      { QStringLiteral("viewerResetView"),
-        QStringLiteral("Reset view") },
+      { QStringLiteral("viewerTransformButton"),
+        QStringLiteral("Rotate & flip") },
+      { QStringLiteral("viewerColorAdjustButton"),
+        QStringLiteral("Color & light") },
+      { QStringLiteral("viewerUiModeButton"),
+        QStringLiteral("Viewer mode & layout (M)") },
+      { QStringLiteral("viewerFullscreenButton"),
+        QStringLiteral("Fullscreen (F11)") },
       { QStringLiteral("viewerFilmstripToggle"),
         QStringLiteral("Toggle thumbnail filmstrip (T)") },
     };
@@ -1415,7 +1417,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 4 : 12);
+    QCOMPARE(buttons, mini ? 4 : 11);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.
@@ -1523,45 +1525,24 @@ private slots:
   ///
   /// This is the real-window defect the first layout grab showed — the dock
   /// reported `visible: true` with a 260 px width while the centre column's
-  /// `anchors.fill: parent` painted the canvas over it, so the window looked
-  /// as if the new panels did not exist. Settings › Appearance hides them
-  /// through the layout, and the picture then takes the space they gave up.
+  /// The Viewer is focused on viewing: it has no left Quick Access / Explorer
+  /// dock, and its toolbar Color & light button toggles the right panel onto
+  /// the Color tab.
   void theLeftPanelsSitBesideThePicture()
   {
-    QVariantMap state;
-    state.insert(QStringLiteral("viewerPath"), m_landscape);
-    state.insert(QStringLiteral("viewerIndex"), 0);
-    state.insert(QStringLiteral("filmstrip"), false);
-    m_viewer->setProperty("state", state);
+    QVERIFY2(item("viewerLeftPanel") == nullptr, "the viewer should not have a left dock");
+    QVERIFY2(item("viewerLeftRail") == nullptr, "the viewer should not have a left rail");
+    QVERIFY2(item("viewerRightRail") == nullptr, "the viewer should not have a right rail");
 
+    QSignalSpy layoutSpy(m_viewer, SIGNAL(layoutRequested(QVariant)));
     QVariantMap panels;
-    panels.insert(QStringLiteral("viewer.quickAccess"), true);
-    panels.insert(QStringLiteral("viewer.explorer"), true);
-    panels.insert(QStringLiteral("viewer.info"), true);
-    m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("leftWidth"), 260},
-                                                {QStringLiteral("panels"), panels}});
+    panels.insert(QStringLiteral("viewer.info"), false);
+    m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("panels"), panels}});
     QCoreApplication::processEvents();
 
-    QQuickItem* dock = item("viewerLeftPanel");
-    QVERIFY2(dock != nullptr, "the viewer has no left dock");
-    QTRY_VERIFY(dock->isVisible());
-    QVERIFY2(dock->width() > 0, "the left dock has no width");
-    const qreal dockRight = dock->mapToScene(QPointF(dock->width(), 0)).x();
-    // The `RowLayout` positions its children on the next polish, so wait for
-    // the picture to actually start where the dock ends.
-    QTRY_VERIFY2(m_viewport->mapToScene(QPointF(0, 0)).x() >= dockRight - 0.5,
-                 qPrintable(QStringLiteral("the picture starts at %1, inside the dock that ends at %2")
-                                .arg(m_viewport->mapToScene(QPointF(0, 0)).x())
-                                .arg(dockRight)));
-
-    // Hiding both panels gives their width back to the picture; the dock is
-    // gone rather than merely transparent.
-    panels.insert(QStringLiteral("viewer.quickAccess"), false);
-    panels.insert(QStringLiteral("viewer.explorer"), false);
-    m_viewer->setProperty("layout", QVariantMap{{QStringLiteral("leftWidth"), 260},
-                                                {QStringLiteral("panels"), panels}});
-    QTRY_VERIFY(!dock->isVisible());
-    QTRY_VERIFY(m_viewport->mapToScene(QPointF(0, 0)).x() < dockRight - 0.5);
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel"));
+    QCOMPARE(m_viewer->property("viewerRightTab").toString(), QStringLiteral("adjust"));
+    QCOMPARE(layoutSpy.count(), 1);
   }
 
   /// "Show in folder" is the shell's job: the view only asks, and both the file
@@ -1841,6 +1822,221 @@ private slots:
     QTest::keyClick(m_view, Qt::Key_R);
     QTest::qWait(50);
     QCOMPARE(m_viewer->property("rotationAngle").toInt(), 90);
+  }
+
+  /// Switching between standard, simple, and compact hides the right dock
+  /// and filmstrip in non-standard modes without mutating saved panel
+  /// visibility, and activates the floating HUD only in compact mode.
+  void viewerUiModesToggleChromeAndHud()
+  {
+    QQuickItem* rightPanel = item("viewerRightPanel");
+    QQuickItem* compactHud = item("viewerCompactHud");
+    QVERIFY(rightPanel != nullptr && compactHud != nullptr);
+
+    // Standard mode (default): right panel visible, compact HUD off.
+    QVariantMap layout;
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("standard"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(rightPanel->isVisible());
+    QVERIFY(!compactHud->isVisible());
+
+    // Simple mode: right panel hidden, compact HUD still off.
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("simple"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(!rightPanel->isVisible());
+    QVERIFY(!compactHud->isVisible());
+
+    // Compact mode: right panel hidden, compact HUD active.
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("compact"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(!rightPanel->isVisible());
+    QVERIFY(compactHud->isVisible());
+
+    // Restore standard mode: previous panel visibility returns intact.
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("standard"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(rightPanel->isVisible());
+    QVERIFY(!compactHud->isVisible());
+  }
+
+  /// Switching between single, dual, and webtoon activates the matching
+  /// display surface and auto-hides the bottom filmstrip in webtoon mode.
+  void viewerDisplayModesSwitchSingleDualAndWebtoon()
+  {
+    QQuickItem* dualSpread = item("viewerDualSpread");
+    QQuickItem* webtoon = item("viewerWebtoonView");
+    QQuickItem* singleImg = item("viewerImage");
+    QVERIFY(dualSpread != nullptr && webtoon != nullptr && singleImg != nullptr);
+
+    QVariantMap layout;
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("single"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(singleImg->isVisible());
+    QVERIFY(!dualSpread->isVisible());
+    QVERIFY(!webtoon->isVisible());
+
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("dual"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(!singleImg->isVisible());
+    QVERIFY(dualSpread->isVisible());
+    QVERIFY(!webtoon->isVisible());
+
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("webtoon"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(!singleImg->isVisible());
+    QVERIFY(!dualSpread->isVisible());
+    QVERIFY(webtoon->isVisible());
+
+    // Restore single mode.
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("single"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    QVERIFY(singleImg->isVisible());
+  }
+
+  /// Regression test: scrolling up at the first page in Webtoon mode must
+  /// clamp to `ListView.originY` rather than `0`, so a non-zero `originY`
+  /// after `positionViewAtIndex` never scrolls into blank black space above page 0.
+  void webtoonScrollUpAtFirstPageRespectsOriginY()
+  {
+    QVariantMap layout;
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("webtoon"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+
+    QQuickItem* webtoon = item("viewerWebtoonView");
+    QQuickItem* list = item("viewerWebtoonList");
+    QVERIFY(webtoon != nullptr && list != nullptr);
+    QTRY_VERIFY(webtoon->isVisible());
+
+    QVERIFY(QMetaObject::invokeMethod(webtoon, "jumpToPage", Q_ARG(QVariant, 0)));
+    QCoreApplication::processEvents();
+    const qreal originY = list->property("originY").toReal();
+
+    // Scroll up repeatedly past the top of page 0.
+    for (int i = 0; i < 5; ++i) {
+      QVERIFY(QMetaObject::invokeMethod(webtoon, "scrollBy", Q_ARG(QVariant, -300.0)));
+    }
+    QTest::qWait(200);
+    const qreal contentY = list->property("contentY").toReal();
+    QVERIFY2(contentY >= originY - 0.5,
+             qPrintable(QStringLiteral("contentY (%1) scrolled above originY (%2)")
+                          .arg(contentY).arg(originY)));
+
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("single"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+  }
+
+  /// Toggling Dual mode options (`mangaCoverSeparate`, `mangaPageGap`, `mangaRtl`)
+  /// immediately updates the spread pairing and refits the two-page canvas.
+  void dualModeUpdatesAndRefitsWhenOptionsChange()
+  {
+    QStringList portraitPair{ m_portrait, m_portrait };
+    m_viewer->setProperty("viewerImages", portraitPair);
+    QVariantMap state;
+    state.insert(QStringLiteral("viewerPath"), m_portrait);
+    state.insert(QStringLiteral("viewerIndex"), 0);
+    m_viewer->setProperty("state", state);
+
+    QVariantMap layout;
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("dual"));
+    layout.insert(QStringLiteral("mangaCoverSeparate"), true);
+    layout.insert(QStringLiteral("mangaPageGap"), 8);
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+
+    QQuickItem* dual = item("viewerDualSpread");
+    QVERIFY(dual != nullptr);
+    QTRY_VERIFY(dual->property("ready").toBool());
+    QVERIFY2(!dual->property("hasRight").toBool(),
+             "with separateCover=true, page 0 should be a solo cover spread");
+    const qreal soloWidth = dual->property("contentWidth").toReal();
+
+    // Turning off separateCover pairs pages (0, 1) and refits to the wider spread.
+    layout.insert(QStringLiteral("mangaCoverSeparate"), false);
+    m_viewer->setProperty("layout", layout);
+    QTRY_VERIFY(dual->property("hasRight").toBool());
+    QTRY_VERIFY(dual->property("ready").toBool());
+    const qreal pairWidth8 = dual->property("contentWidth").toReal();
+    QVERIFY2(pairWidth8 > soloWidth * 1.8, "pair spread should be roughly twice the solo width");
+
+    // Increasing pageGap updates contentWidth immediately and keeps both pages fitted.
+    layout.insert(QStringLiteral("mangaPageGap"), 16);
+    m_viewer->setProperty("layout", layout);
+    QTRY_COMPARE(dual->property("contentWidth").toReal(), pairWidth8 + 8.0);
+    QTest::qWait(40);
+    QVERIFY2(m_viewer->property("zoom").toReal() * dual->property("contentWidth").toReal()
+               <= m_viewport->width() + 1.0,
+             "two-page spread overflowed the viewport width after refit");
+
+    // Turning separateCover back on returns to solo cover and refits.
+    layout.insert(QStringLiteral("mangaCoverSeparate"), true);
+    m_viewer->setProperty("layout", layout);
+    QTRY_VERIFY(!dual->property("hasRight").toBool());
+    QTRY_COMPARE(dual->property("contentWidth").toReal(), soloWidth);
+
+    layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("single"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+  }
+
+  /// Compact HUD supports docking to all 4 edges (`top`/`bottom`/`left`/`right`),
+  /// switches orientation between horizontal and vertical, and shares Color & Light
+  /// adjustments with Viewer's main color panel.
+  void compactHudDocksFourEdgesAndSyncsColorPopover()
+  {
+    QVariantMap layout;
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("compact"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+
+    QQuickItem* hud = item("viewerCompactHud");
+    QQuickItem* pill = item("viewerCompactHudPill");
+    QObject* colorPopover = object("viewerColorPopover");
+    QObject* dockAdjust = object("viewerColorAdjustPanel");
+    QVERIFY(hud != nullptr && pill != nullptr && colorPopover != nullptr && dockAdjust != nullptr);
+
+    // Top (horizontal): wider than tall.
+    hud->setProperty("edge", QStringLiteral("top"));
+    QCoreApplication::processEvents();
+    QVERIFY(!hud->property("vertical").toBool());
+    QVERIFY(pill->width() > pill->height());
+
+    // Left (vertical): taller than wide.
+    hud->setProperty("edge", QStringLiteral("left"));
+    QCoreApplication::processEvents();
+    QVERIFY(hud->property("vertical").toBool());
+    QVERIFY(pill->height() > pill->width());
+
+    // Right (vertical) & Bottom (horizontal).
+    hud->setProperty("edge", QStringLiteral("right"));
+    QCoreApplication::processEvents();
+    QVERIFY(hud->property("vertical").toBool());
+    hud->setProperty("edge", QStringLiteral("bottom"));
+    QCoreApplication::processEvents();
+    QVERIFY(!hud->property("vertical").toBool());
+
+    // Color & Light popover syncs bidirectionally with RightDock's ColorAdjustPanel.
+    colorPopover->setProperty("brightness", 0.25);
+    QCoreApplication::processEvents();
+    QVERIFY(qAbs(dockAdjust->property("brightness").toReal() - 0.25) < 0.001);
+    dockAdjust->setProperty("brightness", 0.0);
+    QCoreApplication::processEvents();
+    QVERIFY(qAbs(colorPopover->property("brightness").toReal()) < 0.001);
+
+    // Restore standard mode & top edge.
+    hud->setProperty("edge", QStringLiteral("top"));
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("standard"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
   }
 };
 

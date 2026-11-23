@@ -1,28 +1,38 @@
 import QtQuick
 import QtQuick.Layouts
 
-/// Narrow vertical icon rail pinned to the right edge of every workspace
-/// (Browser, Viewer, Editor) for one-click toggling and switching of the right
-/// sidebar panels.
+/// Narrow vertical icon rail pinned to the left or right edge of a workspace
+/// (Browser, Viewer, Editor) for one-click toggling and switching of side
+/// panels, plus a bottom action to hide all panels on that side.
 Rectangle {
     id: rail
 
     property Theme theme: Theme {}
+    /// `"left"` or `"right"`: controls divider side, outer active indicator
+    /// bar edge, and the hide-all icon direction.
+    property string edge: "right"
     /// `[{ key, label, icon, active, separatorBefore }]`
     property var entries: []
     /// Prefix used for each button's `objectName` (`<prefix>_<key>`).
-    property string buttonPrefix: "rightRail"
+    property string buttonPrefix: rail.edge === "left" ? "leftRail" : "rightRail"
+    /// True while at least one panel managed by this rail is currently shown;
+    /// enables the bottom Hide-all button.
+    property bool anyActive: false
+    /// Tooltip for the bottom Hide-all button.
+    property string hideAllTooltip: qsTr("Hide all panels")
 
     signal toggled(string key)
+    signal hideAll()
 
     implicitWidth: 40
     Layout.preferredWidth: 40
     Layout.fillHeight: true
     color: rail.theme.surface
 
-    // Left 1 px divider separating the rail from the sidebar or main canvas.
+    // Inner 1 px divider separating the rail from the sidebar or main canvas.
     Rectangle {
-        anchors.left: parent.left
+        anchors.left: rail.edge === "right" ? parent.left : undefined
+        anchors.right: rail.edge === "left" ? parent.right : undefined
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: 1
@@ -70,10 +80,12 @@ Rectangle {
                         onClicked: rail.toggled(modelData.key)
                     }
 
-                    // Active edge indicator bar on the outer right edge.
+                    // Active edge indicator bar on the outer edge.
                     Rectangle {
-                        anchors.right: parent.right
-                        anchors.rightMargin: -3
+                        anchors.right: rail.edge === "right" ? parent.right : undefined
+                        anchors.rightMargin: rail.edge === "right" ? -3 : 0
+                        anchors.left: rail.edge === "left" ? parent.left : undefined
+                        anchors.leftMargin: rail.edge === "left" ? -3 : 0
                         anchors.verticalCenter: parent.verticalCenter
                         width: 2
                         height: modelData.active ? 18 : 0
@@ -88,5 +100,32 @@ Rectangle {
         }
 
         Item { Layout.fillHeight: true }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.leftMargin: 4
+            Layout.rightMargin: 4
+            Layout.topMargin: 2
+            Layout.bottomMargin: 2
+            implicitHeight: 1
+            color: rail.theme.border
+        }
+
+        Item {
+            Layout.fillWidth: true
+            implicitHeight: 34
+
+            ToolRailButton {
+                objectName: rail.buttonPrefix + "_hideAll"
+                anchors.centerIn: parent
+                theme: rail.theme
+                iconSource: rail.edge === "left"
+                            ? "icons/panel-hide-left.svg"
+                            : "icons/panel-hide-right.svg"
+                tooltip: rail.hideAllTooltip
+                enabled: rail.anyActive
+                onClicked: rail.hideAll()
+            }
+        }
     }
 }

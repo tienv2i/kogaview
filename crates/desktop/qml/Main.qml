@@ -96,6 +96,40 @@ ApplicationWindow {
     readonly property var activeLayout: root.previewLayout
                                         || root.state.layout
                                         || ({})
+    readonly property string viewerUiMode: {
+        var mode = root.activeLayout && root.activeLayout.viewerUiMode
+        return (mode === "compact" || mode === "simple" || mode === "standard")
+               ? mode : "simple"
+    }
+    readonly property bool viewerCompactActive:
+        root.state.workspace === "viewer" && root.viewerUiMode === "compact"
+    readonly property bool viewerSimpleActive:
+        root.state.workspace === "viewer" && root.viewerUiMode === "simple"
+    /// Fullscreen state for Viewer (`F11`). Independent of Compact/Simple/Standard
+    /// so exiting fullscreen restores the exact prior window visibility and mode.
+    property bool viewerFullscreen: false
+    property int _preFullscreenVisibility: Window.Windowed
+
+    function toggleViewerFullscreen() {
+        if (root.viewerFullscreen) {
+            root.viewerFullscreen = false
+            root.visibility = root._preFullscreenVisibility === Window.FullScreen
+                              ? Window.Windowed : root._preFullscreenVisibility
+        } else {
+            root._preFullscreenVisibility = root.visibility
+            root.viewerFullscreen = true
+            root.visibility = Window.FullScreen
+        }
+    }
+
+    Connections {
+        target: snapshot
+        function onStateChanged() {
+            if (root.viewerFullscreen && root.state.workspace !== "viewer") {
+                root.toggleViewerFullscreen()
+            }
+        }
+    }
 
     /// One view asked for a layout change: a splitter, the rail's columns, a
     /// reference tab, a panel from Settings. While the Settings form is open
@@ -138,6 +172,16 @@ ApplicationWindow {
                               ? changes.browserSortOrder : source.browserSortOrder,
             browserThumbSize: changes.browserThumbSize !== undefined
                               ? changes.browserThumbSize : source.browserThumbSize,
+            viewerUiMode: changes.viewerUiMode !== undefined
+                          ? changes.viewerUiMode : source.viewerUiMode,
+            viewerDisplayMode: changes.viewerDisplayMode !== undefined
+                               ? changes.viewerDisplayMode : source.viewerDisplayMode,
+            mangaRtl: changes.mangaRtl !== undefined
+                      ? changes.mangaRtl : source.mangaRtl,
+            mangaCoverSeparate: changes.mangaCoverSeparate !== undefined
+                                ? changes.mangaCoverSeparate : source.mangaCoverSeparate,
+            mangaPageGap: changes.mangaPageGap !== undefined
+                          ? changes.mangaPageGap : source.mangaPageGap,
             panels: {}
         }
         var panels = source.panels || ({})
@@ -791,8 +835,24 @@ ApplicationWindow {
     /// leaves (2 %). It is a *target*, not a promise: the compositor may clamp
     /// the size, `minimumWidth` keeps it usable, and the working area keeps it
     /// on screen.
-    readonly property int viewerChromeHeight: 50 + 32 + 106 + 16
-    readonly property int viewerChromeWidth: 16
+    readonly property bool viewerFilmstripWillShow:
+        root.viewerUiMode === "standard"
+        && (root.activeLayout.viewerDisplayMode || "single") !== "webtoon"
+        && !!root.state.filmstrip
+        && (snapshot.viewerImages || []).length > 1
+    readonly property bool viewerRightDockWillShow:
+        root.viewerUiMode === "standard"
+        && !(root.activeLayout.panels && root.activeLayout.panels["viewer.info"] === false)
+    readonly property int viewerChromeHeight:
+        (root.viewerUiMode === "compact" ? 0 : 50)
+        + (root.viewerUiMode === "standard" ? 32 : 0)
+        + (root.viewerFilmstripWillShow ? 106 : 0)
+        + 16
+    readonly property int viewerChromeWidth:
+        (root.viewerRightDockWillShow
+         ? (Math.max(200, Math.min(640, root.activeLayout.rightWidth || appTheme.previewWidth)) + 4)
+         : 0)
+        + 16
 
     /// The size a window should have to show `imageWidth`×`imageHeight` with
     /// as little empty space as possible.
@@ -1027,13 +1087,23 @@ ApplicationWindow {
         }
     }
 
+    Shortcut {
+        sequence: "F11"
+        enabled: !root.modalDialogOpen && root.state.workspace === "viewer"
+        onActivated: root.toggleViewerFullscreen()
+    }
+
     header: ToolBar {
         id: headerBar
+        objectName: "mainHeaderBar"
+        visible: !root.viewerCompactActive && !root.viewerFullscreen
+        implicitHeight: visible ? 50 : 0
+        height: visible ? 50 : 0
         padding: 0
         background: Rectangle {
             color: appTheme.surface
         }
-        contentHeight: 50
+        contentHeight: visible ? 50 : 0
 
         RowLayout {
             objectName: "mainToolbarRow"
@@ -1091,11 +1161,15 @@ ApplicationWindow {
 
     footer: ToolBar {
         id: footerBar
+        objectName: "mainFooterBar"
+        visible: !root.viewerCompactActive && !root.viewerSimpleActive && !root.viewerFullscreen
+        implicitHeight: visible ? 32 : 0
+        height: visible ? 32 : 0
         padding: 0
         background: Rectangle {
             color: appTheme.surface
         }
-        contentHeight: 32
+        contentHeight: visible ? 32 : 0
 
         RowLayout {
             anchors.fill: parent
@@ -1212,6 +1286,8 @@ ApplicationWindow {
             thumbnails: typeof Thumbnails !== "undefined" ? Thumbnails : null
             listFolders: root.listFolders
             layout: root.activeLayout
+            fullscreen: root.viewerFullscreen
+            onToggleFullscreen: root.toggleViewerFullscreen()
             onLayoutRequested: function(patch) { root.requestLayout(patch) }
             onRevealPath: function(path) { Platform.revealInFolder(path); }
             onCommand: function(command) { root.send(command); }

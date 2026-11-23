@@ -874,7 +874,7 @@ void TestSettings::theAppearanceSectionsEditAndSaveTheLayout()
   QCOMPARE(defaults.value(QStringLiteral("editorReferenceTab")).toString(),
            QStringLiteral("info"));
   const QVariantMap panels = defaults.value(QStringLiteral("panels")).toMap();
-  QCOMPARE(panels.size(), 14);
+  QCOMPARE(panels.size(), 12);
   QCOMPARE(panels.value(QStringLiteral("browser.quickAccess")).toBool(), true);
   QCOMPARE(saves.count(), 1);
 }
@@ -898,7 +898,6 @@ void TestSettings::theShellKeepsThePanelListInSettings()
   const QStringList keys = {
     QStringLiteral("browser.quickAccess"),  QStringLiteral("browser.explorer"),
     QStringLiteral("browser.preview"),      QStringLiteral("browser.batch"),
-    QStringLiteral("viewer.quickAccess"),   QStringLiteral("viewer.explorer"),
     QStringLiteral("viewer.info"),          QStringLiteral("editor.quickAccess"),
     QStringLiteral("editor.explorer"),      QStringLiteral("editor.tools"),
     QStringLiteral("editor.options"),       QStringLiteral("editor.info"),

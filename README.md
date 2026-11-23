@@ -4,22 +4,27 @@
 
 ---
 
-## Highlights (v1.0.0)
+## Highlights (v1.1.0)
 
 ### Browser Workspace
-- **Async background folder scanning & disk-cached thumbnails**: Bounded worker pool (`ThumbnailCache`) with instant synchronous cache hits, LRU disk eviction, and EXIF orientation support.
+- **Async background folder scanning & disk-cached thumbnails**: Bounded worker pool (`ThumbnailCache`) with instant synchronous cache hits, warm view-mode delegates, LRU disk eviction, and EXIF orientation support.
 - **Three view modes & 5 thumbnail sizes**: Switch smoothly between **Thumbnails**, **Icons**, and **Details** views with 5 size presets (`XS`, `S`, `M`, `L`, `XL`).
 - **Sorting & navigation**: Sort by Name, Date Modified, File Size, or Type (ascending/descending), breadcrumb navigation, Quick Access favorites, Explorer folder tree, and live Preview / Info / Batch sidebar.
-- **Batch processing**: Batch **Resize**, **Crop**, and **Convert** over selected images or folders with progress tracking, cancellation, and safe non-overwriting defaults.
+- **Batch processing**: Batch **Resize**, **Crop** (with 3×3 anchor grid, `px`/`%` units, and aspect ratios), and **Convert** over selected images or folders with progress tracking, cancellation, and safe non-overwriting defaults.
 
 ### Viewer Workspace
-- **Smooth, responsive viewing**: Scroll-to-zoom at cursor, double-click Fit / 100% toggle, **free pan** at any zoom level, quick 90° rotate & flip, and one-click **Reset view**.
-- **Thumbnail filmstrip**: Horizontal wheel-scrollable filmstrip for instant navigation through the current folder.
-- **Canvas background selector**: Switch viewport backdrop between theme default, checkerboard, white, black, gray, or any custom color.
-- **View-only Light & Color adjustments**: Right-dock **Color** tab with live 60 fps GPU preview (Brightness, Contrast, Saturation + direct numeric steppers) that never modifies files on disk.
+- **Three UI chrome modes (`M`)**: Switch seamlessly between **Simple** (toolbar only — default when opening images, with exact dynamic window auto-fit), **Compact** (image-only with a translucent **4-edge dockable Floating HUD** featuring magnetic drag-to-snap and right-click edge/pin controls), and **Standard** (full workspace with right Info/Color dock, filmstrip, and status bar).
+- **Three image display modes**:
+  - **Single**: Smooth scroll-to-zoom at cursor, double-click Fit / 100%, free pan at any zoom level, grouped **Rotate & flip** menu (`Shift+R`, `R`, `H`, `V`, Reset view), and canvas background selector.
+  - **Dual page (book / manga)**: Smart two-page spread pairing using fast header-only image dimensions — automatic solo spreads for cover pages and panoramic landscape artwork, **LTR → / RTL ←** reading order, configurable page gap (`0 / 8 / 16 px`), and 60 fps zoom/pan inside the shared `ImageCanvas`.
+  - **Webtoon (vertical)**: Virtualized continuous vertical reader (`ListView` with `reuseItems` and bounded VRAM cache), header-only pre-layout (zero layout shift), and **Smart Auto-Fit** (`Auto` / `Width` / `Height` / `100%`) plus smooth `Ctrl+Wheel` column-width zoom with debounced decode caps.
+- **Fullscreen (`F11`)**: Distraction-free full-screen viewing reusing the 4-edge Floating HUD; `F11` or `Esc` restores prior window geometry and mode.
+- **View-only Light & Color adjustments**: Live 60 fps GPU preview (Brightness, Contrast, Saturation) accessible from both the toolbar/RightDock in Standard/Simple mode and a non-dimming floating popover in Compact/Fullscreen mode, synchronized bidirectionally and never written to disk.
+- **Configurable defaults in Settings**: Choose default Viewer open layout (`Simple` / `Standard` / `Compact`) and display mode (`Single` / `Dual` / `Webtoon`) in `Settings → Viewer`.
 
 ### Editor Workspace (Non-Destructive)
 - **Live 60 fps GPU previews**: Never overwrites originals until explicitly saved (with automatic backup on overwrite) and supports full **Undo / Redo / Reset** history.
+- **Vertical right panel rail**: One-click switching for `Tool options`, `Info`, `History`, `Original`, plus a bottom **Hide all panels** button.
 - **Tools**:
   - **Pointer & Hand (`H` / `Space` + Drag)** with Krita-style free canvas panning.
   - **Resize** sidebar panel with `px` / `%` units, aspect-ratio lock, scale presets, Stretch / Cover / Pad fit modes, resampling filters (`Lanczos3`, `Catmull-Rom`, `Nearest`), and live canvas preview.

@@ -1,6 +1,6 @@
 # Maintainer: KogaView Contributors
 pkgname=kogaview
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Fast native desktop photo manager, viewer, and non-destructive editor"
 arch=('x86_64')

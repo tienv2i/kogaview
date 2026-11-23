@@ -69,8 +69,8 @@ Item {
     /// never draws.
     readonly property int browserButtons: 4
     readonly property int browserSeparators: 1
-    readonly property int viewerButtons: 12
-    readonly property int viewerSeparators: 3
+    readonly property int viewerButtons: 11
+    readonly property int viewerSeparators: 2
     readonly property int editorButtons: 11
     readonly property int editorSeparators: 3
 

@@ -409,6 +409,18 @@ pub const LAYOUT_SORT_ORDERS: [&str; 2] = ["asc", "desc"];
 /// Discrete Browser thumbnail/item size presets: very small, small, medium, large, very large.
 pub const LAYOUT_THUMB_SIZES: [&str; 5] = ["xs", "s", "m", "l", "xl"];
 
+/// Viewer chrome density modes:
+/// - `compact`: image-only viewport with a floating HUD on pointer hover.
+/// - `simple`: top toolbar + image viewport, hiding sidebars, filmstrip and status bar.
+/// - `standard`: full workspace with sidebars, filmstrip and status bar (default).
+pub const LAYOUT_VIEWER_UI_MODES: [&str; 3] = ["compact", "simple", "standard"];
+
+/// Viewer image display modes:
+/// - `single`: one image fitted/zoomed in the canvas (default).
+/// - `dual`: two-page book/manga spread with smart landscape & cover handling.
+/// - `webtoon`: continuous virtualized vertical strip.
+pub const LAYOUT_VIEWER_DISPLAY_MODES: [&str; 3] = ["single", "dual", "webtoon"];
+
 fn default_true() -> bool {
     true
 }
@@ -453,6 +465,16 @@ pub struct LayoutState {
     pub browser_sort_order: String,
     /// Browser thumbnail/icon size step: one of `LAYOUT_THUMB_SIZES`.
     pub browser_thumb_size: String,
+    /// Viewer UI chrome density: one of `LAYOUT_VIEWER_UI_MODES`.
+    pub viewer_ui_mode: String,
+    /// Viewer image display mode: one of `LAYOUT_VIEWER_DISPLAY_MODES`.
+    pub viewer_display_mode: String,
+    /// Right-to-left reading order for Dual / Manga mode.
+    pub manga_rtl: bool,
+    /// Keep page 0 standalone as a cover page in Dual mode.
+    pub manga_cover_separate: bool,
+    /// Gap in pixels between pages in Dual and Webtoon modes (`0..=64`).
+    pub manga_page_gap: u16,
 }
 
 impl Default for LayoutState {
@@ -471,6 +493,11 @@ impl Default for LayoutState {
             browser_sort_by: "name".to_owned(),
             browser_sort_order: "asc".to_owned(),
             browser_thumb_size: "m".to_owned(),
+            viewer_ui_mode: "simple".to_owned(),
+            viewer_display_mode: "single".to_owned(),
+            manga_rtl: false,
+            manga_cover_separate: true,
+            manga_page_gap: 8,
         }
     }
 }
@@ -502,6 +529,13 @@ impl LayoutState {
         if !LAYOUT_THUMB_SIZES.contains(&self.browser_thumb_size.as_str()) {
             self.browser_thumb_size = "m".to_owned();
         }
+        if !LAYOUT_VIEWER_UI_MODES.contains(&self.viewer_ui_mode.as_str()) {
+            self.viewer_ui_mode = "simple".to_owned();
+        }
+        if !LAYOUT_VIEWER_DISPLAY_MODES.contains(&self.viewer_display_mode.as_str()) {
+            self.viewer_display_mode = "single".to_owned();
+        }
+        self.manga_page_gap = self.manga_page_gap.min(64);
         let mut panels = BTreeMap::new();
         for key in LAYOUT_PANEL_KEYS {
             panels.insert(
@@ -1250,6 +1284,9 @@ mod tests {
             editor_reference_height: 9999,
             editor_reference_tab: "elsewhere".into(),
             browser_view: "gallery".into(),
+            viewer_ui_mode: "zen".into(),
+            viewer_display_mode: "carousel".into(),
+            manga_page_gap: 999,
             ..LayoutState::default()
         }
         .sanitized();
@@ -1261,16 +1298,25 @@ mod tests {
         // The Browser's view mode is one of the three the window draws; a value
         // from a newer build reads as the default rather than as a blank grid.
         assert_eq!(wild.browser_view, "thumbnails");
+        assert_eq!(wild.viewer_ui_mode, "simple");
+        assert_eq!(wild.viewer_display_mode, "single");
+        assert_eq!(wild.manga_page_gap, 64);
         // It travels in camelCase like every other layout field, so the window
         // and the CLI name the same thing.
         let json = serde_json::to_string(&Command::SetLayout {
             layout: LayoutState {
                 browser_view: "details".into(),
+                viewer_ui_mode: "compact".into(),
+                viewer_display_mode: "dual".into(),
+                manga_rtl: true,
                 ..LayoutState::default()
             },
         })
         .unwrap();
         assert!(json.contains("\"browserView\":\"details\""), "{json}");
+        assert!(json.contains("\"viewerUiMode\":\"compact\""), "{json}");
+        assert!(json.contains("\"viewerDisplayMode\":\"dual\""), "{json}");
+        assert!(json.contains("\"mangaRtl\":true"), "{json}");
 
         // An older config's booleans hide the dock they described.
         let legacy = LayoutState::from_legacy(Some(false), Some(true), Some(false), Some(false));

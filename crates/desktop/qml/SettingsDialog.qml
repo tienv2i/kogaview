@@ -82,8 +82,6 @@ DialogFrame {
         { key: "editor.original", label: qsTr("Original") }
     ]
     readonly property var viewerPanels: [
-        { key: "viewer.quickAccess", label: qsTr("Quick access") },
-        { key: "viewer.explorer", label: qsTr("Explorer") },
         { key: "viewer.info", label: qsTr("Info") }
     ]
 
@@ -92,7 +90,7 @@ DialogFrame {
     /// a key this list forgets comes back visible rather than hidden.
     readonly property var allPanelKeys: [
         "browser.quickAccess", "browser.explorer", "browser.preview", "browser.batch",
-        "viewer.quickAccess", "viewer.explorer", "viewer.info",
+        "viewer.info",
         "editor.quickAccess", "editor.explorer", "editor.tools", "editor.options",
         "editor.info", "editor.history", "editor.original"
     ]
@@ -119,7 +117,8 @@ DialogFrame {
     readonly property string defaultLanguage: "system"
     readonly property var defaultLayout: ({
         leftWidth: 260, rightWidth: 300, editorToolColumns: 2,
-        editorReferenceHeight: 0, editorReferenceTab: "info", panels: ({})
+        editorReferenceHeight: 0, editorReferenceTab: "info",
+        viewerUiMode: "simple", viewerDisplayMode: "single", panels: ({})
     })
 
     readonly property bool hardwareAccelerationValue: hwAccelChoice.checked
@@ -187,6 +186,8 @@ DialogFrame {
         if ((a.editorToolColumns || 0) !== (b.editorToolColumns || 0)) return false
         if ((a.editorReferenceHeight || 0) !== (b.editorReferenceHeight || 0)) return false
         if ((a.editorReferenceTab || "info") !== (b.editorReferenceTab || "info")) return false
+        if ((a.viewerUiMode || "simple") !== (b.viewerUiMode || "simple")) return false
+        if ((a.viewerDisplayMode || "single") !== (b.viewerDisplayMode || "single")) return false
         for (var index = 0; index < dialog.allPanelKeys.length; ++index) {
             var key = dialog.allPanelKeys[index]
             var leftPanels = a.panels || ({})
@@ -603,8 +604,80 @@ DialogFrame {
     ColumnLayout {
         objectName: "settingsViewerPage"
         Layout.fillWidth: true
-        spacing: 6
+        spacing: 12
         visible: dialog.section === "viewer"
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Default Viewer mode")
+            Layout.fillWidth: true
+
+            FormRow {
+                theme: dialog.theme
+                label: qsTr("Open mode")
+                Layout.fillWidth: true
+
+                ComboBox {
+                    id: viewerUiModeChoice
+                    objectName: "settingsViewerUiMode"
+                    Layout.fillWidth: true
+                    readonly property var modeKeys: ["simple", "standard", "compact"]
+                    model: [
+                        qsTr("Simple (toolbar only)"),
+                        qsTr("Standard (full workspace)"),
+                        qsTr("Compact (image & floating HUD)")
+                    ]
+                    currentIndex: {
+                        var mode = (dialog.editedLayout && dialog.editedLayout.viewerUiMode) || "simple"
+                        var idx = modeKeys.indexOf(mode)
+                        return idx >= 0 ? idx : 0
+                    }
+                    onActivated: function(index) {
+                        var next = dialog.copyLayout(dialog.editedLayout)
+                        next.viewerUiMode = modeKeys[index] || "simple"
+                        dialog.editedLayout = next
+                        dialog.changed()
+                    }
+                }
+            }
+
+            FormRow {
+                theme: dialog.theme
+                label: qsTr("Display mode")
+                Layout.fillWidth: true
+
+                ComboBox {
+                    id: viewerDisplayModeChoice
+                    objectName: "settingsViewerDisplayMode"
+                    Layout.fillWidth: true
+                    readonly property var displayKeys: ["single", "dual", "webtoon"]
+                    model: [
+                        qsTr("Single"),
+                        qsTr("Dual page (book)"),
+                        qsTr("Webtoon (vertical)")
+                    ]
+                    currentIndex: {
+                        var mode = (dialog.editedLayout && dialog.editedLayout.viewerDisplayMode) || "single"
+                        var idx = displayKeys.indexOf(mode)
+                        return idx >= 0 ? idx : 0
+                    }
+                    onActivated: function(index) {
+                        var next = dialog.copyLayout(dialog.editedLayout)
+                        next.viewerDisplayMode = displayKeys[index] || "single"
+                        dialog.editedLayout = next
+                        dialog.changed()
+                    }
+                }
+            }
+
+            Label {
+                text: qsTr("Default interface density when opening images in Viewer.")
+                color: dialog.theme.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+        }
 
         FormSection {
             theme: dialog.theme

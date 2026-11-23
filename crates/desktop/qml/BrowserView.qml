@@ -1722,31 +1722,6 @@ Item {
                 }
             }
         }
-
-        RightPanelRail {
-            objectName: "browserRightRail"
-            theme: view.theme
-            buttonPrefix: "browserRail"
-            entries: [
-                { key: "preview", label: qsTr("Preview"), icon: "icons/preview.svg",
-                  active: view.previewPanelVisible && (view.rightPage === "preview" || !view.batchPanelVisible) },
-                { key: "batch", label: qsTr("Batch action"), icon: "icons/batch.svg",
-                  active: view.batchPanelVisible && (view.rightPage === "batch" || !view.previewPanelVisible) }
-            ]
-            onToggled: function(key) {
-                var shown = key === "preview" ? view.previewPanelVisible : view.batchPanelVisible
-                var isCurrent = (view.rightPage === key)
-                    || (key === "preview" && !view.batchPanelVisible)
-                    || (key === "batch" && !view.previewPanelVisible)
-                if (!shown) {
-                    view.setPanelVisible(key, true)
-                } else if (!isCurrent) {
-                    view.rightPage = key
-                } else {
-                    view.setPanelVisible(key, false)
-                }
-            }
-        }
     }
 
     // ------------------------------------------------------------ context menus

@@ -97,18 +97,16 @@ QtObject {
         qsTr("Toggle tool and reference panel"),
         // The shell's way into the Browser's batch form (row 103). Appended
         // for the same reason as every entry above: indices are a contract.
-        qsTr("Tools…")
+        qsTr("Tools…"),
+        qsTr("Reset view")
     ]
     /// The labels the menus are built from (`Main.qml`, the Editor's canvas
     /// menu). Same list, kept as a name of its own so the views read
     /// "what to show" and the shell reads "what to measure".
     readonly property var menuEntries: menuEntryLabels
-    /// The shell's way into the Browser's batch form: the last label appended
-    /// above. Named rather than indexed, because an index here is a trap — the
-    /// entry was written against slot 39, which is the folder menu's
-    /// "Toggle information panel", so the Tools entry drew that word and the
-    /// batch form opened from a menu item nobody could recognise.
-    readonly property string batchToolsLabel: menuEntryLabels[menuEntryLabels.length - 1]
+    /// The shell's way into the Browser's batch form. Named rather than indexed
+    /// by callers so appending new measured labels never breaks the entry.
+    readonly property string batchToolsLabel: menuEntryLabels[menuEntryLabels.length - 2]
     /// Pixels each of `menuEntryLabels` needs, measured once by the shell with the
     /// window font the entries are drawn in (`Main.qml` fills this in).
     property var menuLabelWidths: []

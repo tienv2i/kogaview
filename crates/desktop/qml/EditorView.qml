@@ -5204,10 +5204,13 @@ Item {
             }
         }
 
-        RightPanelRail {
+        SidePanelRail {
             objectName: "editorRightRail"
+            edge: "right"
             theme: view.theme
             buttonPrefix: "editorRail"
+            anyActive: view.toolOptionsVisible || view.infoVisible
+                       || view.historyVisible || view.originalVisible
             entries: [
                 { key: "options", label: qsTr("Tool options"), icon: "icons/preferences.svg",
                   active: view.toolOptionsVisible },
@@ -5240,6 +5243,14 @@ Item {
                     view.setPanelVisible(key, false)
                 }
             }
+            onHideAll: view.layoutRequested({
+                panels: {
+                    "editor.options": false,
+                    "editor.info": false,
+                    "editor.history": false,
+                    "editor.original": false
+                }
+            })
         }
     }
 

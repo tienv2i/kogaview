@@ -16,6 +16,11 @@ LANGUAGE = C++
 SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/BrowserView.qml \
           ../crates/desktop/qml/Viewer.qml \
+          ../crates/desktop/qml/ViewerModePopup.qml \
+          ../crates/desktop/qml/ViewerColorPopover.qml \
+          ../crates/desktop/qml/ViewerCompactHud.qml \
+          ../crates/desktop/qml/ViewerDualSpread.qml \
+          ../crates/desktop/qml/ViewerWebtoonView.qml \
           ../crates/desktop/qml/EditorView.qml \
           ../crates/desktop/qml/EditorResizePanel.qml \
           ../crates/desktop/qml/EditorCanvasSizePanel.qml \
@@ -38,6 +43,7 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/LeftDock.qml \
           ../crates/desktop/qml/FolderMenu.qml \
           ../crates/desktop/qml/RightDock.qml \
+          ../crates/desktop/qml/SidePanelRail.qml \
           ../crates/desktop/qml/WorkspaceSwitcher.qml \
           ../crates/desktop/qml/UiLines.qml \
           ../crates/desktop/qml/ToolbarMetrics.qml \

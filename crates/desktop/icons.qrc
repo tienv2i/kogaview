@@ -48,5 +48,13 @@
     <file alias="icons/view-icons.svg">qml/icons/view-icons.svg</file>
     <file alias="icons/view-details.svg">qml/icons/view-details.svg</file>
     <file alias="icons/chevron.svg">qml/icons/chevron.svg</file>
+    <file alias="icons/quick-access.svg">qml/icons/quick-access.svg</file>
+    <file alias="icons/explorer.svg">qml/icons/explorer.svg</file>
+    <file alias="icons/panel-hide-left.svg">qml/icons/panel-hide-left.svg</file>
+    <file alias="icons/panel-hide-right.svg">qml/icons/panel-hide-right.svg</file>
+    <file alias="icons/sidebar-left.svg">qml/icons/sidebar-left.svg</file>
+    <file alias="icons/viewer-mode.svg">qml/icons/viewer-mode.svg</file>
+    <file alias="icons/fullscreen.svg">qml/icons/fullscreen.svg</file>
+    <file alias="icons/fullscreen-exit.svg">qml/icons/fullscreen-exit.svg</file>
   </qresource>
 </RCC>

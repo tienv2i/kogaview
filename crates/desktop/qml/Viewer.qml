@@ -78,9 +78,14 @@ Item {
     readonly property int zoomPercent: Math.round(view.zoom * 100)
     readonly property bool zoomIsNotActual: Math.abs(view.zoom - 1) > 0.005
 
-    /// The filmstrip is shown when the user asked for it *and* there is a
-    /// strip worth showing: a folder with one image has nothing to scroll.
-    readonly property bool filmstripShown: !!view.state.filmstrip && view.images.length > 1
+    /// The filmstrip is shown in Standard mode (except Webtoon) when the user
+    /// asked for it *and* there is a strip worth showing.
+    readonly property bool filmstripShown:
+        view.standardChrome && view.displayMode !== "webtoon"
+        && !!view.state.filmstrip && view.images.length > 1
+
+    property bool fullscreen: false
+    signal toggleFullscreen()
 
     signal command(var command)
     /// The canvas menu's shell-side actions. The view only says *what* the user
@@ -123,23 +128,57 @@ Item {
     property var layout: ({})
     readonly property var panels: view.layout.panels || ({})
     function panelShown(key) { return view.panels[key] !== false }
-    readonly property bool quickAccessShown: view.panelShown("viewer.quickAccess")
-    readonly property bool explorerShown: view.panelShown("viewer.explorer")
-    readonly property bool leftDockShown: view.quickAccessShown || view.explorerShown
     readonly property bool infoPanelVisible: view.panelShown("viewer.info")
     readonly property bool sidebarShown: view.infoPanelVisible
+    /// Viewer UI chrome density: `"compact"` (image + floating HUD),
+    /// `"simple"` (toolbar only), or `"standard"` (full workspace).
+    readonly property string uiMode: {
+        var mode = view.layout && view.layout.viewerUiMode
+        return (mode === "compact" || mode === "simple" || mode === "standard")
+               ? mode : "standard"
+    }
+    readonly property bool standardChrome: !view.fullscreen && view.uiMode === "standard"
+
+    readonly property string displayMode: {
+        var mode = view.layout && view.layout.viewerDisplayMode
+        return (mode === "dual" || mode === "webtoon" || mode === "single")
+               ? mode : "single"
+    }
+    readonly property bool mangaRtl: !!(view.layout && view.layout.mangaRtl)
+    readonly property bool mangaCoverSeparate:
+        !(view.layout && view.layout.mangaCoverSeparate === false)
+    readonly property int mangaPageGap:
+        (view.layout && view.layout.mangaPageGap !== undefined)
+        ? Math.max(0, Math.min(64, view.layout.mangaPageGap)) : 8
+
+    function setUiMode(mode) {
+        if (mode !== "compact" && mode !== "simple" && mode !== "standard") return
+        view.layoutRequested({ viewerUiMode: mode })
+    }
+
+    function setDisplayMode(mode) {
+        if (mode !== "single" && mode !== "dual" && mode !== "webtoon") return
+        view.layoutRequested({ viewerDisplayMode: mode })
+    }
+
+    function cycleUiMode() {
+        var next = view.uiMode === "standard" ? "simple"
+                 : view.uiMode === "simple" ? "compact"
+                 : "standard"
+        view.setUiMode(next)
+    }
+
+    onUiModeChanged: Qt.callLater(view.refitOrClamp)
+    onDisplayModeChanged: {
+        if (view.displayMode === "webtoon") {
+            Qt.callLater(function() { webtoonView.jumpToPage(view.imageIndex) })
+        } else {
+            Qt.callLater(view.fit)
+        }
+    }
 
     // Widths: the saved layout is the source; a drag keeps a local value while
     // the pointer is down and the shell saves the result once it comes up.
-    property real leftPanelWidth: view.layout.leftWidth || theme.panelWidth
-    property bool leftDragging: false
-    Binding {
-        target: view
-        property: "leftPanelWidth"
-        value: view.layout.leftWidth || view.theme.panelWidth
-        when: !view.leftDragging
-        restoreMode: Binding.RestoreNone
-    }
     property real rightPanelWidth: view.layout.rightWidth || theme.previewWidth
     property bool rightDragging: false
     Binding {
@@ -152,15 +191,25 @@ Item {
     readonly property real dockWidth:
         Math.max(200, Math.min(640, rightPanelWidth))
 
-    /// Settings' Appearance tab toggled one of this workspace's panels. The
-    /// layout is Core's, so the view only says which key changed.
+    /// Toggle the Viewer's right panel (`viewer.info`, which hosts Info and
+    /// Color & Light tabs).
     function setPanelVisible(key, visible) {
+        if (key !== "info") return
         var patch = { panels: {} }
-        if (key === "info") patch.panels["viewer.info"] = visible
-        else if (key === "quickAccess") patch.panels["viewer.quickAccess"] = visible
-        else if (key === "explorer") patch.panels["viewer.explorer"] = visible
-        else return
+        patch.panels["viewer.info"] = visible
         view.layoutRequested(patch)
+    }
+
+    /// Toggle the right-side Color & Light panel directly from the toolbar.
+    function toggleColorAdjustPanel() {
+        if (!view.infoPanelVisible) {
+            view.viewerRightTab = "adjust"
+            view.setPanelVisible("info", true)
+        } else if (view.viewerRightTab !== "adjust") {
+            view.viewerRightTab = "adjust"
+        } else {
+            view.setPanelVisible("info", false)
+        }
     }
 
     property string currentPath: view.state.viewerPath || ""
@@ -192,13 +241,25 @@ Item {
 
     function setZoom(value) { viewport.setZoom(value) }
     function zoomAt(factor, pointX, pointY) { viewport.zoomAt(factor, pointX, pointY) }
-    function zoomIn() { viewport.zoomIn() }
-    function zoomOut() { viewport.zoomOut() }
-    function fit() { viewport.fit() }
+    function zoomIn() {
+        if (view.displayMode === "webtoon") webtoonView.zoomIn()
+        else viewport.zoomIn()
+    }
+    function zoomOut() {
+        if (view.displayMode === "webtoon") webtoonView.zoomOut()
+        else viewport.zoomOut()
+    }
+    function fit() {
+        if (view.displayMode === "webtoon") webtoonView.resetZoom()
+        else viewport.fit()
+    }
     function fittedZoom() { return viewport.fittedZoom() }
     function refitOrClamp() { viewport.refitOrClamp() }
     function clampOffsets() { viewport.clampOffsets() }
-    function actualSize() { viewport.actualSize() }
+    function actualSize() {
+        if (view.displayMode === "webtoon") webtoonView.setWidthZoom(1.0)
+        else viewport.actualSize()
+    }
 
     function rotateLeft() {
         view.rotationAngle = (view.rotationAngle + 270) % 360;
@@ -229,11 +290,17 @@ Item {
     /// fitted picture simply stays centred.
     function panBy(dx, dy) { viewport.panBy(dx, dy) }
 
-    /// Ask Core for the neighbouring image. The Viewer only translates the key;
-    /// `viewer_previous`/`viewer_next` own the wrap-around and the state.
+    /// Ask Core for the neighbouring image (or neighbouring spread in Dual mode,
+    /// respecting `mangaRtl`).
     function stepImage(delta) {
         if (view.images.length === 0) {
             return;
+        }
+        if (view.displayMode === "dual") {
+            var spreadDelta = view.mangaRtl ? -delta : delta
+            var target = dualSpread.targetIndexForSpreadStep(spreadDelta)
+            if (target >= 0) view.openImageAt(target)
+            return
         }
         view.command({ type: delta < 0 ? "viewer_previous" : "viewer_next" });
     }
@@ -375,6 +442,12 @@ Item {
             view.command({ type: "toggle_filmstrip" });
             event.accepted = true;
             break;
+        case Qt.Key_M:
+            if (!event.isAutoRepeat) {
+                view.cycleUiMode();
+                event.accepted = true;
+            }
+            break;
         case Qt.Key_Delete:
             if (hasImage && !event.isAutoRepeat) {
                 view.command({ type: "trash", paths: [view.currentPath] });
@@ -382,6 +455,15 @@ Item {
             }
             break;
         case Qt.Key_Escape:
+            if (view.fullscreen) {
+                view.toggleFullscreen();
+            } else if (view.uiMode === "compact") {
+                view.setUiMode("standard");
+            } else {
+                view.backToBrowser();
+            }
+            event.accepted = true;
+            break;
         case Qt.Key_Backspace:
             view.backToBrowser();
             event.accepted = true;
@@ -395,47 +477,8 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // The files: the same two panels the Browser shows. A folder click
-        // here opens it in the Browser — the Viewer is about one picture, and
-        // silently re-rooting it would change what "previous/next" means.
-        LeftDock {
-            objectName: "viewerLeftPanel"
-            visible: view.leftDockShown
-            Layout.preferredWidth: view.leftPanelWidth
-            Layout.fillHeight: true
-            theme: view.theme
-            state: view.state
-            quickAccessShown: view.quickAccessShown
-            explorerShown: view.explorerShown
-            listFolders: view.listFolders
-            onOpenFolder: function(path) { view.command({ type: "open_folder", path: path }) }
-            onNavigateTo: function(path) { view.command({ type: "open_folder", path: path }) }
-            onOpenMenu: function(path) { view.openFolderMenu(path) }
-            onQuickMenu: function(path) { view.openFolderMenu(path) }
-        }
-
-        PanelSplitter {
-            objectName: "viewerLeftSplitter"
-            visible: view.leftDockShown
-            Layout.fillHeight: true
-            theme: view.theme
-            value: view.leftPanelWidth
-            defaultValue: view.theme.panelWidth
-            direction: 1
-            minimum: 180
-            maximum: 560
-            onMoved: function(width) {
-                view.leftDragging = true
-                view.leftPanelWidth = width
-            }
-            onReleased: function(width) {
-                view.leftDragging = false
-                view.layoutRequested({ leftWidth: Math.round(width) })
-            }
-        }
-
         // The picture and its filmstrip share the centre column; the right
-        // dock is a fourth column and can be revealed or hidden in Settings.
+        // dock is a second column and can be toggled from the toolbar or Settings.
         ColumnLayout {
             // A layout child, not an anchored one: `anchors.fill` would make
             // this column cover the left dock declared before it, leaving the
@@ -444,19 +487,25 @@ Item {
             Layout.fillHeight: true
             spacing: 0
 
-            ImageCanvas {
-                id: viewport
-                objectName: "viewerViewport"
-                wheelHandlerName: "viewerWheelHandler"
-                panHandlerName: "viewerPanHandler"
+            Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: view.canvasBgUseTheme
-                       ? view.theme.background
-                       : (view.canvasBgChecker ? "transparent" : view.canvasBgColor)
-                hasContent: !!view.currentPath && image.implicitWidth > 0 && image.implicitHeight > 0
-                contentWidth: image.implicitWidth
-                contentHeight: image.implicitHeight
+
+                ImageCanvas {
+                    id: viewport
+                    objectName: "viewerViewport"
+                    anchors.fill: parent
+                    visible: view.displayMode !== "webtoon"
+                    wheelHandlerName: "viewerWheelHandler"
+                    panHandlerName: "viewerPanHandler"
+                    color: view.canvasBgUseTheme
+                           ? view.theme.background
+                           : (view.canvasBgChecker ? "transparent" : view.canvasBgColor)
+                    hasContent: view.displayMode === "dual"
+                                ? dualSpread.ready
+                                : (!!view.currentPath && image.implicitWidth > 0 && image.implicitHeight > 0)
+                    contentWidth: view.displayMode === "dual" ? dualSpread.contentWidth : image.implicitWidth
+                    contentHeight: view.displayMode === "dual" ? dualSpread.contentHeight : image.implicitHeight
                 minZoom: 0.05
                 maxZoom: 16
                 fitPadding: 0
@@ -483,8 +532,8 @@ Item {
                 Item {
                     id: canvas
                     objectName: "viewerCanvas"
-                    width: Math.max(1, image.implicitWidth)
-                    height: Math.max(1, image.implicitHeight)
+                    width: Math.max(1, view.displayMode === "dual" ? dualSpread.contentWidth : image.implicitWidth)
+                    height: Math.max(1, view.displayMode === "dual" ? dualSpread.contentHeight : image.implicitHeight)
                     scale: viewport.zoom
                     rotation: view.rotationAngle
                     x: viewport.itemX
@@ -500,6 +549,7 @@ Item {
                     Image {
                         id: image
                         objectName: "viewerImage"
+                        visible: view.displayMode === "single"
                         anchors.fill: parent
                         source: view.currentPath
                                 ? "file://" + view.currentPath
@@ -519,8 +569,34 @@ Item {
                         }
 
                         onStatusChanged: {
-                            if (status === Image.Ready && view.autoFit) {
+                            if (status === Image.Ready && view.autoFit && view.displayMode === "single") {
                                 view.fit();
+                            }
+                        }
+                    }
+
+                    ViewerDualSpread {
+                        id: dualSpread
+                        objectName: "viewerDualSpread"
+                        visible: view.displayMode === "dual"
+                        images: view.images
+                        currentIndex: view.imageIndex
+                        rtl: view.mangaRtl
+                        separateCover: view.mangaCoverSeparate
+                        pageGap: view.mangaPageGap
+                        smoothFiltering: view.state.antiAliasing !== false
+                        colorAdjustActive: viewerAdjustPanel.changed
+                        brightness: viewerAdjustPanel.brightness
+                        contrast: viewerAdjustPanel.contrast
+                        saturation: viewerAdjustPanel.saturation
+                        onSpreadReady: {
+                            if (view.autoFit && view.displayMode === "dual") {
+                                Qt.callLater(view.fit);
+                            }
+                        }
+                        onGeometryChanged: {
+                            if (view.autoFit && view.displayMode === "dual") {
+                                Qt.callLater(view.fit);
                             }
                         }
                     }
@@ -558,7 +634,7 @@ Item {
 
                 Label {
                     anchors.centerIn: parent
-                    visible: image.status === Image.Error
+                    visible: view.displayMode === "single" && image.status === Image.Error
                     text: qsTr("This image cannot be decoded")
                     color: view.theme.danger
                     font.pixelSize: 15
@@ -577,7 +653,7 @@ Item {
                     // move with every zoom.
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 12
-                    visible: view.imageSmallerThanViewport && view.autoFit
+                    visible: view.displayMode === "single" && view.imageSmallerThanViewport && view.autoFit
                     text: qsTr("Small image shown at 100 % — scroll or press + to enlarge")
                     color: view.theme.textMuted
                     font.pixelSize: 12
@@ -588,6 +664,75 @@ Item {
                         border.color: view.theme.border
                     }
                     padding: 8
+                }
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    visible: view.displayMode === "webtoon"
+                    color: view.canvasBgUseTheme
+                           ? view.theme.background
+                           : (view.canvasBgChecker ? "transparent" : view.canvasBgColor)
+
+                    Checkerboard {
+                        anchors.fill: parent
+                        square: 12
+                        visible: !view.canvasBgUseTheme && view.canvasBgChecker
+                    }
+
+                    ViewerWebtoonView {
+                        id: webtoonView
+                        objectName: "viewerWebtoonView"
+                        anchors.fill: parent
+                        theme: view.theme
+                        images: view.images
+                        currentIndex: view.imageIndex
+                        pageGap: view.mangaPageGap
+                        smoothFiltering: view.state.antiAliasing !== false
+                        colorAdjustActive: viewerAdjustPanel.changed
+                        brightness: viewerAdjustPanel.brightness
+                        contrast: viewerAdjustPanel.contrast
+                        saturation: viewerAdjustPanel.saturation
+                        inputBlocked: viewerBgColorDialog.visible
+                        onPageCentered: function(idx) {
+                            view.openImageAt(idx)
+                        }
+                        onContextMenuRequested: function(px, py) {
+                            if (!view.currentPath) return
+                            var local = webtoonView.mapToItem(view, px, py)
+                            canvasMenu.popup(view, local.x, local.y)
+                        }
+                    }
+                }
+
+                ViewerCompactHud {
+                    id: compactHud
+                    objectName: "viewerCompactHud"
+                    theme: view.theme
+                    active: view.fullscreen || view.uiMode === "compact"
+                    fullscreen: view.fullscreen
+                    hasImage: !!view.currentPath
+                    imageCount: view.images.length
+                    imageIndex: view.imageIndex
+                    imageName: view.currentInfo ? view.currentInfo.name : ""
+                    colorAdjustActive: viewerAdjustPanel.changed
+                    keepOpen: viewerModePopup.visible || viewerColorPopover.visible
+                    onPreviousRequested: view.stepImage(-1)
+                    onNextRequested: view.stepImage(1)
+                    onZoomOutRequested: view.zoomOut()
+                    onFitRequested: view.fit()
+                    onZoomInRequested: view.zoomIn()
+                    onColorToggleRequested: function(anchor, edge) {
+                        viewerColorPopover.toggleNear(anchor, edge)
+                    }
+                    onModeToggleRequested: function(anchor, edge) {
+                        viewerModePopup.toggleNear(anchor, edge)
+                    }
+                    onFullscreenToggleRequested: view.toggleFullscreen()
+                    onBrowserRequested: view.backToBrowser()
+                    onEditorRequested: {
+                        if (view.currentPath) view.editInEditor(view.currentPath)
+                    }
                 }
             }
 
@@ -726,7 +871,7 @@ Item {
 
         PanelSplitter {
             objectName: "viewerRightSplitter"
-            visible: view.sidebarShown
+            visible: view.standardChrome && view.sidebarShown
             Layout.fillHeight: true
             theme: view.theme
             value: view.dockWidth
@@ -748,7 +893,7 @@ Item {
         // adjustments (presentation-only, never saved to disk).
         RightDock {
             objectName: "viewerRightPanel"
-            visible: view.sidebarShown
+            visible: view.standardChrome && view.sidebarShown
             Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
             theme: view.theme
@@ -801,31 +946,21 @@ Item {
                         theme: view.theme
                         viewOnly: true
                         showReset: true
+                        onBrightnessChanged: {
+                            if (Math.abs(viewerColorPopover.brightness - brightness) > 0.0005)
+                                viewerColorPopover.brightness = brightness
+                        }
+                        onContrastChanged: {
+                            if (Math.abs(viewerColorPopover.contrast - contrast) > 0.0005)
+                                viewerColorPopover.contrast = contrast
+                        }
+                        onSaturationChanged: {
+                            if (Math.abs(viewerColorPopover.saturation - saturation) > 0.0005)
+                                viewerColorPopover.saturation = saturation
+                        }
                     }
 
                     Item { Layout.fillHeight: true }
-                }
-            }
-        }
-
-        RightPanelRail {
-            objectName: "viewerRightRail"
-            theme: view.theme
-            buttonPrefix: "viewerRail"
-            entries: [
-                { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
-                  active: view.infoPanelVisible && view.viewerRightTab === "info" },
-                { key: "adjust", label: qsTr("Color"), icon: "icons/adjust.svg",
-                  active: view.infoPanelVisible && view.viewerRightTab === "adjust" }
-            ]
-            onToggled: function(key) {
-                if (!view.infoPanelVisible) {
-                    view.viewerRightTab = key
-                    view.setPanelVisible("info", true)
-                } else if (view.viewerRightTab !== key) {
-                    view.viewerRightTab = key
-                } else {
-                    view.setPanelVisible("info", false)
                 }
             }
         }
@@ -1062,16 +1197,6 @@ Item {
             ToolbarButton {
                 theme: view.theme
                 visible: !view.miniToolbar
-                icon.name: "zoom-in-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: !!view.currentPath
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom in (+ or scroll wheel)")
-                onClicked: view.zoomIn()
-            }
-            ToolbarButton {
-                theme: view.theme
-                visible: !view.miniToolbar
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1091,6 +1216,16 @@ Item {
             ToolbarButton {
                 theme: view.theme
                 visible: !view.miniToolbar
+                icon.name: "zoom-in-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: !!view.currentPath
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Zoom in (+ or scroll wheel)")
+                onClicked: view.zoomIn()
+            }
+            ToolbarButton {
+                theme: view.theme
+                visible: !view.miniToolbar
                 icon.name: "zoom-original-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1105,62 +1240,50 @@ Item {
             }
 
             ToolbarButton {
+                objectName: "viewerTransformButton"
                 theme: view.theme
                 visible: !view.miniToolbar
-                icon.name: "object-rotate-left-symbolic"
+                checked: view.rotationAngle !== 0 || view.flipH || view.flipV
+                icon.source: "icons/rotate-right.svg"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Rotate left (Shift+R)")
-                onClicked: view.rotateLeft()
+                ToolTip.text: qsTr("Rotate & flip")
+                onClicked: viewerTransformMenu.toggleFrom(this)
             }
             ToolbarButton {
+                objectName: "viewerColorAdjustButton"
                 theme: view.theme
                 visible: !view.miniToolbar
-                icon.name: "object-rotate-right-symbolic"
+                checked: view.infoPanelVisible && view.viewerRightTab === "adjust"
+                icon.source: "icons/adjust.svg"
                 display: AbstractButton.IconOnly
-                enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Rotate right (R)")
-                onClicked: view.rotateRight()
+                ToolTip.text: qsTr("Color & light")
+                onClicked: view.toggleColorAdjustPanel()
             }
             ToolbarButton {
+                objectName: "viewerUiModeButton"
                 theme: view.theme
                 visible: !view.miniToolbar
-                icon.name: "object-flip-horizontal-symbolic"
+                checked: view.uiMode !== "standard" || view.displayMode !== "single"
+                icon.source: "icons/viewer-mode.svg"
                 display: AbstractButton.IconOnly
-                enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Flip horizontally (H)")
-                onClicked: view.toggleFlipH()
+                ToolTip.text: qsTr("Viewer mode & layout (M)")
+                onClicked: viewerModePopup.toggleBelow(this)
             }
             ToolbarButton {
+                objectName: "viewerFullscreenButton"
                 theme: view.theme
                 visible: !view.miniToolbar
-                icon.name: "object-flip-vertical-symbolic"
+                checked: view.fullscreen
+                icon.source: view.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
                 display: AbstractButton.IconOnly
-                enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Flip vertically (V)")
-                onClicked: view.toggleFlipV()
+                ToolTip.text: view.fullscreen ? qsTr("Exit fullscreen (F11)") : qsTr("Fullscreen (F11)")
+                onClicked: view.toggleFullscreen()
             }
-            ToolbarButton {
-                objectName: "viewerResetView"
-                theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "view-refresh-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: !!view.currentPath
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Reset view")
-                onClicked: view.resetView()
-            }
-
-            ToolbarSeparator {
-                theme: view.theme
-                visible: !view.miniToolbar
-            }
-
             ToolbarButton {
                 objectName: "viewerFilmstripToggle"
                 theme: view.theme
@@ -1223,6 +1346,85 @@ Item {
     property bool canvasBgUseTheme: true
     property bool canvasBgChecker: false
     property color canvasBgColor: "#ffffff"
+
+    AppMenu {
+        id: viewerTransformMenu
+        objectName: "viewerTransformMenu"
+        theme: view.theme
+        implicitWidth: view.menuWidth
+
+        MenuItem {
+            text: view.theme.menuEntries[23]
+            icon.name: "object-rotate-left-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.rotateLeft()
+            MenuShortcut { text: "Shift+R" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[24]
+            icon.name: "object-rotate-right-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.rotateRight()
+            MenuShortcut { text: "R" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[25]
+            icon.name: "object-flip-horizontal-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.toggleFlipH()
+            MenuShortcut { text: "H" }
+        }
+        MenuItem {
+            text: view.theme.menuEntries[26]
+            icon.name: "object-flip-vertical-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.toggleFlipV()
+            MenuShortcut { text: "V" }
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Reset view")
+            icon.name: "view-refresh-symbolic"
+            enabled: !!view.currentPath
+            onTriggered: view.resetView()
+        }
+    }
+
+    ViewerModePopup {
+        id: viewerModePopup
+        objectName: "viewerModePopup"
+        parent: view
+        theme: view.theme
+        currentMode: view.uiMode
+        displayMode: view.displayMode
+        mangaRtl: view.mangaRtl
+        mangaCoverSeparate: view.mangaCoverSeparate
+        mangaPageGap: view.mangaPageGap
+        webtoonFitMode: webtoonView.fitMode
+        onModeSelected: function(mode) { view.setUiMode(mode) }
+        onDisplayModeSelected: function(mode) { view.setDisplayMode(mode) }
+        onMangaOptionsChanged: function(patch) { view.layoutRequested(patch) }
+        onWebtoonFitSelected: function(mode) { webtoonView.setFitMode(mode) }
+    }
+
+    ViewerColorPopover {
+        id: viewerColorPopover
+        objectName: "viewerColorPopover"
+        parent: view
+        theme: view.theme
+        onBrightnessChanged: {
+            if (Math.abs(viewerAdjustPanel.brightness - brightness) > 0.0005)
+                viewerAdjustPanel.brightness = brightness
+        }
+        onContrastChanged: {
+            if (Math.abs(viewerAdjustPanel.contrast - contrast) > 0.0005)
+                viewerAdjustPanel.contrast = contrast
+        }
+        onSaturationChanged: {
+            if (Math.abs(viewerAdjustPanel.saturation - saturation) > 0.0005)
+                viewerAdjustPanel.saturation = saturation
+        }
+    }
 
     BackgroundPopup {
         id: viewerBgPopup
