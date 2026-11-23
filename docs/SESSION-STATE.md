@@ -204,14 +204,36 @@ command, payload or journal line changed (ADR 0024). Core is deliberately not
 a crate of its own: the one ordered gateway is the feature, and the desktop
 bridge names `Core` directly.
 
+The pass after that is a colour question: Photoshop's foreground/background pair
+was the brush's, and two other tools each kept their own answer to "what colour
+is the canvas this command adds?". The pair is now the Editor's one pair, drawn
+in the tool rail, opened from the rail, from the Crop panel's grow row and from
+the Resize form's pad row, with transparency a legal background and the wire
+still one colour plus one alpha byte per command (ADR 0025).
+
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. The suite split is **uncommitted** on top of `8fd68f1`
-  (`refactor(core): one module per area`): `crates/app-core/src/core/tests.rs`
-  is now `crates/app-core/src/core/tests/` — `mod.rs` with the 13 shared
-  fixtures and the `browsing`, `viewing`, `editing`, `gateway`, `jobs` files;
+- Branch `main`. One colour pair per Editor is **uncommitted** on top of
+  `51aa300`: `crates/desktop/qml/ColourPair.qml`, `BackgroundPopup.qml` and
+  `Checkerboard.qml` (new; registered in `crates/desktop/build.rs` and
+  `i18n/kogaview_ts.pro`), `crates/desktop/qml/EditorView.qml` (owns the pair,
+  the rail row, the Crop grow swatch and the two choosers),
+  `crates/desktop/qml/ResizeDialog.qml` (the pad row reads and writes the
+  Editor's background), `tests/qml/tst_editor.cpp` (`init()` resets the pair;
+  `theColourPairIsTheEditorsOnePair`, `theJpegWarningSitsInTheBackgroundList`,
+  `resizeCarriesThePadFill`, `aGrowingCropReachesOutsideThePicture`,
+  `resetRestoresTheCropOptionsAndKeepsTheFrame`), `cpp/main.cpp` (`editor-crop`
+  `_ARG7` and `editor-resize` `_ARG3` write the Editor's background, and the new
+  `editor-colour` request), `i18n/kogaview_vi.ts` and `cpp/translations.cpp`
+  (two dead rows removed), ADR 0025 with revisions in ADR 0014 and ADR 0012,
+  `docs/M1-REPORT.md` row 110 and `docs/evidence/M1-colour-pair*-vi.png`.
+  `git status` is the authority.
+- Branch `main`. The core suite split is **committed** as `51aa300`:
+  `crates/app-core/src/core/tests.rs` was `core/tests/` — `mod.rs` with the 13
+  shared fixtures and the `browsing`, `viewing`, `editing`, `gateway`, `jobs`
+  files;
   ADR 0024's revision and `docs/M1-REPORT.md` row 109. The production side of
   `core/` (`mod.rs`, `gateway.rs`, `browsing.rs`, `viewing.rs`, `editing.rs`,
   `jobs.rs`) is the committed `8fd68f1`, with `crates/app-core/src/core.rs`
@@ -1095,23 +1117,23 @@ removed none — the counts are the ones the same code produced before the move.
 - **A press on the matte is not a dab.** The canvas host extends beyond the
   picture; a press outside the document is ignored, because it would send a
   stroke Core clips away and still cost an undo step and a preview render.
-- **The two colours are a pair of boxes, as in Photoshop.** The inspector draws
+- **The two colours are a pair of boxes, as in Photoshop.** The inspector drew
   the foreground box raised over the background one, each box opening its own
   `ColorDialog` (`paintForegroundColorDialog` / `paintBackgroundColorDialog`)
   rather than one chooser that has to be told which colour it edits, with the
-  swap arrow and the black-over-white reset square beside them. The pair, the
-  hex field and both choosers read the same two properties (`#rrggbb`, three
-  bytes like the command), so a box cannot show a colour the next stroke would
-  not use; a `ColorDialog` answer carries an alpha byte, which `colorText()`
-  drops. Only the foreground reaches a stroke — the background is the colour X
-  swaps in and D resets to — so it needs no command of its own. The chooser is
+  swap arrow and the black-over-white reset square beside them. The chooser is
   seeded on the click as well as by its binding, because the dialog writes
   `selectedColor` itself while the user drags and that ends the binding. Seen on
   the window with the brush armed: the pair at 62 px with the hex field beside
   it, the Vietnamese label `Tiền cảnh`
-  (`docs/evidence/M1-paint-colour-pair-vi.png`); the two choosers were opened by
-  `tst_editor::theColourPairIsTwoBoxesWithTwoChoosers`, which clicks each box
-  and checks that the other chooser stayed shut.
+  (`docs/evidence/M1-paint-colour-pair-vi.png`).
+  **Superseded in part by ADR 0025:** the pair is the Editor's now, not the
+  brush's, it is drawn in the tool rail, its boxes open
+  `foregroundColorDialog` and the background list rather than two colour
+  dialogs, and the background has a transparent state. The guard that clicks
+  each box and checks the other control stayed shut is
+  `tst_editor::theColourPairIsTheEditorsOnePair` (the paint session's
+  `theColourPairIsTwoBoxesWithTwoChoosers` no longer exists).
 
 ## Design decisions, dialog-open fix (row 86)
 
@@ -1530,6 +1552,20 @@ number; making `toggle_right_panel` ignore the explicit `workspace` →
 written. The black-frame bug was mutated last: `book: thumbs` back to `book:
 view.thumbnails` fails `theOriginalTabShowsTheSavedFile` with `edge 0`, which is
 the defect exactly. Each restored, then `just test` green.
+
+Colour pair: `ResizeDialog.fillForCommand` ignoring `backgroundTransparent`
+(returning the painted colour with alpha 0) → `resizeCarriesThePadFill` fails on
+`fill` index 0 — **only after the transparent case was made to assert the three
+bytes as well as the alpha**, which is the hole this mutation found;
+`BackgroundPopup.choose` sending `#ffffff` for the `Transparent` row →
+`theColourPairIsTheEditorsOnePair` fails on `backgroundTransparent` being false;
+`backgroundAlpha()` fixed at 255 → `aGrowingCropReachesOutsideThePicture` fails;
+`documentIsJpeg` answering `false` → `theJpegWarningSitsInTheBackgroundList`
+fails on the note's visibility; the background list's `onColourPicked` calling
+`setForegroundColor` → `theColourPairIsTheEditorsOnePair` fails on the pair's
+two values; `optionsColourPair.visible: view.toolsShown` (inverted) → the same
+case fails on "the fallback pair is not visible with the rail shown". Each
+restored from a copy, the editor suite green again (72 cases).
 
 ## Design decisions, export-size session (ADR 0004)
 
@@ -2126,6 +2162,123 @@ not become a crate, and that is the decision, not an omission.
   rev 1 → `editor_open` rev 3 → `batch_run ok:true` rev 5, the output has the
   three `-c.png` copies at their own sizes, and the grab shows the Editor at
   `rev 10` (`docs/evidence/M1-core-split.png`).
+
+## Design decisions, one colour pair per Editor (ADR 0025)
+
+The foreground/background pair left the brush's tool options and became the
+Editor's, drawn in the tool rail, and the three per-tool answers to "what colour
+is the canvas this command adds?" became one. QML, tests, docs and two dev hooks;
+no protocol type, no Core rule and no journal line changed.
+
+- **The colours live on the view, the component only draws.** `EditorView` owns
+  `foregroundColor` (a `#rrggbb` string), `backgroundColor` and
+  `backgroundTransparent`; `ColourPair.qml` draws 34 × 34 with the foreground box
+  raised over the background one, the swap arrow and the black-over-white reset
+  square, and emits four signals. `foregroundBytes()`, `backgroundBytes()` and
+  `backgroundAlpha()` are the only readers, so the rail's pair, the hex field,
+  the palette and every command show one value.
+- **Two roles, two questions.** Foreground = a mark *inside* the picture, opaque
+  RGB, three bytes, exactly what `editor_paint_stroke` carries; it has no
+  transparent state, because the eraser's `erase` is how a mark is removed.
+  Background = *new canvas* (resize padding, a grown crop border, later a
+  rotate's corners), and transparent is a legal answer, drawn as the
+  checkerboard because a `Rectangle` cannot draw "no colour".
+- **The wire is the command's own colour.** A background travels as three bytes
+  plus `fill_alpha`; transparent is `[0, 0, 0]` with `fill_alpha: 0` (the bytes
+  are irrelevant at alpha zero, so no third state was added), and a Grow
+  rectangle that still fits inside the picture sends no fill at all. Core still
+  receives a concrete colour per command, which is why this needed no protocol
+  change.
+- **One background list, three places.** `BackgroundPopup.qml`
+  (`Transparent`, `White`, `Black`, `Gray`, `Custom color…`) is opened by the
+  rail's background box, by the paint options' fallback pair, by the Crop
+  panel's `cropBackgroundSwatch` and by the Resize form's `resizeBackgroundSwatch`
+  — the form keeps its own instance so the list is placed inside its own window.
+  A `ColorDialog` cannot say "no colour", which is why the background role has a
+  list at all; the foreground keeps the plain chooser and the hex field.
+- **Dialogs edit the global background; no operation keeps its own.** Resize's
+  `backgrounds`/`backgroundMode`/`customColor` and Crop's `cropFill`/
+  `cropFillIndex`/`chooseCropFill` are gone. The form takes `backgroundColor`,
+  `backgroundTransparent` and `documentIsJpeg`, and answers with
+  `backgroundTransparentRequested`/`backgroundColorRequested` for the Editor to
+  store, so choosing `Gray` for a pad is the state the rail shows the moment the
+  form closes. Crop's Grow row is a swatch for the same reason.
+- **The pair is reachable with the rail put away.** Settings › Appearance can
+  hide any panel (ADR 0022), so with `editor.tools` hidden the same component is
+  drawn in the paint options above the hex field, from the same properties. Two
+  live copies therefore exist and only one is on screen, which is why every
+  inner object name is the instance's own name plus a role
+  (`colourPairForegroundSwatch`, `optionsColourPairBackgroundSwatch`): a test or
+  a dev hook must not be able to land on the copy that is not on screen.
+- **The properties are named for the roles, not the tool.**
+  `paintColor` → `foregroundColor`, `paintBackgroundColor` →
+  `backgroundColor`, `paintColorBytes` → `foregroundBytes`, `setPaintColor` →
+  `setForegroundColor`, `setPaintBackgroundColor` → `setBackgroundColor`,
+  `swapPaintColors` → `swapColours`, `resetPaintColors` → `resetColours`. The
+  paint *tool* keeps its own names (`paintSize`, `paintOpacity`,
+  `paintSwatches`): those belong to the stroke, not to the colours.
+- **`X` cannot make the foreground transparent.** Swap exchanges the two
+  colours and the foreground is always opaque, so a transparent background
+  swapped forward becomes a concrete colour (its last painted value) and the
+  transparency stays with the background role. That trade-off is accepted and
+  written into the ADR rather than hidden.
+- **Crop's `Reset options` leaves the background alone.** The background is the
+  Editor's; Reset resets the crop (frame, locks, ratio, mode). A reset that
+  quietly painted the next grown border white would be the per-tool ownership
+  this session removed. `resetRestoresTheCropOptionsAndKeepsTheFrame` asserts
+  it, and `init()` resets the pair so cases cannot leak into each other.
+- **A JPEG says what its save will do.** `documentIsJpeg` (the open document's
+  extension) turns on one line in the background list: a JPEG has no alpha and
+  Core's encoder composites it over white
+  (`crates/app-editor/src/codec.rs`). `Transparent` is still offered — the
+  picture on screen really is clear and an Export to PNG keeps it — and the note
+  explains the save at the moment the answer can still change. It is a note, not
+  a refusal, and no second state was invented for it.
+- **`resize_pad_needs_colour` is unreachable from the interface.** The form has
+  no `None` background any more, so a pad always carries a fill; the rule stays
+  in `crates/app-editor/src/validate.rs` for a client that sends one without.
+- **Two dev hooks, and one of them found a bug in itself.** `editor-crop`'s
+  `_ARG7` and `editor-resize`'s `_ARG3` now write the Editor's background
+  (`setBackgroundTransparent`/`setBackgroundColor`, the functions the list and
+  the chooser call), and `editor-paint` writes `foregroundColor`. A new
+  `editor-colour` request drives `swap`, `reset`, `list`, `foreground`,
+  `pick:<key>` and a typed `#rrggbb`, hides the rail with `_ARG4=notools` and
+  arms the brush with `_ARG3=brush`. Hiding the rail did nothing until the hook
+  passed the bare key `tools`: `setPanelVisible` adds the `editor.` prefix
+  itself, so `editor.tools` returned silently at its guard — a screenshot is
+  what showed the panel still there.
+- **Evidence it runs:** the real dev binary on an isolated `XDG_*`, Vietnamese
+  interface, an 800 × 600 striped picture in the Editor — the rail's pair
+  (foreground `#e5484d`, background transparent) with the paint options' hex
+  field beside it (`docs/evidence/M1-colour-pair-rail-vi.png`); the background
+  list open under the box with `Gray` ticked
+  (`docs/evidence/M1-colour-pair-list-vi.png`); the Resize form's `Nền` row
+  showing the Editor's background, white and then `Trong suốt` with the
+  checkerboard (`…-resize-pad-white-vi.png`, `…-resize-pad-transparent-vi.png`);
+  Crop's grow border with the frame pushed outside the picture, painted grey and
+  then clear, the panel's swatch following
+  (`…-crop-grow-gray-vi.png`, `…-crop-grow-transparent-vi.png`); and the
+  fallback pair with the rail put away
+  (`docs/evidence/M1-colour-pair-rail-hidden-vi.png`). One grab taken while the
+  session had locked itself came back as another window's frame at screen size
+  (1920 × 1114, exit 0) and later runs failed outright (`exit 4`) until the
+  session was unlocked and DPMS turned back on — so every grab was opened and
+  read before it was kept, and the wrong one was re-run.
+- **Mutations, each run and restored:** `ResizeDialog.fillForCommand` ignoring
+  `backgroundTransparent` (caught only after the transparent case was made to
+  assert the three bytes as well as the alpha — the hole this session's own
+  mutation found), `BackgroundPopup.choose` sending a colour for the
+  `Transparent` row, `cropFillForCommand`'s alpha fixed at 255,
+  `documentIsJpeg` answering `false`, the background list writing
+  `setForegroundColor`, and `optionsColourPair.visible` inverted. Each failed
+  exactly one case, `resizeCarriesThePadFill`,
+  `theColourPairIsTheEditorsOnePair` (twice), `aGrowingCropReachesOutsideThePicture`
+  and `theJpegWarningSitsInTheBackgroundList`, and the tree was restored from a
+  copy each time.
+- **Not built:** the pair is not persisted (it is view state like zoom, so a
+  new launch starts black over white), there is no per-document pair, no recent
+  colours, no eyedropper, no `Shift+X` to bring the background forward, and the
+  arbitrary-angle rotate still adds its corners the way it did.
 
 ## Known gaps, in the words they were last measured with
 

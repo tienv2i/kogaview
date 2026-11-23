@@ -95,7 +95,8 @@ private slots:
   void thePaintToolSendsOneStrokeOnRelease();
   void theEraserStrokeCarriesItsModeAndBrush();
   void theKritaKeysPickTheToolsAndAdjustTheBrush();
-  void theColourPairIsTwoBoxesWithTwoChoosers();
+  void theColourPairIsTheEditorsOnePair();
+  void theJpegWarningSitsInTheBackgroundList();
   void ctrlZUndoesAndCtrlShiftZRedoes();
   void spacePansInsteadOfPainting();
   void theOriginalThumbnailCarriesTheSavedFileIdentity();
@@ -288,11 +289,10 @@ void TestEditor::init()
     }
     QTRY_VERIFY_WITH_TIMEOUT(!dialog->property("visible").toBool(), 2000);
     if (qstrcmp(name, "resizeDialog") == 0) {
-      // The form owns fitMode/backgroundMode/filter now; a case that chose a
-      // mode must not decide what the next one opens on.
-      dialog->setProperty("customColor", QColor(QStringLiteral("#808080")));
+      // The form owns fitMode/filter now — the background is the Editor's, so
+      // it is reset below with the rest of the pair. A case that chose a mode
+      // must not decide what the next one opens on.
       dialog->setProperty("fitMode", QStringLiteral("stretch"));
-      dialog->setProperty("backgroundMode", QStringLiteral("none"));
       dialog->setProperty("filter", QStringLiteral("auto"));
       dialog->setProperty("constraint", true);
     }
@@ -313,8 +313,6 @@ void TestEditor::init()
   m_editor->setProperty("cropRatio", QStringLiteral("free"));
   m_editor->setProperty("cropAnchor", QStringLiteral("center"));
   m_editor->setProperty("cropMode", QStringLiteral("center"));
-  m_editor->setProperty("cropFill", QStringLiteral("transparent"));
-  m_editor->setProperty("cropFillColor", QColor(QStringLiteral("#808080")));
   m_editor->setProperty("cropLockWidth", false);
   m_editor->setProperty("cropLockHeight", false);
   m_editor->setProperty("cropLockRatio", false);
@@ -331,14 +329,14 @@ void TestEditor::init()
   if (QQuickItem* box = visualItem(QStringLiteral("cropMode"))) {
     box->setProperty("currentIndex", 0);
   }
-  if (QQuickItem* box = visualItem(QStringLiteral("cropBackground"))) {
-    box->setProperty("currentIndex", 0);
-  }
   m_editor->setProperty("transformLivePreview", false);
   m_editor->setProperty("transformCorners", QVariantList());
   m_editor->setProperty("paintMode", QStringLiteral("brush"));
-  m_editor->setProperty("paintColor", QStringLiteral("#000000"));
-  m_editor->setProperty("paintBackgroundColor", QStringLiteral("#ffffff"));
+  // The pair is Editor-wide view state: a case that swapped, reset or picked a
+  // background must not decide what the next one opens on.
+  m_editor->setProperty("foregroundColor", QStringLiteral("#000000"));
+  m_editor->setProperty("backgroundColor", QStringLiteral("#ffffff"));
+  m_editor->setProperty("backgroundTransparent", false);
   m_editor->setProperty("paintSize", 24.0);
   m_editor->setProperty("paintOpacity", 100);
   m_editor->setProperty("paintStroke", QVariantList());
@@ -1307,16 +1305,23 @@ void TestEditor::resizeCarriesThePadFill()
   dialog->setProperty("fitMode", QStringLiteral("pad"));
   QTRY_VERIFY(expectItem("resizeBackground")->isVisible());
   QQuickItem* background = expectItem("resizeBackground");
-  QVERIFY(!expectItem("resizeBackgroundSwatch")->isVisible());
-  QCOMPARE(background->property("count").toInt(), 6);
-  QCOMPARE(background->property("currentText").toString(), QStringLiteral("None"));
-
-  // A custom colour is the same command shape as before: three RGB bytes, an
-  // opaque alpha, the chosen filter and now the mode that reads them.
-  dialog->setProperty("backgroundMode", QStringLiteral("custom"));
-  dialog->setProperty("customColor", QColor(255, 0, 0));
-  dialog->setProperty("filter", QStringLiteral("bicubic"));
+  QVERIFY(background->isVisible());
+  // The row is not a list any more: a padding paints the Editor's one
+  // background, so the row names the colour the pair holds and its swatch is
+  // the way to the list that changes it.
   QVERIFY(expectItem("resizeBackgroundSwatch")->isVisible());
+  QVERIFY(!expectItem("resizeBackgroundCheckerboard")->isVisible());
+  QCOMPARE(expectItem("resizeBackgroundName")->property("text").toString(),
+           QStringLiteral("#ffffff"));
+
+  // A colour picked anywhere is the same background, and the pad carries it as
+  // it always did: three RGB bytes, an opaque alpha, the chosen filter and the
+  // mode that reads them.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setBackgroundColor",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("#ff0000")))));
+  dialog->setProperty("filter", QStringLiteral("bicubic"));
+  QCOMPARE(expectItem("resizeBackgroundName")->property("text").toString(),
+           QStringLiteral("#ff0000"));
   expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
   expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
   QTest::qWait(20);
@@ -1334,12 +1339,17 @@ void TestEditor::resizeCarriesThePadFill()
   QCOMPARE(command.value("fill_alpha").toInt(), 255);
   QCOMPARE(command.value("filter").toString(), QStringLiteral("bicubic"));
 
-  // `Transparent` is the same pad with alpha 0, so Core can leave the leftover
-  // clear instead of painting a colour there.
+  // A transparent background is the same pad with alpha 0, so Core can leave
+  // the leftover clear instead of painting a colour there. The row shows the
+  // checkerboard, because the background is still a colour with no alpha.
   QTRY_VERIFY(!dialog->property("opened").toBool());
   openResizeDialog();
   dialog->setProperty("fitMode", QStringLiteral("pad"));
-  dialog->setProperty("backgroundMode", QStringLiteral("transparent"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setBackgroundTransparent",
+                                    Q_ARG(QVariant, QVariant(true))));
+  QVERIFY(expectItem("resizeBackgroundCheckerboard")->isVisible());
+  QCOMPARE(expectItem("resizeBackgroundName")->property("text").toString(),
+           QStringLiteral("Transparent"));
   expectItem("resizeWidth")->setProperty("text", QStringLiteral("1024"));
   expectItem("resizeHeight")->setProperty("text", QStringLiteral("576"));
   QTest::qWait(20);
@@ -1347,6 +1357,11 @@ void TestEditor::resizeCarriesThePadFill()
   QCOMPARE(m_commands->count(), 4);
   const QVariantMap clear = m_commands->at(3).at(0).toMap();
   QCOMPARE(clear.value("mode").toString(), QStringLiteral("pad"));
+  // The bytes are Core's to ignore at alpha zero, but they are still the pair's
+  // colour: a command that sent the painted colour with alpha 0 would describe
+  // a background the next reader could paint, so the convention is pinned here
+  // as it is for Crop's own clear border.
+  QCOMPARE(clear.value("fill").toList(), QVariantList({0, 0, 0}));
   QCOMPARE(clear.value("fill_alpha").toInt(), 0);
 }
 
@@ -1616,23 +1631,14 @@ void TestEditor::aGrowingCropReachesOutsideThePicture()
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("grow")))));
   QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("grow"));
-  QVERIFY(expectItem("cropBackground")->isVisible());
+  // The border is painted with the Editor's background — the same colour a
+  // padded resize uses — so Grow shows that swatch and not a list of its own.
   QVERIFY(expectItem("cropBackgroundSwatch")->isVisible());
-
-  const QVariantList fills = m_editor->property("cropBackdrops").toList();
-  int black = -1;
-  int transparent = -1;
-  for (int index = 0; index < fills.size(); ++index) {
-    const QString key = fills.at(index).toMap().value("key").toString();
-    if (key == QStringLiteral("black")) black = index;
-    if (key == QStringLiteral("transparent")) transparent = index;
-  }
-  QVERIFY2(black >= 0, "the grow border offers an opaque colour");
-  QVERIFY2(transparent >= 0, "the grow border offers transparency");
-
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
-                                    Q_ARG(QVariant, QVariant(black))));
-  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("black"));
+  QVERIFY(findObject(QStringLiteral("cropBackground")) == nullptr);
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setBackgroundColor",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("#000000")))));
+  QCOMPARE(m_editor->property("backgroundColor").toString(), QStringLiteral("#000000"));
+  QVERIFY(!expectItem("cropBackgroundCheckerboard")->isVisible());
 
   // A negative origin is part of the typed command: the new canvas begins
   // before the picture, and the rectangle reaches past both far edges. The
@@ -1672,9 +1678,12 @@ void TestEditor::aGrowingCropReachesOutsideThePicture()
   // Transparent is the same grow with alpha 0: the border exists, but it is
   // clear rather than black.
   m_commands->clear();
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
-                                    Q_ARG(QVariant, QVariant(transparent))));
-  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("transparent"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setBackgroundTransparent",
+                                    Q_ARG(QVariant, QVariant(true))));
+  QVERIFY(m_editor->property("backgroundTransparent").toBool());
+  // A transparent background is drawn, not left blank: the swatch the border
+  // row shows turns into the checkerboard.
+  QVERIFY(expectItem("cropBackgroundCheckerboard")->isVisible());
   typeInto(cropWidth, QStringLiteral("4020"));
   typeInto(cropHeight, QStringLiteral("3020"));
   typeInto(cropX, QStringLiteral("-10"));
@@ -1714,7 +1723,7 @@ void TestEditor::aGrowingCropReachesOutsideThePicture()
   QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("center"));
   QVERIFY(cropX->property("text").toInt() >= 0);
   QVERIFY(cropY->property("text").toInt() >= 0);
-  QVERIFY(!expectItem("cropBackground")->isVisible());
+  QVERIFY(!expectItem("cropBackgroundSwatch")->isVisible());
 }
 
 /// Crop links Width and Height through its ratio field, and each size change
@@ -2413,8 +2422,8 @@ void TestEditor::resetRestoresTheCropOptionsAndKeepsTheFrame()
   clickItem(expectItem("cropAnchor_bottom_right"));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("grow")))));
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
-                                    Q_ARG(QVariant, QVariant(1))));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setBackgroundColor",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("#000000")))));
   clickItem(expectItem("cropLockWidth"));
   preset->setProperty("currentIndex", 2);
   QCOMPARE(preset->property("currentIndex").toInt(), 2);
@@ -2425,7 +2434,9 @@ void TestEditor::resetRestoresTheCropOptionsAndKeepsTheFrame()
   QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("free"));
   QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("center"));
   QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("center"));
-  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("transparent"));
+  // The pair belongs to the Editor, not to this panel: Reset is a statement
+  // about Crop's own options, so the background stays where the user put it.
+  QCOMPARE(m_editor->property("backgroundColor").toString(), QStringLiteral("#000000"));
   QVERIFY(!m_editor->property("cropLockWidth").toBool());
   QVERIFY(!m_editor->property("cropLockHeight").toBool());
   QVERIFY(!m_editor->property("cropLockRatio").toBool());
@@ -2446,8 +2457,8 @@ void TestEditor::resetRestoresTheCropOptionsAndKeepsTheFrame()
   clickItem(expectItem("cropAnchor_top_left"));
   QVERIFY(QMetaObject::invokeMethod(m_editor, "setCropMode",
                                     Q_ARG(QVariant, QVariant(QStringLiteral("grow")))));
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "chooseCropFill",
-                                    Q_ARG(QVariant, QVariant(1))));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setBackgroundColor",
+                                    Q_ARG(QVariant, QVariant(QStringLiteral("#000000")))));
   clickItem(expectItem("cropLockHeight"));
   clickItem(expectItem("clearCrop"));
 
@@ -2460,7 +2471,7 @@ void TestEditor::resetRestoresTheCropOptionsAndKeepsTheFrame()
   QVERIFY(!m_editor->property("cropLockHeight").toBool());
   QVERIFY(!m_editor->property("cropLockRatio").toBool());
   QCOMPARE(m_editor->property("cropMode").toString(), QStringLiteral("grow"));
-  QCOMPARE(m_editor->property("cropFill").toString(), QStringLiteral("black"));
+  QCOMPARE(m_editor->property("backgroundColor").toString(), QStringLiteral("#000000"));
   QCOMPARE(m_editor->property("cropRatio").toString(), QStringLiteral("4:3"));
   QCOMPARE(m_editor->property("cropAnchor").toString(), QStringLiteral("top_left"));
 
@@ -3168,7 +3179,7 @@ void TestEditor::armingAToolBringsItsPanelBack()
   QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
   QTRY_VERIFY(m_editor->property("toolOptionsVisible").toBool());
   QTRY_VERIFY(expectItem("editorToolZone")->isVisible());
-  QTRY_VERIFY(expectItem("paintSwatch")->isVisible());
+  QTRY_VERIFY(expectItem("foregroundColorField")->isVisible());
   QCOMPARE(m_commands->count(), 0);
 }
 
@@ -3224,7 +3235,7 @@ void TestEditor::theReferenceDockFitsItsPage()
   // A different tool changes the options, not the reference.
   clickItem(expectItem("toolBrush"));
   QTRY_COMPARE(m_editor->property("tool").toString(), QStringLiteral("paint"));
-  QTRY_VERIFY(expectItem("paintSwatch")->isVisible());
+  QTRY_VERIFY(expectItem("foregroundColorField")->isVisible());
   QTRY_COMPARE(qRound(dock->height()), qRound(infoHeight));
 
   // The pointer has no options, and still no tab of its own changes.
@@ -4050,7 +4061,7 @@ void TestEditor::thePaintToolSendsOneStrokeOnRelease()
   QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("brush"));
   QCOMPARE(expectItem("toolOptionsHeading")->property("text").toString(),
            QStringLiteral("Brush options"));
-  QVERIFY(expectItem("paintSwatch")->isVisible());
+  QVERIFY(expectItem("foregroundColorField")->isVisible());
   QVERIFY(expectItem("paintSize")->isVisible());
   QVERIFY(!expectItem("applyCrop")->isVisible());
   QCOMPARE(m_commands->count(), 0);
@@ -4095,7 +4106,7 @@ void TestEditor::thePaintToolSendsOneStrokeOnRelease()
 void TestEditor::theEraserStrokeCarriesItsModeAndBrush()
 {
   setState(documentState());
-  m_editor->setProperty("paintColor", QStringLiteral("#ff0000"));
+  m_editor->setProperty("foregroundColor", QStringLiteral("#ff0000"));
   m_editor->setProperty("paintSize", 80.0);
   m_editor->setProperty("paintOpacity", 50);
 
@@ -4150,20 +4161,20 @@ void TestEditor::theKritaKeysPickTheToolsAndAdjustTheBrush()
   QTest::keyClick(m_view, Qt::Key_BracketLeft);
   QCOMPARE(m_editor->property("paintSize").toDouble(), start + 10.0);
 
-  QCOMPARE(m_editor->property("paintColor").toString(), QStringLiteral("#000000"));
+  QCOMPARE(m_editor->property("foregroundColor").toString(), QStringLiteral("#000000"));
   QTest::keyClick(m_view, Qt::Key_X);
-  QCOMPARE(m_editor->property("paintColor").toString(), QStringLiteral("#ffffff"));
-  QCOMPARE(m_editor->property("paintBackgroundColor").toString(),
+  QCOMPARE(m_editor->property("foregroundColor").toString(), QStringLiteral("#ffffff"));
+  QCOMPARE(m_editor->property("backgroundColor").toString(),
            QStringLiteral("#000000"));
   QTest::keyClick(m_view, Qt::Key_D);
-  QCOMPARE(m_editor->property("paintColor").toString(), QStringLiteral("#000000"));
-  QCOMPARE(m_editor->property("paintBackgroundColor").toString(),
+  QCOMPARE(m_editor->property("foregroundColor").toString(), QStringLiteral("#000000"));
+  QCOMPARE(m_editor->property("backgroundColor").toString(),
            QStringLiteral("#ffffff"));
 
   // Typing into a field keeps its own keys: B/E/[/] must not fire from the
   // field's keystrokes, which is why the handlers live on the view and not on
   // a window-wide Shortcut.
-  QQuickItem* field = expectItem("paintColorField");
+  QQuickItem* field = expectItem("foregroundColorField");
   field->forceActiveFocus();
   QTest::qWait(10);
   QTest::keyClick(m_view, Qt::Key_B);
@@ -4173,90 +4184,190 @@ void TestEditor::theKritaKeysPickTheToolsAndAdjustTheBrush()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// Photoshop's colour pair, in the paint options: two boxes, the foreground
-/// raised over the background one, each opening its own chooser, with the swap
-/// arrow (X) and the reset square (D) beside them. The boxes, the hex field and
-/// both choosers all read the two properties, so a box can never show a colour
-/// the next stroke would not use.
-void TestEditor::theColourPairIsTwoBoxesWithTwoChoosers()
+/// A JPEG has no alpha and Core's encoder composites it over white, so a
+/// transparent background is still allowed — the picture on screen really is
+/// clear, and an Export to PNG keeps it — but the list says what the document's
+/// own save will do with it, at the only moment the answer can still change.
+void TestEditor::theJpegWarningSitsInTheBackgroundList()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("format"), QStringLiteral(".png"));
+  editor.insert(QStringLiteral("savePath"), QStringLiteral("/pics/photo.png"));
+  setState(editor);
+  selectTool("crop");
+
+  QObject* popup = findObject(QStringLiteral("backgroundPopup"));
+  QVERIFY(popup != nullptr);
+  QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+  QTRY_VERIFY(popup->property("opened").toBool());
+  QVERIFY(!expectItem("backgroundPopupWarning")->isVisible());
+  QVERIFY(QMetaObject::invokeMethod(popup, "close"));
+  QTRY_VERIFY(!popup->property("opened").toBool());
+
+  // The same picture saved as a JPEG: the list says what the encoder does, and
+  // Transparent is still offered.
+  editor.insert(QStringLiteral("format"), QStringLiteral(".jpg"));
+  editor.insert(QStringLiteral("savePath"), QStringLiteral("/pics/photo.jpg"));
+  setState(editor);
+  QVERIFY(QMetaObject::invokeMethod(popup, "open"));
+  QTRY_VERIFY(popup->property("opened").toBool());
+  QVERIFY(expectItem("backgroundPopupWarning")->isVisible());
+  QVERIFY(expectItem("backgroundPopupChoice_transparent")->isVisible());
+  QVERIFY(QMetaObject::invokeMethod(popup, "close"));
+  QTRY_VERIFY(!popup->property("opened").toBool());
+
+  m_view->requestActivate();
+  m_editor->forceActiveFocus();
+  QTest::qWait(50);
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// The Editor's one foreground/background pair, as Photoshop draws it: the
+/// foreground box raised over the background one, the swap arrow (X) and the
+/// reset square (D) inside the same 34 x 34. The pair is the Editor's, not the
+/// brush's: it lives in the tool rail, it is there for every tool, and its
+/// background box is where "the colour of new canvas" is chosen.
+void TestEditor::theColourPairIsTheEditorsOnePair()
 {
   setState(documentState());
-  clickItem(expectItem("toolBrush"));
-  QTRY_VERIFY(expectItem("paintColorPair")->isVisible());
 
-  QQuickItem* pair = expectItem("paintColorPair");
-  QQuickItem* foreground = expectItem("paintSwatch");
-  QQuickItem* background = expectItem("paintBackgroundSwatch");
-  QCOMPARE(foreground->parentItem(), pair);
-  QCOMPARE(background->parentItem(), pair);
+  // The pair is view state, not a paint option: it is on screen with a document
+  // open and a tool that places no marks, because the background answers for
+  // Crop's grow border and for a padded resize too.
+  clickItem(expectItem("toolCrop"));
+  QTRY_VERIFY(expectItem("colourPair")->isVisible());
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("crop"));
+
+  QQuickItem* pair = expectItem("colourPair");
+  QQuickItem* foreground = expectItem("colourPairForegroundSwatch");
+  QQuickItem* background = expectItem("colourPairBackgroundSwatch");
+  QVERIFY(foreground->parentItem() == pair);
+  QVERIFY(background->parentItem() == pair);
 
   // Two targets, not one picture: the background sits offset behind the
   // foreground, and both fit inside the pair's own box — which is what makes
-  // each corner of the pair a clickable colour rather than dead background.
+  // each corner of the pair a clickable colour rather than dead space.
   QVERIFY(background->x() > foreground->x());
   QVERIFY(background->y() > foreground->y());
   QVERIFY(pair->width() >= background->x() + background->width());
   QVERIFY(pair->height() >= background->y() + background->height());
-  QVERIFY(expectItem("paintSwap")->isVisible());
-  QVERIFY(expectItem("paintResetColors")->isVisible());
+  QVERIFY(expectItem("colourPairSwap")->isVisible());
+  QVERIFY(expectItem("colourPairReset")->isVisible());
+  // The pair starts black over white, with nothing transparent.
+  QCOMPARE(foreground->property("color").value<QColor>(), QColor(0, 0, 0));
+  QCOMPARE(background->property("color").value<QColor>(), QColor(255, 255, 255));
+  QVERIFY(!expectItem("colourPairBackgroundSwatchCheckerboard")->isVisible());
 
-  // One chooser per box, opening on that box's own colour: a chooser can never
-  // be the reason the wrong one of the two changed.
-  QObject* foregroundChooser = findObject(QStringLiteral("paintForegroundColorDialog"));
-  QObject* backgroundChooser = findObject(QStringLiteral("paintBackgroundColorDialog"));
+  // The foreground's box opens the foreground's chooser, and the background's
+  // box opens the background list — not a chooser, because a chooser cannot say
+  // "no colour" and transparency is a real background.
+  QObject* foregroundChooser = findObject(QStringLiteral("foregroundColorDialog"));
   QVERIFY(foregroundChooser != nullptr);
-  QVERIFY(backgroundChooser != nullptr);
-  QVERIFY(foregroundChooser != backgroundChooser);
   QCOMPARE(foregroundChooser->property("title").toString(),
            QStringLiteral("Foreground color"));
-  QCOMPARE(backgroundChooser->property("title").toString(),
-           QStringLiteral("Background color"));
   QCOMPARE(foregroundChooser->property("selectedColor").value<QColor>(), QColor(0, 0, 0));
-  QCOMPARE(backgroundChooser->property("selectedColor").value<QColor>(),
-           QColor(255, 255, 255));
 
-  // The boxes draw the properties and nothing else. A typed value lands in
-  // both the pair and the chooser that would edit it, and a value that is not
-  // a colour is refused rather than shown as a different colour.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setPaintColor",
-                                    Q_ARG(QVariant, QStringLiteral("123456"))));
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "setPaintBackgroundColor",
-                                    Q_ARG(QVariant, QStringLiteral("#abcdef"))));
-  QCOMPARE(foreground->property("color").value<QColor>(), QColor(0x12, 0x34, 0x56));
-  QCOMPARE(background->property("color").value<QColor>(), QColor(0xab, 0xcd, 0xef));
-  QCOMPARE(expectItem("paintColorField")->property("text").toString(),
-           QStringLiteral("#123456"));
-  QCOMPARE(foregroundChooser->property("selectedColor").value<QColor>(),
-           QColor(0x12, 0x34, 0x56));
-  QMetaObject::invokeMethod(m_editor, "setPaintBackgroundColor",
-                            Q_ARG(QVariant, QStringLiteral("#12345")));
-  QMetaObject::invokeMethod(m_editor, "setPaintBackgroundColor",
-                            Q_ARG(QVariant, QStringLiteral("no")));
-  QCOMPARE(background->property("color").value<QColor>(), QColor(0xab, 0xcd, 0xef));
-
-  // A click on a box is what opens a chooser, and it opens that box's: the
-  // pair needs no mode switch, and a click on the background cannot change the
-  // colour a left-button stroke uses.
   clickItem(foreground);
   QTRY_VERIFY_WITH_TIMEOUT(foregroundChooser->property("visible").toBool(), 2000);
-  QVERIFY2(!backgroundChooser->property("visible").toBool(),
-           "a click on the foreground box opened the background chooser");
   QVERIFY(QMetaObject::invokeMethod(foregroundChooser, "close"));
   QTRY_VERIFY_WITH_TIMEOUT(!foregroundChooser->property("visible").toBool(), 2000);
-  clickItem(background);
-  QTRY_VERIFY_WITH_TIMEOUT(backgroundChooser->property("visible").toBool(), 2000);
-  QVERIFY2(!foregroundChooser->property("visible").toBool(),
-           "a click on the background box opened the foreground chooser");
-  QVERIFY(QMetaObject::invokeMethod(backgroundChooser, "close"));
-  QTRY_VERIFY_WITH_TIMEOUT(!backgroundChooser->property("visible").toBool(), 2000);
+
   // A popup takes the keyboard while it is open; hand it back, or every later
   // test that types into the view fails on a focus it did not lose.
   m_view->requestActivate();
   m_editor->forceActiveFocus();
   QTest::qWait(50);
 
+  QObject* popup = findObject(QStringLiteral("backgroundPopup"));
+  QVERIFY(popup != nullptr);
+  clickItem(background);
+  QTRY_VERIFY_WITH_TIMEOUT(popup->property("opened").toBool(), 2000);
+
+  // The list is the one background list: transparent, three named colours, and
+  // the chooser behind the last row.
+  QVERIFY(expectItem("backgroundPopupChoice_transparent")->isVisible());
+  QVERIFY(expectItem("backgroundPopupChoice_white")->isVisible());
+  QVERIFY(expectItem("backgroundPopupChoice_black")->isVisible());
+  QVERIFY(expectItem("backgroundPopupChoice_gray")->isVisible());
+  QVERIFY(expectItem("backgroundPopupChoice_custom")->isVisible());
+
+  clickItem(expectItem("backgroundPopupChoice_black"));
+  QTRY_VERIFY_WITH_TIMEOUT(!popup->property("opened").toBool(), 2000);
+  QCOMPARE(m_editor->property("backgroundColor").toString(), QStringLiteral("#000000"));
+  QVERIFY(!m_editor->property("backgroundTransparent").toBool());
+  QCOMPARE(background->property("color").value<QColor>(), QColor(0, 0, 0));
+
+  // Transparent is a state, not a colour: the box draws the checkerboard and
+  // the colour it remembered is still there for the way back.
+  QMetaObject::invokeMethod(popup, "open");
+  QTRY_VERIFY_WITH_TIMEOUT(popup->property("opened").toBool(), 2000);
+  clickItem(expectItem("backgroundPopupChoice_transparent"));
+  QTRY_VERIFY_WITH_TIMEOUT(!popup->property("opened").toBool(), 2000);
+  QVERIFY(m_editor->property("backgroundTransparent").toBool());
+  QVERIFY(expectItem("colourPairBackgroundSwatchCheckerboard")->isVisible());
+  QCOMPARE(m_editor->property("backgroundColor").toString(), QStringLiteral("#000000"));
+
+  // A swap trades the two colours and leaves transparency where it is: it
+  // belongs to the background role, so X can never make the foreground clear.
+  QTest::keyClick(m_view, Qt::Key_X);
+  QCOMPARE(m_editor->property("foregroundColor").toString(), QStringLiteral("#000000"));
+  QCOMPARE(m_editor->property("backgroundColor").toString(), QStringLiteral("#000000"));
+  QVERIFY(m_editor->property("backgroundTransparent").toBool());
+  QTest::keyClick(m_view, Qt::Key_D);
+  QVERIFY(!m_editor->property("backgroundTransparent").toBool());
+  QVERIFY(!expectItem("colourPairBackgroundSwatchCheckerboard")->isVisible());
+
+  m_view->requestActivate();
+  m_editor->forceActiveFocus();
+  QTest::qWait(50);
+
+  // The hex field is the foreground's exact value, which a chooser cannot say,
+  // and an unreadable one is refused rather than shown as a different colour.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setForegroundColor",
+                                    Q_ARG(QVariant, QStringLiteral("123456"))));
+  QCOMPARE(foreground->property("color").value<QColor>(), QColor(0x12, 0x34, 0x56));
+  QCOMPARE(m_editor->property("foregroundColor").toString(), QStringLiteral("#123456"));
+  QMetaObject::invokeMethod(m_editor, "setForegroundColor",
+                            Q_ARG(QVariant, QStringLiteral("#12345")));
+  QMetaObject::invokeMethod(m_editor, "setForegroundColor",
+                            Q_ARG(QVariant, QStringLiteral("no")));
+  QCOMPARE(foreground->property("color").value<QColor>(), QColor(0x12, 0x34, 0x56));
+
+  // The chooser is seeded on the click, so a colour that changed since — a
+  // typed hex, X or D — is the colour it opens on. A `ColorDialog` writes
+  // `selectedColor` itself while it is open, so it cannot be a plain binding.
+  clickItem(foreground);
+  QTRY_VERIFY_WITH_TIMEOUT(foregroundChooser->property("visible").toBool(), 2000);
+  QCOMPARE(foregroundChooser->property("selectedColor").value<QColor>(),
+           QColor(0x12, 0x34, 0x56));
+  QVERIFY(QMetaObject::invokeMethod(foregroundChooser, "close"));
+  QTRY_VERIFY_WITH_TIMEOUT(!foregroundChooser->property("visible").toBool(), 2000);
+  m_view->requestActivate();
+  m_editor->forceActiveFocus();
+  QTest::qWait(50);
+
+  // With the rail hidden (Settings > Appearance can put it away) the same pair
+  // is drawn in the paint options, from the same component and the same two
+  // properties, so the colours are never unreachable.
+  clickItem(expectItem("toolBrush"));
+  QTRY_VERIFY(expectItem("foregroundColorField")->isVisible());
+  QVERIFY(!expectItem("optionsColourPair")->isVisible());
+  QVariantMap panels;
+  panels.insert(QStringLiteral("editor.tools"), false);
+  QVariantMap patch;
+  patch.insert(QStringLiteral("panels"), panels);
+  layoutPatched(patch);
+  QTRY_VERIFY(!expectItem("colourPair")->isVisible());
+  QTRY_VERIFY(expectItem("optionsColourPair")->isVisible());
+  QCOMPARE(expectItem("optionsColourPairForegroundSwatch")->property("color").value<QColor>(),
+           QColor(0x12, 0x34, 0x56));
+  QCOMPARE(expectItem("optionsColourPairBackgroundSwatch")->property("color").value<QColor>(),
+           QColor(255, 255, 255));
+  resetLayout();
+  QTRY_VERIFY(expectItem("colourPair")->isVisible());
+
   // An answer from a chooser carries an alpha byte (`#ff1e2d3c`); the pair, and
-  // so the stroke's three-byte colour, drops it.
+  // so the three bytes a command carries, drops it.
   QVariant colourText;
   QVERIFY(QMetaObject::invokeMethod(
     m_editor, "colorText", Q_RETURN_ARG(QVariant, colourText),

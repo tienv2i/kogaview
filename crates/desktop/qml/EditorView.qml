@@ -339,12 +339,13 @@ Item {
     /// What a crop may do to the canvas. `center` keeps the rectangle entirely
     /// inside the picture, which is the ordinary cut. `grow` lets it reach past
     /// the edges — `x`/`y` become negative — and paints the new border with
-    /// `cropFill`, so a picture can gain a margin without being resized first.
+    /// the Editor's background, so a picture can gain a margin without being
+    /// resized first.
     property string cropMode: "center"
-    /// How a grown border is painted: `transparent`, `black`, `white`, `gray`
-    /// or `custom` (`cropFillColor`). Only read in `grow` mode.
-    property string cropFill: "transparent"
-    property color cropFillColor: "#808080"
+    /// How a grown border is painted is not this tool's question: the new
+    /// canvas takes the Editor's own background (`backgroundColor` /
+    /// `backgroundTransparent`), the same one a resize pads with. Only read in
+    /// `grow` mode.
     /// And for Transform: the canvas shows the straightened frame before Apply.
     property bool transformLivePreview: false
     /// The transform quad in document pixels, clockwise from the top left:
@@ -357,14 +358,32 @@ Item {
 
     /// Paint is one canvas tool with two modes, the way Krita's freehand brush
     /// and eraser are two tools over one paint engine: `brush` blends
-    /// `paintColor` over the picture, `eraser` lowers alpha. One stroke is one
-    /// `editor_paint_stroke` command, sent on release, so one undo removes it.
+    /// `foregroundColor` over the picture, `eraser` lowers alpha. One stroke is
+    /// one `editor_paint_stroke` command, sent on release, so one undo removes
+    /// it.
     property string paintMode: "brush"
-    /// Krita's foreground and background colours — X swaps them and D resets
-    /// them. Stored as `#rrggbb`, which is both the typed command's bytes and
-    /// the field's own text, so the swatch and the field cannot disagree.
-    property string paintColor: "#000000"
-    property string paintBackgroundColor: "#ffffff"
+
+    // ------------------------------------------------- foreground/background
+    // One pair for the whole Editor, not the brush's private colours. The two
+    // roles answer two questions, and every tool that has a colour reads the
+    // role it needs:
+    //
+    // - **Foreground** — the colour of a mark placed *inside* the picture. The
+    //   brush is the only tool that places one today.
+    // - **Background** — the material of *new canvas*: resizing into a bigger
+    //   frame, the border a grown crop adds, and later the corners an
+    //   arbitrary-angle rotate would leave.
+    //
+    // Both are `#rrggbb`, which is both the typed command's bytes and the hex
+    // field's own text, so a box and the field cannot disagree. The pair is
+    // presentation state, like the zoom: it is not saved, and each launch
+    // starts black over white.
+    property string foregroundColor: "#000000"
+    property string backgroundColor: "#ffffff"
+    /// New canvas that is painted with nothing at all. It travels as any colour
+    /// plus `fill_alpha: 0`, which is how the wire already says "clear", so the
+    /// protocol needs no third state.
+    property bool backgroundTransparent: false
     /// Brush diameter in document pixels; the command carries the radius.
     property real paintSize: 24
     /// The stroke's alpha, 1–100, before it is blended.
@@ -393,38 +412,86 @@ Item {
             && view.previewDraft === null && !view.spacePanning
     }
 
-    /// The three bytes for `paintColor`. Core carries RGB, not a QML colour.
-    function paintColorBytes() {
-        var match = /^#([0-9a-fA-F]{6})$/.exec(String(view.paintColor))
+    /// The three bytes for a `#rrggbb` colour. Core carries RGB, not a QML
+    /// colour, and an unreadable string is black rather than a crash.
+    function colorBytes(text) {
+        var match = /^#([0-9a-fA-F]{6})$/.exec(String(text))
         if (!match) return [0, 0, 0]
         return [parseInt(match[1].slice(0, 2), 16),
                 parseInt(match[1].slice(2, 4), 16),
                 parseInt(match[1].slice(4, 6), 16)]
     }
 
+    /// The three bytes a stroke carries: the foreground and nothing else. A
+    /// transparent foreground would be a second, invisible eraser, so the
+    /// foreground role has no transparency — the eraser's own `erase` is how a
+    /// mark is removed.
+    function foregroundBytes() {
+        return view.colorBytes(view.foregroundColor)
+    }
+
+    /// The three bytes new canvas is painted with. Transparent travels as the
+    /// colour plus `fill_alpha: 0`, so this is the colour even when nothing is
+    /// painted.
+    function backgroundBytes() {
+        return view.colorBytes(view.backgroundColor)
+    }
+
+    /// The alpha that goes with `backgroundBytes()`.
+    function backgroundAlpha() {
+        return view.backgroundTransparent ? 0 : 255
+    }
+
+    /// What a canvas strip drawn for new canvas shows: the background colour,
+    /// or the matte when the background paints nothing (the strip is drawn at
+    /// half opacity then, so it reads as an empty area rather than as a colour).
+    function backgroundPreviewColor() {
+        return view.backgroundTransparent ? view.theme.thumb : view.backgroundColor
+    }
+
     /// Normalise a typed or picked colour to `#rrggbb`. An illegal value is
     /// ignored rather than sent, so the document never sees a colour the
     /// interface cannot show.
-    function setPaintColor(value) {
+    function normalizedColor(value) {
         var text = String(value).trim()
         if (/^[0-9a-fA-F]{6}$/.test(text)) text = "#" + text
-        if (!/^#[0-9a-fA-F]{6}$/.test(text)) return
-        view.paintColor = text.toLowerCase()
+        if (!/^#[0-9a-fA-F]{6}$/.test(text)) return ""
+        return text.toLowerCase()
     }
 
-    /// The same for the background box. It is `#rrggbb` for the same reason:
-    /// the pair shows two values of one kind, so the types cannot differ.
-    function setPaintBackgroundColor(value) {
-        var text = String(value).trim()
-        if (/^[0-9a-fA-F]{6}$/.test(text)) text = "#" + text
-        if (!/^#[0-9a-fA-F]{6}$/.test(text)) return
-        view.paintBackgroundColor = text.toLowerCase()
+    function setForegroundColor(value) {
+        var text = view.normalizedColor(value)
+        if (text === "") return
+        view.foregroundColor = text
+    }
+
+    /// A concrete background colour. Choosing one also leaves the transparent
+    /// state: the list says "this colour", not "still nothing".
+    function setBackgroundColor(value) {
+        var text = view.normalizedColor(value)
+        if (text === "") return
+        view.backgroundColor = text
+        view.backgroundTransparent = false
+        view.backgroundChanged()
+    }
+
+    /// `Transparent` in the background list. The colour is remembered, so
+    /// switching back to a colour returns to the one that was there.
+    function setBackgroundTransparent(value) {
+        view.backgroundTransparent = value === true
+        view.backgroundChanged()
+    }
+
+    /// New canvas is previewed on the canvas, so a background change repaints
+    /// the draft the way a typed side does.
+    function backgroundChanged() {
+        draftDebounce.restart()
     }
 
     /// A `ColorDialog` answers with a `color`, whose `toString()` carries an
-    /// alpha byte (`#ff1e2d3c`) when the chooser leaves one set. The paint
-    /// commands carry three bytes, so the pair is written as `#rrggbb` and no
-    /// alpha ever reaches a stroke.
+    /// alpha byte (`#ff1e2d3c`) when the chooser leaves one set. The commands
+    /// carry three bytes, so every colour is written as `#rrggbb` and no alpha
+    /// ever reaches one.
     function colorText(color) {
         function byte(value) {
             var text = Math.round(value * 255).toString(16)
@@ -433,17 +500,48 @@ Item {
         return "#" + byte(color.r) + byte(color.g) + byte(color.b)
     }
 
-    /// Krita's X: foreground and background swap places.
-    function swapPaintColors() {
-        var previous = view.paintColor
-        view.paintColor = view.paintBackgroundColor
-        view.paintBackgroundColor = previous
+    /// Krita's X, now Editor-wide: the two colours swap places. Transparency
+    /// belongs to the background *role*, not to a colour, so a transparent
+    /// background keeps its transparency and the colours trade sides — a swap
+    /// can never make the foreground clear.
+    function swapColours() {
+        var previous = view.foregroundColor
+        view.foregroundColor = view.backgroundColor
+        view.backgroundColor = previous
+        view.backgroundChanged()
     }
 
-    /// Krita's D: black foreground, white background.
-    function resetPaintColors() {
-        view.paintColor = "#000000"
-        view.paintBackgroundColor = "#ffffff"
+    /// Krita's D: black foreground, white background, nothing transparent.
+    function resetColours() {
+        view.foregroundColor = "#000000"
+        view.backgroundColor = "#ffffff"
+        view.backgroundTransparent = false
+        view.backgroundChanged()
+    }
+
+    /// The foreground's chooser, opened from either pair. Seeded on the click:
+    /// a `ColorDialog` writes `selectedColor` itself while the user drags,
+    /// which ends the binding, so a pair that changed since (X, D or a typed
+    /// hex) would otherwise reopen on the old colour.
+    function openForegroundChooser() {
+        foregroundColorDialog.selectedColor = view.foregroundColor
+        foregroundColorDialog.open()
+    }
+
+    /// The background's list, opened under the swatch that was clicked. A
+    /// `ColorDialog` cannot say "no colour", so the background has a popup of
+    /// its own and `Custom color…` reaches the chooser from inside it.
+    function openBackgroundPopup(anchor) {
+        if (!anchor) return
+        backgroundPopup.transparent = view.backgroundTransparent
+        backgroundPopup.colour = view.backgroundColor
+        backgroundPopup.showBelow(anchor)
+    }
+
+    /// The chooser behind `Custom color…` in the background list.
+    function openBackgroundChooser() {
+        backgroundColorDialog.selectedColor = view.backgroundColor
+        backgroundColorDialog.open()
     }
 
     /// Krita's [ and ]: one pixel per press, ten with Shift.
@@ -503,7 +601,7 @@ Item {
         view.command({
             type: "editor_paint_stroke",
             points: points,
-            color: view.paintColorBytes(),
+            color: view.foregroundBytes(),
             radius: Math.max(0.5, view.paintSize / 2),
             opacity: Math.max(0.01, view.paintOpacity / 100),
             erase: view.paintMode === "eraser"
@@ -582,11 +680,11 @@ Item {
             event.accepted = true
             break
         case Qt.Key_X:
-            view.swapPaintColors()
+            view.swapColours()
             event.accepted = true
             break
         case Qt.Key_D:
-            view.resetPaintColors()
+            view.resetColours()
             event.accepted = true
             break
         case Qt.Key_Space:
@@ -786,28 +884,15 @@ Item {
         { key: "bottom_right", glyph: "\u2198", label: qsTr("Bottom right"), column: 2, row: 2 }
     ]
 
-    /// Split a QML `color` into the three bytes the typed command carries.
-    function colorRgb(color) {
-        return [Math.round(color.r * 255), Math.round(color.g * 255),
-                Math.round(color.b * 255)]
-    }
-
     /// Crop's two answers to "may the frame leave the picture?": `center` is
     /// the ordinary cut, `grow` a new canvas around the photo.
     readonly property var cropModes: [
         { key: "center", label: qsTr("Center") },
         { key: "grow", label: qsTr("Grow") }
     ]
-    /// The colours a grown border can take. `None` is absent on purpose: a grow
-    /// always paints *something*, and the transparent choice is how it paints
-    /// nothing the eye can see.
-    readonly property var cropBackdrops: [
-        { key: "transparent", label: qsTr("Transparent") },
-        { key: "black", label: qsTr("Black") },
-        { key: "white", label: qsTr("White") },
-        { key: "gray", label: qsTr("Gray") },
-        { key: "custom", label: qsTr("Custom color…") }
-    ]
+    /// The colours a grown border can take are the Editor's background list,
+    /// not this panel's: `BackgroundPopup.qml` is the one list, and the border
+    /// is painted with whatever the pair holds.
 
     function cropGrow() {
         return view.cropMode === "grow"
@@ -820,12 +905,6 @@ Item {
         return 0
     }
 
-    function cropFillIndex() {
-        for (var index = 0; index < view.cropBackdrops.length; ++index) {
-            if (view.cropBackdrops[index].key === view.cropFill) return index
-        }
-        return 0
-    }
 
     /// Switch between an inside crop and a growing one. Turning Grow off must
     /// pull a rectangle that reached outside back into the picture, or Apply
@@ -866,53 +945,20 @@ Item {
         view.offsetY = 0
     }
 
-    /// Pick a border colour; `Custom color…` opens the chooser, and a cancelled
-    /// chooser leaves the previous choice on screen.
-    function chooseCropFill(index) {
-        if (index < 0 || index >= view.cropBackdrops.length) return
-        var key = view.cropBackdrops[index].key
-        if (key === "custom") {
-            cropFillColorDialog.open()
-            return
-        }
-        view.cropFill = key
-        cropFillBox.currentIndex = index
-        draftDebounce.restart()
-    }
-
-    /// The swatch beside the fill dropdown. Transparent has no colour to show,
-    /// so it borrows the panel's alternate surface and says "0" instead.
-    function cropFillPreviewColor() {
-        switch (view.cropFill) {
-        case "black": return "#000000"
-        case "white": return "#ffffff"
-        case "gray": return "#808080"
-        case "custom": return view.cropFillColor
-        default: return view.theme.surfaceAlt
-        }
-    }
-
     /// The border colour the command carries, or `null` for an inside crop.
-    /// Core reads a present colour as "the canvas may grow". A Grow rectangle
-    /// that still lies inside the picture has no border to paint, so it travels
-    /// as an ordinary crop and its history line says Crop, not Grow.
+    /// Core reads a present colour as "the canvas may grow", and the colour is
+    /// the Editor's background: transparent travels as `[0,0,0]` with
+    /// `fill_alpha: 0`, which is what the command already means by clear. A
+    /// Grow rectangle that still lies inside the picture has no border to
+    /// paint, so it travels as an ordinary crop and its history line says
+    /// Crop, not Grow.
     function cropFillForCommand() {
         if (!view.cropGrow()) return null
         var rect = view.cropRect
         if (rect.x >= 0 && rect.y >= 0
                 && rect.x + rect.width <= view.documentWidth
                 && rect.y + rect.height <= view.documentHeight) return null
-        switch (view.cropFill) {
-        case "black": return [0, 0, 0]
-        case "white": return [255, 255, 255]
-        case "gray": return [128, 128, 128]
-        case "custom": return view.colorRgb(view.cropFillColor)
-        default: return [0, 0, 0]
-        }
-    }
-
-    function cropFillAlpha() {
-        return view.cropFill === "transparent" ? 0 : 255
+        return view.backgroundBytes()
     }
 
     /// The ratio the crop fields are held to, as a pair, or null when the
@@ -1564,13 +1610,12 @@ Item {
         view.cropRatio = "free"
         view.cropAnchor = "center"
         view.cropMode = "center"
-        view.cropFill = "transparent"
-        view.cropFillColor = "#808080"
+        // The border colour is not a panel option any more: the background
+        // pair belongs to the Editor, so Reset leaves it alone.
         view.cropLockWidth = false
         view.cropLockHeight = false
         view.cropLockRatio = false
         cropModeBox.currentIndex = view.cropModeIndex()
-        cropFillBox.currentIndex = view.cropFillIndex()
         cropPreset.currentIndex = -1
         view.syncCropLockButtons()
         view.syncCropRatioField()
@@ -1592,7 +1637,7 @@ Item {
             width: rect.width,
             height: rect.height,
             fill: fill,
-            fill_alpha: fill === null ? 255 : view.cropFillAlpha()
+            fill_alpha: fill === null ? 255 : view.backgroundAlpha()
         })
         // The real gateway publishes the new document before `command()`
         // returns; the QML suite delivers it on its next state publish, which
@@ -1942,6 +1987,18 @@ Item {
         var dot = current.lastIndexOf(".")
         var base = dot > current.lastIndexOf("/") ? current.slice(0, dot) : current
         return base + (editor.format || ".png")
+    }
+
+    /// Whether this document's own file is a JPEG. The encoder composites alpha
+    /// over white (`crates/app-editor/src/codec.rs`), so a transparent
+    /// background is drawn as the checkerboard on screen and written as white
+    /// on disk. Nothing can be done about that — JPEG has no alpha — so the
+    /// background list says it at the moment the choice is made instead of
+    /// losing it silently on the next save.
+    readonly property bool documentIsJpeg: {
+        var format = String((editor && editor.format) || "").toLowerCase()
+        return format === ".jpg" || format === ".jpeg"
+                || format === "jpg" || format === "jpeg"
     }
 
     /// Where Export would write. Empty until the dialog opens, then the same
@@ -2736,6 +2793,47 @@ Item {
                     }
                 }
 
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    Layout.topMargin: 2
+                    Layout.bottomMargin: 2
+                    color: view.theme.border
+                }
+
+                // The pair is the Editor's, not the brush's: it sits under the
+                // tools because every tool that takes a colour reads one of
+                // its two roles, and it stays visible with no document open —
+                // dimmed — so the rail does not grow and shrink a row at a
+                // time.
+                Item {
+                    objectName: "colourPairRow"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 34
+
+                    ColourPair {
+                        id: railColourPair
+                        objectName: "colourPair"
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        enabled: view.documentReady
+                        theme: view.theme
+                        foreground: view.foregroundColor
+                        background: view.backgroundColor
+                        backgroundTransparent: view.backgroundTransparent
+                        onForegroundClicked: view.openForegroundChooser()
+                        onBackgroundClicked:
+                            view.openBackgroundPopup(railColourPair.backgroundBox)
+                        onSwapRequested: {
+                            view.swapColours()
+                            view.forceActiveFocus()
+                        }
+                        onResetRequested: {
+                            view.resetColours()
+                            view.forceActiveFocus()
+                        }
+                    }
+                }
+
                 Item { Layout.fillHeight: true }
 
                 // The rail's own width is its one control: no splitter, because
@@ -2987,7 +3085,7 @@ Item {
                         // black before Apply and a transparent one reads as an
                         // empty strip rather than a solid swatch.
                         readonly property real growOpacity:
-                            view.cropFill === "transparent" ? 0.5 : 0.9
+                            view.backgroundTransparent ? 0.5 : 0.9
                         readonly property real innerTop:
                             Math.max(cropShade.frameTop, cropShade.pictureY)
                         readonly property real innerBottom:
@@ -3008,7 +3106,7 @@ Item {
                             height: Math.max(0, Math.min(cropShade.frameBottom,
                                                         cropShade.pictureY)
                                                 - cropShade.frameTop)
-                            color: view.cropFillPreviewColor()
+                            color: view.backgroundPreviewColor()
                             opacity: cropShade.growOpacity
                         }
                         Rectangle {
@@ -3022,7 +3120,7 @@ Item {
                                                 - Math.max(cropShade.frameTop,
                                                            cropShade.pictureY
                                                            + cropShade.pictureHeight))
-                            color: view.cropFillPreviewColor()
+                            color: view.backgroundPreviewColor()
                             opacity: cropShade.growOpacity
                         }
                         Rectangle {
@@ -3032,7 +3130,7 @@ Item {
                             y: cropShade.innerTop
                             width: Math.max(0, cropShade.innerLeft - cropShade.frameLeft)
                             height: Math.max(0, cropShade.innerBottom - cropShade.innerTop)
-                            color: view.cropFillPreviewColor()
+                            color: view.backgroundPreviewColor()
                             opacity: cropShade.growOpacity
                         }
                         Rectangle {
@@ -3042,7 +3140,7 @@ Item {
                             y: cropShade.innerTop
                             width: Math.max(0, cropShade.frameRight - cropShade.innerRight)
                             height: Math.max(0, cropShade.innerBottom - cropShade.innerTop)
-                            color: view.cropFillPreviewColor()
+                            color: view.backgroundPreviewColor()
                             opacity: cropShade.growOpacity
                         }
                     }
@@ -3333,7 +3431,7 @@ Item {
                             if (!points || points.length === 0) return
                             ctx.globalAlpha = Math.max(0.05, view.paintOpacity / 100)
                             ctx.strokeStyle = view.paintMode === "eraser"
-                                    ? view.theme.thumb : view.paintColor
+                                    ? view.theme.thumb : view.foregroundColor
                             ctx.fillStyle = ctx.strokeStyle
                             ctx.lineCap = "round"
                             ctx.lineJoin = "round"
@@ -3647,191 +3745,38 @@ Item {
                                     }
                                 }
 
-                                // The two colours, as Photoshop draws them: the
-                                // foreground box in front and the background one
-                                // behind it, so the pair reads as one control. A
-                                // click on a box opens that box's chooser, the
-                                // small arrow swaps them (Krita's X) and the small
-                                // black-and-white square resets them (D). The hex
-                                // field beside the pair edits the foreground's
-                                // exact value, which a chooser cannot say.
+                                // The pair itself lives in the rail; with the
+                                // rail showing, this row is the field that
+                                // edits the foreground's exact value — a
+                                // chooser cannot say `#2f81f7`. With the rail
+                                // hidden (Settings › Appearance can put it
+                                // away) the compact pair is drawn here too, from
+                                // the same component and the same two
+                                // properties, so the colours are never
+                                // unreachable.
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 8
 
-                                    Item {
-                                        objectName: "paintColorPair"
-                                        implicitWidth: 62
-                                        implicitHeight: 62
-
-                                        // The box a brush uses is the raised one:
-                                        // foreground on top, background behind and
-                                        // to the right, exactly as in Photoshop.
-                                        Rectangle {
-                                            objectName: "paintBackgroundSwatch"
-                                            x: 22
-                                            y: 22
-                                            width: 34
-                                            height: 34
-                                            radius: 3
-                                            color: view.paintBackgroundColor
-                                            border.width: backgroundArea.containsMouse ? 2 : 1
-                                            border.color: backgroundArea.containsMouse
-                                                          ? view.theme.accent : view.theme.border
-                                            Accessible.role: Accessible.Button
-                                            Accessible.name: qsTr("Background color")
-
-                                            MouseArea {
-                                                id: backgroundArea
-                                                objectName: "paintBackgroundArea"
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                ToolTip.visible: containsMouse
-                                                ToolTip.delay: 500
-                                                ToolTip.text: qsTr("Background color")
-                                                onClicked: {
-                                                    // The chooser is seeded on the
-                                                    // click, not only by its first
-                                                    // binding: the dialog writes
-                                                    // `selectedColor` itself while the
-                                                    // user drags, which ends the
-                                                    // binding, so a pair that changed
-                                                    // since (X, D or a typed hex)
-                                                    // would otherwise reopen on the old
-                                                    // colour.
-                                                    paintBackgroundColorDialog.selectedColor =
-                                                        view.paintBackgroundColor
-                                                    paintBackgroundColorDialog.open()
-                                                }
-                                            }
+                                    ColourPair {
+                                        id: optionsColourPair
+                                        objectName: "optionsColourPair"
+                                        visible: !view.toolsShown
+                                        enabled: view.documentReady
+                                        theme: view.theme
+                                        foreground: view.foregroundColor
+                                        background: view.backgroundColor
+                                        backgroundTransparent: view.backgroundTransparent
+                                        onForegroundClicked: view.openForegroundChooser()
+                                        onBackgroundClicked:
+                                            view.openBackgroundPopup(optionsColourPair.backgroundBox)
+                                        onSwapRequested: {
+                                            view.swapColours()
+                                            view.forceActiveFocus()
                                         }
-
-                                        Rectangle {
-                                            objectName: "paintSwatch"
-                                            width: 34
-                                            height: 34
-                                            radius: 3
-                                            color: view.paintColor
-                                            border.width: foregroundArea.containsMouse ? 2 : 1
-                                            border.color: foregroundArea.containsMouse
-                                                          ? view.theme.accent : view.theme.border
-                                            Accessible.role: Accessible.Button
-                                            Accessible.name: qsTr("Foreground color")
-
-                                            MouseArea {
-                                                id: foregroundArea
-                                                objectName: "paintForegroundArea"
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                ToolTip.visible: containsMouse
-                                                ToolTip.delay: 500
-                                                ToolTip.text: qsTr("Foreground color")
-                                                onClicked: {
-                                                    paintForegroundColorDialog.selectedColor =
-                                                        view.paintColor
-                                                    paintForegroundColorDialog.open()
-                                                }
-                                            }
-                                        }
-
-                                        // Krita's X, drawn as Photoshop's arrow: two
-                                        // arrowheads so a swap reads as an exchange.
-                                        Item {
-                                            objectName: "paintSwap"
-                                            x: 44
-                                            y: 0
-                                            width: 16
-                                            height: 16
-
-                                            Canvas {
-                                                id: swapCanvas
-                                                anchors.fill: parent
-                                                Connections {
-                                                    target: swapArea
-                                                    function onContainsMouseChanged() {
-                                                        swapCanvas.requestPaint()
-                                                    }
-                                                }
-                                                onPaint: {
-                                                    var ctx = getContext("2d")
-                                                    ctx.reset()
-                                                    ctx.strokeStyle = swapArea.containsMouse
-                                                            ? view.theme.accent : view.theme.textMuted
-                                                    ctx.lineWidth = 1.2
-                                                    ctx.lineCap = "round"
-                                                    // Top arrow pointing right, bottom
-                                                    // arrow pointing left.
-                                                    ctx.beginPath()
-                                                    ctx.moveTo(2, 5); ctx.lineTo(13, 5)
-                                                    ctx.moveTo(10, 2); ctx.lineTo(13, 5)
-                                                    ctx.lineTo(10, 8)
-                                                    ctx.moveTo(13, 11); ctx.lineTo(2, 11)
-                                                    ctx.moveTo(5, 8); ctx.lineTo(2, 11)
-                                                    ctx.lineTo(5, 14)
-                                                    ctx.stroke()
-                                                }
-                                            }
-
-                                            MouseArea {
-                                                id: swapArea
-                                                objectName: "paintSwapArea"
-                                                Accessible.role: Accessible.Button
-                                                Accessible.name: qsTr("Swap the foreground and background colours (X)")
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                ToolTip.visible: containsMouse
-                                                ToolTip.delay: 500
-                                                ToolTip.text: qsTr("Swap the foreground and background colours (X)")
-                                                onClicked: {
-                                                    view.swapPaintColors()
-                                                    view.forceActiveFocus()
-                                                }
-                                            }
-                                        }
-
-                                        // Krita's D, drawn as Photoshop's tiny
-                                        // black-over-white square: the colours as
-                                        // they start.
-                                        Item {
-                                            objectName: "paintResetColors"
-                                            x: 0
-                                            y: 44
-                                            width: 16
-                                            height: 16
-
-                                            Rectangle {
-                                                x: 0; y: 0; width: 11; height: 11
-                                                color: "#ffffff"
-                                                border.width: 1
-                                                border.color: resetArea.containsMouse
-                                                              ? view.theme.accent : view.theme.border
-                                            }
-                                            Rectangle {
-                                                x: 4; y: 4; width: 11; height: 11
-                                                color: "#000000"
-                                                border.width: 1
-                                                border.color: resetArea.containsMouse
-                                                              ? view.theme.accent : view.theme.border
-                                            }
-                                            MouseArea {
-                                                id: resetArea
-                                                objectName: "paintResetArea"
-                                                Accessible.role: Accessible.Button
-                                                Accessible.name: qsTr("Reset the colours to black and white (D)")
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                ToolTip.visible: containsMouse
-                                                ToolTip.delay: 500
-                                                ToolTip.text: qsTr("Reset the colours to black and white (D)")
-                                                onClicked: {
-                                                    view.resetPaintColors()
-                                                    view.forceActiveFocus()
-                                                }
-                                            }
+                                        onResetRequested: {
+                                            view.resetColours()
+                                            view.forceActiveFocus()
                                         }
                                     }
 
@@ -3846,21 +3791,21 @@ Item {
                                         }
 
                                         // The field is the pair's value, not a
-                                        // spacer: the hex text is seven characters,
-                                        // so it keeps a field's width instead of
-                                        // stretching across the panel as a white bar
-                                        // beside the two small boxes.
+                                        // spacer: the hex text is seven
+                                        // characters, so it keeps a field's
+                                        // width instead of stretching across the
+                                        // panel as a white bar.
                                         TextField {
-                                            id: paintColorField
-                                            objectName: "paintColorField"
+                                            id: foregroundColorField
+                                            objectName: "foregroundColorField"
                                             Layout.preferredWidth: 118
                                             Layout.maximumWidth: 118
                                             font.pixelSize: 12
-                                            text: view.paintColor
+                                            text: view.foregroundColor
                                             placeholderText: qsTr("#rrggbb")
                                             onEditingFinished: {
-                                                view.setPaintColor(text)
-                                                text = view.paintColor
+                                                view.setForegroundColor(text)
+                                                text = view.foregroundColor
                                                 // Enter belongs to the field; the next key
                                                 // should reach the canvas keys again.
                                                 view.forceActiveFocus()
@@ -3874,9 +3819,9 @@ Item {
                                 // initial binding.
                                 Connections {
                                     target: view
-                                    function onPaintColorChanged() {
-                                        if (!paintColorField.activeFocus)
-                                        paintColorField.text = view.paintColor
+                                    function onForegroundColorChanged() {
+                                        if (!foregroundColorField.activeFocus)
+                                        foregroundColorField.text = view.foregroundColor
                                     }
                                 }
 
@@ -3896,15 +3841,15 @@ Item {
                                             Layout.preferredHeight: 22
                                             radius: 3
                                             color: modelData
-                                            border.width: view.paintColor === modelData ? 2 : 1
-                                            border.color: view.paintColor === modelData
+                                            border.width: view.foregroundColor === modelData ? 2 : 1
+                                            border.color: view.foregroundColor === modelData
                                             ? view.theme.accent : view.theme.border
 
                                             MouseArea {
                                                 anchors.fill: parent
                                                 cursorShape: Qt.PointingHandCursor
                                                 onClicked: {
-                                                    view.setPaintColor(modelData)
+                                                    view.setForegroundColor(modelData)
                                                     view.forceActiveFocus()
                                                 }
                                             }
@@ -4144,10 +4089,15 @@ Item {
                                     }
                                 }
 
-                                // A growing crop needs a colour for the new margin.
-                                // Only shown in Grow: in Center there is no leftover to
-                                // paint, and an unused control would ask a question the
-                                // user cannot answer.
+                                // A growing crop paints its new margin with the
+                                // Editor's background — the same colour a resize
+                                // pads with, so "the stuff added around the
+                                // picture" is one answer rather than a list per
+                                // tool. Only shown in Grow: in Center there is no
+                                // leftover to paint, and an unused control would
+                                // ask a question the user cannot answer. The
+                                // swatch is the way to change it from here; the
+                                // pair in the rail is the other.
                                 RowLayout {
                                     Layout.fillWidth: true
                                     visible: view.tool === "crop" && view.cropGrow()
@@ -4157,29 +4107,36 @@ Item {
                                         text: qsTr("Grow fill color")
                                         color: view.theme.textMuted
                                     }
-                                    ComboBox {
-                                        id: cropFillBox
-                                        objectName: "cropBackground"
-                                        Layout.fillWidth: true
-                                        model: view.cropBackdrops
-                                        textRole: "label"
-                                        currentIndex: view.cropFillIndex()
-                                        onActivated: view.chooseCropFill(currentIndex)
-                                    }
+                                    Item { Layout.fillWidth: true }
                                     Rectangle {
+                                        id: cropBackgroundSwatch
                                         objectName: "cropBackgroundSwatch"
                                         Layout.preferredWidth: 24
                                         Layout.preferredHeight: 24
                                         radius: 4
-                                        color: view.cropFillPreviewColor()
-                                        border.width: 1
-                                        border.color: view.theme.border
-                                        Label {
-                                            anchors.centerIn: parent
-                                            visible: view.cropFill === "transparent"
-                                            text: "0"
-                                            color: view.theme.textMuted
-                                            font.pixelSize: 10
+                                        color: view.backgroundTransparent
+                                               ? "transparent" : view.backgroundColor
+                                        border.width: cropSwatchArea.containsMouse ? 2 : 1
+                                        border.color: cropSwatchArea.containsMouse
+                                                      ? view.theme.accent : view.theme.border
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: qsTr("Background color (new canvas)")
+                                        Checkerboard {
+                                            objectName: "cropBackgroundCheckerboard"
+                                            anchors.fill: parent
+                                            visible: view.backgroundTransparent
+                                            square: 5
+                                        }
+                                        MouseArea {
+                                            id: cropSwatchArea
+                                            objectName: "cropBackgroundArea"
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            ToolTip.visible: containsMouse
+                                            ToolTip.delay: 500
+                                            ToolTip.text: qsTr("Background color (new canvas)")
+                                            onClicked: view.openBackgroundPopup(cropBackgroundSwatch)
                                         }
                                     }
                                 }
@@ -4572,6 +4529,13 @@ Item {
         documentHeight: view.documentHeight
         documentReady: view.documentReady
         presets: view.sizePresets
+        // The form does not own a background: it names the role the padding
+        // plays and every answer is stored on the Editor's one pair.
+        backgroundColor: view.backgroundColor
+        backgroundTransparent: view.backgroundTransparent
+        documentIsJpeg: view.documentIsJpeg
+        onBackgroundTransparentRequested: view.setBackgroundTransparent(true)
+        onBackgroundColorRequested: function(value) { view.setBackgroundColor(value) }
         onResizeRequested: function(width, height, fill, fillAlpha, filter, mode) {
             view.command({
                 type: "editor_resize",
@@ -4585,45 +4549,48 @@ Item {
         }
     }
 
-    /// The paint pair's two choosers. Each box opens its own, so a click says
-    /// which of the two colours is being changed; a cancelled chooser changes
-    /// nothing, and the box keeps showing what a stroke would get.
+    /// The foreground's chooser. One instance for every pair, because there is
+    /// one foreground: a click says which role is being changed, never which
+    /// copy of it. A cancelled chooser changes nothing, and the box keeps
+    /// showing what the next mark would get.
     ColorDialog {
-        id: paintForegroundColorDialog
-        objectName: "paintForegroundColorDialog"
+        id: foregroundColorDialog
+        objectName: "foregroundColorDialog"
         title: qsTr("Foreground color")
-        selectedColor: view.paintColor
+        selectedColor: view.foregroundColor
         onAccepted: {
-            view.setPaintColor(view.colorText(selectedColor))
+            view.setForegroundColor(view.colorText(selectedColor))
             view.forceActiveFocus()
         }
     }
 
+    /// New canvas, as a list: transparent, three named colours, or the chooser.
+    /// One instance serves the rail, the Crop panel and the Resize form, so a
+    /// border grown by hand and a padded resize cannot describe two different
+    /// backgrounds.
+    BackgroundPopup {
+        id: backgroundPopup
+        objectName: "backgroundPopup"
+        theme: view.theme
+        transparent: view.backgroundTransparent
+        colour: view.backgroundColor
+        alphaLostWarning: view.documentIsJpeg
+        onTransparentPicked: view.setBackgroundTransparent(true)
+        onColourPicked: function(value) { view.setBackgroundColor(value) }
+        onCustomPicked: view.openBackgroundChooser()
+    }
+
+    /// The chooser behind `Custom color…`. A cancelled chooser leaves the
+    /// background as it was rather than pretending a colour was picked.
     ColorDialog {
-        id: paintBackgroundColorDialog
-        objectName: "paintBackgroundColorDialog"
+        id: backgroundColorDialog
+        objectName: "backgroundColorDialog"
         title: qsTr("Background color")
-        selectedColor: view.paintBackgroundColor
+        selectedColor: view.backgroundColor
         onAccepted: {
-            view.setPaintBackgroundColor(view.colorText(selectedColor))
+            view.setBackgroundColor(view.colorText(selectedColor))
             view.forceActiveFocus()
         }
-    }
-
-    /// The colour chooser for a grown crop border. A cancelled chooser leaves
-    /// the previous choice selected rather than pretending a colour was picked.
-    ColorDialog {
-        id: cropFillColorDialog
-        objectName: "cropFillColorDialog"
-        title: qsTr("Border color")
-        selectedColor: view.cropFillColor
-        onAccepted: {
-            view.cropFillColor = selectedColor
-            view.cropFill = "custom"
-            cropFillBox.currentIndex = view.cropFillIndex()
-            draftDebounce.restart()
-        }
-        onRejected: cropFillBox.currentIndex = view.cropFillIndex()
     }
 
     /// The actions the mini toolbar cannot show. Same actions, labels and keys

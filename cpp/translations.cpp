@@ -12,7 +12,6 @@ namespace kogaview::i18n {
 static const Entry kEntries_vi[] = {
   // context: BrowserView
   { "Quick access", "Truy cập nhanh" },
-  { "Folders", "Thư mục" },
   { "Hidden parent folders", "Thư mục cha bị ẩn" },
   { "Loading…", "Đang tải…" },
   { "Preview", "Xem trước" },
@@ -91,7 +90,6 @@ static const Entry kEntries_vi[] = {
   { "The editor has changes that are not saved to a file. Save them first?", "Trình chỉnh sửa có thay đổi chưa lưu vào tệp. Lưu lại trước không?" },
   // context: SettingsDialog
   { "Settings", "Cài đặt" },
-  { "Appearance", "Giao diện" },
   { "Theme", "Chủ đề" },
   { "Browsing", "Đang duyệt" },
   { "Remember the last opened folder", "Nhớ thư mục mở gần nhất" },

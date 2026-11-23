@@ -147,3 +147,24 @@ Two smaller rules came with it:
 
 The dev harness's `editor-resize` gained `_ARG6` for the mode, and `tst_editor`
 drives the real form for all three states.
+
+## Revision — the pad row reads the Editor's background (2026-11-23, ADR 0025)
+
+`Background` was drawn only for Pad, but the form owned the answer:
+`ResizeDialog.qml` kept a `backgrounds` list (`None`, three named colours, *Custom
+colour…*) with `backgroundMode` and `customColor` of its own. Crop's grow row
+kept a second list and the brush's paint options a third, so the same question —
+what is the colour of the canvas this command adds? — had three answers and none
+survived the next tool.
+
+The row is now a swatch that shows and edits the Editor's one background: the
+form takes `backgroundColor`, `backgroundTransparent` and `documentIsJpeg`, and
+answers with `backgroundTransparentRequested`/`backgroundColorRequested` for the
+Editor to store. Choosing `Gray` for a pad is the same state the rail's pair
+shows the moment the form closes, and a grown crop uses it too.
+
+`None` is gone from the form, so Pad always carries a fill;
+`resize_pad_needs_colour` stays in `crates/app-editor/src/validate.rs` for a
+payload from a client that sends none. The wire is unchanged: a fill is three
+bytes plus `fill_alpha`, and a transparent pad sends `[0, 0, 0]` with
+`fill_alpha: 0`.

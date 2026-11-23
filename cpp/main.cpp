@@ -489,6 +489,16 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     or drag the divider to a height with `_ARG6` — the tab, the checklist,
   //     the width and the split are view state and send no command. `_ARG7=menu`
   //     clicks the checklist button so its rows can be photographed.
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-colour     -> the Editor's one colour
+  //     pair, through the handlers the controls call: `_ARG` is the action
+  //     (`swap` for Krita's X, `reset` for D, `list` opens the background list
+  //     under the rail's box, `foreground` opens the foreground chooser,
+  //     `pick:<key>` chooses a row of the list, or `#rrggbb` types a
+  //     foreground), `_ARG2` writes the background first (`transparent` or
+  //     `#rrggbb`), `_ARG3=brush` arms the brush so the rail pair and the
+  //     paint options can be compared, and `_ARG4=notools` hides the rail so
+  //     the fallback pair is the one on screen. It logs the two boxes'
+  //     geometry, so the 34 x 34 layout is checkable from a log.
   //   KOGAVIEW_DEV_UI_REQUEST=batch           -> open the Browser's batch form
   //     through the shell's own `openBatchDialog` (the function the Tools…
   //     menu entry calls), write its fields, and optionally press Run. `_ARG`
@@ -688,8 +698,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // written the way its own selection writes it. `_ARG` is WIDTHxHEIGHT
         // of a preset (default 1024x1024), or a custom pair when no preset
         // matches; `_ARG2=free` unlocks the chain; `_ARG3` names a background
-        // (`transparent`, `black`, `white`, `gray`) or is `#rrggbb` for a custom
-        // one; `_ARG4` names a filter (`auto`, `nearest`, `bilinear`, `bicubic`,
+        // (`transparent`, `black`, `white`, `gray`) or is `#rrggbb`, written on
+        // the Editor's own background; `_ARG4` names a filter (`auto`, `nearest`, `bilinear`, `bicubic`,
         // `bspline`, `lanczos3`); `_ARG6` is the fit (`stretch`, `cover`,
         // `pad`) — the question the form now asks before any background.
         QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
@@ -763,36 +773,31 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           QMetaObject::invokeMethod(dialog, "setConstraint", Q_ARG(QVariant, false));
         }
         if (!backgroundArg.isEmpty()) {
-          // Go through the dropdown's own chooser, so the row and the swatch
-          // cannot end up describing different backgrounds. A custom colour
-          // cannot use the chooser — it opens the platform colour dialog — so
-          // it writes the same two properties the accepted chooser writes.
-          QObject* background = dialog->findChild<QObject*>(QStringLiteral("resizeBackground"));
-          const QVariantList backgrounds = dialog->property("backgrounds").toList();
-          int backgroundIndex = -1;
-          const QString backgroundKey =
-            backgroundArg.startsWith(QLatin1Char('#')) ? QStringLiteral("custom") : backgroundArg;
-          for (int i = 0; i < backgrounds.size(); ++i) {
-            if (backgrounds.at(i).toMap().value(QStringLiteral("key")).toString()
-                == backgroundKey) {
-              backgroundIndex = i;
-              break;
-            }
-          }
-          if (backgroundArg.startsWith(QLatin1Char('#'))) {
-            dialog->setProperty("customColor", QColor(backgroundArg));
-            dialog->setProperty("backgroundMode", QStringLiteral("custom"));
-            if (background != nullptr && backgroundIndex >= 0) {
-              background->setProperty("currentIndex", backgroundIndex);
-            }
-          } else if (backgroundIndex >= 0) {
-            QMetaObject::invokeMethod(dialog, "chooseBackground",
-                                      Q_ARG(QVariant, QVariant(backgroundIndex)));
+          // The form owns no colour any more: `_ARG3` sets the Editor's one
+          // background through the same functions the pair and the list call,
+          // so the row the form draws, a grown crop border and the next resize
+          // all read the value this line wrote.
+          if (backgroundArg == QLatin1String("transparent")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundTransparent",
+                                      Q_ARG(QVariant, QVariant(true)));
+          } else if (backgroundArg == QLatin1String("black")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("#000000"))));
+          } else if (backgroundArg == QLatin1String("white")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("#ffffff"))));
+          } else if (backgroundArg == QLatin1String("gray")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("#808080"))));
+          } else if (backgroundArg.startsWith(QLatin1Char('#'))) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(backgroundArg)));
           } else {
             qWarning() << "KogaView dev ui request: no resize background" << backgroundArg;
           }
           qInfo() << "KogaView dev ui request: background" << backgroundArg
-                  << dialog->property("backgroundMode");
+                  << editor->property("backgroundColor")
+                  << editor->property("backgroundTransparent");
         }
         const QString fitArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6");
         if (!fitArg.isEmpty()) {
@@ -820,7 +825,8 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << "preset" << index << "constraint"
                           << dialog->property("constraint") << "fit"
                           << dialog->property("fitMode") << "background"
-                          << dialog->property("backgroundMode") << "filter"
+                          << editor->property("backgroundColor") << "transparent"
+                          << editor->property("backgroundTransparent") << "filter"
                           << dialog->property("filter") << "tool"
                           << editor->property("tool");
         // `_ARG5=apply` presses the dialog's own Apply after the form is filled,
@@ -957,27 +963,30 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // through the dropdown's own chooser; a `#rrggbb` writes the custom
         // swatch, because the real chooser is a portal dialog a harness run
         // cannot answer.
+        // `_ARG7` names the Editor's background — the colour a grown border is
+        // painted with. `transparent` is a state of its own; the three named
+        // colours and a `#rrggbb` go through `setBackgroundColor`, the same
+        // function the background list and the colour chooser call, so a hook
+        // run cannot describe a background the UI could not.
         const QString fillArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG7");
         if (!fillArg.isEmpty()) {
-          if (fillArg.startsWith(QLatin1Char('#'))) {
-            editor->setProperty("cropFillColor", QColor(fillArg));
-            editor->setProperty("cropFill", QStringLiteral("custom"));
+          if (fillArg == QLatin1String("transparent")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundTransparent",
+                                      Q_ARG(QVariant, QVariant(true)));
+          } else if (fillArg == QLatin1String("black")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("#000000"))));
+          } else if (fillArg == QLatin1String("white")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("#ffffff"))));
+          } else if (fillArg == QLatin1String("gray")) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(QStringLiteral("#808080"))));
+          } else if (fillArg.startsWith(QLatin1Char('#'))) {
+            QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                      Q_ARG(QVariant, QVariant(fillArg)));
           } else {
-            const QVariantList backdrops = editor->property("cropBackdrops").toList();
-            int fillIndex = -1;
-            for (int i = 0; i < backdrops.size(); ++i) {
-              const QVariantMap entry = backdrops.at(i).toMap();
-              if (entry.value(QStringLiteral("key")).toString() == fillArg) {
-                fillIndex = i;
-                break;
-              }
-            }
-            if (fillIndex >= 0) {
-              QMetaObject::invokeMethod(editor, "chooseCropFill",
-                                        Q_ARG(QVariant, QVariant(fillIndex)));
-            } else {
-              qWarning() << "KogaView dev ui request: no crop fill" << fillArg;
-            }
+            qWarning() << "KogaView dev ui request: no crop background" << fillArg;
           }
         }
         // A click with no travel asks for the whole picture, through the same
@@ -1036,8 +1045,9 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         }
         qInfo().noquote() << "KogaView dev ui request editor-crop" << size << "preset"
                           << index << "anchor" << editor->property("cropAnchor")
-                          << "mode" << editor->property("cropMode") << "fill"
-                          << editor->property("cropFill") << "ratio"
+                          << "mode" << editor->property("cropMode") << "background"
+                          << editor->property("backgroundColor") << "transparent"
+                          << editor->property("backgroundTransparent") << "ratio"
                           << editor->property("cropRatio") << "locks"
                           << editor->property("cropLockWidth")
                           << editor->property("cropLockHeight")
@@ -1141,7 +1151,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         QMetaObject::invokeMethod(tool, "click");
         const QString colour = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
         if (!colour.isEmpty()) {
-          editor->setProperty("paintColor", colour);
+          editor->setProperty("foregroundColor", colour);
         }
         const QString size = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
         if (!size.isEmpty()) {
@@ -1177,7 +1187,7 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << (erasing ? "eraser" : "brush") << "points" << mapped
                           << "brush" << editor->property("paintSize")
                           << editor->property("paintOpacity")
-                          << editor->property("paintColor")
+                          << editor->property("foregroundColor")
                           << "stroking" << editor->property("paintStroking");
         QMetaObject::invokeMethod(editor, "finishPaintStroke");
         qInfo().noquote() << "KogaView dev ui request editor-paint sent"
@@ -1315,6 +1325,96 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           // checklist itself is Settings › Appearance. Photograph what exists.
           openMainMenu(rootObject);
         }
+        emitted = true;
+      } else if (uiRequest == QLatin1String("editor-colour")) {
+        QObject* editor = rootObject->findChild<QObject*>(QStringLiteral("editor"));
+        if (editor == nullptr) {
+          qWarning() << "KogaView dev ui request: editor view not found";
+          return;
+        }
+        const QString action = requestArg;
+        const QString backgroundArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        // The background first: it is a state (`transparent`) or a colour, and
+        // the two functions below are the ones the list and the chooser call.
+        if (backgroundArg == QLatin1String("transparent")) {
+          QMetaObject::invokeMethod(editor, "setBackgroundTransparent",
+                                    Q_ARG(QVariant, QVariant(true)));
+        } else if (!backgroundArg.isEmpty() && backgroundArg.startsWith(QLatin1Char('#'))) {
+          QMetaObject::invokeMethod(editor, "setBackgroundColor",
+                                    Q_ARG(QVariant, QVariant(backgroundArg)));
+        }
+        // The rail's own pair and its two boxes: a dev hook that finds them by
+        // name is also the check that the component really is in the rail.
+        QObject* pair = editor->findChild<QObject*>(QStringLiteral("colourPair"));
+        QObject* foregroundBox =
+          pair != nullptr ? pair->findChild<QObject*>(QStringLiteral("colourPairForegroundSwatch"))
+                          : nullptr;
+        QObject* backgroundBox =
+          pair != nullptr ? pair->findChild<QObject*>(QStringLiteral("colourPairBackgroundSwatch"))
+                          : nullptr;
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4") == QLatin1String("notools")) {
+          // The same key the sidebar checklist uses: `setPanelVisible` adds the
+          // `editor.` prefix itself.
+          QMetaObject::invokeMethod(editor, "setPanelVisible",
+                                    Q_ARG(QVariant, QStringLiteral("tools")),
+                                    Q_ARG(QVariant, false));
+        }
+        QObject* brush = editor->findChild<QObject*>(QStringLiteral("toolBrush"));
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") == QLatin1String("brush")
+            && brush != nullptr && !brush->property("highlighted").toBool()) {
+          QMetaObject::invokeMethod(brush, "click");
+        }
+        if (action == QLatin1String("swap")) {
+          QMetaObject::invokeMethod(editor, "swapColours");
+        } else if (action == QLatin1String("reset")) {
+          QMetaObject::invokeMethod(editor, "resetColours");
+        } else if (action == QLatin1String("list")) {
+          // The click the box's `MouseArea` makes, with the box as the anchor.
+          if (backgroundBox == nullptr) {
+            qWarning() << "KogaView dev ui request: no background box to open under";
+          } else {
+            QMetaObject::invokeMethod(editor, "openBackgroundPopup",
+                                      Q_ARG(QVariant, QVariant::fromValue(backgroundBox)));
+          }
+        } else if (action == QLatin1String("foreground")) {
+          QMetaObject::invokeMethod(editor, "openForegroundChooser");
+        } else if (action.startsWith(QLatin1String("pick:"))) {
+          // A row of the list, chosen the way its `MouseArea` chooses it.
+          QObject* popup = editor->findChild<QObject*>(QStringLiteral("backgroundPopup"));
+          const QString key = action.mid(5);
+          if (popup == nullptr) {
+            qWarning() << "KogaView dev ui request: no background list";
+          } else {
+            QMetaObject::invokeMethod(popup, "choose", Q_ARG(QVariant, QVariant(key)));
+          }
+        } else if (action.startsWith(QLatin1Char('#'))) {
+          QMetaObject::invokeMethod(editor, "setForegroundColor",
+                                    Q_ARG(QVariant, QVariant(action)));
+        }
+        // Geometry after the layout settles, so a grab and a log agree about
+        // where the pair put its boxes.
+        QTimer::singleShot(900, editor, [editor, pair, foregroundBox, backgroundBox]() {
+          QObject* popup = editor->findChild<QObject*>(QStringLiteral("backgroundPopup"));
+          auto rectOf = [](QObject* item) {
+            if (item == nullptr) {
+              return QStringLiteral("none");
+            }
+            return QStringLiteral("%1,%2 %3x%4")
+              .arg(item->property("x").toDouble())
+              .arg(item->property("y").toDouble())
+              .arg(item->property("width").toDouble())
+              .arg(item->property("height").toDouble());
+          };
+          qInfo().noquote()
+            << "KogaView dev ui request editor-colour"
+            << "pair" << (pair != nullptr ? rectOf(pair) : QStringLiteral("missing"))
+            << "visible" << (pair != nullptr && pair->property("visible").toBool())
+            << "foreground" << rectOf(foregroundBox) << "background"
+            << rectOf(backgroundBox) << "colour"
+            << editor->property("foregroundColor") << editor->property("backgroundColor")
+            << "transparent" << editor->property("backgroundTransparent") << "list"
+            << (popup != nullptr && popup->property("opened").toBool());
+        });
         emitted = true;
       } else if (uiRequest == QLatin1String("batch")) {
         // The batch form without a pointer: the shell's `openBatchDialog` is

@@ -58,10 +58,18 @@ Dialog {
     property var lockedRatio: ({ width: 0, height: 0 })
     /// `stretch`, `cover` or `pad`; `stretch` is the lossless default.
     property string fitMode: "stretch"
-    /// `none`, `transparent`, `black`, `white`, `gray` or `custom`. Only read
-    /// while `fitMode` is `pad`.
-    property string backgroundMode: "none"
-    property color customColor: "#808080"
+    /// The Editor's one background, handed in: this form does not own a colour,
+    /// it only names the role the padding plays. `pad` always has one — a
+    /// colour, or nothing at all — so Core's `resize_pad_needs_colour` can no
+    /// longer be reached from here; the line stays for API callers.
+    property color backgroundColor: "#ffffff"
+    property bool backgroundTransparent: false
+    /// Whether the document is a JPEG, so the background list can say what its
+    /// encoder does to a clear area. The form does not decide it; the Editor
+    /// does, and hands it in the way it hands the colour.
+    property bool documentIsJpeg: false
+    signal backgroundTransparentRequested()
+    signal backgroundColorRequested(string value)
     /// A key from `filters`; `auto` is the fast box average for a downscale.
     property string filter: "auto"
 
@@ -69,14 +77,6 @@ Dialog {
         { key: "stretch", label: qsTr("Stretch to size") },
         { key: "cover", label: qsTr("Crop to fill") },
         { key: "pad", label: qsTr("Fit with background") }
-    ]
-    readonly property var backgrounds: [
-        { key: "none", label: qsTr("None") },
-        { key: "transparent", label: qsTr("Transparent") },
-        { key: "black", label: qsTr("Black") },
-        { key: "white", label: qsTr("White") },
-        { key: "gray", label: qsTr("Gray") },
-        { key: "custom", label: qsTr("Custom color…") }
     ]
     readonly property var filters: [
         { key: "auto", label: qsTr("Auto") },
@@ -147,13 +147,11 @@ Dialog {
         widthField.setPixels(width)
         heightField.setPixels(height)
         dialog.fitMode = "stretch"
-        dialog.backgroundMode = "none"
         dialog.filter = "auto"
         dialog.lockedRatio = { width: width, height: height }
         dialog.setConstraint(true)
         presetBox.currentIndex = dialog.matchingPreset()
         fitBox.currentIndex = dialog.fitIndex()
-        backgroundBox.currentIndex = dialog.backgroundIndex()
         filterBox.currentIndex = dialog.filterIndex()
     }
 
@@ -260,45 +258,11 @@ Dialog {
         fitBox.currentIndex = index
     }
 
-    function backgroundIndex() {
-        for (var index = 0; index < dialog.backgrounds.length; ++index) {
-            if (dialog.backgrounds[index].key === dialog.backgroundMode) return index
-        }
-        return 0
-    }
-
-    /// Pick a background. `Custom color…` opens the colour chooser; a cancelled
-    /// chooser leaves the previous choice on screen rather than pretending a
-    /// colour was picked.
-    function chooseBackground(index) {
-        if (index < 0 || index >= dialog.backgrounds.length) return
-        var key = dialog.backgrounds[index].key
-        if (key === "custom") {
-            fillColorDialog.open()
-            return
-        }
-        dialog.backgroundMode = key
-        backgroundBox.currentIndex = index
-    }
-
     function filterIndex() {
         for (var index = 0; index < dialog.filters.length; ++index) {
             if (dialog.filters[index].key === dialog.filter) return index
         }
         return 0
-    }
-
-    /// The swatch the dropdown shows next to its label. `None` has no colour to
-    /// show, and transparent is drawn as the form's own surface with a zero.
-    function backgroundColor() {
-        switch (dialog.backgroundMode) {
-        case "transparent": return dialog.theme.surfaceAlt
-        case "black": return "#000000"
-        case "white": return "#ffffff"
-        case "gray": return "#808080"
-        case "custom": return dialog.customColor
-        default: return "transparent"
-        }
     }
 
     /// The three bytes the typed command carries, or null for no padding.
@@ -307,22 +271,39 @@ Dialog {
                 Math.round(color.b * 255)]
     }
 
+    /// A `color` as `#rrggbb`, which is what the Editor's pair stores and what
+    /// the row shows beside the swatch.
+    function colorText(value) {
+        function byte(part) {
+            var text = Math.round(part * 255).toString(16)
+            return text.length < 2 ? "0" + text : text
+        }
+        return "#" + byte(value.r) + byte(value.g) + byte(value.b)
+    }
+
+    /// Open the background list under the row's swatch. The list is the same
+    /// component the rail and the Crop panel use; only the item it hangs from
+    /// differs.
+    function openBackgroundList(anchor) {
+        if (!anchor) return
+        backgroundPopup.transparent = dialog.backgroundTransparent
+        backgroundPopup.colour = dialog.backgroundColor
+        backgroundPopup.showBelow(anchor)
+    }
+
     /// The colour the command carries, or null when the mode paints nothing.
+    /// A padding always carries one: the Editor's background, which may be
+    /// "nothing at all" — the colour plus `fill_alpha: 0` the wire already uses
+    /// for a clear area.
     function fillForCommand() {
         if (dialog.fitMode !== "pad") return null
-        switch (dialog.backgroundMode) {
-        case "none": return null
-        case "transparent": return [0, 0, 0]
-        case "black": return [0, 0, 0]
-        case "white": return [255, 255, 255]
-        case "gray": return [128, 128, 128]
-        case "custom": return dialog.rgb(dialog.customColor)
-        default: return null
-        }
+        if (dialog.backgroundTransparent) return [0, 0, 0]
+        return dialog.rgb(dialog.backgroundColor)
     }
 
     function fillAlpha() {
-        return dialog.backgroundMode === "transparent" ? 0 : 255
+        if (dialog.fitMode !== "pad") return 255
+        return dialog.backgroundTransparent ? 0 : 255
     }
 
     function apply() {
@@ -574,41 +555,61 @@ Dialog {
             }
 
             RowLayout {
+                id: backgroundRow
+                objectName: "resizeBackground"
                 Layout.fillWidth: true
                 spacing: 8
                 // Only a pad paints pixels the source does not have, so it is
-                // the only mode with a background to pick.
+                // the only mode with a background to pick. The background is
+                // the Editor's own — the same colour a grown crop adds — so
+                // this row shows it and offers the one list that can change it.
                 visible: dialog.fitMode === "pad"
 
                 Label {
                     text: qsTr("Background")
                     color: dialog.theme.textMuted
                 }
-                ComboBox {
-                    id: backgroundBox
-                    objectName: "resizeBackground"
-                    Layout.fillWidth: true
-                    model: dialog.backgrounds
-                    textRole: "label"
-                    currentIndex: dialog.backgroundIndex()
-                    onActivated: dialog.chooseBackground(currentIndex)
-                }
                 Rectangle {
+                    id: backgroundSwatch
                     objectName: "resizeBackgroundSwatch"
                     Layout.preferredWidth: 24
                     Layout.preferredHeight: 24
                     radius: 4
-                    color: dialog.backgroundColor()
-                    border.width: 1
-                    border.color: dialog.theme.border
-                    visible: dialog.backgroundMode !== "none"
-                    Label {
-                        anchors.centerIn: parent
-                        visible: dialog.backgroundMode === "transparent"
-                        text: "0"
-                        color: dialog.theme.textMuted
-                        font.pixelSize: 10
+                    color: dialog.backgroundTransparent
+                           ? "transparent" : dialog.backgroundColor
+                    border.width: swatchArea.containsMouse ? 2 : 1
+                    border.color: swatchArea.containsMouse
+                                  ? dialog.theme.accent : dialog.theme.border
+                    Accessible.role: Accessible.Button
+                    Accessible.name: qsTr("Background color (new canvas)")
+
+                    Checkerboard {
+                        objectName: "resizeBackgroundCheckerboard"
+                        anchors.fill: parent
+                        visible: dialog.backgroundTransparent
+                        square: 5
                     }
+
+                    MouseArea {
+                        id: swatchArea
+                        objectName: "resizeBackgroundArea"
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: qsTr("Background color (new canvas)")
+                        onClicked: dialog.openBackgroundList(backgroundSwatch)
+                    }
+                }
+                Label {
+                    objectName: "resizeBackgroundName"
+                    Layout.fillWidth: true
+                    text: dialog.backgroundTransparent
+                          ? qsTr("Transparent")
+                          : dialog.colorText(dialog.backgroundColor)
+                    color: dialog.theme.text
+                    elide: Text.ElideRight
                 }
             }
 
@@ -634,7 +635,7 @@ Dialog {
             Label {
                 Layout.fillWidth: true
                 visible: dialog.fitMode === "pad"
-                text: dialog.backgroundMode === "transparent"
+                text: dialog.backgroundTransparent
                       ? qsTr("Fits the whole image inside the target and leaves the leftover transparent.")
                       : qsTr("Fits the whole image inside the target and fills the leftover with this background.")
                 color: dialog.theme.textMuted
@@ -685,17 +686,30 @@ Dialog {
         }
     }
 
+    /// The background list, opened under the row's swatch. It is a child of
+    /// this form rather than of the window, so the form's modality does not
+    /// swallow it while the form is the only thing on screen.
+    BackgroundPopup {
+        id: backgroundPopup
+        objectName: "resizeBackgroundPopup"
+        theme: dialog.theme
+        transparent: dialog.backgroundTransparent
+        colour: dialog.backgroundColor
+        alphaLostWarning: dialog.documentIsJpeg
+        onTransparentPicked: dialog.backgroundTransparentRequested()
+        onColourPicked: function(value) { dialog.backgroundColorRequested(value) }
+        onCustomPicked: backgroundColorDialog.open()
+    }
+
+    /// `Custom color…` in the list. Its answer travels up to the Editor's one
+    /// background, so the next form, the rail's pair and the crop panel all
+    /// read the colour this run picked.
     ColorDialog {
-        id: fillColorDialog
-        objectName: "resizeFillColorDialog"
+        id: backgroundColorDialog
+        objectName: "resizeBackgroundColorDialog"
         title: qsTr("Background color")
-        selectedColor: dialog.customColor
-        onAccepted: {
-            dialog.customColor = selectedColor
-            dialog.backgroundMode = "custom"
-            backgroundBox.currentIndex = dialog.backgroundIndex()
-        }
-        onRejected: backgroundBox.currentIndex = dialog.backgroundIndex()
+        selectedColor: dialog.backgroundColor
+        onAccepted: dialog.backgroundColorRequested(dialog.colorText(selectedColor))
     }
 
     /// Apply: the user chose this size. The editor turns it into one

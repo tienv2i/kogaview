@@ -83,3 +83,31 @@ under the pointer as it is drawn.
   Core's previous preview for the moment the new one takes to render. The
   alternative — holding the overlay until `previewRevision` advances — was not
   built.
+
+## Revision — the pair moved out of the brush (2026-11-23, ADR 0025)
+
+The two colours are no longer the brush's. They are the Editor's one
+foreground/background pair, drawn in the tool rail (`ColourPair.qml`) and shown
+wherever a document is open, because the background never had anything to do
+with a stroke: it is the material of *new canvas* — resize padding, the border a
+growing crop adds. Keeping it in the paint options meant the colour was invisible
+unless the brush was armed, and it was the third list of "what colour is the
+canvas" after Crop's grow row and Resize's pad row.
+
+What survives from this ADR is the pair's *shape*: a foreground box raised over
+a background one, a swap arrow (`X`) and a black-over-white reset square (`D`)
+inside 34 × 34, and each box opening its own control rather than one chooser told
+which colour it edits. The foreground's control is still a `ColorDialog`; the
+background's is now the short list `BackgroundPopup.qml` (Transparent, White,
+Black, Gray, *Custom color…*) whose last row opens the chooser, because a colour
+dialog cannot say "no colour". What changes:
+
+- The colours live on `EditorView` (`foregroundColor`, `backgroundColor`,
+  `backgroundTransparent`) and the component only draws and emits, so the rail's
+  pair, the hex field, the palette and the commands all read one value.
+- The properties are named for the roles, not for the tool:
+  `paintColor` → `foregroundColor`, `swapPaintColors` → `swapColours`, and so
+  on. The stroke still reads `foregroundBytes()`, three RGB bytes, unchanged.
+- The background gained a transparent state, drawn as the checkerboard and sent
+  as `[0, 0, 0]` plus `fill_alpha: 0`. A stroke never carries it: the foreground
+  stays opaque and `erase` remains how a mark is removed.

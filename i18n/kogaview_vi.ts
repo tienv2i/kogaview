@@ -1,6 +1,44 @@
 <?xml version='1.0' encoding='utf-8'?>
 <TS version="2.1" language="vi_VN">
   <context>
+    <name>BackgroundPopup</name>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>Transparent</source>
+      <translation>Trong suốt</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>White</source>
+      <translation>Trắng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>Black</source>
+      <translation>Đen</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>Gray</source>
+      <translation>Xám</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>Custom color…</source>
+      <translation>Màu tùy chọn…</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>Background</source>
+      <translation>Nền</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BackgroundPopup.qml" />
+      <source>This document is a JPEG, which has no transparency: the background is written as white.</source>
+      <translation>Tài liệu này là JPEG, không có độ trong suốt: phần nền sẽ được ghi thành màu trắng.</translation>
+    </message>
+  </context>
+  <context>
     <name>BatchCropDialog</name>
     <message>
       <location filename="../crates/desktop/qml/BatchCropDialog.qml" />
@@ -448,18 +486,6 @@
   <context>
     <name>BrowserView</name>
     <message>
-      <source>Quick access</source>
-      <translation type="vanished">Truy cập nhanh</translation>
-    </message>
-    <message>
-      <source>★</source>
-      <translation type="vanished">★</translation>
-    </message>
-    <message>
-      <source>Folders</source>
-      <translation type="vanished">Thư mục</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/BrowserView.qml" line="560" />
       <location filename="../crates/desktop/qml/BrowserView.qml" line="578" />
       <location filename="../crates/desktop/qml/BrowserView.qml" line="606" />
@@ -641,9 +667,28 @@
       <source>Open folder… (Ctrl+Shift+O)</source>
       <translation>Mở thư mục… (Ctrl+Shift+O)</translation>
     </message>
+  </context>
+  <context>
+    <name>ColourPair</name>
     <message>
-      <source>Toggle quick access and folder tree</source>
-      <translation type="vanished">Bật/tắt truy cập nhanh và cây thư mục</translation>
+      <location filename="../crates/desktop/qml/ColourPair.qml" />
+      <source>Foreground color</source>
+      <translation>Màu tiền cảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ColourPair.qml" />
+      <source>Background color (new canvas)</source>
+      <translation>Màu nền (khung vẽ mới)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ColourPair.qml" />
+      <source>Swap the foreground and background colours (X)</source>
+      <translation>Đổi màu tiền cảnh và hậu cảnh (X)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ColourPair.qml" />
+      <source>Reset the colours to black and white (D)</source>
+      <translation>Đặt lại màu về đen và trắng (D)</translation>
     </message>
   </context>
   <context>
@@ -820,31 +865,6 @@
       <translation>Mở rộng</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="784" />
-      <source>Transparent</source>
-      <translation>Trong suốt</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="785" />
-      <source>Black</source>
-      <translation>Đen</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="786" />
-      <source>White</source>
-      <translation>Trắng</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="787" />
-      <source>Gray</source>
-      <translation>Xám</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="788" />
-      <source>Custom color…</source>
-      <translation>Màu tùy chọn…</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="1944" />
       <source>%1 px long edge</source>
       <translation>%1 px cạnh dài</translation>
@@ -907,24 +927,19 @@
       <translation>#rrggbb</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="3763" />
-      <source>Swap the foreground and background colours (X)</source>
-      <translation>Đổi màu tiền cảnh và hậu cảnh (X)</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="3681" />
       <source>Background color</source>
       <translation>Màu nền</translation>
     </message>
     <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" />
+      <source>Background color (new canvas)</source>
+      <translation>Màu nền (khung vẽ mới)</translation>
+    </message>
+    <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="3704" />
       <source>Foreground color</source>
       <translation>Màu tiền cảnh</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="3802" />
-      <source>Reset the colours to black and white (D)</source>
-      <translation>Đặt lại màu về đen và trắng (D)</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="3816" />
@@ -992,11 +1007,6 @@
       <translation>Xem trước ảnh đã làm thẳng trước khi áp dụng</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="4408" />
-      <source>Border color</source>
-      <translation>Màu viền</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="4483" />
       <source>Export image</source>
       <translation>Xuất ảnh</translation>
@@ -1060,10 +1070,6 @@
       <location filename="../crates/desktop/qml/EditorView.qml" line="757" />
       <source>Top left</source>
       <translation>Trên trái</translation>
-    </message>
-    <message>
-      <source>Tool options</source>
-      <translation type="vanished">Tuỳ chọn công cụ</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="758" />
@@ -1341,14 +1347,6 @@
       <translation>Huỷ</translation>
     </message>
     <message>
-      <source>View</source>
-      <translation type="vanished">Xem</translation>
-    </message>
-    <message>
-      <source>Sidebar</source>
-      <translation type="vanished">Thanh bên</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/Main.qml" line="1207" />
       <source>Delete permanently?</source>
       <translation>Xoá vĩnh viễn?</translation>
@@ -1413,34 +1411,9 @@
   <context>
     <name>ResizeDialog</name>
     <message>
-      <location filename="../crates/desktop/qml/ResizeDialog.qml" line="74" />
-      <source>None</source>
-      <translation>Không tô</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="75" />
       <source>Transparent</source>
       <translation>Trong suốt</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/ResizeDialog.qml" line="76" />
-      <source>Black</source>
-      <translation>Đen</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/ResizeDialog.qml" line="77" />
-      <source>White</source>
-      <translation>Trắng</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/ResizeDialog.qml" line="78" />
-      <source>Gray</source>
-      <translation>Xám</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/ResizeDialog.qml" line="79" />
-      <source>Custom color…</source>
-      <translation>Màu tùy chọn…</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="82" />
@@ -1522,6 +1495,11 @@
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="691" />
       <source>Background color</source>
       <translation>Màu nền</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/ResizeDialog.qml" />
+      <source>Background color (new canvas)</source>
+      <translation>Màu nền (khung vẽ mới)</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/ResizeDialog.qml" line="513" />
@@ -1680,10 +1658,6 @@
       <location filename="../crates/desktop/qml/SettingsDialog.qml" line="337" />
       <source>×</source>
       <translation>×</translation>
-    </message>
-    <message>
-      <source>Appearance</source>
-      <translation type="vanished">Giao diện</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/SettingsDialog.qml" line="381" />
