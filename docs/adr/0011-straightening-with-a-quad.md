@@ -291,3 +291,43 @@ warps them onto the document's own frame.
   smaller, not computed smaller — so the cost of a 27 MP document is what row
   82 recorded. The tool rail's tooltip now says what the tool does in this build
   (`Straighten the picture by dragging the frame's corners and edges`).
+
+## Revision — the answer is drawn on the canvas (2026-11-23)
+
+The revision above kept the frame's answer in the tool options as a 104 px
+thumbnail, on the argument that a picture drawn under the corners is a picture
+you cannot aim at. The owner answered it: the preview belongs on the big
+picture — "chức năng transform chỉnh lại cơ chế hiển thị transform trực tiếp
+trong phần hiển thị ảnh lớn chứ không phải cần khung preview nhỏ, không cần giải
+thích bên phải". No protocol change, no Core change: the draft was already a
+full-size warp of the document's own frame.
+
+- **The canvas draws the draft.** `displayedWidth`/`displayedHeight` and the
+  canvas `Image` follow `transformPreview` while it exists, so the picture on
+  screen *is* the straightened result, at the draft's own size (a draft rendered
+  in another frame is drawn at that frame, not stretched into the document's).
+  `transformPreview` is unchanged as a gate: the tool, `kind: "transform"`, and a
+  frame that has actually left the identity.
+- **The frame stays on top of it.** `transformFrameShown`, the four edges and
+  the eight handles are drawn over the draft and stay draggable, so a drag shows
+  its own result while it happens. That was the whole defect of the switch the
+  first revision removed: the answer arrived and the thing being aimed with left.
+- **The tool options are the mode row, and nothing else.** `transformPreviewBox`,
+  `transformPreviewImage`, `transformPerspectiveReason`, `transformHint` and
+  `transformSizeHint` are gone; the panel is `Khung` / `Phối cảnh` and the two
+  verbs. Why `Phối cảnh` is shut is a **tooltip** on the disabled button — the
+  sentence is kept, the paragraph is not. The panel is the tool's, not a
+  lecture's.
+- **One render per pause, not per pointer move.** `onTransformCornersChanged`
+  restarted nothing and called `requestDraft` directly, so `draftDebounce` only
+  governed typed crop sides: a corner drag asked Core for a full-size warp on
+  every pointer move. Measured on the real window as a stream of
+  `editor_transform_preview` commands. It is `draftDebounce.restart()` now, and
+  the suite pins the whole drag at one command.
+- **Consequences.** The canvas no longer shows the source while Transform is
+  armed and moved, so a straightening is judged where it will be applied; a
+  corner the user wants to place against the *source* pixels has to be placed
+  against the result. The draft is still a full warp per settle (a thumbnail was
+  drawn smaller, never computed smaller), and the 200 ms pause is the cost of a
+  drag. Apply still sends `editor_transform` and puts the frame back on the
+  document's corners, which disarms Apply until the next drag.

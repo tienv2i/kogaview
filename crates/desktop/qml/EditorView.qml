@@ -738,7 +738,12 @@ Item {
     /// for the straightened result through the debounce a typed crop side uses,
     /// so a drag renders once per pause instead of once per pixel. The identity
     /// asks for nothing — `requestDraft` refuses a frame that changes nothing.
-    onTransformCornersChanged: view.requestDraft()
+    ///
+    /// It is the *debounce* that is restarted here, not `requestDraft`: a drag
+    /// writes a corner on every pointer move, and asking straight away sent a
+    /// full-size render per move — measured on the real window as a stream of
+    /// `editor_transform_preview` commands, one per pixel of travel.
+    onTransformCornersChanged: draftDebounce.restart()
 
     /// The quad that changes nothing: the document's own frame.
     function identityCorners() {
@@ -1821,10 +1826,11 @@ Item {
         view.setCropRect(x, y, width, height)
     }
 
-    /// The frame is drawn on the source picture and stays there: the straightened
-    /// result is previewed in the tool options (`transformPreview`), not over
-    /// the canvas, because the corners are the command and a picture drawn under
-    /// the pointer would be a picture you cannot aim at.
+    /// The frame is drawn on the canvas and stays there while the answer is
+    /// drawn under it: the result is on the canvas (`transformPreview`), and the
+    /// eight handles are what the next drag grabs. Hiding them for a draft is
+    /// what made the old live preview a switch — the picture arrived and the
+    /// thing you aimed with left.
     readonly property bool transformFrameShown:
         view.tool === "transform" && view.documentReady
         && view.transformCorners && view.transformCorners.length === 4
@@ -2222,12 +2228,12 @@ Item {
     readonly property real documentWidth: hasDocument ? editor.width : 0
     readonly property real documentHeight: hasDocument ? editor.height : 0
 
-    /// The straightened result Core rendered for the frame on screen, shown in
-    /// the tool options. Live preview is not an option any more: the answer is
-    /// always drawn, because a frame whose result you have to ask for is a frame
-    /// you are aiming blind. It is a thumbnail rather than the canvas because
-    /// the corners are the command — drawing the result over the picture would
-    /// describe pixels that are no longer on screen.
+    /// The straightened result Core rendered for the frame on screen. Live
+    /// preview is not an option any more: the answer is drawn on the canvas as
+    /// soon as the frame leaves the identity, because a frame whose result you
+    /// have to ask for is a frame you are aiming blind. The corners stay drawn
+    /// on top of it (`transformFrameShown`), so the result can be watched and
+    /// dragged at once.
     ///
     /// The gating is presentation-only: Core keeps the draft until an edit lands
     /// or the document changes, so the tool being put down, a draft of another
@@ -2256,10 +2262,12 @@ Item {
         view.tool = "pointer"
         resizeDialog.open()
     }
-    /// What the canvas draws: the document's own size. No draft replaces the
-    /// picture any more — Transform's answer is in the tool options.
-    readonly property real displayedWidth: documentWidth
-    readonly property real displayedHeight: documentHeight
+    /// What the canvas draws: the draft while Transform has one, the document
+    /// otherwise. The draft keeps the document's size (a warp is remapped onto
+    /// the document's own frame), so both numbers describe the same rectangle —
+    /// they are read from the draft anyway, so the two cannot drift apart.
+    readonly property real displayedWidth: transformPreview ? transformPreview.width : documentWidth
+    readonly property real displayedHeight: transformPreview ? transformPreview.height : documentHeight
 
     // The document is drawn by a scaled `Image`, so a point in document pixels
     // sits `x * zoom` from the picture's visual corner. `Image.scale` grows
@@ -3008,9 +3016,11 @@ Item {
                 fillMode: Image.Stretch
                 asynchronous: false
                 cache: false
-                source: view.editor && view.editor.previewPath
-                        ? "file://" + view.editor.previewPath
-                        : ""
+                source: view.transformPreview
+                        ? "file://" + view.transformPreview.path
+                        : (view.editor && view.editor.previewPath
+                           ? "file://" + view.editor.previewPath
+                           : "")
                 opacity: view.rendering ? 0.65 : 1.0
                 Behavior on opacity {
                     NumberAnimation { duration: 120 }
@@ -4344,10 +4354,10 @@ Item {
                             }
 
                             // Transform: the frame on the canvas is the
-                            // command, so there is nothing to type. The options
-                            // are how it is taken (one frame shape, one quad
-                            // shape that is not built yet) and the answer, which
-                            // is always drawn — never asked for.
+                            // command, so there is nothing to type and nothing
+                            // to explain — the picture under the handles is the
+                            // answer while it is dragged. The one row is how the
+                            // four corners are taken.
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 visible: view.tool === "transform"
@@ -4356,10 +4366,12 @@ Item {
                                 // The two modes as one row: the armed one is
                                 // painted with the accent, like the active
                                 // segment of any segmented control. Perspective
-                                // is drawn and disabled rather than hidden —
-                                // an option that exists and cannot be armed is
+                                // is drawn and disabled rather than hidden — an
+                                // option that exists and cannot be armed is
                                 // information; one that is not there is a
-                                // question the window refuses to answer.
+                                // question the window refuses to answer. Why it
+                                // is shut is a tooltip, not a paragraph: the
+                                // panel is for the tool, not for a lecture.
                                 RowLayout {
                                     objectName: "transformModeSwitch"
                                     Layout.fillWidth: true
@@ -4379,83 +4391,13 @@ Item {
                                         Layout.fillWidth: true
                                         theme: view.theme
                                         // The quad would need layers, which the
-                                        // Editor does not have; the line under
-                                        // the row says so instead of leaving a
-                                        // dead button to guess at.
+                                        // Editor does not have.
                                         enabled: false
                                         text: qsTr("Perspective")
                                         primary: view.transformMode === "perspective"
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Perspective puts the four sides on four planes, which needs layers; it stays off until the Editor has them.")
                                         onClicked: view.setTransformMode("perspective")
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    objectName: "transformPerspectiveReason"
-                                    text: qsTr("Perspective puts the four sides on four planes, which needs layers; it stays off until the Editor has them.")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    objectName: "transformHint"
-                                    visible: view.transformMode === "frame"
-                                    text: qsTr("Drag a corner or an edge: the side across from it stays where it is.")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    objectName: "transformSizeHint"
-                                    text: qsTr("The result keeps the document's size.")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
-
-                                // The live preview: the straightened result
-                                // Core rendered for the frame on the canvas,
-                                // always drawn while there is one. A thumbnail
-                                // in the options, not the canvas, because the
-                                // corners are the command and stay draggable.
-                                ColumnLayout {
-                                    objectName: "transformPreview"
-                                    Layout.fillWidth: true
-                                    spacing: 4
-                                    visible: view.transformPreview !== null
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: qsTr("Live preview")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                    }
-
-                                    Rectangle {
-                                        objectName: "transformPreviewBox"
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 104
-                                        radius: 4
-                                        color: view.theme.thumb
-                                        border.width: 1
-                                        border.color: view.theme.border
-                                        clip: true
-
-                                        Image {
-                                            objectName: "transformPreviewImage"
-                                            anchors.fill: parent
-                                            anchors.margins: 3
-                                            fillMode: Image.PreserveAspectFit
-                                            asynchronous: false
-                                            cache: false
-                                            source: view.transformPreview
-                                                    ? "file://" + view.transformPreview.path
-                                                    : ""
-                                        }
                                     }
                                 }
                             }

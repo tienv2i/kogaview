@@ -116,7 +116,7 @@ private slots:
   void theCropFrameRefitsAfterADocumentChange();
   void theCropFrameDrawsItsGuidesAndShade();
   void theTransformToolDragsCornersAndEdges();
-  void theTransformPreviewIsAlwaysDrawnBesideTheFrame();
+  void theTransformPreviewIsDrawnOnTheCanvas();
   void thePerspectiveQuadIsKeptBehindItsMode();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void theMiniToolbarFoldsTheSecondaryActions_data();
@@ -2506,9 +2506,10 @@ void TestEditor::theTransformToolDragsCornersAndEdges()
   QQuickItem* perspective = expectItem("transformModePerspective");
   QCOMPARE(perspective->property("enabled").toBool(), false);
   QCOMPARE(perspective->property("primary").toBool(), false);
-  QVERIFY2(expectItem("transformPerspectiveReason")->property("text").toString()
-             .contains(QStringLiteral("layers")),
-           "the disabled mode does not say why it is disabled");
+  // Why the mode is shut is a tooltip on the button, not a paragraph under it:
+  // the panel is the tool's, and the owner asked for the explanations gone.
+  QVERIFY2(visualItem(QStringLiteral("transformPerspectiveReason")) == nullptr,
+           "the tool options explain the mode in the panel again");
   QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
   QTest::qWait(20);
 
@@ -2561,13 +2562,16 @@ void TestEditor::theTransformToolDragsCornersAndEdges()
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[1][0]")).toDouble(), 200.0);
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble(), 20.0);
 
-  // Every move asked Core for the straightened result — live preview is not a
-  // switch any more — and none of them applied anything.
-  QVERIFY2(m_commands->count() >= 1, "the drag asked for no preview");
-  for (int index = 0; index < m_commands->count(); ++index) {
-    QCOMPARE(m_commands->at(index).at(0).toMap().value(QStringLiteral("type")).toString(),
-             QStringLiteral("editor_transform_preview"));
-  }
+  // The drag asked Core for the straightened result — live preview is not a
+  // switch any more — and it asked **once**: a drag writes a corner on every
+  // pointer move, and a render per move is a full-size warp per pixel of travel
+  // (measured on the real window as an `editor_transform_preview` per move). The
+  // pause after the last move is what renders, so nothing is applied and one
+  // command is what the whole drag costs.
+  QTest::qWait(500);
+  QCOMPARE(m_commands->count(), 1);
+  QCOMPARE(m_commands->at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+           QStringLiteral("editor_transform_preview"));
 
   // Apply carries the quad and nothing else, then returns to the identity so a
   // second press cannot record the same transform twice.
@@ -2587,10 +2591,10 @@ void TestEditor::theTransformToolDragsCornersAndEdges()
 }
 
 /// Live preview is not an option any more: the straightened result is asked for
-/// as soon as the frame leaves the identity, and it is drawn in the tool options
-/// rather than over the canvas — the corners are the command, so the picture has
-/// to stay in front of the pointer and the frame stays draggable.
-void TestEditor::theTransformPreviewIsAlwaysDrawnBesideTheFrame()
+/// as soon as the frame leaves the identity, and it is drawn on the canvas —
+/// under the handles, which stay there, so the picture can be watched and
+/// dragged at once. The tool options carry the mode row and nothing else.
+void TestEditor::theTransformPreviewIsDrawnOnTheCanvas()
 {
   QVariantMap draft;
   draft.insert(QStringLiteral("path"), m_previewTwo);
@@ -2605,18 +2609,23 @@ void TestEditor::theTransformPreviewIsAlwaysDrawnBesideTheFrame()
   selectTool("transform");
 
   QQuickItem* canvas = expectItem("canvas");
-  QQuickItem* box = expectItem("transformPreviewBox");
-  QQuickItem* preview = expectItem("transformPreviewImage");
 
   // On the identity there is nothing to preview: the frame changes nothing, so
-  // the draft Core may still be holding describes no answer. The frame itself is
-  // on the canvas, which is where it now stays.
+  // the draft Core may still be holding describes no answer and the canvas shows
+  // the document. The frame is on the canvas, which is where it now stays.
   QVERIFY(m_editor->property("transformFrameShown").toBool());
-  QVERIFY2(!box->isVisible(),
-           "a draft is drawn in the options while the frame is still the document");
+  QVERIFY2(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")),
+           "a draft is drawn while the frame is still the document");
 
-  // One corner off the identity: the preview appears without anything being
-  // armed, and it is the draft Core published.
+  // The options are the mode row and nothing else: no preview box, no hints.
+  QVERIFY(expectItem("transformModeSwitch")->isVisible());
+  QVERIFY2(visualItem(QStringLiteral("transformPreviewBox")) == nullptr,
+           "the small preview box is back in the tool options");
+  QVERIFY2(visualItem(QStringLiteral("transformPerspectiveReason")) == nullptr,
+           "an explanation line is back in the tool options");
+
+  // One corner off the identity: the canvas becomes the draft without anything
+  // being armed, and the frame stays drawn on top of it with its handles.
   QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
   QTest::qWait(20);
   QQuickItem* corner0 = expectItem("transformCorner_0");
@@ -2626,31 +2635,28 @@ void TestEditor::theTransformPreviewIsAlwaysDrawnBesideTheFrame()
   QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble() - 30.0)
                  < 0.6,
                "the corner drag did not move the frame");
-  QTRY_VERIFY(box->isVisible());
-  QCOMPARE(preview->property("source").toString(),
-           QStringLiteral("file://") + m_previewTwo);
-
-  // The canvas is the document, not the draft, and the frame is still on it:
-  // that is the whole point of moving the preview into the options.
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
+  QTRY_COMPARE(canvas->property("source").toString(),
+               QStringLiteral("file://") + m_previewTwo);
   QCOMPARE(canvas->property("width").toDouble(), 200.0);
   QVERIFY(m_editor->property("transformFrameShown").toBool());
   QVERIFY(expectItem("transformOverlay")->isVisible());
+  QVERIFY2(expectItem("transformCorner_0")->isVisible(),
+           "the handles left the canvas with the answer");
   // The draft is a preview, not an edit.
   QCOMPARE(m_editor->property("documentWidth").toDouble(), 200.0);
   QCOMPARE(m_editor->property("modified").toBool(), false);
 
   // A crop draft under Transform is the other tool's answer and is never drawn
-  // here — and the frame it would hide stays where it is.
+  // here — and the frame stays where it is.
   m_commands->clear();
   draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
   editor.insert(QStringLiteral("previewDraft"), draft);
   setState(editor);
   QVERIFY(readQml(m_editor, QStringLiteral("transformPreview === null")).toBool());
-  QVERIFY(!box->isVisible());
+  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
   QVERIFY(m_editor->property("transformFrameShown").toBool());
 
-  // A transform draft again: the frame asks Core for it by itself, with no
+  // Transform's own draft again: the frame asks Core for it by itself, with no
   // toggle to press. The identity is never requested — there is nothing to
   // preview.
   draft.insert(QStringLiteral("kind"), QStringLiteral("transform"));
@@ -2675,6 +2681,18 @@ void TestEditor::theTransformPreviewIsAlwaysDrawnBesideTheFrame()
   const QVariantList first = corners.at(0).toList();
   QVERIFY(qAbs(first.at(0).toDouble() - 12.0) < 0.6);
   QVERIFY(qAbs(first.at(1).toDouble() - 8.0) < 0.6);
+
+  // The canvas is the draft, so it takes the draft's own size: a draft drawn in
+  // a frame other than the document's is shown at its own size, not stretched
+  // into the document's — the pixels on screen are the ones Core rendered.
+  draft.insert(QStringLiteral("width"), 300);
+  draft.insert(QStringLiteral("height"), 225);
+  editor.insert(QStringLiteral("previewDraft"), draft);
+  setState(editor);
+  QTRY_COMPARE(canvas->property("width").toDouble(), 300.0);
+  QCOMPARE(canvas->property("height").toDouble(), 225.0);
+  QCOMPARE(m_editor->property("documentWidth").toDouble(), 200.0);
+  QCOMPARE(m_editor->property("documentHeight").toDouble(), 150.0);
 }
 
 /// The quad is still the shape the mode will have when layers land: with the

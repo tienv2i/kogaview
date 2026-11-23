@@ -2567,6 +2567,76 @@ two of them were not colours at all.
   colours are proven; and the 12 px floor was judged on this desktop's font at
   this DPI, not measured against another font.
 
+## Design decisions, the answer is drawn on the canvas (row 115, ADR 0011 revision)
+
+Row 113 kept Transform's answer in the tool options as a 104 px thumbnail, on the
+argument that a picture drawn under the corners is a picture you cannot aim at.
+The owner answered it: "chức năng transform chỉnh lại cơ chế hiển thị transform
+trực tiếp trong phần hiển thị ảnh lớn chứ không phải cần khung preview nhỏ. không
+cần giải thích bên phải". No protocol change, no Core change — the draft was
+already a full-size warp of the document's own frame.
+
+- **The canvas draws the draft.** `displayedWidth`/`displayedHeight` and the
+  canvas `Image` follow `transformPreview` while it exists, so the picture on
+  screen *is* the straightened result, at the draft's own size (a draft rendered
+  in another frame is drawn at that frame, not stretched into the document's).
+  `transformPreview` is unchanged as a gate: the tool, `kind: "transform"` and a
+  frame that has actually left the identity.
+- **The frame stays on top of it.** `transformFrameShown`, the four edges and the
+  eight handles are drawn over the draft and stay draggable, so a drag shows its
+  own result while it happens — which was the whole defect of the switch row 113
+  removed: the answer arrived and the thing being aimed with left.
+- **The tool options are the mode row, and nothing else.** `transformPreviewBox`,
+  `transformPreviewImage`, `transformPerspectiveReason`, `transformHint` and
+  `transformSizeHint` are gone; the panel is `Khung` / `Phối cảnh` and the two
+  verbs. Why `Phối cảnh` is shut is a **tooltip** on the disabled button: the
+  sentence is kept, the paragraph is not. The panel is the tool's, not a
+  lecture's.
+- **One render per pause, not per pointer move.** `onTransformCornersChanged`
+  called `requestDraft` directly, so `draftDebounce` only ever governed typed crop
+  sides: a corner drag asked Core for a full-size warp on **every pointer move**,
+  measured on the real window as a stream of `editor_transform_preview`
+  commands. It is `draftDebounce.restart()` now, and the suite pins the whole drag
+  at one command — the mutation (back to `requestDraft()`) makes that count 12.
+- **A draft in another frame is what makes the rule assertable.** The case's
+  draft was originally the document's own size, so re-pointing
+  `displayedWidth`/`displayedHeight` at the document slipped through the suite;
+  it now carries a 300 × 225 draft over a 200 × 150 document, and the mutation
+  fails as it should.
+- **Two mutations, each run and restored:** the corner path back to
+  `view.requestDraft()` (12 commands instead of 1), and
+  `displayedWidth`/`displayedHeight` back to the document's (the canvas keeps
+  200 × 150 and the 300 × 225 draft is not drawn).
+- **Evidence it runs:** the dev binary, isolated `XDG_*`, Vietnamese — the frame
+  dragged to `[[140,90],[1254,90],[1254,1254],[140,1254]]`, `Khung` armed,
+  `Phối cảnh` drawn greyed, the options holding only the mode row and
+  `Áp dụng`/`Đặt lại`, the **canvas** drawing the straightened result at the
+  draft's own 12 % zoom with the frame and its eight handles over it
+  (`docs/evidence/M1-transform-canvas-vi.png`; the same state in the light theme
+  in `M1-light-transform-vi.png`), the run's journal holding exactly one
+  `editor_transform_preview` for the entire drag. Then Apply: `editor_transform`
+  in the journal, the picture is the straightening, the frame back on the
+  document's own corners so `Áp dụng` is greyed, the info page reading `đã sửa`
+  and the footer `chưa lưu` (`docs/evidence/M1-transform-applied-frame-vi.png`).
+- **Consequences:** the canvas no longer shows the *source* while Transform is
+  armed and moved, so a straightening is judged where it will be applied; a
+  corner the user wants to place against the source pixels has to be placed
+  against the result. The draft is still a full warp per settle (a thumbnail was
+  drawn smaller, never computed smaller), and the 200 ms pause is the cost of a
+  drag.
+- **Not verified:** no hand dragged a handle (the `editor-transform` hook calls
+  the two functions the canvas handles call), and the perspective mode has no
+  armed screenshot because no control can arm it, which is the point of the row.
+- **An unexplained observation, recorded rather than explained away:** two of
+  fourteen runs of the same script produced a stream of
+  `editor_transform_preview` commands (~96 in four seconds, the frame drifting a
+  few pixels per event) *while no pointer touched the window*; both runs'
+  journals also held a `select`/`open_file` pair the script does not send, and
+  neither state was reproducible in twelve further attempts. The un-debounced
+  corner path above is the only way that rate is reachable, and it is now bounded
+  at one render per 200 ms pause; what moved the corners in those two runs is not
+  known.
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was
