@@ -994,17 +994,14 @@ void TestEditor::undoRedoResetAndCloseEmitCommands()
   clickItem(expectItem("undoButton"));
   clickItem(expectItem("redoButton"));
   clickItem(expectItem("resetButton"));
-  clickItem(expectItem("editorClose"));
 
-  QCOMPARE(m_commands->count(), 4);
+  QCOMPARE(m_commands->count(), 3);
   QCOMPARE(m_commands->at(0).at(0).toMap().value("type").toString(),
            QStringLiteral("editor_undo"));
   QCOMPARE(m_commands->at(1).at(0).toMap().value("type").toString(),
            QStringLiteral("editor_redo"));
   QCOMPARE(m_commands->at(2).at(0).toMap().value("type").toString(),
            QStringLiteral("editor_reset"));
-  QCOMPARE(m_commands->at(3).at(0).toMap().value("type").toString(),
-           QStringLiteral("editor_close"));
 }
 
 void TestEditor::resizeApplyEmitsTheTypedSize()
@@ -3825,7 +3822,6 @@ void TestEditor::toolbarTooltipsNameTheirShortcuts()
     { QStringLiteral("redoButton"), QStringLiteral("Redo") },
     { QStringLiteral("resetButton"), QStringLiteral("Reset to original") },
     { QStringLiteral("editorZoomIn"), QStringLiteral("Zoom in") },
-    { QStringLiteral("editorBack"), QStringLiteral("Back to browser") },
   };
   for (const auto& entry : expected) {
     const QByteArray name = entry.first.toLatin1();

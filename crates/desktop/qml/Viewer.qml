@@ -1009,20 +1009,6 @@ Item {
 
             ToolbarButton {
                 theme: view.theme
-                icon.name: "go-previous-symbolic"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Back to browser (Esc/Backspace)")
-                onClicked: view.command({ type: "set_workspace", workspace: "browser" })
-            }
-
-            ToolbarSeparator {
-                theme: view.theme
-                visible: !view.miniToolbar
-            }
-
-            ToolbarButton {
-                theme: view.theme
                 icon.name: "media-skip-backward-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: view.images.length > 0

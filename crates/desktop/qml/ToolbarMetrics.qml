@@ -69,10 +69,10 @@ Item {
     /// never draws.
     readonly property int browserButtons: 4
     readonly property int browserSeparators: 1
-    readonly property int viewerButtons: 13
-    readonly property int viewerSeparators: 4
-    readonly property int editorButtons: 13
-    readonly property int editorSeparators: 5
+    readonly property int viewerButtons: 12
+    readonly property int viewerSeparators: 3
+    readonly property int editorButtons: 11
+    readonly property int editorSeparators: 3
 
     /// The buttons each workspace keeps once the window is too narrow for the
     /// whole icon row, the overflow button included. The rest of its actions
@@ -82,8 +82,8 @@ Item {
     /// real toolbars, so a button whose `visible` does not follow this rule
     /// fails there rather than quietly making the floor too narrow.
     readonly property int browserMiniButtons: 4
-    readonly property int viewerMiniButtons: 5
-    readonly property int editorMiniButtons: 7
+    readonly property int viewerMiniButtons: 4
+    readonly property int editorMiniButtons: 5
 
     /// `EditorView`'s zoom readout is a fixed 48 px (`Layout.preferredWidth`),
     /// wider than the icon square it stands in for. The Middle other readouts

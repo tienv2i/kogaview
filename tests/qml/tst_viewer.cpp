@@ -1293,8 +1293,6 @@ private slots:
     QCoreApplication::processEvents();
 
     const QList<QPair<QString, QString>> expected = {
-      { QStringLiteral("go-previous-symbolic"),
-        QStringLiteral("Back to browser (Esc/Backspace)") },
       { QStringLiteral("media-skip-backward-symbolic"),
         QStringLiteral("Previous image (Left)") },
       { QStringLiteral("media-skip-forward-symbolic"),
@@ -1417,7 +1415,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 5 : 13);
+    QCOMPARE(buttons, mini ? 4 : 12);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.

@@ -1024,11 +1024,6 @@
       <translation>Kích thước thật (100%)</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="2337" />
-      <source>Back to browser</source>
-      <translation>Về trình duyệt</translation>
-    </message>
-    <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="2688" />
       <source>Rotate left</source>
       <translation>Xoay trái</translation>
@@ -3064,11 +3059,6 @@
       <location filename="../crates/desktop/qml/Viewer.qml" line="990" />
       <source>Rotate right</source>
       <translation>Xoay phải</translation>
-    </message>
-    <message>
-      <location filename="../crates/desktop/qml/Viewer.qml" line="1094" />
-      <source>Back to browser (Esc/Backspace)</source>
-      <translation>Về trình duyệt (Esc/Backspace)</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/Viewer.qml" line="1109" />

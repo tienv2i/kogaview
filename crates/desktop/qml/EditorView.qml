@@ -2611,34 +2611,12 @@ Item {
             enabled: view.modified
             onTriggered: view.command({ type: "editor_reset" })
         }
-        MenuItem {
-            text: view.theme.menuEntries[28]
-            enabled: view.documentReady
-            onTriggered: view.command({ type: "editor_close" })
-        }
     }
 
     // ------------------------------------------------------ editor workspace
     property Component toolbar: Component {
         RowLayout {
             spacing: 2
-
-            // The way out of the workspace sits first, as it does in the
-            // Viewer: escaping an editor must not mean hunting for the button
-            // at the far end of a row whose length depends on the document.
-            ToolbarButton {
-                objectName: "editorBack"
-                theme: view.theme
-                icon.name: "go-previous-symbolic"
-                display: AbstractButton.IconOnly
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Back to browser")
-                onClicked: view.command({ type: "set_workspace", workspace: "browser" })
-            }
-            ToolbarSeparator {
-                theme: view.theme
-                visible: !view.miniToolbar
-            }
 
             ToolbarButton {
                 objectName: "editorOpenButton"
@@ -2776,20 +2754,6 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Reset to original")
                 onClicked: view.command({ type: "editor_reset" })
-            }
-            ToolbarSeparator {
-                theme: view.theme
-                visible: !view.miniToolbar
-            }
-            ToolbarButton {
-                objectName: "editorClose"
-                theme: view.theme
-                icon.name: "window-close-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.documentReady
-                ToolTip.visible: hovered
-                ToolTip.text: view.theme.menuEntries[28]
-                onClicked: view.command({ type: "editor_close" })
             }
             ToolbarButton {
                 objectName: "editorOverflowButton"
