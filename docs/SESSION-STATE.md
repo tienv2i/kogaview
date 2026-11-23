@@ -208,14 +208,17 @@ Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
-- Branch `main`. `core.rs` is **uncommitted** on top of `8f5d104`: it is now
-  `crates/app-core/src/core/` (`mod.rs` for `Core` and the shared state,
-  `gateway.rs`, `browsing.rs`, `viewing.rs`, `editing.rs`, `jobs.rs`,
-  `tests.rs`), with `crates/app-core/src/core.rs` deleted;
-  `scripts/check_translations.py` scans each source directory recursively and
-  truncates only an inline `#[cfg(test)] mod tests {`, not `mod tests;`; ADR
-  0024, `docs/M1-REPORT.md` row 108 and
-  `docs/evidence/M1-core-split.png`. `git status` is the authority.
+- Branch `main`. The suite split is **uncommitted** on top of `8fd68f1`
+  (`refactor(core): one module per area`): `crates/app-core/src/core/tests.rs`
+  is now `crates/app-core/src/core/tests/` — `mod.rs` with the 13 shared
+  fixtures and the `browsing`, `viewing`, `editing`, `gateway`, `jobs` files;
+  ADR 0024's revision and `docs/M1-REPORT.md` row 109. The production side of
+  `core/` (`mod.rs`, `gateway.rs`, `browsing.rs`, `viewing.rs`, `editing.rs`,
+  `jobs.rs`) is the committed `8fd68f1`, with `crates/app-core/src/core.rs`
+  deleted; `scripts/check_translations.py` scans each source directory
+  recursively and truncates only an inline `#[cfg(test)] mod tests {`, not
+  `mod tests;`; ADR 0024 and `docs/evidence/M1-core-split.png`. `git status` is
+  the authority.
 - Branch `main`. The Editor is a **crate of its own**, committed as `8f5d104`:
   `crates/app-editor/` (`kogaview-editor`, new workspace member) with
   `lib.rs`, `operation.rs`, `document.rs`, `validate.rs`, `pixels.rs`,
@@ -2112,11 +2115,12 @@ not become a crate, and that is the decision, not an omission.
   module and cut the file at line 180, hiding `no_editor_document()` at 488.
   The truncation now matches only an inline `mod tests {`. Both are recorded in
   row 108 as what happened, not as a hypothetical.
-- **The suite is still one file** (2,379 lines). Its fixtures — a temp
-  directory, a scan settle, a batch settle, a command helper, a JPEG writer —
-  are used across areas, and splitting the cases without moving those to a
-  shared module would turn every case into an import list. It is the next
-  candidate, not this change.
+- **The suite followed the modules** (ADR 0024's revision). `core/tests.rs`
+  (2,379 lines) is now `core/tests/`: `mod.rs` keeps the 13 shared fixtures and
+  declares `browsing` (20 cases), `viewing` (2), `editing` (16), `gateway` (2)
+  and `jobs` (6), each starting with `use super::*;`. The fixtures moved first,
+  which was the condition written into the ADR; no case was rewritten, and the
+  75 core tests pass under their new `core::tests::<area>::…` names.
 - **Evidence it runs:** the dev binary opened `wide.png` in the Editor and ran a
   real `batch_run` convert over three files; the journal reads `open_folder`
   rev 1 → `editor_open` rev 3 → `batch_run ok:true` rev 5, the output has the
@@ -2833,14 +2837,12 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     form are pointer-reached like the rest of the compact toolbar. A person who
     wants "History but not Info" now has one place to say so, and a CLI can say
     it with `set_layout`, but neither has been driven by a hand here.
-20. **Core's suite is the last long file.** `core/tests.rs` is 2,379 lines; the
-    production side is now 108–968 lines per area (`editing.rs` is the largest).
-    Splitting the suite by area is the natural next move, and the reason it was
-    not done here is the fixtures: a temp directory, a scan settle, a batch
-    settle, a command helper and a JPEG writer are shared across areas, so they
-    have to move to a `tests/mod.rs` first or every case grows an import list.
-    `editing.rs` is the module to watch: if it passes the size the old file had,
-    the question becomes whether the Editor's *place in Core* (save target,
-    preview cache, lifecycle) can be a small crate of its own, with
-    `kogaview-editor` doing the pixels. That one is unproven; nothing here
-    assumes it will happen.
+20. **The Editor's place in Core is the next boundary question.** The suite is
+    split (row 109), so the longest files are now `core/editing.rs` (968 lines)
+    and `core/tests/editing.rs` (1,134). Both are one area, not one pile, and
+    the move that would actually change the shape is unproven: whether the
+    Editor's *place in Core* — the save target, the source-changed guard, the
+    preview cache, the lifecycle — can be a small crate of its own, with
+    `kogaview-editor` doing the pixels and `Core` still owning the ordering.
+    Nothing here assumes it will happen, and ADR 0023 already names the desktop
+    bridge as what makes it expensive.

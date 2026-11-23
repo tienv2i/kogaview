@@ -118,8 +118,11 @@ ways — `editor.rs` had already written the separation down in its own module
 documentation ("this module owns pixels and history only; file paths, the command
 gateway and UI state stay in Core"), and it had grown past 3,000 lines of code
 plus its suite inside a crate whose other half is 5,000. `app-core` re-exports it
-as `kogaview_core::editor`, so no caller changed. The next honest split is
-`core.rs` itself, which is larger and touches the desktop bridge.
+as `kogaview_core::editor`, so no caller changed. `core.rs` itself has since
+been split (ADR 0024) into `core/` — one module per command area, still one
+struct and one gateway, because the ordering is the feature and the desktop
+bridge names `Core` directly. Its suite followed: `core/tests/` keeps the shared
+fixtures in `mod.rs` and one file per area.
 
 ### Runtime identity (decided in M0)
 

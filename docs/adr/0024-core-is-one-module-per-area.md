@@ -73,3 +73,23 @@ suite and ~100 lines of free helpers. Three problems came with that:
 - The suite is one file. It is 2,379 lines, and it is the next candidate for a
   split by area, but only if the fixture helpers can move to a shared module
   without turning every case into an import list.
+
+## Revision — the suite followed the modules (2026-11-23)
+
+The consequence above called the suite the next candidate, and it became one:
+`core/tests.rs` (2,379 lines) is now `core/tests/`, one file per area. The
+fixtures did move to a shared module first, which was the condition:
+
+- `tests/mod.rs` holds the fixtures — `temp_dir`, `remove_tree`, `settle_scan`,
+  `settle_batch`, `settle_save`, `settle_export`, `settle_editor`,
+  `settle_draft`, `select_json`, `dispatch_json`, `write_png`,
+  `write_jpeg_with_exif`, `editor_envelope` — and declares five child modules.
+- `tests/browsing.rs` (20 cases), `tests/viewing.rs` (2), `tests/editing.rs`
+  (16), `tests/gateway.rs` (2) and `tests/jobs.rs` (6) each start with
+  `use super::*;`, so a fixture is one copy and a case sits with the module it
+  drives.
+
+No test was rewritten, renamed or dropped: the same 75 core cases pass, now
+under `core::tests::<area>::…`. The translation gate reads the new files (it
+skips a file named `tests.rs`, which this is not) and still prints 438 strings,
+which was already measured to be the same result with or without that skip.
