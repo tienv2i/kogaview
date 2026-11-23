@@ -34,6 +34,11 @@ QtObject {
         return book.cache.keyFor(path, edge, modified || 0, size || 0);
     }
 
+    function lookup(path, edge, modified, size) {
+        if (!book.cache || !path || edge <= 0 || typeof book.cache.lookup !== "function") return "";
+        return book.cache.lookup(path, edge, modified || 0, size || 0);
+    }
+
     /// Ask for the thumbnail on behalf of `requester`, which the cache calls back
     /// through its own `setThumbnail(key, url)`.
     function request(requester, path, edge, modified, size) {

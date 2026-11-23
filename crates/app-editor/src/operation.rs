@@ -48,6 +48,41 @@ pub enum EditOperation {
     Transform {
         corners: [[f64; 2]; 4],
     },
+    /// Free-transform inside the existing document frame: resample the image to
+    /// `width × height`, place it at `(x, y)` (clipping anything outside the
+    /// frame), and fill the uncovered canvas with `fill` / `fill_alpha`.
+    FreeTransform {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        rotation: f64,
+        fill: Option<[u8; 3]>,
+        fill_alpha: u8,
+    },
+    /// Grow or shrink the canvas without scaling the image pixels, anchored at
+    /// one of the 9 positions (`top_left`..`bottom_right`), filling uncovered
+    /// pixels with `fill` / `fill_alpha`.
+    CanvasSize {
+        width: u32,
+        height: u32,
+        anchor: String,
+        fill: Option<[u8; 3]>,
+        fill_alpha: u8,
+    },
+    /// Rotate by an arbitrary angle (clockwise, in degrees), expanding the
+    /// canvas to fit the rotated bounding box and filling uncovered corners.
+    RotateAngle {
+        degrees: f64,
+        fill: Option<[u8; 3]>,
+        fill_alpha: u8,
+    },
+    /// Adjust light and colour (`brightness`, `contrast`, `saturation` in `-1.0..=1.0`).
+    AdjustColor {
+        brightness: f64,
+        contrast: f64,
+        saturation: f64,
+    },
     /// One freehand stroke. `points` are in document pixels in drawing order,
     /// `radius` is half the brush width, `opacity` is 0–1 and `erase` lowers
     /// the destination alpha instead of blending `color` over it. The stroke is
@@ -141,7 +176,14 @@ impl EditOperation {
                     None => UiText::with("resize", [width.to_string(), height.to_string()]),
                 },
             },
-            Self::Transform { .. } => UiText::new("transform"),
+            Self::Transform { .. } | Self::FreeTransform { .. } => UiText::new("transform"),
+            Self::CanvasSize { width, height, .. } => {
+                UiText::with("canvas_size", [width.to_string(), height.to_string()])
+            }
+            Self::RotateAngle { degrees, .. } => {
+                UiText::with("rotate_angle", [format!("{degrees:.1}")])
+            }
+            Self::AdjustColor { .. } => UiText::new("adjust_color"),
             Self::Paint { erase, .. } => {
                 if *erase {
                     UiText::new("eraser_stroke")

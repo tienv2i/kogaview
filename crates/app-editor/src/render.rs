@@ -77,6 +77,68 @@ pub fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<
             validate_transform(corners, width, height)?;
             Ok(warp_quad(image, corners))
         }
+        EditOperation::FreeTransform {
+            x,
+            y,
+            width: w,
+            height: h,
+            rotation,
+            fill,
+            fill_alpha,
+        } => {
+            validate_resize(*w, *h)?;
+            if !rotation.is_finite() {
+                return Err(UiText::with("invalid_rotation", [rotation.to_string()]));
+            }
+            let rgb = fill.unwrap_or([0, 0, 0]);
+            Ok(free_transform(
+                image,
+                *x,
+                *y,
+                *w,
+                *h,
+                *rotation,
+                rgb,
+                *fill_alpha,
+            ))
+        }
+        EditOperation::CanvasSize {
+            width: w,
+            height: h,
+            anchor,
+            fill,
+            fill_alpha,
+        } => {
+            validate_resize(*w, *h)?;
+            let rgb = fill.unwrap_or([0, 0, 0]);
+            Ok(canvas_size(image, *w, *h, anchor, rgb, *fill_alpha))
+        }
+        EditOperation::RotateAngle {
+            degrees,
+            fill,
+            fill_alpha,
+        } => {
+            if !degrees.is_finite() {
+                return Err(UiText::with("invalid_rotation", [degrees.to_string()]));
+            }
+            let rgb = fill.unwrap_or([0, 0, 0]);
+            Ok(rotate_angle(image, *degrees, rgb, *fill_alpha))
+        }
+        EditOperation::AdjustColor {
+            brightness,
+            contrast,
+            saturation,
+        } => {
+            if !brightness.is_finite() || !contrast.is_finite() || !saturation.is_finite() {
+                return Err(UiText::new("invalid_color_adjustment"));
+            }
+            Ok(pixels::adjust_color(
+                image,
+                *brightness,
+                *contrast,
+                *saturation,
+            ))
+        }
         EditOperation::Paint {
             points,
             color,

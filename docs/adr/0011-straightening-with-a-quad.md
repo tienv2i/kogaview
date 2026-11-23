@@ -331,3 +331,34 @@ full-size warp of the document's own frame.
   drawn smaller, never computed smaller), and the 200 ms pause is the cost of a
   drag. Apply still sends `editor_transform` and puts the frame back on the
   document's corners, which disarms Apply until the next drag.
+
+## Revision — Free Transform, Scale Canvas, GPU live preview and shared bounding-box modifiers (2026-11-23)
+
+Using `warp_quad` for the `Frame` bounding box inverted user expectation:
+pulling a corner inward zoomed the sub-rectangle back out to fill the entire
+document frame (reading as an unwanted auto-fit) while a 200 ms CPU draft
+round-trip froze the canvas during drags.
+
+- **Two Krita-style icon modes replace `Frame` / disabled `Perspective`.**
+  The disabled `Perspective` button is removed. `Transform options` shows an
+  icon-only mode row (`transformModeFree` / `transformModeScale`) with tooltips:
+  - **Free Transform (`free`, default):** scale and reposition the image inside
+    the fixed `W × H` document frame; uncovered canvas uses the Editor's
+    `ColourPair` background (or checkerboard when transparent). Apply sends
+    `Command::EditorFreeTransform` (`editor_free_transform`), which resamples
+    the full-resolution document and composites it onto a `W × H` canvas in
+    Core (undoable by snapshot).
+  - **Scale Canvas (`scale`):** drag the bounding box to resize the document's
+    own `W × H` dimensions directly while keeping the current viewport `zoom`
+    fixed (no `autoFit` jump during drag). Apply reuses `editor_resize`
+    (`mode: "stretch"`).
+- **60 fps GPU live preview in QML.** Transform no longer sends
+  `editor_transform_preview` on drag. `transformCanvasLayer` transforms the
+  existing `<= 2048 px` preview texture directly on the GPU so even large
+  documents drag smoothly inside the bounding box; full-resolution resampling
+  runs asynchronously in Core only on Apply.
+- **Shared bounding-box modifiers for Crop and Transform.** Both tools share
+  `computeBoxHandleDrag` / `computeBoxMoveDrag` / `snapDocCoord`:
+  `Shift` locks aspect ratio (or locks axis while moving), `Alt` resizes
+  symmetrically around the centre, `Ctrl` snaps to document edges/centre or
+  10 px steps, and held `Space` pans the canvas.

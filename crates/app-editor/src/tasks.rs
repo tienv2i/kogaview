@@ -153,7 +153,7 @@ pub fn spawn_draft(
         EditOperation::Crop { width, height, .. } => ("crop", *width, *height),
         // A transform keeps the frame it started with, so the draft is the
         // document's own size — read from the pixels the worker was handed.
-        EditOperation::Transform { .. } => {
+        EditOperation::Transform { .. } | EditOperation::FreeTransform { .. } => {
             let (width, height) = pixels.dimensions();
             ("transform", width, height)
         }

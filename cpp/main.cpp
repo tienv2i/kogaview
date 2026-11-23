@@ -23,6 +23,7 @@
 #include <QQmlEngine>
 #include <QQmlExpression>
 #include <QQuickItem>
+#include <QQuickStyle>
 #include <QQuickWindow>
 #include <QShortcutEvent>
 #include <QTimer>
@@ -1139,37 +1140,49 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         const double docY = point.value(1).toDouble();
         const double hostX = originX + docX * zoom;
         const double hostY = originY + docY * zoom;
-        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3") == QLatin1String("quad")) {
+        const QString modeArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        if (modeArg == QLatin1String("scale") || modeArg == QLatin1String("free")) {
           QMetaObject::invokeMethod(editor, "setTransformMode",
-                                    Q_ARG(QVariant, QVariant(QStringLiteral("perspective"))));
+                                    Q_ARG(QVariant, QVariant(modeArg)));
         }
         const QString target = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
         const bool edge = target.startsWith(QLatin1Char('e'));
         const int index = (edge ? target.mid(1) : target).isEmpty()
                             ? 0
                             : (edge ? target.mid(1) : target).toInt();
+        int modifiers = 0;
+        const QString modArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG5");
+        if (modArg.contains(QLatin1String("shift"))) {
+          modifiers |= Qt::ShiftModifier;
+        }
+        if (modArg.contains(QLatin1String("alt"))) {
+          modifiers |= Qt::AltModifier;
+        }
+        if (modArg.contains(QLatin1String("ctrl"))) {
+          modifiers |= Qt::ControlModifier;
+        }
         if (edge) {
           QMetaObject::invokeMethod(editor, "dragTransformEdge",
                                     Q_ARG(QVariant, QVariant(index)),
                                     Q_ARG(QVariant, QVariant(hostX)),
-                                    Q_ARG(QVariant, QVariant(hostY)));
+                                    Q_ARG(QVariant, QVariant(hostY)),
+                                    Q_ARG(QVariant, QVariant(modifiers)),
+                                    Q_ARG(QVariant, QVariant()));
         } else {
           QMetaObject::invokeMethod(editor, "dragTransformCorner",
                                     Q_ARG(QVariant, QVariant(index)),
                                     Q_ARG(QVariant, QVariant(hostX)),
-                                    Q_ARG(QVariant, QVariant(hostY)));
+                                    Q_ARG(QVariant, QVariant(hostY)),
+                                    Q_ARG(QVariant, QVariant(modifiers)),
+                                    Q_ARG(QVariant, QVariant()));
         }
-        QQmlExpression preview(QQmlEngine::contextForObject(editor), editor,
-                               QStringLiteral("transformPreview !== null"));
-        // The corners are a JavaScript array, which `QVariant::toString()` prints
-        // as nothing at all; JSON is the only honest way to quote the numbers.
         QQmlExpression corners(QQmlEngine::contextForObject(editor), editor,
                                QStringLiteral("JSON.stringify(transformCorners)"));
         qInfo().noquote() << "KogaView dev ui request editor-transform"
                           << pointArg << (edge ? "edge" : "corner") << index
                           << "mode" << editor->property("transformMode")
                           << "corners" << corners.evaluate().toString()
-                          << "preview" << preview.evaluate().toBool()
+                          << "zoom" << editor->property("zoom").toDouble()
                           << "tool" << editor->property("tool");
         if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4") == QLatin1String("apply")) {
           QObject* apply = editor->findChild<QObject*>(QStringLiteral("applyTransform"));
@@ -2115,9 +2128,81 @@ QObject* loadUserInterface(QQmlEngine& engine, const QStringList& launchArgument
 
 } // namespace
 
+namespace {
+class InputFocusDismissFilter : public QObject
+{
+public:
+  explicit InputFocusDismissFilter(QObject* parent = nullptr)
+    : QObject(parent)
+  {
+  }
+
+  bool eventFilter(QObject* watched, QEvent* event) override
+  {
+    if (event->type() != QEvent::MouseButtonPress) {
+      return false;
+    }
+    auto* window = qobject_cast<QQuickWindow*>(watched);
+    if (window == nullptr) {
+      return false;
+    }
+    QQuickItem* focused = window->activeFocusItem();
+    if (focused == nullptr) {
+      return false;
+    }
+    const bool isTextInput =
+      focused->inherits("QQuickTextInput") || focused->inherits("QQuickTextEdit");
+    if (!isTextInput) {
+      return false;
+    }
+    // Keep focus while clicking inside the input itself or its enclosing
+    // SpinBox/ComboBox (so SpinBox +/- buttons stay responsive).
+    QQuickItem* control = focused;
+    for (QQuickItem* p = focused->parentItem(); p != nullptr; p = p->parentItem()) {
+      if (p->inherits("QQuickSpinBox") || p->inherits("QQuickComboBox")) {
+        control = p;
+        break;
+      }
+    }
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    const QPointF local = control->mapFromScene(mouse->scenePosition());
+    if (QRectF(0, 0, control->width(), control->height()).contains(local)) {
+      return false;
+    }
+    // Clicked outside the input: blur it and hand focus back to the active
+    // workspace so keyboard shortcuts (Space pan/next, tool keys) work right away.
+    focused->setFocus(false);
+    if (control != focused) {
+      control->setFocus(false);
+    }
+    for (QQuickItem* p = control->parentItem(); p != nullptr; p = p->parentItem()) {
+      const QString name = p->objectName();
+      if (p->isVisible() && p->isEnabled() &&
+          (name == QLatin1String("editor") || name == QLatin1String("viewer") ||
+           name == QLatin1String("browser"))) {
+        p->forceActiveFocus();
+        break;
+      }
+    }
+    return false;
+  }
+};
+} // namespace
+
 int main(int argc, char* argv[])
 {
   QGuiApplication app(argc, argv);
+
+  // On KDE Plasma 6, KDEPlasmaPlatformTheme6 forces `org.kde.breeze`, whose
+  // controls read Kirigami.Theme (`kdeglobals`) and ignore QQuickItem and
+  // QGuiApplication palettes — leaving menus, combo boxes, fields and button
+  // labels stuck in the desktop's dark theme when KogaView switches to Light
+  // mode (and vice versa). Qt's built-in `Fusion` style honours the palette
+  // across KDE, GNOME, Windows and Flatpak while still respecting an explicit
+  // `QT_QUICK_CONTROLS_STYLE` override.
+  if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_STYLE")) {
+    QQuickStyle::setStyle(QStringLiteral("Fusion"));
+  }
 
   QGuiApplication::setApplicationName(kogaview_display_name());
   QGuiApplication::setApplicationVersion(kogaview_app_version());
@@ -2165,6 +2250,8 @@ int main(int argc, char* argv[])
 
   QObject::connect(&engine, &QQmlEngine::quit, &app, &QGuiApplication::quit);
   QObject::connect(&engine, &QQmlEngine::exit, &app, &QCoreApplication::exit);
+  auto* inputFocusFilter = new InputFocusDismissFilter(&app);
+  app.installEventFilter(inputFocusFilter);
 
   // The language is persisted state like the theme: the first snapshot carries
   // it, and `Main.qml` applies every later change (a `set_settings` from the

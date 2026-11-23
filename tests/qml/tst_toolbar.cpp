@@ -648,6 +648,33 @@ private slots:
     fixture.root()->setWidth(threshold - 1);
     QTRY_COMPARE(labelsShown(), 0);
   }
+
+  /// Toolbar buttons update `palette.buttonText` and `palette.windowText` when
+  /// `theme.dark` flips, so light mode never inherits dark-theme white text on
+  /// a white toolbar surface.
+  void toolbarButtonsApplyThemeTextPalette()
+  {
+    for (const QString& file :
+         { QStringLiteral("CompactToolbarButton.qml"), QStringLiteral("ToolbarButton.qml") }) {
+      QObject* button = create(file, m_host);
+      QVERIFY2(button != nullptr, qPrintable(file));
+      QObject* theme = button->property("theme").value<QObject*>();
+      QVERIFY2(theme != nullptr, qPrintable(file));
+
+      for (const bool dark : { true, false }) {
+        theme->setProperty("dark", dark);
+        QTest::qWait(10);
+        const QColor expected = theme->property("text").value<QColor>();
+        QQmlExpression btnText(QQmlEngine::contextForObject(button), button,
+                               QStringLiteral("String(palette.buttonText)"));
+        QQmlExpression winText(QQmlEngine::contextForObject(button), button,
+                               QStringLiteral("String(palette.windowText)"));
+        QCOMPARE(QColor(btnText.evaluate().toString()), expected);
+        QCOMPARE(QColor(winText.evaluate().toString()), expected);
+      }
+      delete button;
+    }
+  }
 };
 
 QTEST_MAIN(TestToolbar)

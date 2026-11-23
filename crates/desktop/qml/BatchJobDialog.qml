@@ -943,7 +943,13 @@ DialogFrame {
             onClicked: {
                 dialog.inputKind = "otherFolder"
                 otherFolderRadio.checked = true
-                inputFolderDialog.open()
+                if (!batchSystemDialogs.openFolder(qsTr("Choose a folder of images"), function(path) {
+                    dialog.inputFolder = path
+                    dialog.inputKind = "otherFolder"
+                    otherFolderRadio.checked = true
+                })) {
+                    // Fallback already handled inside SystemDialogs.
+                }
             }
         }
     }
@@ -1012,7 +1018,13 @@ DialogFrame {
             theme: dialog.theme
             text: qsTr("Choose…")
             implicitWidth: 96
-            onClicked: outputFolderDialog.open()
+            onClicked: {
+                batchSystemDialogs.openFolder(qsTr("Choose an output folder"), function(path) {
+                    dialog.outputFolder = path
+                    folderDestinationRadio.checked = true
+                    dialog.outputKind = "folder"
+                })
+            }
         }
     }
 
@@ -1101,6 +1113,11 @@ DialogFrame {
         }
     }
 
+    SystemDialogs {
+        id: batchSystemDialogs
+        objectName: "batchSystemDialogs"
+    }
+
     FolderDialog {
         id: inputFolderDialog
         objectName: "batchInputFolderDialog"
@@ -1124,9 +1141,11 @@ DialogFrame {
         }
     }
 
-    ColorDialog {
+    property ColorPickerDialog fillColorDialog: ColorPickerDialog {
         id: fillColorDialog
         objectName: "batchFillColorDialog"
+        parent: dialog.parent
+        theme: dialog.theme
         title: qsTr("Background color")
         selectedColor: dialog.customColor
         onAccepted: {

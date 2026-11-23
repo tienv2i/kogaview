@@ -25,8 +25,7 @@ Label {
     anchors.right: parent.right
     anchors.rightMargin: 12
     anchors.verticalCenter: parent.verticalCenter
-    color: parent.contentItem && parent.contentItem.color !== undefined
-           ? parent.contentItem.color : palette.windowText
+    color: parent && parent.palette ? parent.palette.windowText : palette.windowText
     opacity: 0.7
     font: parent.font
 }

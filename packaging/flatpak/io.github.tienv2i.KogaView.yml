@@ -1,0 +1,33 @@
+app-id: io.github.tienv2i.KogaView
+runtime: org.kde.Platform
+runtime-version: '6.8'
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: kogaview
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=xdg-pictures:rw
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.FileManager1
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/kogaview/cargo
+modules:
+  - name: kogaview
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+    build-commands:
+      - cmake --build . --target kogaview kogaview_translations
+    post-install:
+      - install -Dm755 bin/kogaview /app/bin/kogaview
+      - install -Dm644 ../packaging/linux/io.github.tienv2i.KogaView.metainfo.xml /app/share/metainfo/io.github.tienv2i.KogaView.metainfo.xml
+      - install -Dm644 ../packaging/linux/io.github.tienv2i.KogaView.svg /app/share/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg
+    sources:
+      - type: dir
+        path: ../..

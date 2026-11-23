@@ -47,10 +47,19 @@ Image {
     }
 
     onCacheKeyChanged: {
-        thumb.resolved = "";
-        if (thumb.cacheKey !== "") {
-            settle.restart();
+        if (thumb.cacheKey === "") {
+            settle.stop();
+            thumb.resolved = "";
+            return;
         }
+        var hit = book.lookup(path, edge, modified, fileSize);
+        if (hit !== "") {
+            settle.stop();
+            thumb.resolved = hit;
+            return;
+        }
+        thumb.resolved = "";
+        settle.restart();
     }
 
     /// The key settles over several property assignments — the caller sets the
@@ -69,7 +78,10 @@ Image {
     }
 
     asynchronous: true
-    cache: false
+    // Cached thumbnail URLs carry the (path, edge, modified, size) key in their
+    // filename, so Qt's in-memory pixmap cache never serves stale pixels and
+    // scrolling back over already-loaded rows stays instant instead of re-decoding.
+    cache: true
     fillMode: Image.PreserveAspectFit
     source: thumb.cached ? thumb.resolved : thumb.fallbackSource
 }

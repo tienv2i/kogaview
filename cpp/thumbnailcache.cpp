@@ -108,6 +108,21 @@ void ThumbnailCache::setBudgetBytes(qint64 bytes)
   evictIfNeeded();
 }
 
+QString ThumbnailCache::lookup(const QString& path, int edge, qint64 modified, qint64 size)
+{
+  if (path.isEmpty() || edge <= 0) {
+    return QString();
+  }
+  const QString key = keyFor(path, edge, modified, size);
+  const auto entry = m_entries.constFind(key);
+  if (entry != m_entries.constEnd()) {
+    ++m_hits;
+    noteUse(key);
+    return QUrl::fromLocalFile(entry->file).toString();
+  }
+  return QString();
+}
+
 void ThumbnailCache::request(QObject* requester, const QString& path, int edge, qint64 modified,
                              qint64 size)
 {

@@ -154,6 +154,7 @@ impl Core {
                     .map(|entry| entry.path.clone())
                     .collect::<HashSet<_>>();
                 self.state.entries = entries;
+                self.sort_entries();
                 self.listing_epoch += 1;
                 self.state.item_count = self.state.entries.len();
                 self.state.image_count = self
@@ -206,6 +207,44 @@ impl Core {
             }
         }
         true
+    }
+
+    /// Sort `self.state.entries` according to `self.state.layout.browser_sort_by`
+    /// and `browser_sort_order`, always keeping directories ahead of files.
+    pub(super) fn sort_entries(&mut self) {
+        let sort_by = self.state.layout.browser_sort_by.clone();
+        let descending = self.state.layout.browser_sort_order == "desc";
+        self.state.entries.sort_by(|a, b| {
+            // Directories always stay grouped before files.
+            let group = b.is_dir.cmp(&a.is_dir);
+            if group != std::cmp::Ordering::Equal {
+                return group;
+            }
+            let primary = match sort_by.as_str() {
+                "modified" => a.modified.cmp(&b.modified),
+                "size" => a.size.cmp(&b.size),
+                "kind" => {
+                    let ext_a = Path::new(&a.name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let ext_b = Path::new(&b.name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    ext_a.cmp(&ext_b)
+                }
+                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            };
+            let ordered = if descending {
+                primary.reverse()
+            } else {
+                primary
+            };
+            ordered.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
     }
 
     pub(super) fn set_selection(&mut self, paths: Vec<String>) {

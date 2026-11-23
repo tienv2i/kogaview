@@ -167,7 +167,9 @@ impl Core {
             EditOperation::Resize { width, height, .. }
             | EditOperation::Crop { width, height, .. } => (*width, *height),
             // The frame does not move, so the draft is the document's size.
-            EditOperation::Transform { .. } => document.dimensions(),
+            EditOperation::Transform { .. } | EditOperation::FreeTransform { .. } => {
+                document.dimensions()
+            }
             _ => (0, 0),
         };
         let changes = document.would_change(&operation).map_err(invalid_edit)?;

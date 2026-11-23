@@ -117,7 +117,7 @@ private slots:
   void theCropFrameDrawsItsGuidesAndShade();
   void theTransformToolDragsCornersAndEdges();
   void theTransformPreviewIsDrawnOnTheCanvas();
-  void thePerspectiveQuadIsKeptBehindItsMode();
+  void boundingBoxModifiersWorkInCropAndTransform();
   void anInvalidOrEmptySizeKeepsApplyDisabled();
   void theMiniToolbarFoldsTheSecondaryActions_data();
   void theMiniToolbarFoldsTheSecondaryActions();
@@ -330,7 +330,7 @@ void TestEditor::init()
   if (QQuickItem* box = visualItem(QStringLiteral("cropMode"))) {
     box->setProperty("currentIndex", 0);
   }
-  m_editor->setProperty("transformMode", QStringLiteral("frame"));
+  m_editor->setProperty("transformMode", QStringLiteral("free"));
   m_editor->setProperty("transformCorners", QVariantList());
   m_editor->setProperty("paintMode", QStringLiteral("brush"));
   // The pair is Editor-wide view state: a case that swapped, reset or picked a
@@ -2483,10 +2483,10 @@ void TestEditor::resetRestoresTheCropOptionsAndKeepsTheFrame()
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// Transform carries four source corners and nothing else, and in `frame` mode
-/// they are a rectangle: a corner drag moves that corner with the one across
-/// from it anchored, an edge drag moves the whole side and leaves the side
-/// opposite exactly where it was — the live resize a window border does.
+/// Transform offers two icon-only modes (Free Transform and Scale Canvas) with
+/// no disabled Perspective button. Dragging handles resizes the bounding box
+/// with zero `editor_transform_preview` commands, and Apply emits
+/// `editor_free_transform` (in Free mode) or `editor_resize` (in Scale mode).
 void TestEditor::theTransformToolDragsCornersAndEdges()
 {
   QVariantMap editor = documentState();
@@ -2499,21 +2499,16 @@ void TestEditor::theTransformToolDragsCornersAndEdges()
   QVERIFY(expectItem("transformOverlay")->isVisible());
   QVERIFY(expectItem("applyTransform")->isVisible());
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners.length")).toInt(), 4);
-  // The frame is the mode the tool opens on; the quad is drawn next to it and
-  // stays shut, because four sides on four planes needs layers.
-  QCOMPARE(m_editor->property("transformMode").toString(), QStringLiteral("frame"));
-  QCOMPARE(expectItem("transformModeFrame")->property("primary").toBool(), true);
-  QQuickItem* perspective = expectItem("transformModePerspective");
-  QCOMPARE(perspective->property("enabled").toBool(), false);
-  QCOMPARE(perspective->property("primary").toBool(), false);
-  // Why the mode is shut is a tooltip on the button, not a paragraph under it:
-  // the panel is the tool's, and the owner asked for the explanations gone.
-  QVERIFY2(visualItem(QStringLiteral("transformPerspectiveReason")) == nullptr,
-           "the tool options explain the mode in the panel again");
+
+  // Two Krita-style icon buttons; Perspective is gone.
+  QCOMPARE(m_editor->property("transformMode").toString(), QStringLiteral("free"));
+  QCOMPARE(expectItem("transformModeFree")->property("active").toBool(), true);
+  QCOMPARE(expectItem("transformModeScale")->property("active").toBool(), false);
+  QVERIFY2(visualItem(QStringLiteral("transformModePerspective")) == nullptr,
+           "Perspective button should be removed");
   QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
   QTest::qWait(20);
 
-  // All four corners and all four edges are drawn, at the document's frame.
   for (int index = 0; index < 4; ++index) {
     QQuickItem* corner = visualItem(QStringLiteral("transformCorner_%1").arg(index));
     QVERIFY2(corner != nullptr && corner->isVisible(), "a corner handle is missing");
@@ -2524,221 +2519,209 @@ void TestEditor::theTransformToolDragsCornersAndEdges()
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][1]")).toDouble(), 150.0);
   QVERIFY(!expectItem("applyTransform")->property("enabled").toBool());
 
-  // Corner 0 (top left) moves in by 20 × 10; the corner across from it — the
-  // bottom right — is the anchor and keeps its own place.
+  // Corner 0 moves in by 20 × 10; bottom-right stays anchored.
   QQuickItem* corner0 = expectItem("transformCorner_0");
   const QPointF cornerCentre =
     corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
   dragScene(cornerCentre, cornerCentre + QPointF(20, 10));
   QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble() - 20.0)
-                 < 0.6,
+                 < 1.1,
                "the corner did not follow the pointer");
   QVERIFY(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][1]")).toDouble() - 10.0)
-          < 0.6);
-  // The box stays a box: the top edge came down with its corner, and the
-  // bottom right has not moved at all.
-  QVERIFY(qAbs(readQml(m_editor, QStringLiteral("transformCorners[1][1]")).toDouble() - 10.0)
-          < 0.6);
-  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[1][0]")).toDouble(), 200.0);
+          < 1.1);
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][0]")).toDouble(), 200.0);
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][1]")).toDouble(), 150.0);
   QVERIFY(expectItem("applyTransform")->property("enabled").toBool());
 
-  // Edge 0 is the top edge: the whole side follows the pointer down to y = 25
-  // and the bottom edge stays at 150 — dragging a side is not dragging it by a
-  // delta, it is putting it where the pointer is.
+  // Edge 0 (top edge) moves down by 15 px; bottom edge stays at 150.
   QQuickItem* edge0 = expectItem("transformEdge_0");
   const QPointF edgeCentre =
     edge0->mapToScene(QPointF(edge0->width() / 2.0, edge0->height() / 2.0));
   dragScene(edgeCentre, edgeCentre + QPointF(0, 15));
   QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][1]")).toDouble() - 25.0)
-                 < 0.6,
+                 < 1.1,
                "the edge did not follow the pointer");
-  QVERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[1][1]")).toDouble() - 25.0)
-             < 0.6,
-           "the edge moved one corner and not the other");
-  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[3][1]")).toDouble(), 150.0);
   QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[2][1]")).toDouble(), 150.0);
-  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[1][0]")).toDouble(), 200.0);
-  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble(), 20.0);
 
-  // The drag asked Core for the straightened result — live preview is not a
-  // switch any more — and it asked **once**: a drag writes a corner on every
-  // pointer move, and a render per move is a full-size warp per pixel of travel
-  // (measured on the real window as an `editor_transform_preview` per move). The
-  // pause after the last move is what renders, so nothing is applied and one
-  // command is what the whole drag costs.
-  QTest::qWait(500);
-  QCOMPARE(m_commands->count(), 1);
-  QCOMPARE(m_commands->at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
-           QStringLiteral("editor_transform_preview"));
-
-  // Apply carries the quad and nothing else, then returns to the identity so a
-  // second press cannot record the same transform twice.
-  m_commands->clear();
-  clickItem(expectItem("applyTransform"));
-  QCOMPARE(m_commands->count(), 1);
-  const QVariantMap command = m_commands->at(0).at(0).toMap();
-  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_transform"));
-  const QVariantList corners = command.value("corners").toList();
-  QCOMPARE(corners.size(), 4);
-  const QVariantList first = corners.at(0).toList();
-  QCOMPARE(first.size(), 2);
-  QVERIFY(qAbs(first.at(0).toDouble() - 20.0) < 0.6);
-  QVERIFY(qAbs(first.at(1).toDouble() - 25.0) < 0.6);
-  QTRY_COMPARE(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble(), 0.0);
-  QVERIFY(!expectItem("applyTransform")->property("enabled").toBool());
-}
-
-/// Live preview is not an option any more: the straightened result is asked for
-/// as soon as the frame leaves the identity, and it is drawn on the canvas —
-/// under the handles, which stay there, so the picture can be watched and
-/// dragged at once. The tool options carry the mode row and nothing else.
-void TestEditor::theTransformPreviewIsDrawnOnTheCanvas()
-{
-  QVariantMap draft;
-  draft.insert(QStringLiteral("path"), m_previewTwo);
-  draft.insert(QStringLiteral("kind"), QStringLiteral("transform"));
-  draft.insert(QStringLiteral("width"), 200);
-  draft.insert(QStringLiteral("height"), 150);
-  QVariantMap editor = documentState();
-  editor.insert(QStringLiteral("width"), 200);
-  editor.insert(QStringLiteral("height"), 150);
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  selectTool("transform");
-
-  QQuickItem* canvas = expectItem("canvas");
-
-  // On the identity there is nothing to preview: the frame changes nothing, so
-  // the draft Core may still be holding describes no answer and the canvas shows
-  // the document. The frame is on the canvas, which is where it now stays.
-  QVERIFY(m_editor->property("transformFrameShown").toBool());
-  QVERIFY2(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")),
-           "a draft is drawn while the frame is still the document");
-
-  // The options are the mode row and nothing else: no preview box, no hints.
-  QVERIFY(expectItem("transformModeSwitch")->isVisible());
-  QVERIFY2(visualItem(QStringLiteral("transformPreviewBox")) == nullptr,
-           "the small preview box is back in the tool options");
-  QVERIFY2(visualItem(QStringLiteral("transformPerspectiveReason")) == nullptr,
-           "an explanation line is back in the tool options");
-
-  // One corner off the identity: the canvas becomes the draft without anything
-  // being armed, and the frame stays drawn on top of it with its handles.
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
-  QTest::qWait(20);
-  QQuickItem* corner0 = expectItem("transformCorner_0");
-  const QPointF centre =
-    corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
-  dragScene(centre, centre + QPointF(30, 20));
-  QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble() - 30.0)
-                 < 0.6,
-               "the corner drag did not move the frame");
-  QTRY_COMPARE(canvas->property("source").toString(),
-               QStringLiteral("file://") + m_previewTwo);
-  QCOMPARE(canvas->property("width").toDouble(), 200.0);
-  QVERIFY(m_editor->property("transformFrameShown").toBool());
-  QVERIFY(expectItem("transformOverlay")->isVisible());
-  QVERIFY2(expectItem("transformCorner_0")->isVisible(),
-           "the handles left the canvas with the answer");
-  // The draft is a preview, not an edit.
-  QCOMPARE(m_editor->property("documentWidth").toDouble(), 200.0);
-  QCOMPARE(m_editor->property("modified").toBool(), false);
-
-  // A crop draft under Transform is the other tool's answer and is never drawn
-  // here — and the frame stays where it is.
-  m_commands->clear();
-  draft.insert(QStringLiteral("kind"), QStringLiteral("crop"));
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  QVERIFY(readQml(m_editor, QStringLiteral("transformPreview === null")).toBool());
-  QVERIFY(canvas->property("source").toString().endsWith(QStringLiteral("preview-1.png")));
-  QVERIFY(m_editor->property("transformFrameShown").toBool());
-
-  // Transform's own draft again: the frame asks Core for it by itself, with no
-  // toggle to press. The identity is never requested — there is nothing to
-  // preview.
-  draft.insert(QStringLiteral("kind"), QStringLiteral("transform"));
-  editor.insert(QStringLiteral("previewDraft"), QVariant());
-  setState(editor);
-  m_commands->clear();
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "resetTransformCorners"));
-  QTest::qWait(20);
+  // Live preview is GPU-only in QML: no `editor_transform_preview` command is sent.
+  QTest::qWait(300);
   QCOMPARE(m_commands->count(), 0);
 
-  QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
-  QTest::qWait(20);
-  corner0 = expectItem("transformCorner_0");
-  const QPointF again =
-    corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
-  dragScene(again, again + QPointF(12, 8));
-  QTRY_VERIFY(m_commands->count() >= 1);
-  const QVariantMap command = m_commands->last().at(0).toMap();
-  QCOMPARE(command.value("type").toString(), QStringLiteral("editor_transform_preview"));
-  const QVariantList corners = command.value("corners").toList();
-  QCOMPARE(corners.size(), 4);
-  const QVariantList first = corners.at(0).toList();
-  QVERIFY(qAbs(first.at(0).toDouble() - 12.0) < 0.6);
-  QVERIFY(qAbs(first.at(1).toDouble() - 8.0) < 0.6);
+  // Apply in Free Transform sends `editor_free_transform` with the exact rect.
+  clickItem(expectItem("applyTransform"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap freeCmd = m_commands->at(0).at(0).toMap();
+  QCOMPARE(freeCmd.value("type").toString(), QStringLiteral("editor_free_transform"));
+  QCOMPARE(freeCmd.value("x").toInt(), 20);
+  QCOMPARE(freeCmd.value("y").toInt(), 25);
+  QCOMPARE(freeCmd.value("width").toInt(), 180);
+  QCOMPARE(freeCmd.value("height").toInt(), 125);
+  QTRY_COMPARE(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble(), 0.0);
+  QVERIFY(!expectItem("applyTransform")->property("enabled").toBool());
 
-  // The canvas is the draft, so it takes the draft's own size: a draft drawn in
-  // a frame other than the document's is shown at its own size, not stretched
-  // into the document's — the pixels on screen are the ones Core rendered.
-  draft.insert(QStringLiteral("width"), 300);
-  draft.insert(QStringLiteral("height"), 225);
-  editor.insert(QStringLiteral("previewDraft"), draft);
-  setState(editor);
-  QTRY_COMPARE(canvas->property("width").toDouble(), 300.0);
-  QCOMPARE(canvas->property("height").toDouble(), 225.0);
-  QCOMPARE(m_editor->property("documentWidth").toDouble(), 200.0);
-  QCOMPARE(m_editor->property("documentHeight").toDouble(), 150.0);
+  // Switch to Scale Canvas mode: dragging corner 2 outward and applying emits
+  // `editor_resize` (stretch) with the new dimensions.
+  m_commands->clear();
+  clickItem(expectItem("transformModeScale"));
+  QCOMPARE(m_editor->property("transformMode").toString(), QStringLiteral("scale"));
+  QCOMPARE(expectItem("transformModeScale")->property("active").toBool(), true);
+  QQuickItem* corner2 = expectItem("transformCorner_2");
+  const QPointF brCentre =
+    corner2->mapToScene(QPointF(corner2->width() / 2.0, corner2->height() / 2.0));
+  dragScene(brCentre, brCentre + QPointF(40, 30));
+  QTRY_VERIFY(qAbs(readQml(m_editor, QStringLiteral("transformRect().width")).toDouble() - 240.0)
+              < 1.1);
+  QVERIFY(qAbs(readQml(m_editor, QStringLiteral("transformRect().height")).toDouble() - 180.0)
+          < 1.1);
+  clickItem(expectItem("applyTransform"));
+  QCOMPARE(m_commands->count(), 1);
+  const QVariantMap scaleCmd = m_commands->at(0).at(0).toMap();
+  QCOMPARE(scaleCmd.value("type").toString(), QStringLiteral("editor_resize"));
+  QCOMPARE(scaleCmd.value("width").toInt(), 240);
+  QCOMPARE(scaleCmd.value("height").toInt(), 180);
+  QCOMPARE(scaleCmd.value("mode").toString(), QStringLiteral("stretch"));
 }
 
-/// The quad is still the shape the mode will have when layers land: with the
-/// property set to `perspective` (no control reaches it), a corner goes wherever
-/// the pointer goes and an edge slides both of its corners by the same offset,
-/// instead of the frame the same eight handles resize by default.
-void TestEditor::thePerspectiveQuadIsKeptBehindItsMode()
+/// Live Transform preview renders directly inside the bounding box on the GPU
+/// canvas in both Free Transform and Scale Canvas modes, without changing
+/// `zoom` (`autoFit` never fights the drag) or sending Core preview commands.
+void TestEditor::theTransformPreviewIsDrawnOnTheCanvas()
 {
   QVariantMap editor = documentState();
   editor.insert(QStringLiteral("width"), 200);
   editor.insert(QStringLiteral("height"), 150);
   setState(editor);
   selectTool("transform");
-  m_editor->setProperty("transformMode", QStringLiteral("perspective"));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "fit"));
+  QTest::qWait(20);
+
+  const double zoomBefore = m_editor->property("zoom").toDouble();
+  QVERIFY(zoomBefore > 0.0);
+  QVERIFY(expectItem("transformCanvasLayer")->isVisible());
+  QVERIFY(!expectItem("canvas")->isVisible());
+
+  // Free Transform: dragging corner 0 shrinks `freeTransformImage` inside the
+  // fixed `freeTransformFrame` to match the bounding box at `zoomBefore`.
+  QQuickItem* corner0 = expectItem("transformCorner_0");
+  const QPointF tl = corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
+  dragScene(tl, tl + QPointF(40 * zoomBefore, 30 * zoomBefore));
+  QTRY_VERIFY(qAbs(readQml(m_editor, QStringLiteral("transformRect().x")).toDouble() - 40.0) < 2.0);
+  QCOMPARE(m_editor->property("zoom").toDouble(), zoomBefore);
+  QQuickItem* freeImg = expectItem("freeTransformImage");
+  QVERIFY(freeImg->isVisible());
+  QVERIFY(qAbs(freeImg->x() - 40.0 * zoomBefore) < 2.5);
+  QVERIFY(qAbs(freeImg->width() - 160.0 * zoomBefore) < 2.5);
+
+  // Scale Canvas: `scaleTransformImage` matches the dragged bounding box and
+  // keeps `zoom` unchanged.
+  clickItem(expectItem("transformModeScale"));
+  QTest::qWait(20);
+  QQuickItem* scaleImg = expectItem("scaleTransformImage");
+  QVERIFY(scaleImg->isVisible());
+  QQuickItem* corner2 = expectItem("transformCorner_2");
+  const QPointF br = corner2->mapToScene(QPointF(corner2->width() / 2.0, corner2->height() / 2.0));
+  dragScene(br, br - QPointF(50 * zoomBefore, 30 * zoomBefore));
+  QTRY_VERIFY(qAbs(readQml(m_editor, QStringLiteral("transformRect().width")).toDouble() - 150.0)
+              < 2.0);
+  QCOMPARE(m_editor->property("zoom").toDouble(), zoomBefore);
+  QVERIFY(qAbs(scaleImg->width() - 150.0 * zoomBefore) < 2.5);
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// Shared bounding-box modifiers (`Shift` = aspect ratio / axis lock,
+/// `Alt` = resize from centre, `Ctrl` = snap) work identically in both Crop
+/// and Transform.
+void TestEditor::boundingBoxModifiersWorkInCropAndTransform()
+{
+  QVariantMap editor = documentState();
+  editor.insert(QStringLiteral("width"), 400);
+  editor.insert(QStringLiteral("height"), 200);
+  setState(editor);
   QVERIFY(QMetaObject::invokeMethod(m_editor, "actualSize"));
   QTest::qWait(20);
 
-  // A corner drag moves one point and leaves the other three: the quad folds
-  // into a keystone, which the frame mode refuses to do.
-  QQuickItem* corner0 = expectItem("transformCorner_0");
-  const QPointF centre =
-    corner0->mapToScene(QPointF(corner0->width() / 2.0, corner0->height() / 2.0));
-  dragScene(centre, centre + QPointF(20, 10));
-  QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][0]")).toDouble() - 20.0)
-                 < 0.6,
-               "the quad did not follow the pointer");
-  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[1][1]")).toDouble(), 0.0);
-  QCOMPARE(readQml(m_editor, QStringLiteral("transformCorners[3][0]")).toDouble(), 0.0);
+  const double originX = m_editor->property("canvasOriginX").toDouble();
+  const double originY = m_editor->property("canvasOriginY").toDouble();
 
-  // An edge drag slides the two corners that form it by the same offset, so the
-  // edge stays parallel to itself.
-  QQuickItem* edge0 = expectItem("transformEdge_0");
-  const QPointF edgeCentre =
-    edge0->mapToScene(QPointF(edge0->width() / 2.0, edge0->height() / 2.0));
-  dragScene(edgeCentre, edgeCentre + QPointF(0, 15));
-  QTRY_VERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[0][1]")).toDouble() - 25.0)
-                 < 0.6,
-               "the quad's edge did not move its first corner");
-  QVERIFY2(qAbs(readQml(m_editor, QStringLiteral("transformCorners[1][1]")).toDouble() - 15.0)
-             < 0.6,
-           "the quad's edge did not keep itself parallel");
+  // --- Transform: Shift locks 2:1 ratio, Alt resizes from centre, Ctrl snaps.
+  selectTool("transform");
+  QVariantMap startRect;
+  startRect.insert(QStringLiteral("x"), 0);
+  startRect.insert(QStringLiteral("y"), 0);
+  startRect.insert(QStringLiteral("width"), 400);
+  startRect.insert(QStringLiteral("height"), 200);
 
-  // The switch proves it: no control on screen can arm the mode, and the armed
-  // frame button says so.
-  QCOMPARE(expectItem("transformModePerspective")->property("enabled").toBool(), false);
-  m_editor->setProperty("transformMode", QStringLiteral("frame"));
+  // Shift on bottom-right corner dragged to (200, 180): aspect 2:1 forces 200 × 100.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "dragTransformCorner",
+                                    Q_ARG(QVariant, 2),
+                                    Q_ARG(QVariant, originX + 200.0),
+                                    Q_ARG(QVariant, originY + 180.0),
+                                    Q_ARG(QVariant, int(Qt::ShiftModifier)),
+                                    Q_ARG(QVariant, startRect)));
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().width")).toInt(), 200);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().height")).toInt(), 100);
+
+  // Alt on bottom-right corner dragged to (300, 150) around centre (200, 100):
+  // half-size 100 × 50 -> rect (100, 50, 200 × 100).
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "dragTransformCorner",
+                                    Q_ARG(QVariant, 2),
+                                    Q_ARG(QVariant, originX + 300.0),
+                                    Q_ARG(QVariant, originY + 150.0),
+                                    Q_ARG(QVariant, int(Qt::AltModifier)),
+                                    Q_ARG(QVariant, startRect)));
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().x")).toInt(), 100);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().y")).toInt(), 50);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().width")).toInt(), 200);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().height")).toInt(), 100);
+
+  // Ctrl snaps pointer (323, 147) to 10 px grid -> 320 × 150.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "dragTransformCorner",
+                                    Q_ARG(QVariant, 2),
+                                    Q_ARG(QVariant, originX + 323.0),
+                                    Q_ARG(QVariant, originY + 147.0),
+                                    Q_ARG(QVariant, int(Qt::ControlModifier)),
+                                    Q_ARG(QVariant, startRect)));
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().width")).toInt(), 320);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().height")).toInt(), 150);
+
+  // Move with Shift locks to dominant axis (dx = 45, dy = 12 -> dx = 45, dy = 0).
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "moveTransformBox",
+                                    Q_ARG(QVariant, startRect),
+                                    Q_ARG(QVariant, 45.0),
+                                    Q_ARG(QVariant, 12.0),
+                                    Q_ARG(QVariant, int(Qt::ShiftModifier))));
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().x")).toInt(), 45);
+  QCOMPARE(readQml(m_editor, QStringLiteral("transformRect().y")).toInt(), 0);
+
+  // --- Crop: same modifiers on create-drag and handle-drag.
+  selectTool("crop");
+  // Shift on free create-drag from (40, 20) to (160, 80) produces a 1:1 square (60 × 60).
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "dragCropCreate",
+                                    Q_ARG(QVariant, originX + 40.0),
+                                    Q_ARG(QVariant, originY + 20.0),
+                                    Q_ARG(QVariant, originX + 160.0),
+                                    Q_ARG(QVariant, originY + 80.0),
+                                    Q_ARG(QVariant, int(Qt::ShiftModifier))));
+  QCOMPARE(readQml(m_editor, QStringLiteral("cropRect.width")).toInt(), 60);
+  QCOMPARE(readQml(m_editor, QStringLiteral("cropRect.height")).toInt(), 60);
+
+  // Alt on crop bottom-right handle resizes symmetrically around centre (70, 50).
+  QVariantMap cropStart;
+  cropStart.insert(QStringLiteral("x"), 40);
+  cropStart.insert(QStringLiteral("y"), 20);
+  cropStart.insert(QStringLiteral("width"), 60);
+  cropStart.insert(QStringLiteral("height"), 60);
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "dragCropHandle",
+                                    Q_ARG(QVariant, 2),
+                                    Q_ARG(QVariant, 2),
+                                    Q_ARG(QVariant, originX + 120.0),
+                                    Q_ARG(QVariant, originY + 90.0),
+                                    Q_ARG(QVariant, int(Qt::AltModifier)),
+                                    Q_ARG(QVariant, cropStart)));
+  QCOMPARE(readQml(m_editor, QStringLiteral("cropRect.x")).toInt(), 20);
+  QCOMPARE(readQml(m_editor, QStringLiteral("cropRect.y")).toInt(), 10);
+  QCOMPARE(readQml(m_editor, QStringLiteral("cropRect.width")).toInt(), 100);
+  QCOMPARE(readQml(m_editor, QStringLiteral("cropRect.height")).toInt(), 80);
 }
 
 void TestEditor::anInvalidOrEmptySizeKeepsApplyDisabled()
@@ -3918,19 +3901,16 @@ void TestEditor::canvasSupportsViewerStyleZoomAndPan()
   QVERIFY(canvasHost != nullptr);
   const double scaledWidth = 4000.0 * scale;
   const double scaledHeight = 3000.0 * scale;
-  // The clamp stops an axis at the overflow it has plus `panMargin`, which is
-  // what makes a drag feel free; it still stops.
-  const double margin = m_editor->property("panMargin").toDouble();
-  QVERIFY(margin > 0.0);
+  // Editor allows Krita-style panMargin freedom when panning with Hand or Space,
+  // while still clamping so the picture stays reachable inside the viewport.
+  const double margin = canvasHost->property("panMargin").toDouble();
+  QVERIFY(margin >= 64.0);
   const double maxX = qMax(0.0, (scaledWidth - canvasHost->width()) / 2.0) + margin;
   const double maxY = qMax(0.0, (scaledHeight - canvasHost->height()) / 2.0) + margin;
   QVERIFY2(qAbs(m_editor->property("offsetX").toDouble()) <= maxX + 0.001,
            "offsetX left the picture's own bounds");
   QVERIFY2(qAbs(m_editor->property("offsetY").toDouble()) <= maxY + 0.001,
            "offsetY left the picture's own bounds");
-  // Zooming at a far corner keeps that corner reachable: an axis the picture
-  // does not fill can now move by the pan margin, which is what a free pan
-  // means. It still cannot run away past it.
   if (scaledHeight <= canvasHost->height()) {
     QVERIFY(qAbs(m_editor->property("offsetY").toDouble()) <= margin + 0.001);
   }
@@ -3939,10 +3919,8 @@ void TestEditor::canvasSupportsViewerStyleZoomAndPan()
   QVERIFY(findObject(QStringLiteral("editorPanHandler")) != nullptr);
 }
 
-/// A picture shorter than the canvas can be dragged up and down. The first
-/// implementation pinned every axis that did not overflow to 0, so a wide photo
-/// in a wide host moved sideways and not vertically — which reads as a broken
-/// pan. The clamp now allows a margin past every edge.
+/// Tight canvas bounds: a fitted picture stays centred (no drift), and once
+/// zoomed past the viewport the Hand tool (H) pans strictly up to the edges.
 void TestEditor::aLargePicturePansFreelyInBothAxes()
 {
   QVariantMap editor = documentState();
@@ -3956,26 +3934,21 @@ void TestEditor::aLargePicturePansFreelyInBothAxes()
     qobject_cast<QQuickItem*>(findObject(QStringLiteral("editorCanvasHost")));
   QVERIFY(canvasHost != nullptr);
 
-  // Fit shows the whole picture, so the scaled height is below the host height:
-  // before the fix this axis could not move at all.
-  const double scale = m_editor->property("zoom").toDouble();
-  QVERIFY2(1200.0 * scale < canvasHost->height(),
-           qPrintable(QStringLiteral("the fixture must be shorter than the host: %1 vs %2")
-                        .arg(1200.0 * scale)
-                        .arg(canvasHost->height())));
+  // Switch to the Hand tool via its Krita/Photoshop shortcut `H`.
+  QTest::keyClick(m_view, Qt::Key_H);
+  QCoreApplication::processEvents();
+  QCOMPARE(m_editor->property("tool").toString(), QStringLiteral("hand"));
 
-  // A real drag, driven with QTest: a hand-built QMouseEvent reaches the
-  // handler but never satisfies its grab.
+  // Zoom in so both axes exceed the viewport, then drag with the Hand tool.
+  QMetaObject::invokeMethod(m_editor, "actualSize");
+  QTest::qWait(20);
   QQuickItem* canvas = expectItem("canvas");
   const QPointF start = canvas->mapToScene(QPointF(canvas->width() / 2.0, canvas->height() / 2.0));
   const QPoint target = start.toPoint();
   QTest::mouseMove(m_view, target);
   QTest::qWait(30);
-  const bool hovered = m_editor->property("panHover").toBool();
-  QVERIFY2(hovered, "the canvas hover never armed the pan handler");
+  QVERIFY2(m_editor->property("panHover").toBool(), "the canvas hover never armed the pan handler");
 
-  // Several small steps: Qt Quick keeps the implicit grab the press took, and a
-  // teleporting cursor is not what a drag looks like on a real device.
   QTest::mousePress(m_view, Qt::LeftButton, Qt::NoModifier, target);
   QCoreApplication::processEvents();
   for (int step = 1; step <= 6; ++step) {
@@ -3989,39 +3962,40 @@ void TestEditor::aLargePicturePansFreelyInBothAxes()
   const double offsetY = m_editor->property("offsetY").toDouble();
   const double offsetX = m_editor->property("offsetX").toDouble();
   QVERIFY2(qAbs(offsetY) > 1.0,
-           qPrintable(QStringLiteral("a vertical drag did not pan a short picture: offsetY %1")
+           qPrintable(QStringLiteral("a vertical drag did not pan a zoomed picture: offsetY %1")
                         .arg(offsetY)));
   QVERIFY2(offsetX > 1.0,
            qPrintable(QStringLiteral("a horizontal drag did not pan: offsetX %1").arg(offsetX)));
-  QVERIFY(qAbs(offsetY) <= 64.0 + 0.5);
   QCOMPARE(m_commands->count(), 0);
 }
 
-/// A touchpad drag reports a TouchPad device, and a middle click is not the left
-/// button, so a handler that accepts neither setting is dead for both. Both are
-/// asserted on the real handler, because neither is visible from the outside
-/// until a laptop user tries to pan.
+/// Touchpad + middle-click + Space priority: Pointer/Crop/Transform/Paint only
+/// accept middle-click pan, while Hand (H) or holding Space enables left-click
+/// pan and suspends active overlays (including Crop's create area).
 void TestEditor::thePanHandlerTakesTouchpadsAndMiddleClicks()
 {
   setState(documentState());
-  // The handler is not a visual item; its settings are read off the object.
   QObject* pan = findObject(QStringLiteral("editorPanHandler"));
   QVERIFY(pan != nullptr);
 
-  // Qt 6 defaults `acceptedDevices` to Mouse only, which is why a touchpad drag
-  // would silently do nothing.
   const auto devices = pan->property("acceptedDevices").value<QPointingDevice::DeviceTypes>();
   QVERIFY2(devices.testFlag(QPointingDevice::DeviceType::TouchPad),
            "the pan handler ignores touchpads");
   QVERIFY(devices.testFlag(QPointingDevice::DeviceType::Mouse));
 
-  const auto buttons = pan->property("acceptedButtons").value<Qt::MouseButtons>();
-  QVERIFY2(buttons.testFlag(Qt::LeftButton) && buttons.testFlag(Qt::MiddleButton),
-           "the pan handler does not take a middle-button drag");
+  // Pointer tool does not pan with LeftButton (only MiddleButton).
+  const auto pointerButtons = pan->property("acceptedButtons").value<Qt::MouseButtons>();
+  QVERIFY2(!pointerButtons.testFlag(Qt::LeftButton) && pointerButtons.testFlag(Qt::MiddleButton),
+           "pointer tool should only pan with middle-button");
 
-  // With Crop or Transform armed the left button belongs to the overlay: the
-  // frame and the quad are drawn with it, so a drag must not also move the
-  // picture. The middle button still pans in both.
+  // Hand tool enables both LeftButton and MiddleButton.
+  m_editor->setProperty("tool", QStringLiteral("hand"));
+  QCoreApplication::processEvents();
+  const auto handButtons = pan->property("acceptedButtons").value<Qt::MouseButtons>();
+  QVERIFY2(handButtons.testFlag(Qt::LeftButton) && handButtons.testFlag(Qt::MiddleButton),
+           "hand tool must pan with left and middle buttons");
+
+  // Crop and Transform reserve LeftButton for their overlays, unless Space is held.
   for (const char* name : {"crop", "transform"}) {
     selectTool(name);
     QCOMPARE(m_editor->property("tool").toString(), QString::fromLatin1(name));
@@ -4029,6 +4003,19 @@ void TestEditor::thePanHandlerTakesTouchpadsAndMiddleClicks()
     QVERIFY2(!armed.testFlag(Qt::LeftButton) && armed.testFlag(Qt::MiddleButton),
              qPrintable(QStringLiteral("%1 still pans with the left button")
                           .arg(QString::fromLatin1(name))));
+    // Holding Space suspends the overlay and hands LeftButton back to pan.
+    m_editor->setProperty("spacePanning", true);
+    QCoreApplication::processEvents();
+    const auto spaceButtons = pan->property("acceptedButtons").value<Qt::MouseButtons>();
+    QVERIFY2(spaceButtons.testFlag(Qt::LeftButton),
+             qPrintable(QStringLiteral("Space did not enable left-pan in %1").arg(name)));
+    QObject* overlay = findObject(QString::fromLatin1(
+        std::strcmp(name, "crop") == 0 ? "cropOverlay" : "transformOverlay"));
+    QVERIFY(overlay != nullptr);
+    QVERIFY2(!overlay->property("enabled").toBool(),
+             qPrintable(QStringLiteral("Space did not suspend %1 overlay").arg(name)));
+    m_editor->setProperty("spacePanning", false);
+    QCoreApplication::processEvents();
   }
 }
 

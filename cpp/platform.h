@@ -43,6 +43,9 @@ public:
   /// file-type combo on one workspace and the desktop's own everywhere else.
   /// `currentName` is the file name the dialog opens on (no folder).
   Q_INVOKABLE bool requestSaveFile(const QString& title, const QString& currentName);
+  /// Pick a screen colour via XDG `Screenshot.PickColor` portal. Returns false
+  /// when the portal is unavailable or another portal request is active.
+  Q_INVOKABLE bool requestPickColor();
 
   /// Close the file dialog that is still open. Used when the window goes away
   /// (and by the QA harness) so no portal request is left behind; the portal
@@ -96,11 +99,18 @@ public:
   /// only read in the language you do not speak yet is useless.
   Q_INVOKABLE QVariantList languages() const;
 
+  /// Sync the Qt application palette and colour-scheme hint with KogaView's
+  /// active `Theme` so popups (`Menu`, `ComboBox` dropdowns, `ToolTip`) and
+  /// stock controls follow Light/Dark mode instead of the desktop's own theme.
+  Q_INVOKABLE void applyThemePalette(const QVariantMap& colors, bool dark);
+
 signals:
   void filesSelected(const QStringList& paths);
   void folderSelected(const QString& path);
   /// The answer to `requestSaveFile`: one path, already a local file path.
   void saveFileSelected(const QString& path);
+  /// The answer to `requestPickColor`: `#rrggbb` hex colour picked from screen.
+  void colorPicked(const QString& hex);
   void copyResult(bool ok, const QString& message);
   void dialogError(const QString& message);
   void info(const QString& message);
@@ -145,6 +155,7 @@ private:
   bool m_portalAvailable = false;
   bool m_folderMode = false;
   bool m_saveMode = false;
+  bool m_colorMode = false;
   bool m_requestActive = false;
   bool m_dismissing = false;
   QString m_requestPath;

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
+import QtQuick.Effects
 import QtQuick.Layouts
 
 // The Editor workspace.
@@ -30,6 +31,11 @@ Item {
     // The paint keys and Space-pan need the view to be the focus item when the
     // Editor opens; a text field or a click takes focus away on purpose.
     Component.onCompleted: view.forceActiveFocus()
+    onVisibleChanged: {
+        if (visible && view.autoFit && view.hasDocument && view.hostReady) {
+            Qt.callLater(view.fit)
+        }
+    }
 
     property Theme theme: Theme {}
     /// The shared thumbnail cache (C++ `ThumbnailCache`). Null in the QML test
@@ -346,21 +352,16 @@ Item {
     /// canvas takes the Editor's own background (`backgroundColor` /
     /// `backgroundTransparent`), the same one a resize pads with. Only read in
     /// `grow` mode.
-    /// How Transform takes its four corners. `frame` is a rectangle: a corner
-    /// or an edge drag moves that side and leaves the side across exactly where
-    /// it was, the way a window border resizes — which is why one gesture is
-    /// enough to straighten a photograph of a page. `perspective` is the
-    /// keystone quad, where each corner goes wherever the pointer goes; it is
-    /// shut in this build, because putting four sides on four planes is a
-    /// layers question the Editor has not answered — the tool options draw it
-    /// disabled and say so.
-    property string transformMode: "frame"
-    /// The transform quad in document pixels, clockwise from the top left:
-    /// every corner must stay inside the picture, and the four of them are the
-    /// whole command. The frame's own corners are the identity, so opening a
-    /// document or putting the tool down leaves nothing armed. The four edge
-    /// handles are an affordance over this one array: dragging an edge moves
-    /// the two corners that form it.
+    /// How Transform reshapes the picture:
+    /// - `free`: Free Transform — scale and reposition the image inside the
+    ///   document's fixed `W × H` frame; uncovered canvas takes the Editor's
+    ///   background (`backgroundColor` / `backgroundTransparent`).
+    /// - `scale`: Scale Canvas — drag the bounding box to resize the document's
+    ///   own `W × H` dimensions directly while keeping the current viewport zoom.
+    property string transformMode: "free"
+    /// The transform bounding box as four clockwise corners in document pixels
+    /// (`[[x, y], [x+w, y], [x+w, y+h], [x, y+h]]`). Identity is the document's
+    /// own frame.
     property var transformCorners: []
 
     /// Paint is one canvas tool with two modes, the way Krita's freehand brush
@@ -550,6 +551,23 @@ Item {
         backgroundColorDialog.open()
     }
 
+    // Canvas backdrop colour (presentation-only: theme default, checkerboard,
+    // white, black, gray, or a custom colour drawn across the viewport and
+    // behind the document).
+    property bool canvasBgUseTheme: true
+    property bool canvasBgChecker: false
+    property color canvasBgColor: "#ffffff"
+    function openCanvasBgPopup(anchor) {
+        if (!anchor) return
+        canvasBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
+        canvasBgPopup.colour = view.canvasBgColor
+        canvasBgPopup.showBelow(anchor)
+    }
+    function openCanvasBgChooser() {
+        canvasBgColorDialog.selectedColor = view.canvasBgColor
+        canvasBgColorDialog.open()
+    }
+
     /// Krita's [ and ]: one pixel per press, ten with Shift.
     function stepPaintSize(delta) {
         view.paintSize = Math.max(view.minimumPaintSize,
@@ -660,6 +678,30 @@ Item {
                 return
             }
         }
+        if (!control && view.tool === "transform" && view.documentReady) {
+            if (event.key === Qt.Key_Escape) {
+                view.tool = "pointer"
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (view.transformUsable() && view.transformChanged()) view.applyTransform()
+                event.accepted = true
+                return
+            }
+        }
+        if (!control && view.tool === "rotate" && view.documentReady) {
+            if (event.key === Qt.Key_Escape) {
+                view.tool = "pointer"
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (view.rotateHasChange()) view.applyRotateAngle()
+                event.accepted = true
+                return
+            }
+        }
         if (control || alt) {
             if (control && !alt && (event.key === Qt.Key_Z || event.key === Qt.Key_Y)) {
                 var redo = event.key === Qt.Key_Y || shift
@@ -669,20 +711,8 @@ Item {
             return
         }
         switch (event.key) {
-        case Qt.Key_B:
-            view.selectPaintMode("brush")
-            event.accepted = true
-            break
-        case Qt.Key_E:
-            view.selectPaintMode("eraser")
-            event.accepted = true
-            break
-        case Qt.Key_BracketLeft:
-            view.stepPaintSize(shift ? -10 : -1)
-            event.accepted = true
-            break
-        case Qt.Key_BracketRight:
-            view.stepPaintSize(shift ? 10 : 1)
+        case Qt.Key_H:
+            view.tool = "hand"
             event.accepted = true
             break
         case Qt.Key_X:
@@ -695,10 +725,24 @@ Item {
             break
         case Qt.Key_Space:
             if (view.documentReady) {
-                // Space interrupts a stroke rather than swallowing it: the
-                // stroke is finished as drawn, then the button pans.
-                view.finishPaintStroke()
-                view.spacePanning = true
+                if (!event.isAutoRepeat) {
+                    // Space interrupts a stroke rather than swallowing it: the
+                    // stroke is finished as drawn, then the button pans.
+                    view.finishPaintStroke()
+                    view.spacePanning = true
+                }
+                event.accepted = true
+            }
+            break
+        case Qt.Key_1:
+            if (view.documentReady) {
+                view.actualSize()
+                event.accepted = true
+            }
+            break
+        case Qt.Key_2:
+            if (view.documentReady) {
+                view.fit()
                 event.accepted = true
             }
             break
@@ -719,7 +763,7 @@ Item {
         }
     }
     Keys.onReleased: function(event) {
-        if (event.key === Qt.Key_Space) {
+        if (event.key === Qt.Key_Space && !event.isAutoRepeat) {
             view.spacePanning = false
             event.accepted = true
         }
@@ -737,13 +781,193 @@ Item {
     /// The frame is the preview's input: a corner or an edge moving asks Core
     /// for the straightened result through the debounce a typed crop side uses,
     /// so a drag renders once per pause instead of once per pixel. The identity
-    /// asks for nothing — `requestDraft` refuses a frame that changes nothing.
-    ///
-    /// It is the *debounce* that is restarted here, not `requestDraft`: a drag
-    /// writes a corner on every pointer move, and asking straight away sent a
-    /// full-size render per move — measured on the real window as a stream of
-    /// `editor_transform_preview` commands, one per pixel of travel.
-    onTransformCornersChanged: draftDebounce.restart()
+    // ------------------------------------------- shared bounding-box helpers
+    // Used by both Crop and Transform so keyboard modifiers behave identically:
+    // - Shift: lock aspect ratio (or lock horizontal/vertical axis while moving)
+    // - Alt:   resize symmetrically around the box centre
+    // - Ctrl:  snap to document edges/centre or 10 px steps
+
+    function snapDocCoord(value, maxDim, snapEnabled) {
+        if (!snapEnabled) return value
+        var threshold = Math.max(8, 10 / Math.max(0.05, view.zoom))
+        var guides = [0, maxDim / 2, maxDim]
+        for (var i = 0; i < guides.length; ++i) {
+            if (Math.abs(value - guides[i]) <= threshold) return guides[i]
+        }
+        return Math.round(value / 10) * 10
+    }
+
+    function computeBoxHandleDrag(startRect, column, row, pointerX, pointerY, options) {
+        var opts = options || ({})
+        var clampToDoc = !!opts.clampToDoc
+        var maxDim = opts.maxDim || 16384
+        var fromCenter = !!opts.fromCenter
+        var keepAspect = !!opts.keepAspect
+        var aspect = opts.aspect || 0
+        var snap = !!opts.snap
+
+        var px = view.snapDocCoord(pointerX, view.documentWidth, snap)
+        var py = view.snapDocCoord(pointerY, view.documentHeight, snap)
+        if (clampToDoc) {
+            px = Math.max(0, Math.min(view.documentWidth, px))
+            py = Math.max(0, Math.min(view.documentHeight, py))
+        }
+
+        var x = startRect.x
+        var y = startRect.y
+        var w = startRect.width
+        var h = startRect.height
+
+        if (fromCenter) {
+            var cx = startRect.x + startRect.width / 2
+            var cy = startRect.y + startRect.height / 2
+            var hw = column === 0 ? Math.max(0.5, cx - px)
+                   : (column === 2 ? Math.max(0.5, px - cx) : startRect.width / 2)
+            var hh = row === 0 ? Math.max(0.5, cy - py)
+                   : (row === 2 ? Math.max(0.5, py - cy) : startRect.height / 2)
+            w = hw * 2
+            h = hh * 2
+            if (keepAspect && aspect > 0) {
+                if (column !== 1 && row !== 1) {
+                    if (w / h > aspect) w = h * aspect
+                    else h = w / aspect
+                } else if (row === 1) {
+                    h = w / aspect
+                } else if (column === 1) {
+                    w = h * aspect
+                }
+            }
+            if (clampToDoc) {
+                var maxW = Math.max(1, 2 * Math.min(cx, view.documentWidth - cx))
+                var maxH = Math.max(1, 2 * Math.min(cy, view.documentHeight - cy))
+                if (keepAspect && aspect > 0) {
+                    var fit = Math.min(1, maxW / w, maxH / h)
+                    w *= fit
+                    h *= fit
+                } else {
+                    w = Math.min(w, maxW)
+                    h = Math.min(h, maxH)
+                }
+            }
+            if (keepAspect && aspect > 0) {
+                var cap = Math.min(1, maxDim / w, maxDim / h)
+                w *= cap
+                h *= cap
+            } else {
+                w = Math.min(w, maxDim)
+                h = Math.min(h, maxDim)
+            }
+            w = Math.max(1, w)
+            h = Math.max(1, h)
+            x = cx - w / 2
+            y = cy - h / 2
+            return { x: Math.round(x), y: Math.round(y),
+                     width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) }
+        }
+
+        if (keepAspect && aspect > 0) {
+            if (column !== 1 && row !== 1) {
+                var fixedX = column === 0 ? startRect.x + startRect.width : startRect.x
+                var fixedY = row === 0 ? startRect.y + startRect.height : startRect.y
+                var rawW = Math.max(1, Math.abs(px - fixedX))
+                var rawH = Math.max(1, Math.abs(py - fixedY))
+                if (rawW / rawH > aspect) rawW = rawH * aspect
+                else rawH = rawW / aspect
+                var limW = clampToDoc ? (column === 0 ? fixedX : view.documentWidth - fixedX) : maxDim
+                var limH = clampToDoc ? (row === 0 ? fixedY : view.documentHeight - fixedY) : maxDim
+                var scale = Math.min(1, limW / rawW, limH / rawH, maxDim / rawW, maxDim / rawH)
+                w = Math.max(1, rawW * scale)
+                h = Math.max(1, rawH * scale)
+                x = column === 0 ? fixedX - w : fixedX
+                y = row === 0 ? fixedY - h : fixedY
+            } else if (row === 1) {
+                var sideX = column === 0 ? startRect.x + startRect.width : startRect.x
+                var midY = startRect.y + startRect.height / 2
+                w = Math.max(1, column === 0 ? sideX - px : px - sideX)
+                h = w / aspect
+                var maxSideW = clampToDoc ? (column === 0 ? sideX : view.documentWidth - sideX) : maxDim
+                var maxSideH = clampToDoc ? view.documentHeight : maxDim
+                var sH = Math.min(1, maxSideW / w, maxSideH / h, maxDim / w, maxDim / h)
+                w = Math.max(1, w * sH)
+                h = Math.max(1, h * sH)
+                x = column === 0 ? sideX - w : sideX
+                y = clampToDoc ? Math.max(0, Math.min(view.documentHeight - h, midY - h / 2))
+                               : midY - h / 2
+            } else {
+                var sideY = row === 0 ? startRect.y + startRect.height : startRect.y
+                var midX = startRect.x + startRect.width / 2
+                h = Math.max(1, row === 0 ? sideY - py : py - sideY)
+                w = h * aspect
+                var maxVertH = clampToDoc ? (row === 0 ? sideY : view.documentHeight - sideY) : maxDim
+                var maxVertW = clampToDoc ? view.documentWidth : maxDim
+                var sV = Math.min(1, maxVertW / w, maxVertH / h, maxDim / w, maxDim / h)
+                w = Math.max(1, w * sV)
+                h = Math.max(1, h * sV)
+                y = row === 0 ? sideY - h : sideY
+                x = clampToDoc ? Math.max(0, Math.min(view.documentWidth - w, midX - w / 2))
+                               : midX - w / 2
+            }
+            return { x: Math.round(x), y: Math.round(y),
+                     width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) }
+        }
+
+        if (column === 0) {
+            var rightEdge = startRect.x + startRect.width
+            x = Math.min(px, rightEdge - 1)
+            w = Math.min(maxDim, rightEdge - x)
+            x = rightEdge - w
+        } else if (column === 2) {
+            w = Math.max(1, Math.min(maxDim, px - startRect.x))
+        }
+        if (row === 0) {
+            var bottomEdge = startRect.y + startRect.height
+            y = Math.min(py, bottomEdge - 1)
+            h = Math.min(maxDim, bottomEdge - y)
+            y = bottomEdge - h
+        } else if (row === 2) {
+            h = Math.max(1, Math.min(maxDim, py - startRect.y))
+        }
+        return { x: Math.round(x), y: Math.round(y),
+                 width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) }
+    }
+
+    function computeBoxMoveDrag(startRect, dxDoc, dyDoc, modifiers) {
+        var mods = modifiers || 0
+        var shift = (mods & Qt.ShiftModifier) !== 0
+        var snap = (mods & Qt.ControlModifier) !== 0
+        var dx = dxDoc
+        var dy = dyDoc
+        if (shift) {
+            if (Math.abs(dx) >= Math.abs(dy)) dy = 0
+            else dx = 0
+        }
+        var nx = startRect.x + dx
+        var ny = startRect.y + dy
+        if (snap) {
+            var threshold = Math.max(8, 10 / Math.max(0.05, view.zoom))
+            var xSnapped = false
+            var ySnapped = false
+            // Snap left, centre, or right edge to document 0 / mid / max.
+            var docMidX = view.documentWidth / 2
+            var docMidY = view.documentHeight / 2
+            if (Math.abs(nx) <= threshold) { nx = 0; xSnapped = true }
+            else if (Math.abs(nx + startRect.width - view.documentWidth) <= threshold) {
+                nx = view.documentWidth - startRect.width; xSnapped = true
+            } else if (Math.abs(nx + startRect.width / 2 - docMidX) <= threshold) {
+                nx = docMidX - startRect.width / 2; xSnapped = true
+            }
+            if (!xSnapped) nx = Math.round(nx / 10) * 10
+
+            if (Math.abs(ny) <= threshold) { ny = 0; ySnapped = true }
+            else if (Math.abs(ny + startRect.height - view.documentHeight) <= threshold) {
+                ny = view.documentHeight - startRect.height; ySnapped = true
+            } else if (Math.abs(ny + startRect.height / 2 - docMidY) <= threshold) {
+                ny = docMidY - startRect.height / 2; ySnapped = true
+            }
+            if (!ySnapped) ny = Math.round(ny / 10) * 10
+        }
+        return { x: Math.round(nx), y: Math.round(ny) }
+    }
 
     /// The quad that changes nothing: the document's own frame.
     function identityCorners() {
@@ -757,11 +981,7 @@ Item {
         view.transformCorners = view.identityCorners()
     }
 
-    /// The frame's rectangle in document pixels: `frame` mode keeps the four
-    /// corners on an axis-aligned box, so the box is the four of them read
-    /// back. Read through `min`/`max` rather than by index so a corner array
-    /// that came from anywhere but a frame drag still yields a box, not a
-    /// negative size.
+    /// The transform bounding box in document pixels.
     function transformRect() {
         var corners = view.transformCorners
         if (!corners || corners.length !== 4) return null
@@ -769,30 +989,25 @@ Item {
         var top = Math.min(corners[0][1], corners[1][1])
         var right = Math.max(corners[1][0], corners[2][0])
         var bottom = Math.max(corners[2][1], corners[3][1])
-        return { x: left, y: top, width: right - left, height: bottom - top }
+        return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) }
     }
 
-    /// Write the frame from a rectangle in document pixels, clamped inside the
-    /// picture and never smaller than one pixel on either side, then rounded
-    /// the way a corner drag rounds — so a drag and a typed number agree to the
-    /// tenth of a pixel the command carries.
+    /// Write the transform bounding box from a rectangle in document pixels.
+    /// In `free` mode the image may be placed partially off-canvas (clipped on
+    /// apply); in `scale` mode the box describes the target `W × H` (anchored at
+    /// `x, y` during drag so the opposite side stays put visually).
     function setTransformFrame(x, y, width, height) {
-        var w = Math.min(Math.max(1, width), view.documentWidth)
-        var h = Math.min(Math.max(1, height), view.documentHeight)
-        var left = Math.max(0, Math.min(view.documentWidth - w, x))
-        var top = Math.max(0, Math.min(view.documentHeight - h, y))
-        function round(value) { return Math.round(value * 10) / 10 }
-        view.transformCorners = [[round(left), round(top)],
-                                 [round(left + w), round(top)],
-                                 [round(left + w), round(top + h)],
-                                 [round(left), round(top + h)]]
+        var maxDim = 16384
+        var w = Math.min(Math.max(1, Math.round(width)), maxDim)
+        var h = Math.min(Math.max(1, Math.round(height)), maxDim)
+        var left = Math.round(x)
+        var top = Math.round(y)
+        view.transformCorners = [[left, top],
+                                 [left + w, top],
+                                 [left + w, top + h],
+                                 [left, top + h]]
     }
 
-    /// The frame's eight handles in the crop pad's own coordinates: `column`/
-    /// `row` 0 is the left/top side, 2 the right/bottom side, 1 the middle of
-    /// that axis. The first four are the corners (clockwise from the top left),
-    /// the last four the edges (from corner `i` to corner `i + 1`), so one drag
-    /// function serves all eight in `frame` mode.
     readonly property var transformFrameHandles: [
         { column: 0, row: 0 }, { column: 2, row: 0 },
         { column: 2, row: 2 }, { column: 0, row: 2 },
@@ -800,65 +1015,50 @@ Item {
         { column: 1, row: 2 }, { column: 0, row: 1 }
     ]
 
-    /// One frame handle's drag: the side under the pointer follows it, the side
-    /// across keeps its own place, and the frame stays a rectangle inside the
-    /// picture. This is the live resize a window border does, and the whole of
-    /// `frame` mode.
-    function dragFrameHandle(column, row, hostX, hostY) {
-        var rect = view.transformRect()
-        if (!rect) return
-        var pointerX = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(hostX)))
-        var pointerY = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(hostY)))
-        var x = rect.x
-        var y = rect.y
-        var width = rect.width
-        var height = rect.height
-        if (column === 0) {
-            var right = x + width
-            x = Math.min(pointerX, right - 1)
-            width = right - x
-        } else if (column === 2) {
-            width = Math.max(1, pointerX - x)
-        }
-        if (row === 0) {
-            var bottom = y + height
-            y = Math.min(pointerY, bottom - 1)
-            height = bottom - y
-        } else if (row === 2) {
-            height = Math.max(1, pointerY - y)
-        }
-        view.setTransformFrame(x, y, width, height)
+    function dragFrameHandle(column, row, hostX, hostY, modifiers, startRect) {
+        var base = startRect || view.transformRect()
+        if (!base) return
+        var mods = modifiers || 0
+        var shift = (mods & Qt.ShiftModifier) !== 0
+        var alt = (mods & Qt.AltModifier) !== 0
+        var ctrl = (mods & Qt.ControlModifier) !== 0
+        var next = view.computeBoxHandleDrag(
+            base, column, row,
+            view.hostToDocX(hostX), view.hostToDocY(hostY),
+            {
+                keepAspect: shift,
+                aspect: base.height > 0 ? base.width / base.height : 1,
+                fromCenter: alt,
+                snap: ctrl,
+                clampToDoc: false,
+                maxDim: 16384
+            })
+        view.setTransformFrame(next.x, next.y, next.width, next.height)
     }
 
-    /// Arm one of the tool's two modes. `perspective` is shut in this build, so
-    /// nothing on screen reaches it; the value is still accepted because the
-    /// option is a real one and the suite drives it through the property.
     function setTransformMode(mode) {
-        if (mode !== "frame" && mode !== "perspective") return
+        if (mode !== "free" && mode !== "scale") return
+        if (view.transformMode === mode) return
         view.transformMode = mode
+        view.resetTransformCorners()
     }
 
-    /// A corner drag, routed by the mode: `frame` resizes the box with the
-    /// opposite corner anchored, `perspective` moves that one point.
-    function dragTransformCorner(index, hostX, hostY) {
-        if (view.transformMode === "perspective") {
-            view.setTransformCorner(index, hostX, hostY)
-            return
-        }
+    function dragTransformCorner(index, hostX, hostY, modifiers, startRect) {
         var handle = view.transformFrameHandles[index]
-        view.dragFrameHandle(handle.column, handle.row, hostX, hostY)
+        if (!handle) return
+        view.dragFrameHandle(handle.column, handle.row, hostX, hostY, modifiers, startRect)
     }
 
-    /// An edge drag, routed the same way: the frame's side follows the pointer
-    /// as a whole, and the quad's edge moves the two corners that form it by
-    /// the same offset.
-    function dragTransformEdge(index, hostX, hostY) {
-        if (view.transformMode === "perspective") {
-            view.moveTransformEdge(index, hostX, hostY)
-            return
-        }
+    function dragTransformEdge(index, hostX, hostY, modifiers, startRect) {
         var handle = view.transformFrameHandles[4 + index]
-        view.dragFrameHandle(handle.column, handle.row, hostX, hostY)
+        if (!handle) return
+        view.dragFrameHandle(handle.column, handle.row, hostX, hostY, modifiers, startRect)
+    }
+
+    function moveTransformBox(startRect, dxDoc, dyDoc, modifiers) {
+        if (!startRect || view.transformMode !== "free") return
+        var pos = view.computeBoxMoveDrag(startRect, dxDoc, dyDoc, modifiers)
+        view.setTransformFrame(pos.x, pos.y, startRect.width, startRect.height)
     }
 
     function cornerX(index) {
@@ -871,81 +1071,50 @@ Item {
         return corners && corners.length === 4 ? corners[index][1] : 0
     }
 
-    /// Move one corner to a point given in canvas-host coordinates, clamped to
-    /// the picture so the command can never name a corner with no pixels.
-    function setTransformCorner(index, hostX, hostY) {
-        var corners = view.transformCorners
-        if (!corners || corners.length !== 4) return
-        var x = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(hostX)))
-        var y = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(hostY)))
-        var next = []
-        for (var i = 0; i < 4; ++i) next.push([corners[i][0], corners[i][1]])
-        next[index] = [Math.round(x * 10) / 10, Math.round(y * 10) / 10]
-        view.transformCorners = next
-    }
-
-    /// Move the two corners of edge `index` (from corner `index` to corner
-    /// `index + 1`) by the same offset, so the edge follows the pointer and
-    /// stays parallel to itself. The offset is clamped for both corners at
-    /// once, otherwise one of them could leave the picture and fold the quad.
-    function moveTransformEdge(index, hostX, hostY) {
-        var corners = view.transformCorners
-        if (!corners || corners.length !== 4) return
-        var first = index % 4
-        var second = (index + 1) % 4
-        var midX = (corners[first][0] + corners[second][0]) / 2
-        var midY = (corners[first][1] + corners[second][1]) / 2
-        var dx = view.hostToDocX(hostX) - midX
-        var dy = view.hostToDocY(hostY) - midY
-        dx = Math.max(-Math.min(corners[first][0], corners[second][0]),
-                Math.min(dx, view.documentWidth - Math.max(corners[first][0], corners[second][0])))
-        dy = Math.max(-Math.min(corners[first][1], corners[second][1]),
-                Math.min(dy, view.documentHeight - Math.max(corners[first][1], corners[second][1])))
-        var next = []
-        for (var i = 0; i < 4; ++i) next.push([corners[i][0], corners[i][1]])
-        next[first] = [Math.round((corners[first][0] + dx) * 10) / 10,
-                       Math.round((corners[first][1] + dy) * 10) / 10]
-        next[second] = [Math.round((corners[second][0] + dx) * 10) / 10,
-                        Math.round((corners[second][1] + dy) * 10) / 10]
-        view.transformCorners = next
-    }
-
-    /// Whether the quad is worth sending. Core is the authority and answers a
-    /// rejected corner with a translated line; this repeats only the two
-    /// geometric guards — inside the picture, clockwise and not folded — so a
-    /// quad Core would refuse is never rendered or applied in the first place.
     function transformUsable() {
-        var corners = view.transformCorners
-        if (!view.documentReady || !corners || corners.length !== 4) return false
-        var winding = 0
-        for (var index = 0; index < 4; ++index) {
-            var point = corners[index]
-            if (!(typeof point[0] === "number") || !(typeof point[1] === "number")) return false
-            if (point[0] < 0 || point[1] < 0
-                    || point[0] > view.documentWidth || point[1] > view.documentHeight) return false
-            var a = corners[index]
-            var b = corners[(index + 1) % 4]
-            var c = corners[(index + 2) % 4]
-            var cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
-            if (Math.abs(cross) < 1e-6) return false
-            var turn = cross > 0 ? 1 : -1
-            if (winding === 0) winding = turn
-            else if (turn !== winding) return false
-        }
-        return winding > 0
+        var rect = view.transformRect()
+        if (!view.documentReady || !rect) return false
+        return rect.width >= 1 && rect.height >= 1
+                && rect.width <= 16384 && rect.height <= 16384
     }
 
-    /// True when at least one corner left the frame, so Apply is not armed for
-    /// a transform that would only answer `edit_noop`.
     function transformChanged() {
-        var corners = view.transformCorners
-        if (!corners || corners.length !== 4) return false
-        var frame = view.identityCorners()
-        for (var index = 0; index < 4; ++index) {
-            if (Math.abs(corners[index][0] - frame[index][0]) > 1e-6
-                    || Math.abs(corners[index][1] - frame[index][1]) > 1e-6) return true
+        var rect = view.transformRect()
+        if (!rect) return false
+        if (view.transformMode === "scale") {
+            return Math.round(rect.width) !== Math.round(view.documentWidth)
+                    || Math.round(rect.height) !== Math.round(view.documentHeight)
         }
-        return false
+        return Math.round(rect.x) !== 0
+                || Math.round(rect.y) !== 0
+                || Math.round(rect.width) !== Math.round(view.documentWidth)
+                || Math.round(rect.height) !== Math.round(view.documentHeight)
+    }
+
+    /// Commit the live Transform bounding box as one typed Core command.
+    function applyTransform() {
+        var rect = view.transformRect()
+        if (!rect || !view.transformUsable() || !view.transformChanged()) return
+        if (view.transformMode === "scale") {
+            view.command({
+                type: "editor_resize",
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+                mode: "stretch",
+                filter: "auto"
+            })
+        } else {
+            view.command({
+                type: "editor_free_transform",
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+                fill: view.backgroundTransparent ? null : view.backgroundBytes(),
+                fill_alpha: view.backgroundAlpha()
+            })
+        }
+        view.resetTransformCorners()
     }
 
     /// The ratios both size tools offer. `Free` leaves both fields alone,
@@ -1111,24 +1280,29 @@ Item {
         return (width / divisor) + ":" + (height / divisor)
     }
 
-    /// `3:2`, `3/2`, `3x2` and a bare `2` (meaning 2:1) all parse; anything
-    /// else, including an empty string, is not a ratio.
+    /// Most recently edited size axis (`"width"` or `"height"`), so typing a
+    /// ratio keeps the axis the user just touched unless the other is locked.
+    property string cropLastAxis: "width"
+
+    /// `3:2`, `3/2`, `3x2`, and decimals (`1.5`, `1.777`, `0.75`) all parse;
+    /// anything else, including an empty string, is not a ratio.
     function parseRatio(text) {
         if (text === undefined || text === null) return null
         var cleaned = String(text).trim()
         if (cleaned === "") return null
-        var match = /^(\d+)\s*[:/xX]\s*(\d+)$/.exec(cleaned)
-        if (!match) {
-            if (/^\d+$/.test(cleaned)) {
-                var single = parseInt(cleaned)
-                return single > 0 ? { width: single, height: 1 } : null
-            }
-            return null
+        var match = /^(\d+(?:\.\d+)?)\s*[:/xX]\s*(\d+(?:\.\d+)?)$/.exec(cleaned)
+        if (match) {
+            var width = parseFloat(match[1])
+            var height = parseFloat(match[2])
+            if (!isFinite(width) || !isFinite(height) || !(width > 0) || !(height > 0)) return null
+            return { width: width, height: height }
         }
-        var width = parseInt(match[1])
-        var height = parseInt(match[2])
-        if (!(width > 0) || !(height > 0)) return null
-        return { width: width, height: height }
+        if (/^\d+(?:\.\d+)?$/.test(cleaned)) {
+            var single = parseFloat(cleaned)
+            if (!isFinite(single) || !(single > 0)) return null
+            return { width: single, height: 1 }
+        }
+        return null
     }
 
     /// The ratio the rectangle is currently held to, as width / height, or 0
@@ -1203,15 +1377,18 @@ Item {
             view.syncCropRatioField()
             return
         }
-        view.cropRatio = view.reducedRatio(pair.width, pair.height)
+        if (Math.abs(pair.width - Math.round(pair.width)) < 1e-6
+                && Math.abs(pair.height - Math.round(pair.height)) < 1e-6) {
+            view.cropRatio = view.reducedRatio(Math.round(pair.width), Math.round(pair.height))
+        } else {
+            view.cropRatio = cleaned
+        }
         view.syncCropRatioField()
         view.applyCropRatio()
     }
 
     /// Apply the current ratio to the fields. The locked side wins when one is
-    /// pinned; otherwise Width is the starting side (Height when Width is
-    /// empty). Clamping happens once, on the shape, so a ratio never survives
-    /// as a pair the document cannot hold.
+    /// pinned; otherwise the most recently edited axis (`cropLastAxis`) is kept.
     function applyCropRatio() {
         var pair = view.cropRatioPair()
         if (!pair) {
@@ -1224,6 +1401,8 @@ Item {
         if (view.cropLockWidth && width > 0) {
             height = width * pair.height / pair.width
         } else if (view.cropLockHeight && height > 0) {
+            width = height * pair.width / pair.height
+        } else if (view.cropLastAxis === "height" && height > 0) {
             width = height * pair.width / pair.height
         } else if (width > 0) {
             height = width * pair.height / pair.width
@@ -1299,16 +1478,30 @@ Item {
                 return
             }
             view.cropLockRatio = locked
-            if (locked && view.cropRatio === "free") {
-                // Locking a free shape freezes the one on screen; with no frame
-                // yet, the document's own shape is the honest starting point.
-                if (view.cropHasRect()) {
-                    view.cropRatio = view.reducedRatio(
-                                cropWidthField.pixels(),
-                                cropHeightField.pixels())
-                } else if (view.hasDocument) {
-                    view.cropRatio = view.reducedRatio(view.documentWidth,
-                                                       view.documentHeight)
+            if (locked) {
+                // Lock the ratio currently displayed in the field (or the
+                // current crop rectangle's ratio) — never snap back to the
+                // original document ratio when a current ratio exists.
+                var typed = (typeof cropRatioField !== "undefined" && cropRatioField !== null)
+                            ? cropRatioField.text.trim() : ""
+                var parsedTyped = view.parseRatio(typed)
+                if (parsedTyped) {
+                    if (Math.abs(parsedTyped.width - Math.round(parsedTyped.width)) < 1e-6
+                            && Math.abs(parsedTyped.height - Math.round(parsedTyped.height)) < 1e-6) {
+                        view.cropRatio = view.reducedRatio(Math.round(parsedTyped.width),
+                                                           Math.round(parsedTyped.height))
+                    } else {
+                        view.cropRatio = typed
+                    }
+                } else if (view.cropRatio === "free") {
+                    if (view.cropHasRect()) {
+                        view.cropRatio = view.reducedRatio(
+                                    cropWidthField.pixels(),
+                                    cropHeightField.pixels())
+                    } else if (view.hasDocument) {
+                        view.cropRatio = view.reducedRatio(view.documentWidth,
+                                                           view.documentHeight)
+                    }
                 }
                 view.syncCropRatioField()
             }
@@ -1446,21 +1639,14 @@ Item {
         if (!cropWidthField.acceptableInput) return
         var width = cropWidthField.pixels()
         if (!(width > 0)) return
-        var pair = view.cropRatioPair()
+        view.cropLastAxis = "width"
+        var pair = view.cropLockRatio ? view.cropRatioPair() : null
         var height = cropHeightField.acceptableInput ? cropHeightField.pixels() : 0
-        if (pair) {
-            if (view.cropLockHeight) {
-                // The locked side stays; the unlocked ratio follows the pair.
-                if (height > 0) view.setCropRatioFromPair(width, height)
-                var held = view.clampCropPair(width, height, false)
-                width = held.width
-                height = held.height
-            } else {
-                height = width * pair.height / pair.width
-                var linked = view.clampCropPair(width, height, true)
-                width = linked.width
-                height = linked.height
-            }
+        if (pair && !view.cropLockHeight) {
+            height = width * pair.height / pair.width
+            var linked = view.clampCropPair(width, height, true)
+            width = linked.width
+            height = linked.height
         } else {
             if (!(height > 0) || view.cropHeightAuto) {
                 height = width * view.documentHeight / view.documentWidth
@@ -1469,6 +1655,7 @@ Item {
             var free = view.clampCropPair(width, height, false)
             width = free.width
             height = free.height
+            if (width > 0 && height > 0) view.setCropRatioFromPair(width, height)
         }
         cropWidthField.setPixels(width)
         cropHeightField.setPixels(height)
@@ -1482,21 +1669,14 @@ Item {
         if (!cropHeightField.acceptableInput) return
         var height = cropHeightField.pixels()
         if (!(height > 0)) return
-        var pair = view.cropRatioPair()
+        view.cropLastAxis = "height"
+        var pair = view.cropLockRatio ? view.cropRatioPair() : null
         var width = cropWidthField.acceptableInput ? cropWidthField.pixels() : 0
-        if (pair) {
-            if (view.cropLockWidth) {
-                // The locked side stays; the unlocked ratio follows the pair.
-                if (width > 0) view.setCropRatioFromPair(width, height)
-                var held = view.clampCropPair(width, height, false)
-                width = held.width
-                height = held.height
-            } else {
-                width = height * pair.width / pair.height
-                var linked = view.clampCropPair(width, height, true)
-                width = linked.width
-                height = linked.height
-            }
+        if (pair && !view.cropLockWidth) {
+            width = height * pair.width / pair.height
+            var linked = view.clampCropPair(width, height, true)
+            width = linked.width
+            height = linked.height
         } else {
             view.cropHeightAuto = false
             if (!(width > 0) || view.cropWidthAuto) {
@@ -1506,6 +1686,7 @@ Item {
             var free = view.clampCropPair(width, height, false)
             width = free.width
             height = free.height
+            if (width > 0 && height > 0) view.setCropRatioFromPair(width, height)
         }
         cropWidthField.setPixels(width)
         cropHeightField.setPixels(height)
@@ -1783,44 +1964,53 @@ Item {
     }
 
     /// A drag on the empty canvas builds a rectangle from the press to the
-    /// pointer. With a ratio chosen, the shape is fitted to that ratio before
-    /// it is clamped to the document, so a square drag draws a square.
-    function dragCropCreate(startHostX, startHostY, hostX, hostY) {
+    /// pointer. With a ratio chosen (or Shift held for a 1:1 square), the shape
+    /// is fitted to that ratio before clamping. Alt grows symmetrically around
+    /// the press point; Ctrl snaps to document guides or 10 px steps.
+    function dragCropCreate(startHostX, startHostY, hostX, hostY, modifiers) {
         if (!view.documentReady) return
+        var mods = modifiers || 0
+        var shift = (mods & Qt.ShiftModifier) !== 0
+        var alt = (mods & Qt.AltModifier) !== 0
+        var ctrl = (mods & Qt.ControlModifier) !== 0
         var documentWidth = view.documentWidth
         var documentHeight = view.documentHeight
-        var startX = view.hostToDocX(startHostX)
-        var startY = view.hostToDocY(startHostY)
-        var endX = view.hostToDocX(hostX)
-        var endY = view.hostToDocY(hostY)
+        var startX = view.snapDocCoord(view.hostToDocX(startHostX), documentWidth, ctrl)
+        var startY = view.snapDocCoord(view.hostToDocY(startHostY), documentHeight, ctrl)
+        var endX = view.snapDocCoord(view.hostToDocX(hostX), documentWidth, ctrl)
+        var endY = view.snapDocCoord(view.hostToDocY(hostY), documentHeight, ctrl)
         if (!view.cropGrow()) {
             startX = Math.max(0, Math.min(documentWidth, startX))
             startY = Math.max(0, Math.min(documentHeight, startY))
             endX = Math.max(0, Math.min(documentWidth, endX))
             endY = Math.max(0, Math.min(documentHeight, endY))
         }
-        var width = Math.max(1, Math.abs(endX - startX))
-        var height = Math.max(1, Math.abs(endY - startY))
-        var aspect = view.cropRatioAspect()
+        var aspect = view.cropLockRatio ? view.cropRatioAspect() : 0
+        if (aspect <= 0 && shift) aspect = 1.0
+        var width = Math.max(1, alt ? Math.abs(endX - startX) * 2 : Math.abs(endX - startX))
+        var height = Math.max(1, alt ? Math.abs(endY - startY) * 2 : Math.abs(endY - startY))
         if (aspect > 0) {
             if (width / height > aspect) width = height * aspect
             else height = width / aspect
             if (view.cropGrow()) {
-                // The canvas can grow, so only the protocol's own size ceiling
-                // constrains a ratio-locked create-drag.
                 var cap = Math.min(1, 20000 / width, 20000 / height)
                 width *= cap
                 height *= cap
             } else {
-                var maxWidth = endX >= startX ? documentWidth - startX : startX
-                var maxHeight = endY >= startY ? documentHeight - startY : startY
-                var scale = Math.min(1, maxWidth / width, maxHeight / height)
+                var maxWidth = alt ? 2 * Math.min(startX, documentWidth - startX)
+                                   : (endX >= startX ? documentWidth - startX : startX)
+                var maxHeight = alt ? 2 * Math.min(startY, documentHeight - startY)
+                                    : (endY >= startY ? documentHeight - startY : startY)
+                var scale = Math.min(1, Math.max(1, maxWidth) / width, Math.max(1, maxHeight) / height)
                 width *= scale
                 height *= scale
             }
+        } else if (alt && !view.cropGrow()) {
+            width = Math.min(width, Math.max(1, 2 * Math.min(startX, documentWidth - startX)))
+            height = Math.min(height, Math.max(1, 2 * Math.min(startY, documentHeight - startY)))
         }
-        var x = endX >= startX ? startX : startX - width
-        var y = endY >= startY ? startY : startY - height
+        var x = alt ? startX - width / 2 : (endX >= startX ? startX : startX - width)
+        var y = alt ? startY - height / 2 : (endY >= startY ? startY : startY - height)
         view.cropHeightAuto = false
         view.cropWidthAuto = false
         view.setCropRect(x, y, width, height)
@@ -1876,37 +2066,45 @@ Item {
         cropY.setPixels(y)
         cropWidthField.setPixels(width)
         cropHeightField.setPixels(height)
+        if (!view.cropLockRatio && width > 0 && height > 0) {
+            view.setCropRatioFromPair(width, height)
+        }
         // Mirror the pair in the preset dropdown without re-applying it.
         cropPreset.currentIndex = view.matchingCropPreset()
         draftDebounce.restart()
     }
 
-    /// Drag one frame handle. The side the handle owns follows the pointer and
-    /// the opposite side stays put, so a corner drag never also moves the
-    /// rectangle. With a ratio chosen, a corner keeps the opposite corner fixed
-    /// and a side keeps the opposite side fixed while the other axis grows
-    /// around the rectangle's centre — the shape is never broken by a drag.
-    function dragCropHandle(column, row, hostX, hostY) {
+    /// Drag one crop frame handle. Supports the shared bounding-box modifiers:
+    /// Shift locks aspect ratio (using the panel ratio or the starting rect's
+    /// ratio), Alt resizes symmetrically around the centre, Ctrl snaps to
+    /// document guides / 10 px steps.
+    function dragCropHandle(column, row, hostX, hostY, modifiers, startRect) {
         if (!view.cropFrameShown) return
         if (!view.cropResizable) return
-        var rect = view.cropRect
+        var rect = startRect || view.cropRect
+        var mods = modifiers || 0
+        var shift = (mods & Qt.ShiftModifier) !== 0
+        var alt = (mods & Qt.AltModifier) !== 0
+        var ctrl = (mods & Qt.ControlModifier) !== 0
         var documentWidth = view.documentWidth
         var documentHeight = view.documentHeight
         var grow = view.cropGrow()
-        var x = rect.x
-        var y = rect.y
-        var width = rect.width
-        var height = rect.height
         var pointerX = view.hostToDocX(hostX)
         var pointerY = view.hostToDocY(hostY)
-        if (!grow) {
-            pointerX = Math.max(0, Math.min(documentWidth, pointerX))
-            pointerY = Math.max(0, Math.min(documentHeight, pointerY))
-        }
         // One locked axis leaves the other handle free: a left/right side is
         // pinned with Width, and a top/bottom side is pinned with Height. The
         // corners follow whichever axis is still free.
         if (view.cropLockWidth || view.cropLockHeight) {
+            pointerX = view.snapDocCoord(pointerX, documentWidth, ctrl)
+            pointerY = view.snapDocCoord(pointerY, documentHeight, ctrl)
+            if (!grow) {
+                pointerX = Math.max(0, Math.min(documentWidth, pointerX))
+                pointerY = Math.max(0, Math.min(documentHeight, pointerY))
+            }
+            var x = rect.x
+            var y = rect.y
+            var width = rect.width
+            var height = rect.height
             if (view.cropLockWidth) {
                 if (row === 1) return
                 if (row === 0) {
@@ -1943,116 +2141,24 @@ Item {
             }
             return
         }
-        var aspect = view.cropRatioAspect()
-        // A growing rectangle has no picture edge to stop at; only the
-        // protocol's own ceiling constrains it.
-        var sideLimit = 20000
-
-        if (aspect > 0) {
-            if (column !== 1 && row !== 1) {
-                // Corner: the opposite corner is the anchor.
-                var fixedX = column === 0 ? x + width : x
-                var fixedY = row === 0 ? y + height : y
-                var rawWidth = Math.max(1, Math.abs(pointerX - fixedX))
-                var rawHeight = Math.max(1, Math.abs(pointerY - fixedY))
-                if (rawWidth / rawHeight > aspect) rawWidth = rawHeight * aspect
-                else rawHeight = rawWidth / aspect
-                var limitWidth = grow
-                        ? sideLimit
-                        : (column === 0 ? fixedX : documentWidth - fixedX)
-                var limitHeight = grow
-                        ? sideLimit
-                        : (row === 0 ? fixedY : documentHeight - fixedY)
-                var scale = Math.min(1, limitWidth / rawWidth, limitHeight / rawHeight)
-                width = Math.max(1, Math.round(rawWidth * scale))
-                height = Math.max(1, Math.round(rawHeight * scale))
-                x = column === 0 ? Math.round(fixedX - width) : Math.round(fixedX)
-                y = row === 0 ? Math.round(fixedY - height) : Math.round(fixedY)
-            } else if (column !== 1) {
-                // Left or right side: the opposite side stays, the height grows
-                // around the rectangle's vertical centre.
-                var fixedXSide = column === 0 ? x + width : x
-                var centreY = y + height / 2
-                var edgeWidth = Math.max(1, Math.abs(pointerX - fixedXSide))
-                var edgeHeight = edgeWidth / aspect
-                var edgeLimitWidth = grow
-                        ? sideLimit
-                        : (column === 0 ? fixedXSide : documentWidth - fixedXSide)
-                var edgeScale = Math.min(1, edgeLimitWidth / edgeWidth,
-                                         (grow ? sideLimit : documentHeight) / edgeHeight)
-                width = Math.max(1, Math.round(edgeWidth * edgeScale))
-                height = Math.max(1, Math.round(edgeHeight * edgeScale))
-                x = column === 0 ? Math.round(fixedXSide - width) : Math.round(fixedXSide)
-                y = grow
-                        ? Math.round(centreY - height / 2)
-                        : Math.round(Math.max(0, Math.min(documentHeight - height,
-                                                            centreY - height / 2)))
-            } else {
-                // Top or bottom side: the opposite side stays, the width grows
-                // around the rectangle's horizontal centre.
-                var fixedYSide = row === 0 ? y + height : y
-                var centreX = x + width / 2
-                var edgeHeightSide = Math.max(1, Math.abs(pointerY - fixedYSide))
-                var edgeWidthSide = edgeHeightSide * aspect
-                var edgeLimitHeight = grow
-                        ? sideLimit
-                        : (row === 0 ? fixedYSide : documentHeight - fixedYSide)
-                var edgeScaleSide = Math.min(1, edgeLimitHeight / edgeHeightSide,
-                                             (grow ? sideLimit : documentWidth) / edgeWidthSide)
-                height = Math.max(1, Math.round(edgeHeightSide * edgeScaleSide))
-                width = Math.max(1, Math.round(edgeWidthSide * edgeScaleSide))
-                y = row === 0 ? Math.round(fixedYSide - height) : Math.round(fixedYSide)
-                x = grow
-                        ? Math.round(centreX - width / 2)
-                        : Math.round(Math.max(0, Math.min(documentWidth - width,
-                                                            centreX - width / 2)))
-            }
-            view.setCropRect(x, y, width, height)
-            return
-        }
-
-        if (column === 0) {
-            var left = grow
-                    ? Math.min(x + width - 1, pointerX)
-                    : Math.max(0, Math.min(x + width - 1, pointerX))
-            width = x + width - left
-            x = left
-        } else if (column === 2) {
-            var right = grow
-                    ? Math.max(x + 1, pointerX)
-                    : Math.max(x + 1, Math.min(documentWidth, pointerX))
-            width = right - x
-        }
-        if (row === 0) {
-            var top = grow
-                    ? Math.min(y + height - 1, pointerY)
-                    : Math.max(0, Math.min(y + height - 1, pointerY))
-            height = y + height - top
-            y = top
-        } else if (row === 2) {
-            var bottom = grow
-                    ? Math.max(y + 1, pointerY)
-                    : Math.max(y + 1, Math.min(documentHeight, pointerY))
-            height = bottom - y
-        }
-        view.setCropRect(x, y, width, height)
+        var aspect = view.cropLockRatio ? view.cropRatioAspect() : 0
+        var keepAspect = aspect > 0 || shift
+        var effectiveAspect = aspect > 0 ? aspect : (rect.height > 0 ? rect.width / rect.height : 1)
+        var next = view.computeBoxHandleDrag(rect, column, row, pointerX, pointerY, {
+            keepAspect: keepAspect,
+            aspect: effectiveAspect,
+            fromCenter: alt,
+            snap: ctrl,
+            clampToDoc: !grow,
+            maxDim: 20000
+        })
+        view.setCropRect(next.x, next.y, next.width, next.height)
     }
 
-    /// Ask Core to render the selected tool's draft without applying it. The
-    /// debounce keeps a drag from spawning a render per pixel: the previous
-    /// draft stays in the options until the newest one lands. Crop no longer has
-    /// a draft — its panel is the rectangle — and Transform's is always asked
-    /// for, because its preview is not an option (see `transformPreview`).
+    /// Draft preview hook (Crop draws its own frame and Transform previews live
+    /// on the GPU canvas without round-tripping Core).
     function requestDraft() {
         draftDebounce.stop()
-        if (!view.hasDocument) return
-        if (view.tool === "transform"
-                && view.transformUsable() && view.transformChanged()) {
-            view.command({
-                type: "editor_transform_preview",
-                corners: view.transformCorners
-            })
-        }
     }
 
     /// Raised by the empty state and the toolbar's open button; Main owns the
@@ -2202,27 +2308,21 @@ Item {
 
     /// True while the pointer rests on the canvas. The pan handler arms itself
     /// on it, so a drag that starts on a sidebar does not move the picture.
-    property bool panHover: false
+    property alias panHover: canvasHost.hovered
 
     // ------------------------------------------------ presentation transform
-    // Exactly the Viewer's model: Core knows nothing about it and it survives
-    // no command. 100 % means one document pixel per screen pixel, so the
-    // 2048 px preview texture costs sharpness at high zoom but never changes
-    // what the percentage means. `autoFit` keeps the picture fitted while the
-    // document's own size changes (rotate, crop, resize) and is dropped the
-    // moment the user chooses a zoom.
-    property real zoom: 1
-    property real offsetX: 0
-    property real offsetY: 0
-    property bool autoFit: true
+    // Shared through `ImageCanvas.qml`: Core knows nothing about it and it
+    // survives no command. Tight clamping (`panMargin = 0`) keeps fitted
+    // documents centred and restricts pan strictly to the document edges.
+    property alias zoom: canvasHost.zoom
+    property alias offsetX: canvasHost.offsetX
+    property alias offsetY: canvasHost.offsetY
+    property alias autoFit: canvasHost.autoFit
     /// False until the canvas host exists; the document's size handlers fire
     /// while the view is still being constructed.
     property bool hostReady: false
-    /// Where the last wheel landed, in canvas-host coordinates. Read by the
-    /// debug build's `KOGAVIEW_DEV_EDITOR_WHEEL` hook to prove the handler — not
-    /// a stand-in for it — received the event; nothing in the UI reads it.
-    property real lastWheelX: -1
-    property real lastWheelY: -1
+    property alias lastWheelX: canvasHost.lastWheelX
+    property alias lastWheelY: canvasHost.lastWheelY
 
     readonly property string documentPath: editor ? (editor.path || "") : ""
     readonly property real documentWidth: hasDocument ? editor.width : 0
@@ -2252,15 +2352,95 @@ Item {
     /// pointer-handler events to items under a popup overlay, and a wheel or a
     /// drag behind a modal form would move a picture the user cannot see.
     readonly property bool resizeDialogOpen: resizeDialog.visible
+    readonly property bool canvasSizeDialogOpen: canvasSizeDialog.visible
 
-    /// Open Resize's dialog. Resize is a question about the document, not a
-    /// canvas mode, so any armed tool is put down first: a crop frame left
-    /// underneath a modal form would be dragged by the same pointer events the
-    /// dialog is meant to own.
+    // Custom live rotate state (clockwise degrees, -180..+180). Uses the
+    // Editor's shared background colour directly.
+    property real rotateAngle: 0
+    readonly property bool rotateFrameShown: view.tool === "rotate" && view.documentReady
+    readonly property real rotatedWidth: {
+        if (!view.hasDocument) return 0
+        var rad = view.rotateAngle * Math.PI / 180
+        return Math.max(1, Math.min(16384, Math.ceil(
+            Math.abs(view.documentWidth * Math.cos(rad))
+            + Math.abs(view.documentHeight * Math.sin(rad)))))
+    }
+    readonly property real rotatedHeight: {
+        if (!view.hasDocument) return 0
+        var rad = view.rotateAngle * Math.PI / 180
+        return Math.max(1, Math.min(16384, Math.ceil(
+            Math.abs(view.documentWidth * Math.sin(rad))
+            + Math.abs(view.documentHeight * Math.cos(rad)))))
+    }
+    function rotateHasChange() {
+        var norm = ((view.rotateAngle % 360) + 360) % 360
+        return norm > 0.01 && (360 - norm) > 0.01
+    }
+    function applyRotateAngle() {
+        if (!view.documentReady || !view.rotateHasChange()) return
+        view.command({
+            type: "editor_rotate_angle",
+            degrees: view.rotateAngle,
+            fill: view.backgroundTransparent ? null : view.backgroundBytes(),
+            fill_alpha: view.backgroundAlpha()
+        })
+        view.rotateAngle = 0
+    }
+
+    readonly property bool resizeFrameShown: view.tool === "resize" && view.documentReady && resizeOptionsPanel.valid
+    readonly property bool canvasSizeFrameShown: view.tool === "canvasSize" && view.documentReady && canvasSizeOptionsPanel.valid
+
+    function applyResizePanel() {
+        if (!view.documentReady || !resizeOptionsPanel.changed) return
+        var isPad = resizeOptionsPanel.fitMode === "pad"
+        view.command({
+            type: "editor_resize",
+            width: resizeOptionsPanel.targetWidth,
+            height: resizeOptionsPanel.targetHeight,
+            mode: resizeOptionsPanel.fitMode,
+            filter: resizeOptionsPanel.filter,
+            fill: isPad && !view.backgroundTransparent ? view.backgroundBytes() : null,
+            fill_alpha: isPad ? view.backgroundAlpha() : 255
+        })
+        view.tool = "pointer"
+    }
+
+    function applyCanvasSizePanel() {
+        if (!view.documentReady || !canvasSizeOptionsPanel.changed) return
+        view.command({
+            type: "editor_canvas_size",
+            width: canvasSizeOptionsPanel.targetWidth,
+            height: canvasSizeOptionsPanel.targetHeight,
+            anchor: canvasSizeOptionsPanel.anchor,
+            fill: view.backgroundTransparent ? null : view.backgroundBytes(),
+            fill_alpha: view.backgroundAlpha()
+        })
+        view.tool = "pointer"
+    }
+
+    function applyColorAdjust() {
+        if (!view.documentReady || !adjustOptionsPanel.changed) return
+        view.command({
+            type: "editor_adjust_color",
+            brightness: adjustOptionsPanel.brightness,
+            contrast: adjustOptionsPanel.contrast,
+            saturation: adjustOptionsPanel.saturation
+        })
+        adjustOptionsPanel.reset()
+    }
+
     function openResizeDialog() {
         if (!view.documentReady) return
-        view.tool = "pointer"
-        resizeDialog.open()
+        resizeOptionsPanel.reset()
+        view.tool = view.tool === "resize" ? "pointer" : "resize"
+        view.forceActiveFocus()
+    }
+
+    function openCanvasSizeDialog() {
+        if (!view.documentReady) return
+        canvasSizeOptionsPanel.reset()
+        view.tool = view.tool === "canvasSize" ? "pointer" : "canvasSize"
+        view.forceActiveFocus()
     }
     /// What the canvas draws: the draft while Transform has one, the document
     /// otherwise. The draft keeps the document's size (a warp is remapped onto
@@ -2269,20 +2449,12 @@ Item {
     readonly property real displayedWidth: transformPreview ? transformPreview.width : documentWidth
     readonly property real displayedHeight: transformPreview ? transformPreview.height : documentHeight
 
-    // The document is drawn by a scaled `Image`, so a point in document pixels
-    // sits `x * zoom` from the picture's visual corner. `Image.scale` grows
-    // around the item's centre, so the origin is the item's own x plus half the
-    // shrink/grow the scale caused. These three functions are the only place
-    // the conversion lives: the transform quad and the crop frame both use
-    // them, and neither can drift from the picture.
-    readonly property real canvasOriginX:
-        canvas.x + canvas.width / 2 * (1 - canvas.scale)
-    readonly property real canvasOriginY:
-        canvas.y + canvas.height / 2 * (1 - canvas.scale)
-    function docToHostX(value) { return view.canvasOriginX + value * view.zoom }
-    function docToHostY(value) { return view.canvasOriginY + value * view.zoom }
-    function hostToDocX(value) { return view.zoom > 0 ? (value - view.canvasOriginX) / view.zoom : 0 }
-    function hostToDocY(value) { return view.zoom > 0 ? (value - view.canvasOriginY) / view.zoom : 0 }
+    readonly property real canvasOriginX: canvasHost.canvasOriginX
+    readonly property real canvasOriginY: canvasHost.canvasOriginY
+    function docToHostX(value) { return canvasHost.docToHostX(value) }
+    function docToHostY(value) { return canvasHost.docToHostY(value) }
+    function hostToDocX(value) { return canvasHost.hostToDocX(value) }
+    function hostToDocY(value) { return canvasHost.hostToDocY(value) }
 
     function sizeLabel() {
         if (!hasDocument) return "—"
@@ -2291,111 +2463,25 @@ Item {
 
     readonly property int zoomPercent: Math.round(view.zoom * 100)
 
-    function setZoom(value) {
-        view.zoom = Math.max(0.02, Math.min(16, value));
-        view.autoFit = false;
-        view.clampOffsets();
-    }
-
-    /// How far a corner of the picture may travel past the canvas edge before
-    /// the clamp stops it: enough to clear the canvas, no more. With this
-    /// margin a picture smaller than the viewport can still be dragged aside
-    /// (the user asked for a pan that does not depend on the picture being
-    /// larger than the window), and one larger than the viewport keeps a few
-    /// pixels of context instead of ending flush at its edge.
-    readonly property real panMargin: 64
-
-    /// Keep the picture reachable rather than pinned.
-    ///
-    /// A picture wider than the canvas may be dragged until its far edge meets
-    /// the canvas edge plus [`panMargin`]; one narrower than the canvas may be
-    /// dragged until it is almost off the canvas, which is what makes a pan
-    /// feel free instead of snapping back to the centre. The previous rule
-    /// pinned each axis that did not overflow to 0, so a 2400 × 1600 photo in a
-    /// 786 × 736 host could be panned left and right but not up and down.
-    function clampOffsets() {
-        if (!hostReady) return
-        var shownX = displayedWidth * view.zoom
-        var shownY = displayedHeight * view.zoom
-        var maxX = Math.max(0, (shownX - canvasHost.width) / 2) + view.panMargin
-        var maxY = Math.max(0, (shownY - canvasHost.height) / 2) + view.panMargin
-        view.offsetX = Math.max(-maxX, Math.min(maxX, view.offsetX))
-        view.offsetY = Math.max(-maxY, Math.min(maxY, view.offsetY))
-    }
-
-    function fit() {
-        if (!hasDocument || !hostReady || canvasHost.width <= 0 || canvasHost.height <= 0) {
-            return
-        }
-        var pad = 32
-        view.zoom = Math.max(0.02, Math.min(16,
-            Math.min((canvasHost.width - pad) / displayedWidth,
-                     (canvasHost.height - pad) / displayedHeight)))
-        view.offsetX = 0
-        view.offsetY = 0
-        view.autoFit = true
-    }
-
-    /// Fit the document to the canvas and *stay* fitted: the host resize
-    /// handler below keeps it whole while the window is dragged.
-    function refitOrClamp() {
-        if (view.autoFit) view.fit()
-        else view.clampOffsets()
-    }
-
-    function actualSize() {
-        if (!hasDocument) return
-        view.offsetX = 0
-        view.offsetY = 0
-        view.setZoom(1)
-    }
-
-    function zoomIn() {
-        view.setZoom(view.zoom * 1.25)
-    }
-
-    function zoomOut() {
-        view.setZoom(view.zoom / 1.25)
-    }
-
-    /// Zoom with the document point under the cursor nailed to the cursor.
-    /// `pointX`/`pointY` are in canvas-host coordinates.
-    function zoomAt(factor, pointX, pointY) {
-        if (!hasDocument) return
-        var previous = view.zoom > 0 ? view.zoom : 1
-        var next = Math.max(0.02, Math.min(16, previous * factor))
-        if (Math.abs(next - previous) < 0.000001) {
-            return
-        }
-        var centerX = canvasHost.width / 2 + view.offsetX
-        var centerY = canvasHost.height / 2 + view.offsetY
-        var shift = 1 - next / previous
-        view.offsetX += (pointX - centerX) * shift
-        view.offsetY += (pointY - centerY) * shift
-        view.zoom = next
-        view.autoFit = false
-        view.clampOffsets()
-    }
-
-    /// Double-click: fitted <-> actual size.
-    function toggleZoom() {
-        if (!hasDocument) return
-        if (view.autoFit) {
-            view.actualSize()
-        } else {
-            view.fit()
-        }
-    }
+    function setZoom(value) { canvasHost.setZoom(value) }
+    function clampOffsets() { if (hostReady) canvasHost.clampOffsets() }
+    function fit() { if (hasDocument && hostReady) canvasHost.fit() }
+    function refitOrClamp() { if (hostReady) canvasHost.refitOrClamp() }
+    function actualSize() { if (hasDocument) canvasHost.actualSize() }
+    function zoomIn() { canvasHost.zoomIn() }
+    function zoomOut() { canvasHost.zoomOut() }
+    function zoomAt(factor, pointX, pointY) { if (hasDocument) canvasHost.zoomAt(factor, pointX, pointY) }
+    function toggleZoom() { if (hasDocument) canvasHost.toggleZoom() }
 
     onDocumentPathChanged: {
         view.autoFit = true
-        view.zoom = 1
         view.offsetX = 0
         view.offsetY = 0
         // A different document is not the result of the crop that was pending.
         view.pendingCropResult = null
-        if (view.hostReady) {
+        if (view.hostReady && view.hasDocument) {
             view.fit()
+            Qt.callLater(view.fit)
         }
     }
 
@@ -2415,10 +2501,11 @@ Item {
         // away and then arms a tool gets the panel back; the pointer is the
         // no-op tool, so it never forces the panel open. Panel visibility is
         // Core's layout, so asking for it is a patch, not a local write.
-        if (view.tool !== "pointer" && !view.toolOptionsVisible)
+        if (view.tool !== "pointer" && view.tool !== "hand" && !view.toolOptionsVisible)
             view.layoutRequested({ panels: { "editor.options": true } })
         if (view.tool === "transform") view.resetTransformCorners()
         if (view.tool === "crop") view.enterCropTool()
+        if (view.tool === "rotate") view.rotateAngle = 0
     }
     onCropRatioChanged: view.syncCropRatioField()
     // The document changing size (another edit, a new file, an applied crop)
@@ -2456,11 +2543,11 @@ Item {
         if (view.cropFieldsValid()) return
         var rect = view.cropRect
         var pair = view.clampCropPair(rect.width, rect.height,
-                                      view.cropRatio !== "free")
+                                      view.cropLockRatio && view.cropRatio !== "free")
         view.setCropRect(Math.max(0, Math.min(rect.x, view.documentWidth - pair.width)),
                          Math.max(0, Math.min(rect.y, view.documentHeight - pair.height)),
                          pair.width, pair.height)
-        if (view.cropRatio !== "free") view.applyCropRatio()
+        if (view.cropLockRatio && view.cropRatio !== "free") view.applyCropRatio()
     }
 
     /// The debounce behind the live preview: typing a width must not render the
@@ -2492,8 +2579,9 @@ Item {
     // ------------------------------------------------------------ editor menu
     // The long label serves as the width probe: a regression that cuts labels
     // shows up as "Crop to selection…" losing its ellipsis.
-    Menu {
+    AppMenu {
         id: contextMenu
+        theme: view.theme
         implicitWidth: view.theme.menuWidth(view.theme.menuLabelWidths,
                                             view.theme.menuShortcutWidths)
 
@@ -2816,16 +2904,39 @@ Item {
                         iconSource: "icons/pointer.svg"
                         tooltip: qsTr("Pointer")
                         active: view.tool === "pointer"
-                        onClicked: view.tool = "pointer"
+                        onClicked: {
+                            view.tool = "pointer"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolHand"
+                        theme: view.theme
+                        iconSource: "icons/hand.svg"
+                        tooltip: qsTr("Hand (H)")
+                        active: view.tool === "hand"
+                        onClicked: {
+                            view.tool = "hand"
+                            view.forceActiveFocus()
+                        }
                     }
                     ToolRailButton {
                         objectName: "toolResize"
                         theme: view.theme
                         iconSource: "icons/resize.svg"
                         tooltip: qsTr("Resize…")
-                        active: view.resizeDialogOpen
+                        active: view.tool === "resize"
                         enabled: view.documentReady
                         onClicked: view.openResizeDialog()
+                    }
+                    ToolRailButton {
+                        objectName: "toolCanvasSize"
+                        theme: view.theme
+                        iconSource: "icons/canvas-size.svg"
+                        tooltip: qsTr("Canvas size…")
+                        active: view.tool === "canvasSize"
+                        enabled: view.documentReady
+                        onClicked: view.openCanvasSizeDialog()
                     }
                     ToolRailButton {
                         objectName: "toolCrop"
@@ -2834,7 +2945,10 @@ Item {
                         tooltip: qsTr("Crop")
                         active: view.tool === "crop"
                         enabled: view.documentReady
-                        onClicked: view.tool = view.tool === "crop" ? "pointer" : "crop"
+                        onClicked: {
+                            view.tool = view.tool === "crop" ? "pointer" : "crop"
+                            view.forceActiveFocus()
+                        }
                     }
                     ToolRailButton {
                         objectName: "toolTransform"
@@ -2843,31 +2957,33 @@ Item {
                         tooltip: qsTr("Straighten the picture by dragging the frame's corners and edges")
                         active: view.tool === "transform"
                         enabled: view.documentReady
-                        onClicked: view.tool = view.tool === "transform" ? "pointer" : "transform"
-                    }
-                    // Krita's freehand brush and eraser are one paint engine with
-                    // two modes, so they are two buttons over one `paint` tool.
-                    ToolRailButton {
-                        objectName: "toolBrush"
-                        theme: view.theme
-                        iconSource: "icons/brush.svg"
-                        tooltip: qsTr("Paint freehand (B)")
-                        active: view.tool === "paint" && view.paintMode === "brush"
-                        enabled: view.documentReady
                         onClicked: {
-                            view.selectPaintMode("brush")
+                            view.tool = view.tool === "transform" ? "pointer" : "transform"
                             view.forceActiveFocus()
                         }
                     }
                     ToolRailButton {
-                        objectName: "toolEraser"
+                        objectName: "toolRotateAngle"
                         theme: view.theme
-                        iconSource: "icons/eraser.svg"
-                        tooltip: qsTr("Erase with the brush (E)")
-                        active: view.tool === "paint" && view.paintMode === "eraser"
+                        iconSource: "icons/rotate-angle.svg"
+                        tooltip: qsTr("Rotate by angle")
+                        active: view.tool === "rotate"
                         enabled: view.documentReady
                         onClicked: {
-                            view.selectPaintMode("eraser")
+                            view.tool = view.tool === "rotate" ? "pointer" : "rotate"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolAdjust"
+                        theme: view.theme
+                        iconSource: "icons/adjust.svg"
+                        tooltip: qsTr("Color & light")
+                        active: view.tool === "adjust"
+                        enabled: view.documentReady
+                        onClicked: {
+                            adjustOptionsPanel.reset()
+                            view.tool = view.tool === "adjust" ? "pointer" : "adjust"
                             view.forceActiveFocus()
                         }
                     }
@@ -2966,6 +3082,38 @@ Item {
                     }
                 }
 
+                // Canvas background swatch: full width of the rail (2 columns
+                // wide in normal mode, 1 column in compact mode), directly below
+                // the foreground/background pair.
+                Rectangle {
+                    id: canvasBgSwatch
+                    objectName: "canvasBgSwatch"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 22
+                    radius: view.theme.radius
+                    color: (!view.canvasBgUseTheme && view.canvasBgChecker)
+                           ? "transparent"
+                           : (view.canvasBgUseTheme ? view.theme.thumb : view.canvasBgColor)
+                    border.width: 1
+                    border.color: canvasBgHover.hovered ? view.theme.accent : view.theme.border
+                    clip: true
+
+                    Checkerboard {
+                        anchors.fill: parent
+                        visible: !view.canvasBgUseTheme && view.canvasBgChecker
+                    }
+                    HoverHandler { id: canvasBgHover; cursorShape: Qt.PointingHandCursor }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: qsTr("Canvas background")
+                        onClicked: view.openCanvasBgPopup(canvasBgSwatch)
+                    }
+                }
+
                 Item { Layout.fillHeight: true }
 
                 // The rail's own width is its one control: no splitter, because
@@ -2983,120 +3131,340 @@ Item {
         }
 
         // ------------------------------------------------------------- canvas
-        Rectangle {
+        ImageCanvas {
             id: canvasHost
             objectName: "editorCanvasHost"
+            wheelHandlerName: "editorWheelHandler"
+            panHandlerName: "editorPanHandler"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            color: view.theme.thumb
-            // Resizing the window (or the sidebar) resizes the canvas, not the
-            // document: a fitted document must refit, a hand-zoomed one only
-            // re-clamp. This is what kept a fitted picture at its old scale
-            // after the window grew or shrank.
-            onWidthChanged: view.refitOrClamp()
-            onHeightChanged: view.refitOrClamp()
+            color: view.canvasBgUseTheme
+                   ? view.theme.thumb
+                   : (view.canvasBgChecker ? "transparent" : view.canvasBgColor)
+            hasContent: view.hasDocument
+            contentWidth: view.displayedWidth
+            contentHeight: view.displayedHeight
+            minZoom: 0.02
+            maxZoom: 16
+            fitPadding: 32
+            fitScaleFactor: 1.0
+            fitCapAtOne: true
+            roundPosition: true
+            // Allow Krita-style free pan with Hand tool or Space even when fitted,
+            // while keeping the image reachable inside the viewport.
+            panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
+            inputBlocked: view.resizeDialogOpen || view.canvasSizeDialogOpen
+                          || foregroundColorDialog.visible || backgroundColorDialog.visible
+                          || canvasBgColorDialog.visible
+            requireHoverToPan: true
+            allowLeftPan: view.tool === "hand" || view.spacePanning
+            allowMiddlePan: true
+            allowDoubleTapZoom: (view.tool === "pointer" || view.tool === "hand") && !view.spacePanning
+
+            // Full-viewport checkerboard when the user explicitly selects
+            // checkerboard as the canvas backdrop.
+            Checkerboard {
+                objectName: "editorViewportCheckerboard"
+                anchors.fill: parent
+                square: 12
+                visible: !view.canvasBgUseTheme && view.canvasBgChecker
+            }
+
+            // Document backdrop: checkerboard, white, black, or custom colour
+            // drawn behind the picture so transparent pixels stay visible.
+            Item {
+                id: canvasBackdrop
+                objectName: "canvasBackdrop"
+                visible: view.hasDocument && !view.transformFrameShown && !view.rotateFrameShown
+                         && !view.resizeFrameShown && !view.canvasSizeFrameShown
+                x: view.docToHostX(0)
+                y: view.docToHostY(0)
+                width: Math.max(1, view.displayedWidth * view.zoom)
+                height: Math.max(1, view.displayedHeight * view.zoom)
+                clip: true
+
+                Checkerboard {
+                    anchors.fill: parent
+                    square: 10
+                    visible: view.canvasBgUseTheme || view.canvasBgChecker
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    visible: !view.canvasBgUseTheme && !view.canvasBgChecker
+                    color: view.canvasBgColor
+                }
+            }
 
             Image {
                 id: canvas
                 objectName: "canvas"
+                // While Transform, Rotate, Resize or Canvas Size is armed,
+                // its live GPU preview layer draws directly on the canvas at 60 fps.
+                visible: !view.transformFrameShown && !view.rotateFrameShown
+                         && !view.resizeFrameShown && !view.canvasSizeFrameShown
                 width: Math.max(1, view.displayedWidth)
                 height: Math.max(1, view.displayedHeight)
-                scale: view.zoom
-                // A whole pixel, so the picture's edges land on the device
-                // grid at 100 % and a document coordinate maps to the pixel
-                // under the pointer instead of straddling two. Without this a
-                // centred picture at an odd host width sat at `x.5`, and a
-                // crop dragged from document pixel 10 started at 11.
-                x: Math.round((canvasHost.width - width) / 2 + view.offsetX)
-                y: Math.round((canvasHost.height - height) / 2 + view.offsetY)
-                // The preview is already encoded at the document aspect ratio;
-                // the item is the document coordinate system and its scale is
-                // purely presentation state.
+                scale: canvasHost.zoom
+                x: canvasHost.itemX
+                y: canvasHost.itemY
                 fillMode: Image.Stretch
                 asynchronous: false
                 cache: false
-                source: view.transformPreview
-                        ? "file://" + view.transformPreview.path
-                        : (view.editor && view.editor.previewPath
-                           ? "file://" + view.editor.previewPath
-                           : "")
+                source: view.editor && view.editor.previewPath
+                        ? "file://" + view.editor.previewPath
+                        : ""
+                // Live 60 fps GPU preview when the Color & light tool is active.
+                layer.enabled: view.tool === "adjust" && adjustOptionsPanel.changed
+                layer.effect: MultiEffect {
+                    brightness: adjustOptionsPanel.brightness
+                    contrast: adjustOptionsPanel.contrast
+                    saturation: adjustOptionsPanel.saturation
+                }
+                onStatusChanged: {
+                    if (status === Image.Ready && view.autoFit && view.hostReady) {
+                        view.fit()
+                    }
+                }
                 opacity: view.rendering ? 0.65 : 1.0
                 Behavior on opacity {
                     NumberAnimation { duration: 120 }
                 }
             }
 
-            WheelHandler {
-                objectName: "editorWheelHandler"
-                acceptedDevices: PointerDevice.AllDevices
-                // A modal form owns the pointer while it is up: pointer-handler
-                // delivery still reaches handlers under a popup overlay, and a
-                // wheel behind the form would zoom a picture the user is not
-                // looking at.
-                enabled: !view.resizeDialogOpen
-                onWheel: function(event) {
-                    if (!view.hasDocument) return;
-                    var factor = 1;
-                    if (event.angleDelta.y !== 0) {
-                        factor = Math.pow(1.0015, event.angleDelta.y);
-                    } else if (event.pixelDelta.y !== 0) {
-                        factor = Math.pow(1.01, event.pixelDelta.y);
-                    } else {
-                        return;
+            // Live 60 fps GPU preview for Resize (Stretch / Cover / Pad).
+            Item {
+                id: resizeCanvasLayer
+                objectName: "resizeCanvasLayer"
+                anchors.fill: parent
+                visible: view.resizeFrameShown
+
+                readonly property real previewW: Math.max(1, resizeOptionsPanel.targetWidth * view.zoom)
+                readonly property real previewH: Math.max(1, resizeOptionsPanel.targetHeight * view.zoom)
+
+                Item {
+                    x: Math.round(canvasHost.width / 2 + canvasHost.offsetX - resizeCanvasLayer.previewW / 2)
+                    y: Math.round(canvasHost.height / 2 + canvasHost.offsetY - resizeCanvasLayer.previewH / 2)
+                    width: resizeCanvasLayer.previewW
+                    height: resizeCanvasLayer.previewH
+                    clip: true
+
+                    Checkerboard {
+                        anchors.fill: parent
+                        square: 10
+                        visible: resizeOptionsPanel.fitMode === "pad"
+                                 ? view.backgroundTransparent
+                                 : (view.canvasBgUseTheme || view.canvasBgChecker)
                     }
-                    factor = Math.max(0.5, Math.min(2, factor));
-                    view.lastWheelX = event.x;
-                    view.lastWheelY = event.y;
-                    view.zoomAt(factor, event.x, event.y);
-                    event.accepted = true;
-                }
-            }
-
-            DragHandler {
-                id: editorPan
-                objectName: "editorPanHandler"
-                target: null
-                // Arm on the picture only: a drag that begins on a sidebar or
-                // a scroll view must keep scrolling. While Crop or Transform
-                // is armed the left button belongs to the overlay's own
-                // handles and the frame, and while Paint is armed it belongs
-                // to the brush; the middle button still pans in all three
-                // cases. Holding Space hands Paint's left button back to the
-                // pan, the way Krita does. The Resize dialog is modal, so no
-                // button pans behind it.
-                enabled: view.panHover && !view.resizeDialogOpen
-                acceptedDevices: PointerDevice.AllDevices
-                acceptedButtons: (view.tool === "crop" || view.tool === "transform"
-                                  || (view.tool === "paint" && !view.spacePanning))
-                                 ? Qt.MiddleButton
-                                 : (Qt.LeftButton | Qt.MiddleButton)
-                property real startX: 0
-                property real startY: 0
-
-                onActiveChanged: {
-                    if (active) {
-                        startX = view.offsetX;
-                        startY = view.offsetY;
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: resizeOptionsPanel.fitMode === "pad"
+                                 ? !view.backgroundTransparent
+                                 : (!view.canvasBgUseTheme && !view.canvasBgChecker)
+                        color: resizeOptionsPanel.fitMode === "pad"
+                               ? view.backgroundColor
+                               : view.canvasBgColor
+                    }
+                    Image {
+                        anchors.fill: parent
+                        source: canvas.source
+                        asynchronous: false
+                        cache: false
+                        smooth: resizeOptionsPanel.filter !== "nearest"
+                        fillMode: resizeOptionsPanel.fitMode === "cover"
+                                  ? Image.PreserveAspectCrop
+                                  : (resizeOptionsPanel.fitMode === "pad"
+                                     ? Image.PreserveAspectFit
+                                     : Image.Stretch)
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "transparent"
+                        border.width: 1.5
+                        border.color: view.theme.accent
                     }
                 }
-                onTranslationChanged: {
-                    view.offsetX = startX + translation.x;
-                    view.offsetY = startY + translation.y;
-                    view.clampOffsets();
+            }
+
+            // Live 60 fps GPU preview for Canvas Size (anchor-positioned image
+            // inside the new canvas dimensions, using the shared background).
+            Item {
+                id: canvasSizeLayer
+                objectName: "canvasSizeLayer"
+                anchors.fill: parent
+                visible: view.canvasSizeFrameShown
+
+                readonly property real targetW: Math.max(1, canvasSizeOptionsPanel.targetWidth * view.zoom)
+                readonly property real targetH: Math.max(1, canvasSizeOptionsPanel.targetHeight * view.zoom)
+                readonly property real frameX: Math.round(canvasHost.width / 2 + canvasHost.offsetX - targetW / 2)
+                readonly property real frameY: Math.round(canvasHost.height / 2 + canvasHost.offsetY - targetH / 2)
+
+                // Dimmed ghost of original image so cropped edges stay visible when shrinking.
+                Image {
+                    x: canvasSizeLayer.frameX + canvasSizeOptionsPanel.imageOffsetX * view.zoom
+                    y: canvasSizeLayer.frameY + canvasSizeOptionsPanel.imageOffsetY * view.zoom
+                    width: Math.max(1, view.displayedWidth * view.zoom)
+                    height: Math.max(1, view.displayedHeight * view.zoom)
+                    source: canvas.source
+                    asynchronous: false
+                    cache: false
+                    fillMode: Image.Stretch
+                    opacity: 0.25
+                }
+
+                Item {
+                    x: canvasSizeLayer.frameX
+                    y: canvasSizeLayer.frameY
+                    width: canvasSizeLayer.targetW
+                    height: canvasSizeLayer.targetH
+                    clip: true
+
+                    Checkerboard {
+                        anchors.fill: parent
+                        square: 10
+                        visible: view.backgroundTransparent
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: !view.backgroundTransparent
+                        color: view.backgroundColor
+                    }
+                    Image {
+                        x: canvasSizeOptionsPanel.imageOffsetX * view.zoom
+                        y: canvasSizeOptionsPanel.imageOffsetY * view.zoom
+                        width: Math.max(1, view.displayedWidth * view.zoom)
+                        height: Math.max(1, view.displayedHeight * view.zoom)
+                        source: canvas.source
+                        asynchronous: false
+                        cache: false
+                        fillMode: Image.Stretch
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "transparent"
+                        border.width: 1.5
+                        border.color: view.theme.accent
+                    }
                 }
             }
 
-            HoverHandler {
-                id: canvasHover
-                onHoveredChanged: view.panHover = hovered
+            // Live 60 fps GPU preview for Transform (Free Transform and Scale
+            // Canvas). Uses the same <= 2048 px preview texture as `canvas` so
+            // even 50 MP documents transform smoothly; full-resolution pixels
+            // are only resampled by Core when Apply is pressed.
+            Item {
+                id: transformCanvasLayer
+                objectName: "transformCanvasLayer"
+                anchors.fill: parent
+                visible: view.transformFrameShown
+
+                readonly property var activeRect: view.transformRect()
+                                                  || ({ x: 0, y: 0,
+                                                        width: view.documentWidth,
+                                                        height: view.documentHeight })
+
+                // Free Transform: fixed document frame with background fill
+                // (or checkerboard) behind the transformed image, clipped to
+                // the document bounds.
+                Item {
+                    id: freeTransformFrame
+                    objectName: "freeTransformFrame"
+                    visible: view.transformMode === "free"
+                    clip: true
+                    x: view.docToHostX(0)
+                    y: view.docToHostY(0)
+                    width: Math.max(1, view.documentWidth * view.zoom)
+                    height: Math.max(1, view.documentHeight * view.zoom)
+
+                    Checkerboard {
+                        anchors.fill: parent
+                        visible: view.backgroundTransparent
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: !view.backgroundTransparent
+                        color: view.backgroundColor
+                    }
+                    Image {
+                        id: freeTransformImage
+                        objectName: "freeTransformImage"
+                        x: transformCanvasLayer.activeRect.x * view.zoom
+                        y: transformCanvasLayer.activeRect.y * view.zoom
+                        width: Math.max(1, transformCanvasLayer.activeRect.width * view.zoom)
+                        height: Math.max(1, transformCanvasLayer.activeRect.height * view.zoom)
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: canvas.source
+                    }
+                }
+
+                // Scale Canvas: the image scales directly to the bounding box
+                // at the current zoom without triggering `autoFit`.
+                Image {
+                    id: scaleTransformImage
+                    objectName: "scaleTransformImage"
+                    visible: view.transformMode === "scale"
+                    x: view.docToHostX(transformCanvasLayer.activeRect.x)
+                    y: view.docToHostY(transformCanvasLayer.activeRect.y)
+                    width: Math.max(1, transformCanvasLayer.activeRect.width * view.zoom)
+                    height: Math.max(1, transformCanvasLayer.activeRect.height * view.zoom)
+                    fillMode: Image.Stretch
+                    asynchronous: false
+                    cache: false
+                    source: canvas.source
+                }
             }
 
-            // A middle-click drag pans as well, the way every viewer does it.
-            TapHandler {
-                acceptedButtons: Qt.LeftButton
-                enabled: !view.resizeDialogOpen
-                onDoubleTapped: view.toggleZoom()
+            // Live 60 fps GPU preview for Custom Rotate: expands the background
+            // canvas to the rotated bounding box using the Editor's shared background.
+            Item {
+                id: rotateCanvasLayer
+                objectName: "rotateCanvasLayer"
+                anchors.fill: parent
+                visible: view.rotateFrameShown
+
+                readonly property real centerX: view.docToHostX(view.documentWidth / 2)
+                readonly property real centerY: view.docToHostY(view.documentHeight / 2)
+                readonly property real boxW: Math.max(1, view.rotatedWidth * view.zoom)
+                readonly property real boxH: Math.max(1, view.rotatedHeight * view.zoom)
+
+                Item {
+                    id: rotateBoundsFrame
+                    objectName: "rotateBoundsFrame"
+                    x: rotateCanvasLayer.centerX - width / 2
+                    y: rotateCanvasLayer.centerY - height / 2
+                    width: rotateCanvasLayer.boxW
+                    height: rotateCanvasLayer.boxH
+                    clip: true
+
+                    Checkerboard {
+                        anchors.fill: parent
+                        visible: view.backgroundTransparent
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        visible: !view.backgroundTransparent
+                        color: view.backgroundColor
+                    }
+                    Image {
+                        id: rotatePreviewImage
+                        objectName: "rotatePreviewImage"
+                        anchors.centerIn: parent
+                        width: Math.max(1, view.documentWidth * view.zoom)
+                        height: Math.max(1, view.documentHeight * view.zoom)
+                        rotation: view.rotateAngle
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: canvas.source
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "transparent"
+                        border.width: 1
+                        border.color: view.theme.accent
+                    }
+                }
             }
 
             // Only the picture is clickable, so a click on the empty canvas
@@ -3128,12 +3496,10 @@ Item {
                     id: cropOverlay
                     objectName: "cropOverlay"
                     anchors.fill: parent
-                    // Same gate as the frame: while the crop draft is on the
-                    // canvas, dragging would read the result's coordinates as
-                    // if they were the source's, and a new rectangle would be
-                    // placed inside the preview instead of the picture.
+                    // Space-panning takes priority over crop frame creation and
+                    // handle drags (Krita-style navigation).
                     visible: view.tool === "crop" && view.documentReady
-                    enabled: visible
+                    enabled: visible && !view.spacePanning
 
                     // The picture outside the rectangle is dimmed, the way a
                     // crop tool shows what is about to be discarded. It covers
@@ -3312,7 +3678,7 @@ Item {
                                     && Math.abs(mouse.y - startHostY) < 4) return
                             moved = true
                             view.dragCropCreate(startHostX, startHostY,
-                                                mouse.x, mouse.y)
+                                                mouse.x, mouse.y, mouse.modifiers)
                         }
                         onReleased: {
                             if (dragging && !moved) view.createFullCropFrame()
@@ -3385,6 +3751,7 @@ Item {
                             property real startHostY: 0
                             property real startDocX: 0
                             property real startDocY: 0
+                            property var startRect: null
 
                             onPressed: function(mouse) {
                                 var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
@@ -3392,13 +3759,22 @@ Item {
                                 startHostY = point.y
                                 startDocX = view.cropRect.x
                                 startDocY = view.cropRect.y
+                                startRect = {
+                                    x: view.cropRect.x,
+                                    y: view.cropRect.y,
+                                    width: view.cropRect.width,
+                                    height: view.cropRect.height
+                                }
                             }
                             onPositionChanged: function(mouse) {
-                                if (!pressed) return
+                                if (!pressed || !startRect) return
                                 var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                view.setCropRect(startDocX + (point.x - startHostX) / view.zoom,
-                                                 startDocY + (point.y - startHostY) / view.zoom,
-                                                 view.cropRect.width, view.cropRect.height)
+                                var pos = view.computeBoxMoveDrag(
+                                    startRect,
+                                    (point.x - startHostX) / view.zoom,
+                                    (point.y - startHostY) / view.zoom,
+                                    mouse.modifiers)
+                                view.setCropRect(pos.x, pos.y, startRect.width, startRect.height)
                             }
                         }
 
@@ -3430,11 +3806,21 @@ Item {
                                                     : (modelData.column === modelData.row
                                                        ? Qt.SizeFDiagCursor
                                                        : Qt.SizeBDiagCursor))
+                                    property var startRect: null
+                                    onPressed: {
+                                        startRect = {
+                                            x: view.cropRect.x,
+                                            y: view.cropRect.y,
+                                            width: view.cropRect.width,
+                                            height: view.cropRect.height
+                                        }
+                                    }
                                     onPositionChanged: function(mouse) {
                                         if (!pressed) return
                                         var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
                                         view.dragCropHandle(modelData.column, modelData.row,
-                                                            point.x, point.y)
+                                                            point.x, point.y,
+                                                            mouse.modifiers, startRect)
                                     }
                                 }
                             }
@@ -3442,20 +3828,48 @@ Item {
                     }
                 }
 
-                // ------------------------------------------- transform quad
-                // The four source corners, clockwise from the top left, plus
-                // four edge handles that move the two corners of that edge.
-                // The protocol carries the corners alone; the edges are a
-                // QML affordance over the same array.
+                // ------------------------------------------- transform frame
                 Item {
                     id: transformOverlay
                     objectName: "transformOverlay"
                     anchors.fill: parent
                     visible: view.transformFrameShown
-                    enabled: visible
+                    enabled: visible && !view.spacePanning
 
-                    // The quad's outline: one thin item per edge, from corner
-                    // i to corner i + 1.
+                    // Inside-box drag repositions the image in Free Transform
+                    // mode (Shift locks axis, Ctrl snaps to edges/centre/10 px).
+                    MouseArea {
+                        id: transformMoveArea
+                        objectName: "transformMoveArea"
+                        visible: view.transformMode === "free"
+                        enabled: visible
+                        x: view.docToHostX(view.cornerX(0))
+                        y: view.docToHostY(view.cornerY(0))
+                        width: Math.max(1, view.docToHostX(view.cornerX(1)) - x)
+                        height: Math.max(1, view.docToHostY(view.cornerY(2)) - y)
+                        acceptedButtons: Qt.LeftButton
+                        cursorShape: Qt.SizeAllCursor
+                        property real startHostX: 0
+                        property real startHostY: 0
+                        property var startRect: null
+
+                        onPressed: function(mouse) {
+                            var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                            startHostX = point.x
+                            startHostY = point.y
+                            startRect = view.transformRect()
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed || !startRect) return
+                            var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                            view.moveTransformBox(startRect,
+                                                  (point.x - startHostX) / view.zoom,
+                                                  (point.y - startHostY) / view.zoom,
+                                                  mouse.modifiers)
+                        }
+                    }
+
+                    // The bounding box outline: one thin item per edge.
                     Repeater {
                         model: 4
 
@@ -3495,11 +3909,15 @@ Item {
                             MouseArea {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton
-                                cursorShape: Qt.CrossCursor
+                                cursorShape: (index === 0 || index === 2)
+                                             ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor
+                                property var startRect: null
+                                onPressed: startRect = view.transformRect()
                                 onPositionChanged: function(mouse) {
                                     if (!pressed) return
                                     var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                    view.dragTransformCorner(index, point.x, point.y)
+                                    view.dragTransformCorner(index, point.x, point.y,
+                                                             mouse.modifiers, startRect)
                                 }
                             }
                         }
@@ -3526,11 +3944,15 @@ Item {
                             MouseArea {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton
-                                cursorShape: Qt.SizeAllCursor
+                                cursorShape: (index === 0 || index === 2)
+                                             ? Qt.SizeVerCursor : Qt.SizeHorCursor
+                                property var startRect: null
+                                onPressed: startRect = view.transformRect()
                                 onPositionChanged: function(mouse) {
                                     if (!pressed) return
                                     var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                    view.dragTransformEdge(index, point.x, point.y)
+                                    view.dragTransformEdge(index, point.x, point.y,
+                                                           mouse.modifiers, startRect)
                                 }
                             }
                         }
@@ -3695,7 +4117,8 @@ Item {
             /// with no verbs adds nothing.
             readonly property int actionRowHeight:
                 view.toolOptionsVisible
-                && (view.tool === "crop" || view.tool === "transform")
+                && (view.tool === "crop" || view.tool === "transform" || view.tool === "rotate"
+                    || view.tool === "resize" || view.tool === "canvasSize" || view.tool === "adjust")
                 ? cropActions.implicitHeight + 10 : 0
             /// What the reference dock is offered: its page's own height
             /// unless the user dragged the divider, and never more than the
@@ -3714,20 +4137,28 @@ Item {
                 Math.max(0, height - referenceShownHeight - headerHeight
                             - actionRowHeight - 10))
             readonly property bool toolOptionsShown:
-                view.tool !== "pointer" && view.toolOptionsVisible
+                view.tool !== "pointer" && view.tool !== "hand" && view.toolOptionsVisible
             /// The tool's name for the heading. The sentence is "… options", so
             /// the heading says whose column this is whether or not a tool is
             /// armed.
             readonly property string toolName:
                 view.tool === "pointer"
                 ? qsTr("Pointer")
-                : (view.tool === "crop"
-                   ? qsTr("Crop")
-                   : (view.tool === "transform"
-                      ? qsTr("Transform")
-                      : (view.tool === "paint"
-                         ? (view.paintMode === "eraser" ? qsTr("Eraser") : qsTr("Brush"))
-                         : qsTr("Resize"))))
+                : (view.tool === "hand"
+                   ? qsTr("Hand")
+                   : (view.tool === "crop"
+                      ? qsTr("Crop")
+                      : (view.tool === "transform"
+                         ? qsTr("Transform")
+                         : (view.tool === "rotate"
+                            ? qsTr("Rotate")
+                            : (view.tool === "paint"
+                               ? (view.paintMode === "eraser" ? qsTr("Eraser") : qsTr("Brush"))
+                               : (view.tool === "canvasSize"
+                                  ? qsTr("Canvas size")
+                                  : (view.tool === "adjust"
+                                     ? qsTr("Color & light")
+                                     : qsTr("Resize"))))))))
             /// Under this width the tab labels no longer fit in two languages;
             /// the icons and their tooltips carry the tab instead.
             readonly property bool tabsCompact: width < 240
@@ -3789,7 +4220,7 @@ Item {
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
                         Layout.bottomMargin: 10
-                        visible: view.tool === "pointer"
+                        visible: view.tool === "pointer" || view.tool === "hand"
                         text: qsTr("This tool has no options.")
                         color: view.theme.textMuted
                         font.pixelSize: 11
@@ -4353,85 +4784,189 @@ Item {
                                 color: view.theme.border
                             }
 
-                            // Transform: the frame on the canvas is the
-                            // command, so there is nothing to type and nothing
-                            // to explain — the picture under the handles is the
-                            // answer while it is dragged. The one row is how the
-                            // four corners are taken.
+                            // Transform: Krita-style icon mode selector (Free
+                            // Transform vs Scale Canvas), live bounding-box
+                            // dimensions, and background fill for Free mode.
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 visible: view.tool === "transform"
-                                spacing: 6
+                                spacing: 8
 
-                                // The two modes as one row: the armed one is
-                                // painted with the accent, like the active
-                                // segment of any segmented control. Perspective
-                                // is drawn and disabled rather than hidden — an
-                                // option that exists and cannot be armed is
-                                // information; one that is not there is a
-                                // question the window refuses to answer. Why it
-                                // is shut is a tooltip, not a paragraph: the
-                                // panel is for the tool, not for a lecture.
                                 RowLayout {
                                     objectName: "transformModeSwitch"
                                     Layout.fillWidth: true
                                     spacing: 6
 
-                                    PanelAction {
-                                        objectName: "transformModeFrame"
-                                        Layout.fillWidth: true
+                                    ToolRailButton {
+                                        objectName: "transformModeFree"
                                         theme: view.theme
-                                        text: qsTr("Frame")
-                                        primary: view.transformMode === "frame"
+                                        iconSource: "icons/transform-free.svg"
+                                        active: view.transformMode === "free"
                                         enabled: view.documentReady
-                                        onClicked: view.setTransformMode("frame")
+                                        tooltip: qsTr("Free transform — scale and move inside the canvas")
+                                        onClicked: view.setTransformMode("free")
                                     }
-                                    PanelAction {
-                                        objectName: "transformModePerspective"
-                                        Layout.fillWidth: true
+                                    ToolRailButton {
+                                        objectName: "transformModeScale"
                                         theme: view.theme
-                                        // The quad would need layers, which the
-                                        // Editor does not have.
-                                        enabled: false
-                                        text: qsTr("Perspective")
-                                        primary: view.transformMode === "perspective"
-                                        ToolTip.visible: hovered
-                                        ToolTip.text: qsTr("Perspective puts the four sides on four planes, which needs layers; it stays off until the Editor has them.")
-                                        onClicked: view.setTransformMode("perspective")
+                                        iconSource: "icons/transform-scale.svg"
+                                        active: view.transformMode === "scale"
+                                        enabled: view.documentReady
+                                        tooltip: qsTr("Scale canvas — resize image dimensions directly")
+                                        onClicked: view.setTransformMode("scale")
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                Label {
+                                    objectName: "transformSizeReadout"
+                                    Layout.fillWidth: true
+                                    color: view.theme.text
+                                    font.pixelSize: 12
+                                    text: {
+                                        var r = view.transformRect()
+                                        if (!r) return "—"
+                                        var size = Math.round(r.width) + " × " + Math.round(r.height) + " px"
+                                        if (view.transformMode === "free") {
+                                            return size + "  (" + Math.round(r.x) + ", " + Math.round(r.y) + ")"
+                                        }
+                                        return size
                                     }
                                 }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    text: qsTr("Shift: ratio · Alt: center · Ctrl: snap")
+                                }
+                            }
+
+                            // Custom rotate options (uses the Editor's shared
+                            // background colour directly — no separate swatch).
+                            ColumnLayout {
+                                objectName: "rotateOptions"
+                                Layout.fillWidth: true
+                                spacing: 10
+                                visible: view.tool === "rotate"
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        text: qsTr("Angle")
+                                        color: view.theme.textMuted
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        objectName: "rotateAngleValue"
+                                        text: view.rotateAngle.toFixed(1) + "°"
+                                        color: view.theme.text
+                                        font.bold: true
+                                    }
+                                }
+
+                                Slider {
+                                    id: rotateAngleSlider
+                                    objectName: "rotateAngleSlider"
+                                    Layout.fillWidth: true
+                                    from: -180
+                                    to: 180
+                                    stepSize: 0.5
+                                    value: view.rotateAngle
+                                    focusPolicy: Qt.NoFocus
+                                    onMoved: view.rotateAngle = Math.round(value * 2) / 2
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Repeater {
+                                        model: [-45, -15, 15, 45]
+                                        delegate: Button {
+                                            required property int modelData
+                                            Layout.fillWidth: true
+                                            text: (modelData > 0 ? "+" : "") + modelData + "°"
+                                            focusPolicy: Qt.NoFocus
+                                            padding: 4
+                                            onClicked: {
+                                                var next = view.rotateAngle + modelData
+                                                while (next > 180) next -= 360
+                                                while (next < -180) next += 360
+                                                view.rotateAngle = next
+                                            }
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        text: qsTr("Output size")
+                                        color: view.theme.textMuted
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        objectName: "rotateOutputSize"
+                                        text: view.rotatedWidth + " × " + view.rotatedHeight
+                                        color: view.theme.text
+                                    }
+                                }
+                            }
+
+                            EditorResizePanel {
+                                id: resizeOptionsPanel
+                                Layout.fillWidth: true
+                                visible: view.tool === "resize"
+                                theme: view.theme
+                                sourceWidth: view.documentWidth
+                                sourceHeight: view.documentHeight
+                            }
+
+                            EditorCanvasSizePanel {
+                                id: canvasSizeOptionsPanel
+                                Layout.fillWidth: true
+                                visible: view.tool === "canvasSize"
+                                theme: view.theme
+                                sourceWidth: view.documentWidth
+                                sourceHeight: view.documentHeight
+                            }
+
+                            ColorAdjustPanel {
+                                id: adjustOptionsPanel
+                                objectName: "editorColorAdjustPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "adjust"
+                                theme: view.theme
+                                viewOnly: false
+                                showReset: false
                             }
                         }
                     }
                     }
-                    // The action row follows the fields it acts on. It is not
-                    // pinned to the frame's bottom: the blank part of the frame
-                    // sits below the verbs, so a short tool does not push Apply
-                    // away from its own options.
-                    //
-                    // It is a grid rather than a row because even the 260 px
-                    // default cannot hold three 80 px buttons: on one line the
-                    // labels elided (74.6 px each at the default row, 61 px at
-                    // 220 px). When the labels do not fit, Apply spans both
-                    // columns and Reset/Clear take the next line; when they do,
-                    // the three share equal cells.
 
                     GridLayout {
                         id: cropActions
                         objectName: "cropActions"
-                        visible: (view.tool === "crop" || view.tool === "transform")
+                        visible: (view.tool === "crop" || view.tool === "transform" || view.tool === "rotate"
+                                  || view.tool === "resize" || view.tool === "canvasSize"
+                                  || view.tool === "adjust")
                                  && view.toolOptionsVisible
                         Layout.fillWidth: true
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
                         Layout.topMargin: 6
                         Layout.bottomMargin: 10
-                        // Three verbs share a line only while their words fit:
-                        // at the 260 px default the Vietnamese row elided
-                        // `Bỏ khung` to `Bỏ khu…`, so the rule measures the
-                        // labels instead of assuming a dock width.
-                        columns: view.tool === "transform" ? 2
-                                                          : (view.cropActionsStack ? 2 : 3)
+                        columns: (view.tool === "transform" || view.tool === "rotate"
+                                  || view.tool === "resize" || view.tool === "canvasSize"
+                                  || view.tool === "adjust")
+                                 ? 2
+                                 : (view.cropActionsStack ? 2 : 3)
                         columnSpacing: 6
                         rowSpacing: 6
 
@@ -4440,9 +4975,6 @@ Item {
                             objectName: "applyCrop"
                             text: qsTr("Apply")
                             Layout.fillWidth: true
-                            // Apply is the row's verb; Reset and Clear are the
-                            // corrections, so a dock too narrow for the three
-                            // gives it a line of its own.
                             Layout.columnSpan: view.cropActionsStack ? 2 : 1
                             visible: view.tool === "crop"
                             focusPolicy: Qt.NoFocus
@@ -4476,13 +5008,7 @@ Item {
                             visible: view.tool === "transform"
                             focusPolicy: Qt.NoFocus
                             enabled: view.transformUsable() && view.transformChanged()
-                            onClicked: {
-                                view.command({
-                                    type: "editor_transform",
-                                    corners: view.transformCorners
-                                })
-                                view.resetTransformCorners()
-                            }
+                            onClicked: view.applyTransform()
                         }
                         Button {
                             objectName: "resetTransformFields"
@@ -4492,6 +5018,78 @@ Item {
                             focusPolicy: Qt.NoFocus
                             enabled: view.documentReady
                             onClicked: view.resetTransformCorners()
+                        }
+                        Button {
+                            objectName: "applyRotateAngle"
+                            text: qsTr("Apply")
+                            Layout.fillWidth: true
+                            visible: view.tool === "rotate"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && view.rotateHasChange()
+                            onClicked: view.applyRotateAngle()
+                        }
+                        Button {
+                            objectName: "resetRotateAngle"
+                            text: qsTr("Reset")
+                            Layout.fillWidth: true
+                            visible: view.tool === "rotate"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && view.rotateHasChange()
+                            onClicked: view.rotateAngle = 0
+                        }
+                        Button {
+                            objectName: "applyResizePanel"
+                            text: qsTr("Apply")
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && resizeOptionsPanel.changed
+                            onClicked: view.applyResizePanel()
+                        }
+                        Button {
+                            objectName: "resetResizePanel"
+                            text: qsTr("Reset")
+                            Layout.fillWidth: true
+                            visible: view.tool === "resize"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && resizeOptionsPanel.changed
+                            onClicked: resizeOptionsPanel.reset()
+                        }
+                        Button {
+                            objectName: "applyCanvasSizePanel"
+                            text: qsTr("Apply")
+                            Layout.fillWidth: true
+                            visible: view.tool === "canvasSize"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && canvasSizeOptionsPanel.changed
+                            onClicked: view.applyCanvasSizePanel()
+                        }
+                        Button {
+                            objectName: "resetCanvasSizePanel"
+                            text: qsTr("Reset")
+                            Layout.fillWidth: true
+                            visible: view.tool === "canvasSize"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && canvasSizeOptionsPanel.changed
+                            onClicked: canvasSizeOptionsPanel.reset()
+                        }
+                        Button {
+                            objectName: "applyColorAdjust"
+                            text: qsTr("Apply")
+                            Layout.fillWidth: true
+                            visible: view.tool === "adjust"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && adjustOptionsPanel.changed
+                            onClicked: view.applyColorAdjust()
+                        }
+                        Button {
+                            objectName: "resetColorAdjust"
+                            text: qsTr("Reset")
+                            Layout.fillWidth: true
+                            visible: view.tool === "adjust"
+                            focusPolicy: Qt.NoFocus
+                            enabled: view.documentReady && adjustOptionsPanel.changed
+                            onClicked: adjustOptionsPanel.reset()
                         }
                     }
 
@@ -4646,6 +5244,30 @@ Item {
     /// under it stays untouched. The palette button opens it; nothing on the
     /// canvas changes mode, and the form draws no preview — the picture does
     /// not move until Apply.
+    CanvasSizeDialog {
+        id: canvasSizeDialog
+        objectName: "canvasSizeDialog"
+        theme: view.theme
+        documentWidth: view.documentWidth
+        documentHeight: view.documentHeight
+        documentReady: view.documentReady
+        backgroundColor: view.backgroundColor
+        backgroundTransparent: view.backgroundTransparent
+        documentIsJpeg: view.documentIsJpeg
+        onBackgroundTransparentRequested: view.setBackgroundTransparent()
+        onBackgroundColorRequested: function(value) { view.setBackgroundColor(value) }
+        onApplyRequested: function(width, height, anchor) {
+            view.command({
+                type: "editor_canvas_size",
+                width: width,
+                height: height,
+                anchor: anchor,
+                fill: view.backgroundTransparent ? null : view.backgroundBytes(),
+                fill_alpha: view.backgroundAlpha()
+            })
+        }
+    }
+
     ResizeDialog {
         id: resizeDialog
         objectName: "resizeDialog"
@@ -4678,9 +5300,10 @@ Item {
     /// one foreground: a click says which role is being changed, never which
     /// copy of it. A cancelled chooser changes nothing, and the box keeps
     /// showing what the next mark would get.
-    ColorDialog {
+    ColorPickerDialog {
         id: foregroundColorDialog
         objectName: "foregroundColorDialog"
+        theme: view.theme
         title: qsTr("Foreground color")
         selectedColor: view.foregroundColor
         onAccepted: {
@@ -4705,11 +5328,12 @@ Item {
         onCustomPicked: view.openBackgroundChooser()
     }
 
-    /// The chooser behind `Custom color…`. A cancelled chooser leaves the
-    /// background as it was rather than pretending a colour was picked.
-    ColorDialog {
+    /// The chooser behind `Custom color…`. Uses the shared `ColorPickerDialog`
+    /// built on `DialogFrame`.
+    ColorPickerDialog {
         id: backgroundColorDialog
         objectName: "backgroundColorDialog"
+        theme: view.theme
         title: qsTr("Background color")
         selectedColor: view.backgroundColor
         onAccepted: {
@@ -4718,12 +5342,46 @@ Item {
         }
     }
 
+    /// Canvas backdrop list (checkerboard, white, black, gray, custom).
+    BackgroundPopup {
+        id: canvasBgPopup
+        objectName: "canvasBgPopup"
+        theme: view.theme
+        transparent: !view.canvasBgUseTheme && view.canvasBgChecker
+        colour: view.canvasBgColor
+        onTransparentPicked: {
+            view.canvasBgUseTheme = false
+            view.canvasBgChecker = true
+        }
+        onColourPicked: function(value) {
+            view.canvasBgUseTheme = false
+            view.canvasBgChecker = false
+            view.canvasBgColor = value
+        }
+        onCustomPicked: view.openCanvasBgChooser()
+    }
+
+    ColorPickerDialog {
+        id: canvasBgColorDialog
+        objectName: "canvasBgColorDialog"
+        theme: view.theme
+        title: qsTr("Canvas background")
+        selectedColor: view.canvasBgColor
+        onAccepted: {
+            view.canvasBgUseTheme = false
+            view.canvasBgChecker = false
+            view.canvasBgColor = view.colorText(selectedColor)
+            view.forceActiveFocus()
+        }
+    }
+
     /// The actions the mini toolbar cannot show. Same actions, labels and keys
     /// as the toolbar buttons it replaces; see `Viewer.qml` for why the labels
     /// come from `Theme.menuEntries`.
-    Menu {
+    AppMenu {
         id: editorOverflow
         objectName: "editorOverflowMenu"
+        theme: view.theme
         implicitWidth: view.theme.menuWidth(view.theme.menuLabelWidths,
                                             view.theme.menuShortcutWidths)
 

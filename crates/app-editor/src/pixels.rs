@@ -251,6 +251,201 @@ pub(crate) fn warp_quad(image: &RgbaImage, corners: &[[f64; 2]; 4]) -> RgbaImage
     output
 }
 
+/// Resample `image` to `width × height` and place it at `(x, y)` on a new
+/// canvas of `image`'s original dimensions, filling uncovered pixels with
+/// `fill` / `fill_alpha`. Pixels placed outside the canvas are clipped.
+pub(crate) fn free_transform(
+    image: &RgbaImage,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    rotation: f64,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let (doc_w, doc_h) = image.dimensions();
+    let background = if fill_alpha == 0 {
+        image::Rgba([0, 0, 0, 0])
+    } else {
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha])
+    };
+    let mut output = RgbaImage::from_pixel(doc_w, doc_h, background);
+    let scaled = resample(image, width, height, ResizeFilter::Auto);
+    let norm = rotation.rem_euclid(360.0);
+    if norm < 1e-4 || (360.0 - norm) < 1e-4 {
+        let doc_w_i = i64::from(doc_w);
+        let doc_h_i = i64::from(doc_h);
+        for sy in 0..height {
+            let dy = i64::from(y) + i64::from(sy);
+            if dy < 0 || dy >= doc_h_i {
+                continue;
+            }
+            for sx in 0..width {
+                let dx = i64::from(x) + i64::from(sx);
+                if dx < 0 || dx >= doc_w_i {
+                    continue;
+                }
+                let src = *scaled.get_pixel(sx, sy);
+                let dst = *output.get_pixel(dx as u32, dy as u32);
+                output.put_pixel(dx as u32, dy as u32, blend_over(dst, src));
+            }
+        }
+        return output;
+    }
+
+    let rad = rotation.to_radians();
+    let cos = rad.cos();
+    let sin = rad.sin();
+    let wf = f64::from(width);
+    let hf = f64::from(height);
+    let box_cx = f64::from(x) + wf / 2.0;
+    let box_cy = f64::from(y) + hf / 2.0;
+    for dy_u in 0..doc_h {
+        let dy = (f64::from(dy_u) + 0.5) - box_cy;
+        for dx_u in 0..doc_w {
+            let dx = (f64::from(dx_u) + 0.5) - box_cx;
+            let sx = dx * cos + dy * sin + wf / 2.0;
+            let sy = -dx * sin + dy * cos + hf / 2.0;
+            if sx >= 0.0 && sx <= wf && sy >= 0.0 && sy <= hf {
+                let sampled = sample_bilinear(&scaled, sx - 0.5, sy - 0.5);
+                output.put_pixel(dx_u, dy_u, blend_over(background, sampled));
+            }
+        }
+    }
+    output
+}
+
+/// Resize the canvas without scaling the source pixels.
+///
+/// The source image is placed at the requested 3×3 anchor inside the new
+/// `width × height` frame: growing adds a border filled with `fill` /
+/// `fill_alpha`, shrinking crops around the anchor.
+pub(crate) fn canvas_size(
+    image: &RgbaImage,
+    width: u32,
+    height: u32,
+    anchor: &str,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let (doc_w, doc_h) = image.dimensions();
+    let background = if fill_alpha == 0 {
+        image::Rgba([0, 0, 0, 0])
+    } else {
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha])
+    };
+    let mut output = RgbaImage::from_pixel(width, height, background);
+    let col = match anchor {
+        "top_left" | "left" | "bottom_left" => 0,
+        "top_right" | "right" | "bottom_right" => 2,
+        _ => 1,
+    };
+    let row = match anchor {
+        "top_left" | "top" | "top_right" => 0,
+        "bottom_left" | "bottom" | "bottom_right" => 2,
+        _ => 1,
+    };
+    let dx: i64 = match col {
+        0 => 0,
+        1 => (i64::from(width) - i64::from(doc_w)) / 2,
+        _ => i64::from(width) - i64::from(doc_w),
+    };
+    let dy: i64 = match row {
+        0 => 0,
+        1 => (i64::from(height) - i64::from(doc_h)) / 2,
+        _ => i64::from(height) - i64::from(doc_h),
+    };
+    let out_w_i = i64::from(width);
+    let out_h_i = i64::from(height);
+    for sy in 0..doc_h {
+        let ty = i64::from(sy) + dy;
+        if ty < 0 || ty >= out_h_i {
+            continue;
+        }
+        for sx in 0..doc_w {
+            let tx = i64::from(sx) + dx;
+            if tx < 0 || tx >= out_w_i {
+                continue;
+            }
+            let src = *image.get_pixel(sx, sy);
+            let dst = *output.get_pixel(tx as u32, ty as u32);
+            output.put_pixel(tx as u32, ty as u32, blend_over(dst, src));
+        }
+    }
+    output
+}
+
+/// Rotate `image` clockwise by an arbitrary angle (in degrees), expanding the
+/// canvas to hold the rotated bounding box and filling uncovered corners with
+/// `fill` / `fill_alpha`.
+pub(crate) fn rotate_angle(
+    image: &RgbaImage,
+    degrees: f64,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let wf = f64::from(w);
+    let hf = f64::from(h);
+    let rad = degrees.to_radians();
+    let cos = rad.cos();
+    let sin = rad.sin();
+    let new_w = ((wf * cos.abs() + hf * sin.abs()).ceil() as u32).clamp(1, 16384);
+    let new_h = ((wf * sin.abs() + hf * cos.abs()).ceil() as u32).clamp(1, 16384);
+    let background = if fill_alpha == 0 {
+        image::Rgba([0, 0, 0, 0])
+    } else {
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha])
+    };
+    let mut output = RgbaImage::from_pixel(new_w, new_h, background);
+    let dst_cx = f64::from(new_w) / 2.0;
+    let dst_cy = f64::from(new_h) / 2.0;
+    let src_cx = wf / 2.0;
+    let src_cy = hf / 2.0;
+
+    for y in 0..new_h {
+        let dy = (f64::from(y) + 0.5) - dst_cy;
+        for x in 0..new_w {
+            let dx = (f64::from(x) + 0.5) - dst_cx;
+            // Inverse clockwise rotation (-rad) maps destination pixel centre
+            // back into source frame coordinates.
+            let sx = dx * cos + dy * sin + src_cx;
+            let sy = -dx * sin + dy * cos + src_cy;
+            if sx >= 0.0 && sx <= wf && sy >= 0.0 && sy <= hf {
+                let sampled = sample_bilinear(image, sx - 0.5, sy - 0.5);
+                output.put_pixel(x, y, blend_over(background, sampled));
+            }
+        }
+    }
+    output
+}
+
+fn blend_over(dst: image::Rgba<u8>, src: image::Rgba<u8>) -> image::Rgba<u8> {
+    let sa = f32::from(src[3]) / 255.0;
+    if sa >= 1.0 {
+        return src;
+    }
+    if sa <= 0.0 {
+        return dst;
+    }
+    let da = f32::from(dst[3]) / 255.0;
+    let out_a = sa + da * (1.0 - sa);
+    if out_a <= 0.0 {
+        return image::Rgba([0, 0, 0, 0]);
+    }
+    let mix = |s: u8, d: u8| -> u8 {
+        let v = (f32::from(s) * sa + f32::from(d) * da * (1.0 - sa)) / out_a;
+        v.round().clamp(0.0, 255.0) as u8
+    };
+    image::Rgba([
+        mix(src[0], dst[0]),
+        mix(src[1], dst[1]),
+        mix(src[2], dst[2]),
+        (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
+    ])
+}
+
 /// Bilinear sample with the sample point clamped to the image's own bounds.
 pub(crate) fn sample_bilinear(image: &RgbaImage, x: f64, y: f64) -> image::Rgba<u8> {
     let (width, height) = image.dimensions();
@@ -405,4 +600,52 @@ pub(crate) fn cover_rect(
         crop_width,
         crop_height,
     )
+}
+
+/// Adjust brightness, contrast, and saturation (`-1.0..=1.0`, `0.0` = identity)
+/// matching Qt 6 `MultiEffect` order (contrast -> brightness -> saturation) while
+/// preserving alpha untouched.
+pub(crate) fn adjust_color(
+    image: &RgbaImage,
+    brightness: f64,
+    contrast: f64,
+    saturation: f64,
+) -> RgbaImage {
+    let b = brightness.clamp(-1.0, 1.0);
+    let c = contrast.clamp(-1.0, 1.0);
+    let s = saturation.clamp(-1.0, 1.0);
+    let contrast_factor = if c >= 0.0 {
+        1.0 / (1.0 - c * 0.999)
+    } else {
+        1.0 + c
+    };
+    let sat_factor = 1.0 + s;
+
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        let mut r = f64::from(px[0]) / 255.0;
+        let mut g = f64::from(px[1]) / 255.0;
+        let mut bl = f64::from(px[2]) / 255.0;
+
+        // Contrast around mid-grey (0.5)
+        r = (r - 0.5) * contrast_factor + 0.5;
+        g = (g - 0.5) * contrast_factor + 0.5;
+        bl = (bl - 0.5) * contrast_factor + 0.5;
+
+        // Brightness (linear additive, matching Qt Quick MultiEffect)
+        r += b;
+        g += b;
+        bl += b;
+
+        // Saturation around Rec.709 luma
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+        r = luma + (r - luma) * sat_factor;
+        g = luma + (g - luma) * sat_factor;
+        bl = luma + (bl - luma) * sat_factor;
+
+        px[0] = (r.clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[1] = (g.clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[2] = (bl.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    out
 }

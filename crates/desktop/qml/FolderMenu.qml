@@ -8,10 +8,9 @@ import QtQuick.Controls
 // path…) would be a menu of things these views do not do. Two actions are
 // enough: go to that folder in the Browser, or show it in the desktop's file
 // manager. The Browser keeps its own, longer menu.
-Menu {
+AppMenu {
     id: menu
 
-    property Theme theme: Theme {}
     property string path: ""
 
     signal openInBrowser()

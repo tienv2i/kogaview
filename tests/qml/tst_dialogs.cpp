@@ -76,6 +76,7 @@ private slots:
   void aNarrowWindowNarrowsTheForm();
   void theCrossIsCancelInEveryForm();
   void everyFormPaintsItsControlsInTheTheme();
+  void everyMenuAppliesTheActiveTheme();
   void cleanupTestCase();
 
 private:
@@ -416,8 +417,10 @@ void TestDialogs::noFormRebuildsItsOwnChrome()
                qPrintable(where + QStringLiteral("uses the platform's button row")));
       QVERIFY2(!line.contains(QLatin1String("MessageDialog")),
                qPrintable(where + QStringLiteral("uses the platform's question box")));
-      QVERIFY2(!line.contains(QLatin1String("onAboutToShow")),
-               qPrintable(where + QStringLiteral("opens itself; a form implements prepare()")));
+      if (name != QLatin1String("AppMenu.qml")) {
+        QVERIFY2(!line.contains(QLatin1String("onAboutToShow")),
+                 qPrintable(where + QStringLiteral("opens itself; a form implements prepare()")));
+      }
       QVERIFY2(!bareDialog.match(line).hasMatch(),
                qPrintable(where + QStringLiteral("declares a bare Dialog, not a DialogFrame")));
     }
@@ -541,6 +544,76 @@ void TestDialogs::theCrossIsCancelInEveryForm()
   clickItem(item(QStringLiteral("settings"), "Close"));
   QTRY_VERIFY(!form(QStringLiteral("settings"))->property("visible").toBool());
   QCOMPARE(reverted.count(), 1);
+}
+
+/// Every popup menu wears `AppMenu`, updates its palette and icon tint when
+/// `theme.dark` flips (light <-> dark), and no view declares a bare `Menu {`.
+void TestDialogs::everyMenuAppliesTheActiveTheme()
+{
+  QQmlComponent component(
+    &m_engine, QUrl::fromLocalFile(qmlDir() + QStringLiteral("/FolderMenu.qml")));
+  QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+  QObject* menu = component.create();
+  QVERIFY2(menu != nullptr, qPrintable(component.errorString()));
+  menu->setParent(m_view->rootObject());
+  menu->setProperty("parent", QVariant::fromValue<QObject*>(m_view->rootObject()));
+
+  QObject* theme = menu->property("theme").value<QObject*>();
+  QVERIFY(theme != nullptr);
+
+  const auto paletteColour = [menu](const char* role) {
+    QQmlExpression probe(QQmlEngine::contextForObject(menu), menu,
+                         QStringLiteral("String(palette.%1)").arg(QLatin1String(role)));
+    return QColor(probe.evaluate().toString());
+  };
+  const auto itemIconColour = [menu](int index) {
+    QQmlExpression probe(QQmlEngine::contextForObject(menu), menu,
+                         QStringLiteral("String(itemAt(%1).icon.color)").arg(index));
+    return QColor(probe.evaluate().toString());
+  };
+
+  for (const bool dark : { true, false }) {
+    theme->setProperty("dark", dark);
+    QTest::qWait(20);
+    const auto colour = [theme](const char* name) {
+      return theme->property(name).value<QColor>();
+    };
+    QCOMPARE(paletteColour("window"), colour("surface"));
+    QCOMPARE(paletteColour("windowText"), colour("text"));
+    QCOMPARE(paletteColour("buttonText"), colour("text"));
+    QCOMPARE(paletteColour("highlight"), colour("accent"));
+    QCOMPARE(paletteColour("highlightedText"), colour("accentText"));
+    QCOMPARE(itemIconColour(0), colour("text"));
+    QCOMPARE(itemIconColour(1), colour("text"));
+  }
+
+  // A disabled menu item gets muted icon ink when the menu re-applies its theme.
+  QQmlExpression disableFirst(QQmlEngine::contextForObject(menu), menu,
+                              QStringLiteral("itemAt(0).enabled = false; applyTheme()"));
+  disableFirst.evaluate();
+  QCOMPARE(itemIconColour(0), theme->property("textMuted").value<QColor>());
+  QCOMPARE(itemIconColour(1), theme->property("text").value<QColor>());
+
+  delete menu;
+
+  // Source guard: every menu outside `AppMenu.qml` must use `AppMenu`, never a
+  // bare `Menu {` that falls back to the desktop's own theme.
+  const QRegularExpression bareMenu(QStringLiteral("^\\s*Menu\\s*\\{"));
+  const QDir dir(qmlDir());
+  for (const QString& fileName : dir.entryList({ QStringLiteral("*.qml") }, QDir::Files)) {
+    if (fileName == QLatin1String("AppMenu.qml")) {
+      continue;
+    }
+    QFile file(dir.filePath(fileName));
+    QVERIFY2(file.open(QIODevice::ReadOnly | QIODevice::Text), qPrintable(fileName));
+    const QStringList lines = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i) {
+      QVERIFY2(!bareMenu.match(lines.at(i)).hasMatch(),
+               qPrintable(QStringLiteral("%1:%2 declares a bare Menu instead of AppMenu")
+                            .arg(fileName)
+                            .arg(i + 1)));
+    }
+  }
 }
 
 QTEST_MAIN(TestDialogs)

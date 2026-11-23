@@ -3,24 +3,21 @@ name: real-window-verification
 description: Use when a change in this repository has to be proven — building it, launching the real desktop app, exercising a feature, photographing evidence, mutation-checking a fix, or writing the completion report. Covers the isolated XDG launch, the KOGAVIEW_DEV_* harness, evidence by layer, and the honest-gap rules.
 ---
 
-# Verifying a change on the real window
+# Verifying a change on the real window (Tier 3)
 
-`AGENTS.md` states the rule ("a green test suite does not prove a feature works").
-This skill is the recipe: what to run, in which order, and what each piece of
-evidence is actually worth.
+`AGENTS.md` states the rule ("a green test suite does not prove a feature works on the real desktop").
+This skill is the **Tier 3 (`/verify`)** recipe: what to run, in which order, and what each piece of evidence is actually worth. Check `docs/VERIFICATION-QUEUE.md` first for pending items that need deep verification.
 
 Load `references/dev-harness.md` for the full `KOGAVIEW_DEV_*` list.
 
 ## 1. Baseline, before touching anything
 
 ```sh
-just doctor                 # toolchain, identity, canonical artifact, conflicts
 git status --short          # what is already in flight
+just doctor                 # only needed if environment/toolchain changed or build is broken
 ```
 
-Record both. A dirty tree is normal here; the point is to know which files are
-yours. Then name the owning layer — protocol, Core, adapter (bridge), QML, or
-platform — because that decides which evidence will be able to fail.
+Record the dirty state and name the owning layer — protocol, Core, adapter (bridge), QML, or platform — because that decides which evidence will be able to fail.
 
 ## 2. Build, or do not claim anything
 
@@ -32,17 +29,20 @@ A QML-only edit is picked up by `just test qml` **without** a rebuild, but the
 *window* still needs one: a stale binary has passed for a fixed bug before. A
 C++/Rust edit always needs `just build` before launch.
 
-## 3. Launch isolated, so the owner's session is untouched
+## 3. Launch the dev build
 
-Give the run its own state/config/cache roots, otherwise the evidence lands in
-`~/.local/state/kogaview-dev` next to the owner's real session:
+The dev build already uses its own app ID (`io.github.tienv2i.KogaView.Dev`) and
+directories (`~/.local/state/kogaview-dev`, `~/.config/kogaview-dev`), separate
+from the installed production app (`kogaview`):
 
 ```sh
-XDG_STATE_HOME=/tmp/opencode/kv/s XDG_CONFIG_HOME=/tmp/opencode/kv/c \
-XDG_CACHE_HOME=/tmp/opencode/kv/k \
-QT_ASSUME_STDERR_HAS_CONSOLE=1 \
-./build/dev/bin/kogaview
+QT_ASSUME_STDERR_HAS_CONSOLE=1 ./build/dev/bin/kogaview
 ```
+
+Only override `XDG_STATE_HOME` / `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` under
+`/tmp/opencode/kv/...` when testing a clean-start, changing locale/settings
+without touching your dev `config.json`, or when you need a fresh single-run
+journal.
 
 Constraints that have actually cost time here:
 

@@ -809,7 +809,7 @@ checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "kogaview-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "image",
  "kogaview-editor",
@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "kogaview-editor"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "image",
  "jpeg-decoder",
@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "kogaview-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "kogaview_desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "cxx",
  "cxx-qt",

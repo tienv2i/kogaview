@@ -647,9 +647,11 @@ DialogFrame {
     /// `Custom color…` in the list. Its answer travels up to the Editor's one
     /// background, so the next form, the rail's pair and the crop panel all
     /// read the colour this run picked.
-    ColorDialog {
+    property ColorPickerDialog backgroundColorDialog: ColorPickerDialog {
         id: backgroundColorDialog
         objectName: "resizeBackgroundColorDialog"
+        parent: dialog.parent
+        theme: dialog.theme
         title: qsTr("Background color")
         selectedColor: dialog.backgroundColor
         onAccepted: dialog.backgroundColorRequested(dialog.colorText(selectedColor))

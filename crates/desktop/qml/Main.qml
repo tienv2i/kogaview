@@ -132,6 +132,12 @@ ApplicationWindow {
             // remembered across launches like a dock's width.
             browserView: changes.browserView !== undefined
                          ? changes.browserView : source.browserView,
+            browserSortBy: changes.browserSortBy !== undefined
+                           ? changes.browserSortBy : source.browserSortBy,
+            browserSortOrder: changes.browserSortOrder !== undefined
+                              ? changes.browserSortOrder : source.browserSortOrder,
+            browserThumbSize: changes.browserThumbSize !== undefined
+                              ? changes.browserThumbSize : source.browserThumbSize,
             panels: {}
         }
         var panels = source.panels || ({})
@@ -178,24 +184,48 @@ ApplicationWindow {
         menuWidthsMeasured = true
     }
 
-    // Keep built-in controls (menus, dialogs, scroll bars) in step with the
-    // app theme instead of the platform default palette.
-    palette.window: appTheme.background
-    palette.windowText: appTheme.text
-    palette.base: appTheme.surface
-    palette.alternateBase: appTheme.surfaceAlt
-    palette.text: appTheme.text
-    palette.button: appTheme.surface
-    palette.buttonText: appTheme.text
-    palette.brightText: "#ffffff"
-    palette.highlight: appTheme.accent
-    palette.highlightedText: appTheme.accentText
-    palette.toolTipBase: appTheme.surfaceAlt
-    palette.toolTipText: appTheme.text
-    palette.placeholderText: appTheme.textMuted
-    palette.mid: appTheme.border
-    palette.dark: appTheme.border
-    palette.light: appTheme.surfaceAlt
+    // Keep built-in controls (menus, dialogs, combo boxes, buttons, scroll
+    // bars) in step with the app theme instead of the desktop's palette.
+    // Written imperatively (not as grouped `palette.*:` bindings) because
+    // grouped palette bindings do not re-evaluate when `appTheme.dark` flips
+    // while the window is open, and synced to `QGuiApplication::setPalette` so
+    // popups inherit the active theme too.
+    function applyPalette() {
+        root.palette.window = appTheme.background
+        root.palette.windowText = appTheme.text
+        root.palette.base = appTheme.surface
+        root.palette.alternateBase = appTheme.surfaceAlt
+        root.palette.text = appTheme.text
+        root.palette.button = appTheme.surface
+        root.palette.buttonText = appTheme.text
+        root.palette.brightText = "#ffffff"
+        root.palette.highlight = appTheme.accent
+        root.palette.highlightedText = appTheme.accentText
+        root.palette.toolTipBase = appTheme.surfaceAlt
+        root.palette.toolTipText = appTheme.text
+        root.palette.placeholderText = appTheme.textMuted
+        root.palette.mid = appTheme.border
+        root.palette.dark = appTheme.border
+        root.palette.light = appTheme.surfaceAlt
+        root.palette.shadow = appTheme.border
+        if (typeof Platform !== "undefined" && Platform && Platform.applyThemePalette) {
+            Platform.applyThemePalette({
+                background: appTheme.background,
+                surface: appTheme.surface,
+                surfaceAlt: appTheme.surfaceAlt,
+                text: appTheme.text,
+                textMuted: appTheme.textMuted,
+                accent: appTheme.accent,
+                accentText: appTheme.accentText,
+                border: appTheme.border
+            }, appTheme.dark)
+        }
+    }
+
+    Connections {
+        target: appTheme
+        function onDarkChanged() { root.applyPalette() }
+    }
 
     KogaViewBridge {
         id: bridge
@@ -865,6 +895,7 @@ ApplicationWindow {
         // Before the first menu can open: they size themselves to the labels.
         root.measureMenuLabels();
         snapshot.apply();
+        root.applyPalette();
         // C++ applied the stored language before the window existed; this is
         // the same value, adopted so a later change is a real difference.
         var installed = root.languageInstaller ? root.languageInstaller.locale : "";
@@ -1217,9 +1248,10 @@ ApplicationWindow {
         }
     }
 
-    Menu {
+    AppMenu {
         id: mainMenu
         objectName: "mainMenu"
+        theme: appTheme
         implicitWidth: appTheme.menuWidth(appTheme.menuLabelWidths,
                                           appTheme.menuShortcutWidths)
 
@@ -1237,18 +1269,6 @@ ApplicationWindow {
             text: appTheme.menuEntries[29]
             icon.name: "document-edit-symbolic"
             onTriggered: root.chooseEditorImage()
-        }
-        MenuItem {
-            // The last label in the list, by name: an index here is a footgun
-            // (see `batchToolsLabel`).
-            text: appTheme.batchToolsLabel
-            icon.name: "applications-graphics-symbolic"
-            // The forms act on the Browser's listing; in the Viewer and the
-            // Editor there is no selection to batch. The entry names three
-            // tools, so it opens the page that names them (`openBatchTools`),
-            // not one guessing form.
-            enabled: root.state.workspace === "browser"
-            onTriggered: root.openBatchTools()
         }
         MenuSeparator {}
         MenuItem {

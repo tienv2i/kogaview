@@ -26,9 +26,10 @@ logs:
 install:
     @python3 scripts/dev.py install
 
-# Development install: same app ID, data directories and desktop entry as
-# `just install`, but optimized-with-hooks instead of Release. Use it to exercise
-# the installed app with the `KOGAVIEW_DEV_*` evidence harness.
+# Development install: reuses the existing `build/dev/bin/kogaview` binary (only
+# building `dev` when missing) behind a `KOGAVIEW_PROFILE=prod` wrapper so it
+# shares the installed app ID, config directory and desktop entry without a
+# second Release/RelWithDebInfo build.
 install-dev:
     @python3 scripts/dev.py install-dev
 

@@ -4,22 +4,30 @@ This document is the operational companion to `AGENTS.md`: it defines how to
 investigate and verify a change, while `AGENTS.md` remains the authority for
 architecture and non-negotiable ownership rules.
 
+## Verification Tiers (Fast by default, Deep on demand)
+
+| Tier | When to use | What to run | Real window / screenshots | Mutation check |
+|---|---|---|---|---|
+| **Tier 1 — Fast (default)** | After a single feature edit or small fix | Narrowest target (`just test cargo`, `just test <suite>`, `just test translations`) + `cargo fmt --check` (Rust) | Not required | No (for bugfixes, write the failing test *first* — TDD) |
+| **Tier 2 — Standard** | Before a commit or after batching edits | Full `just test` once + `cargo fmt --check` | Only if visible UI (layout, dialog, menu, font, icon, theme) changed | Optional |
+| **Tier 3 — Deep (`/verify`)** | When the user requests deep verification or before a milestone | Full `just test`, real desktop app, screenshots, log/journal, failure paths, EN + VI, clearing `docs/VERIFICATION-QUEUE.md` | Required | Selective (for key bugfixes/invariants) |
+
+- **Log what was skipped:** Every Tier 1 or Tier 2 completion must record unverified aspects (e.g., real window check, Vietnamese layout, full gate, failure paths) in `docs/VERIFICATION-QUEUE.md` so Tier 3 (`/verify`) can clear them systematically.
+- **No false claims:** Tier 1/2 green tests mean *"test-checked, pending Tier 3 verification"* — never *"proven on the real desktop"*.
+
 ## Before editing
 
-1. Run `just doctor` and `git status --short`; confirm the dev/prod identity and
-   that no stale binary or unrelated change is being used as evidence.
-2. Read the relevant requirement documents and write down the expected visible
-   behavior, state delta, command (if any), and real output.
+1. Run `git status --short` to see what is already in flight. Run `just doctor` only when starting on a new/changed environment or troubleshooting build/toolchain issues.
+2. Read the relevant requirement documents and note the expected visible behavior, state delta, command (if any), and real output.
 3. Choose the smallest vertical slice and the narrowest test target.
 
 ## Default delivery cycle
 1. Define expected visible behavior, state effect, real output and command contract.
-2. Implement a vertical slice, build, launch desktop app and review startup logs.
-3. Exercise real UI (click, drag/drop, shortcut, file picker as relevant), capture screenshot after render readiness.
-4. Check command journal, state revisions, events, task status and output files. Open exported images again when relevant.
-5. Exercise the equivalent CLI/IPC/MCP command when implemented; compare semantic state/results.
-6. Try failure paths (missing file, permission denied, cancellation, rapid repeated actions, app restart).
-7. Report evidence and remaining limitations. Never claim a target OS was tested unless it was actually run.
+2. Implement a vertical slice and run **Tier 1** checks (narrowest test target + `cargo fmt --check` for Rust).
+3. Before committing or finishing a larger slice, run **Tier 2** (`just test` once; launch the real dev app directly with `kogaview-dev` if visible UI changed).
+4. Record any skipped deep checks in `docs/VERIFICATION-QUEUE.md`.
+5. When the user runs `/verify` (or at milestone close), execute **Tier 3**: launch the real desktop app, exercise UI/CLI/MCP paths, try failure paths (missing file, permission denied, cancellation, rapid repeated actions, app restart), capture screenshots, check command journal/logs/state revisions, and clear verified items from `docs/VERIFICATION-QUEUE.md`.
+6. Report evidence and remaining limitations honestly. Never claim a target OS was tested unless it was actually run.
 
 ## Bug fixing: log-first and reproduce-first
 1. Identify the owning layer:
@@ -31,8 +39,8 @@ architecture and non-negotiable ownership rules.
    - For visual math bugs (zoom anchors, canvas centering): verify transform formulas in a minimal script. Remember `Item.scale` in Qt Quick expands around `Item.Center` by default; do not bake `scale` into `x`/`y` item bindings.
 3. Replay the smallest safe command sequence in an isolated workspace, or reproduce with real UI/Agent IPC; minimize the sequence when possible.
 4. Compare before/after snapshots, expected/actual state, file output and visual result; identify root cause and fix in the owning layer.
-5. Re-run the same real scenario, check logs for new errors and test one adjacent failure case. Add focused regression tests where useful, not as a substitute for real verification.
-6. Mutation-check the fix before calling it done: revert the fix, or plant one small fault in a code path the fix owns, rebuild, and confirm the new test fails; then restore and confirm it passes. Keep it selective — the few mutations that prove the test can see the bug, not a sweep over every line, and never a mutation framework or a generator script. Name each mutation and its result in the report (`/tmp` scripts are scratch, not artefacts).
+5. Prefer TDD for bugfixes: add a focused regression test and watch it fail *before* applying the fix, then re-run and watch it pass. Record any skipped real-window check in `docs/VERIFICATION-QUEUE.md`.
+6. At **Tier 3 (`/verify`)**, re-run on the real window, check logs for new errors, test an adjacent failure case, and perform selective mutation checks for high-risk invariants (never a mutation framework or full-file sweep).
 
 ## Diagnostics CLI targets (to implement, not assumed present)
 ```sh
@@ -59,8 +67,8 @@ kogactl debug replay --journal bug-001.jsonl --sandbox
 - Not verified / blockers:
 
 ## Hard rules
-- Green tests are insufficient. No mock-only validation.
-- A regression test nobody has seen failing is unproven: revert the fix once and watch it fail before trusting it. Mutation checks stay selective (the code path the fix owns, a handful of faults), never a sweep and never a framework.
+- Green tests are insufficient to claim desktop verification. Always label Tier 1/2 results as test-checked (pending Tier 3) and log skipped checks in `docs/VERIFICATION-QUEUE.md`.
+- A regression test nobody has seen failing is unproven: prefer writing the failing test *before* the fix (TDD), or run a selective mutation check at Tier 3. Never use a mutation framework or sweep every line.
 - Assertions must verify meaningful state transitions (`after != before`); a test asserting invariant stability where no state changed (e.g. `zoom 1.0 -> 1.0`) is a false positive and does not constitute proof.
 - Do not silently substitute API calls for a UI interaction requirement.
 - Do not jump to OS/compositor level input debugging before verifying that the QML Handler accepted the pointing device.

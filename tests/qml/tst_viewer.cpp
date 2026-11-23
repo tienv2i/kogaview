@@ -1312,7 +1312,9 @@ private slots:
         QStringLiteral("Flip horizontally (H)") },
       { QStringLiteral("object-flip-vertical-symbolic"),
         QStringLiteral("Flip vertically (V)") },
-      { QStringLiteral("view-list-symbolic"),
+      { QStringLiteral("viewerResetView"),
+        QStringLiteral("Reset view") },
+      { QStringLiteral("viewerFilmstripToggle"),
         QStringLiteral("Toggle thumbnail filmstrip (T)") },
     };
     QList<QQuickItem*> all;
@@ -1320,7 +1322,8 @@ private slots:
     for (const auto& entry : expected) {
       QQuickItem* button = nullptr;
       for (QQuickItem* candidate : all) {
-        if (readQml(candidate, QStringLiteral("icon.name")).toString() == entry.first) {
+        if (candidate->objectName() == entry.first
+            || readQml(candidate, QStringLiteral("icon.name")).toString() == entry.first) {
           button = candidate;
           break;
         }
@@ -1414,7 +1417,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 5 : 12);
+    QCOMPARE(buttons, mini ? 5 : 13);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.
@@ -1464,9 +1467,9 @@ private slots:
     QQuickItem* panel = item("viewerRightPanel");
     QVERIFY2(panel != nullptr, "the viewer has no right dock");
     QTRY_VERIFY(panel->isVisible());
-    QVERIFY2(!panel->property("stripShown").toBool(),
-             "a one-page dock drew a tab strip");
-    QCOMPARE(panel->property("tabs").toList().size(), 1);
+    QVERIFY2(panel->property("stripShown").toBool(),
+             "the two-page viewer dock did not draw a tab strip");
+    QCOMPARE(panel->property("tabs").toList().size(), 2);
 
     QQuickItem* name = item("infoName");
     QVERIFY2(name != nullptr, "the viewer's dock has no information page");

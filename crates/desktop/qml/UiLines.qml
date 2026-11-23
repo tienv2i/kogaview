@@ -200,6 +200,10 @@ QtObject {
         case "resize_pad": return qsTr("Resize %1 × %2 · pad %3").arg(args[0]).arg(args[1]).arg(args[2]);
         case "resize_pad_clear": return qsTr("Resize %1 × %2 · transparent background").arg(args[0]).arg(args[1]);
         case "transform": return qsTr("Straighten the frame");
+        case "canvas_size": return qsTr("Canvas size %1 × %2").arg(args[0]).arg(args[1]);
+        case "rotate_angle": return qsTr("Rotate %1°").arg(args[0]);
+        case "adjust_color": return qsTr("Adjust color & light");
+        case "invalid_color_adjustment": return qsTr("Invalid color adjustment values");
         case "brush_stroke": return qsTr("Brush stroke");
         case "eraser_stroke": return qsTr("Eraser stroke");
         }

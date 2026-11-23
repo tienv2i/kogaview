@@ -42,10 +42,23 @@ Dialog {
     property int preferredWidth: 520
     /// `true`: as tall as the form needs, up to the window — the shape a form of
     /// fields has, because a short form should not leave a blank page under its
-    /// verbs. `false`: the height a tabbed form wants (`preferredHeight`), so
-    /// its body does not jump when a page is switched.
+    /// verbs. `false`: at least `preferredHeight`, growing to fit the current
+    /// page when the window has room so unnecessary scrollbars disappear.
     property bool fitToContent: true
     property int preferredHeight: 520
+
+    /// Interactive resizing inside the parent window bounds.
+    property bool resizable: true
+    property int minWidth: 360
+    property int minHeight: 240
+    property bool userResized: false
+    property real customWidth: 0
+    property real customHeight: 0
+
+    readonly property real maxDialogWidth:
+        parent ? Math.max(frame.minWidth, parent.width - 48) : 960
+    readonly property real maxDialogHeight:
+        parent ? Math.max(frame.minHeight, parent.height - 48) : 800
 
     /// A strip between the title bar and the scrolling body, for a form with
     /// pages: `Component { PanelTabs { … } }`. It takes the height it needs and
@@ -93,16 +106,25 @@ Dialog {
     // Escape is Cancel; a click outside does not dismiss, because a form should
     // be left on purpose.
     closePolicy: Popup.CloseOnEscape
-    width: Math.min(frame.preferredWidth, parent ? parent.width - 48 : frame.preferredWidth)
-    // The header and the footer are constant, the body is measured on the column
-    // it holds, and the window always wins: a form may be clipped (the body then
-    // scrolls) but never drawn outside the window.
+    width: {
+        var wanted = frame.userResized && frame.customWidth > 0
+                     ? frame.customWidth : frame.preferredWidth
+        var limit = parent ? Math.max(240, parent.width - 48) : wanted
+        return Math.min(limit, Math.max(Math.min(frame.minWidth, limit), wanted))
+    }
+    // Auto-fit content height without overflowing the parent window: both plain
+    // and tabbed forms expand to avoid unnecessary scrollbars when the window
+    // has room, while still clamping inside `parent.height - 48`.
     height: {
         var limit = parent ? Math.max(240, parent.height - 48) : 800
+        if (frame.userResized && frame.customHeight > 0) {
+            return Math.min(limit, Math.max(Math.min(frame.minHeight, limit), frame.customHeight))
+        }
         var chrome = frame.headerHeight + frame.footerHeight
-                     + 2 * frame.bodyPadding + frame.stripHeight()
-        if (!frame.fitToContent) return Math.min(limit, frame.preferredHeight)
-        return Math.min(limit, chrome + bodyColumn.implicitHeight)
+                     + 2 * frame.bodyPadding + frame.stripHeight() + 4
+        var natural = chrome + bodyColumn.implicitHeight
+        if (!frame.fitToContent) return Math.min(limit, Math.max(frame.preferredHeight, natural))
+        return Math.min(limit, natural)
     }
 
     /// The strip's height, or zero when the form has no strip.
@@ -131,6 +153,9 @@ Dialog {
     onHeightChanged: if (!moved) centreInParent()
     onAboutToShow: {
         moved = false
+        userResized = false
+        customWidth = 0
+        customHeight = 0
         centreInParent()
         // The palette is written again on every opening: a theme switched while
         // the form was shut must not be worn by the next open.
@@ -184,6 +209,111 @@ Dialog {
         border.color: frame.theme.border
         border.width: 1
         radius: frame.theme.radius
+
+        // Right-edge resize handle.
+        MouseArea {
+            objectName: frame.namePrefix + "ResizeRight"
+            visible: frame.resizable
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: parent.right
+            anchors.topMargin: frame.headerHeight
+            anchors.bottomMargin: 12
+            width: 6
+            cursorShape: Qt.SizeHorCursor
+            property real startX: 0
+            property real startW: 0
+            onPressed: function(mouse) {
+                startX = mapToItem(frame.parent, mouse.x, mouse.y).x
+                startW = frame.width
+                frame.userResized = true
+                frame.moved = true
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed) return
+                var nowX = mapToItem(frame.parent, mouse.x, mouse.y).x
+                var maxW = frame.parent ? Math.max(frame.minWidth, frame.parent.width - frame.x - 8) : 1200
+                frame.customWidth = Math.max(frame.minWidth, Math.min(maxW, startW + (nowX - startX)))
+            }
+        }
+
+        // Bottom-edge resize handle.
+        MouseArea {
+            objectName: frame.namePrefix + "ResizeBottom"
+            visible: frame.resizable
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 12
+            height: 6
+            cursorShape: Qt.SizeVerCursor
+            property real startY: 0
+            property real startH: 0
+            onPressed: function(mouse) {
+                startY = mapToItem(frame.parent, mouse.x, mouse.y).y
+                startH = frame.height
+                frame.userResized = true
+                frame.moved = true
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed) return
+                var nowY = mapToItem(frame.parent, mouse.x, mouse.y).y
+                var maxH = frame.parent ? Math.max(frame.minHeight, frame.parent.height - frame.y - 8) : 1000
+                frame.customHeight = Math.max(frame.minHeight, Math.min(maxH, startH + (nowY - startY)))
+            }
+        }
+
+        // Bottom-right corner resize grip.
+        Item {
+            objectName: frame.namePrefix + "ResizeCorner"
+            visible: frame.resizable
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            width: 14
+            height: 14
+            z: 20
+
+            Canvas {
+                anchors.fill: parent
+                onPaint: {
+                    var ctx = getContext("2d")
+                    ctx.reset()
+                    ctx.strokeStyle = frame.theme.textMuted
+                    ctx.globalAlpha = 0.55
+                    ctx.lineWidth = 1.2
+                    ctx.beginPath()
+                    ctx.moveTo(4, 12); ctx.lineTo(12, 4)
+                    ctx.moveTo(8, 12); ctx.lineTo(12, 8)
+                    ctx.stroke()
+                }
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.SizeFDiagCursor
+                property real startX: 0
+                property real startY: 0
+                property real startW: 0
+                property real startH: 0
+                onPressed: function(mouse) {
+                    var pt = mapToItem(frame.parent, mouse.x, mouse.y)
+                    startX = pt.x
+                    startY = pt.y
+                    startW = frame.width
+                    startH = frame.height
+                    frame.userResized = true
+                    frame.moved = true
+                }
+                onPositionChanged: function(mouse) {
+                    if (!pressed) return
+                    var pt = mapToItem(frame.parent, mouse.x, mouse.y)
+                    var maxW = frame.parent ? Math.max(frame.minWidth, frame.parent.width - frame.x - 8) : 1200
+                    var maxH = frame.parent ? Math.max(frame.minHeight, frame.parent.height - frame.y - 8) : 1000
+                    frame.customWidth = Math.max(frame.minWidth, Math.min(maxW, startW + (pt.x - startX)))
+                    frame.customHeight = Math.max(frame.minHeight, Math.min(maxH, startH + (pt.y - startY)))
+                }
+            }
+        }
     }
 
     header: Rectangle {
@@ -289,7 +419,10 @@ Dialog {
             // a form that overflows said nothing.
             ScrollBar.vertical: ScrollBar {
                 id: bodyBar
-                policy: ScrollBar.AsNeeded
+                // Only show the scrollbar when content genuinely overflows the
+                // body (a 1–2 px border/rounding delta never triggers a bar).
+                policy: body.contentHeight > body.height + 2
+                        ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
                 contentItem: Rectangle {
                     implicitWidth: 6
                     radius: 3

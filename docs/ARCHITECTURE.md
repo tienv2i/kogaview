@@ -61,3 +61,12 @@ Core unit/property tests, command contract tests, image golden tests, IPC integr
 - `AppState` includes `active_workspace` and Browser/Viewer/Editor state; Core owns navigation transitions and restoration context.
 - CLI args, file-manager activation, QML interactions and MCP requests map to the same typed commands.
 - Dev/prod/Flatpak app identities and IPC namespaces are distinct; file access must remain portal/sandbox-compatible. See `WORKSPACES.md`, `BUILD.md`, `DESKTOP.md`.
+
+## Shared Desktop & QML Component Libraries (v1.0.0)
+- **`ImageCanvas.qml`**: Shared GPU-friendly image viewport for both Viewer and Editor (zoom-at-cursor, free pan via `panMargin`, double-click Fit/100%, document↔viewport coordinate mapping).
+- **`DialogFrame.qml` / `DialogFooter.qml`**: Shared app-themed dialog chrome with auto-fit height, interactive edge/corner resizing, and overflow-only scrollbars.
+- **`SystemDialogs.qml`**: Unified XDG Desktop Portal facade (`FileChooser.OpenFile`, `SaveFile`, directory selection) with Qt fallback for non-portal environments.
+- **`ColorPickerDialog.qml`**: App-themed color chooser with 2D Saturation–Value spectrum, vertical Hue bar, RGB steppers, Hex input, quick swatches, and XDG Portal `Screenshot.PickColor` screen eyedropper.
+- **`ColorAdjustPanel.qml`**: Shared Light & Color adjustment controls (Brightness, Contrast, Saturation with steppers & sliders), reused for Viewer (view-only 60 fps `MultiEffect` preview) and Editor (`editor_adjust_color` Core command).
+- **`EditorResizePanel.qml` / `EditorCanvasSizePanel.qml` / `UnitField.qml`**: Modular sidebar panels with `px` / `%` unit selection and live 60 fps GPU canvas previews.
+- **C++ Platform & Cache Services (`cpp/`)**: `ThumbnailCache` (bounded worker pool + synchronous `lookup()` hit path), `PlatformHelper` (XDG Portals, theme palette sync, clipboard), and `InputFocusDismissFilter` (clears text input focus on outside clicks so workspace shortcuts such as `Space` always respond immediately).

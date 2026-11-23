@@ -266,6 +266,47 @@ impl EditorDocument {
                 validate_transform(corners, width, height)?;
                 Ok(is_identity_quad(corners, width, height))
             }
+            EditOperation::FreeTransform {
+                x,
+                y,
+                width: w,
+                height: h,
+                rotation,
+                ..
+            } => {
+                validate_resize(*w, *h)?;
+                if !rotation.is_finite() {
+                    return Err(UiText::with("invalid_rotation", [rotation.to_string()]));
+                }
+                let norm = rotation.rem_euclid(360.0);
+                let rot_zero = norm < 1e-4 || (360.0 - norm) < 1e-4;
+                Ok(*x == 0 && *y == 0 && *w == width && *h == height && rot_zero)
+            }
+            EditOperation::CanvasSize {
+                width: w,
+                height: h,
+                ..
+            } => {
+                validate_resize(*w, *h)?;
+                Ok(*w == width && *h == height)
+            }
+            EditOperation::RotateAngle { degrees, .. } => {
+                if !degrees.is_finite() {
+                    return Err(UiText::with("invalid_rotation", [degrees.to_string()]));
+                }
+                let norm = degrees.rem_euclid(360.0);
+                Ok(norm < 1e-4 || (360.0 - norm) < 1e-4)
+            }
+            EditOperation::AdjustColor {
+                brightness,
+                contrast,
+                saturation,
+            } => {
+                if !brightness.is_finite() || !contrast.is_finite() || !saturation.is_finite() {
+                    return Err(UiText::new("invalid_color_adjustment"));
+                }
+                Ok(brightness.abs() < 1e-4 && contrast.abs() < 1e-4 && saturation.abs() < 1e-4)
+            }
             EditOperation::Paint {
                 points,
                 radius,
@@ -290,7 +331,11 @@ impl EditorDocument {
             EditOperation::Crop { .. } | EditOperation::Resize { .. } => Undo::Snapshot(before),
             // A warp cannot be recreated from its parameters: the pixels that
             // left the quad are not in the result. Snapshot, like crop.
-            EditOperation::Transform { .. } => Undo::Snapshot(before),
+            EditOperation::Transform { .. }
+            | EditOperation::FreeTransform { .. }
+            | EditOperation::CanvasSize { .. }
+            | EditOperation::RotateAngle { .. }
+            | EditOperation::AdjustColor { .. } => Undo::Snapshot(before),
             // A stroke blends over the pixels underneath it, so inverting it
             // would need the original alpha at every touched pixel. Snapshot.
             EditOperation::Paint { .. } => Undo::Snapshot(before),

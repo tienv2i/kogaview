@@ -1895,40 +1895,15 @@ private slots:
   /// opens the Batch page, which names the three tools, rather than one form.
   ///
   /// This was wrong on a real window: the entry was written against
-  /// `menuEntries[39]`, which is the folder menu's "Toggle information panel",
-  /// so the burger menu offered "Toggle information panel" and opened the batch
-  /// form — and driving the menu by its own text could not find "Tools…". The
-  /// label list is index-addressed and append-only, so the entry now reads the
-  /// named slot; this case pins both halves.
+  /// The redundant Tools… entry was removed from the burger menu in v1.0.0
+  /// because Batch actions live directly in the Browser's right dock.
   void theBatchMenuEntryNamesTheToolsLabel()
   {
-    QQuickItem* view = browserItem();
-    QObject* theme = view->property("theme").value<QObject*>();
-    QVERIFY(theme != nullptr);
-    const QVariantList entries = theme->property("menuEntryLabels").value<QVariantList>();
-    QVERIFY(!entries.isEmpty());
-    const QString last = entries.last().toString();
-    QVERIFY2(last.contains(QStringLiteral("Tools")),
-             qPrintable(QStringLiteral("the last menu label is \"%1\", not the Tools entry")
-                          .arg(last)));
-    // The named slot is the last label, by definition in the theme's own source.
-    QCOMPARE(theme->property("batchToolsLabel").toString(), last);
-
     QFile source(qmlDir() + QStringLiteral("/Main.qml"));
     QVERIFY2(source.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
     const QString text = QString::fromUtf8(source.readAll());
-    const int batchEntry = text.indexOf(QStringLiteral("onTriggered: root.openBatchTools()"));
-    QVERIFY2(batchEntry > 0, "the shell menu no longer opens the batch tools");
-    // The text that opens the form is the entry's own label line, a few lines
-    // above the handler.
-    const int labelStart = text.lastIndexOf(QStringLiteral("MenuItem {"), batchEntry);
-    QVERIFY2(labelStart >= 0, "the batch handler is not inside a MenuItem");
-    const QString entry = text.mid(labelStart, batchEntry - labelStart);
-    QVERIFY2(entry.contains(QStringLiteral("text: appTheme.batchToolsLabel")),
-             qPrintable(QStringLiteral("the batch entry draws %1")
-                          .arg(entry.section(QLatin1Char('\n'), 1, 1).trimmed())));
-    QVERIFY2(!entry.contains(QRegularExpression(QStringLiteral("menuEntries\\s*\\["))),
-             "the batch entry addresses the label list by index again");
+    QVERIFY2(!text.contains(QStringLiteral("onTriggered: root.openBatchTools()")),
+             "redundant Tools menu entry still present in Main.qml");
   }
 
   /// The shell's Tools… entry calls `showBatchPage`, which is this view's name

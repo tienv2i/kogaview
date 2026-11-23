@@ -376,8 +376,15 @@ impl Core {
                 // command is validated here rather than by the view, so a CLI
                 // cannot save a width the splitter would never reach.
                 let layout = layout.sanitized();
+                let sort_changed = self.config.layout.browser_sort_by != layout.browser_sort_by
+                    || self.config.layout.browser_sort_order != layout.browser_sort_order;
                 self.config.layout = layout.clone();
                 self.state.layout = layout;
+                if sort_changed && !self.state.entries.is_empty() {
+                    self.sort_entries();
+                    self.listing_epoch += 1;
+                    self.sync_viewer();
+                }
                 self.save_config();
                 self.state.bump();
                 Ok(Some(UiText::new("layout_saved")))
@@ -455,7 +462,55 @@ impl Core {
             Command::EditorTransform { corners } => {
                 self.editor_apply(EditOperation::Transform { corners })
             }
+            Command::EditorFreeTransform {
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                fill,
+                fill_alpha,
+            } => self.editor_apply(EditOperation::FreeTransform {
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                fill,
+                fill_alpha,
+            }),
             Command::EditorTransformPreview { corners } => self.editor_transform_preview(corners),
+            Command::EditorCanvasSize {
+                width,
+                height,
+                anchor,
+                fill,
+                fill_alpha,
+            } => self.editor_apply(EditOperation::CanvasSize {
+                width,
+                height,
+                anchor,
+                fill,
+                fill_alpha,
+            }),
+            Command::EditorRotateAngle {
+                degrees,
+                fill,
+                fill_alpha,
+            } => self.editor_apply(EditOperation::RotateAngle {
+                degrees,
+                fill,
+                fill_alpha,
+            }),
+            Command::EditorAdjustColor {
+                brightness,
+                contrast,
+                saturation,
+            } => self.editor_apply(EditOperation::AdjustColor {
+                brightness,
+                contrast,
+                saturation,
+            }),
             Command::EditorRotate { degrees } => {
                 self.editor_apply(EditOperation::Rotate { degrees })
             }

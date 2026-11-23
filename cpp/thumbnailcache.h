@@ -56,6 +56,11 @@ public:
   /// no side effects, so QML may call it from a property binding.
   Q_INVOKABLE QString keyFor(const QString& path, int edge, qint64 modified, qint64 size) const;
 
+  /// Synchronous cache hit lookup (GUI thread, pure in-memory hash table).
+  /// Returns the cached `file://` URL immediately on hit, or an empty string
+  /// on miss so the caller can fall back to the async `request()` queue.
+  Q_INVOKABLE QString lookup(const QString& path, int edge, qint64 modified, qint64 size);
+
   /// Ask for the thumbnail for that combination on behalf of `requester`, which
   /// is called back through `setThumbnail(key, url)` on its own thread — url is
   /// empty when the source cannot be decoded. Idempotent: a cached entry answers

@@ -13,6 +13,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -173,7 +175,10 @@ def installed_identity(binary: Path) -> str:
         (BINARY, f"dev build, {APP_ID_DEV}"),
         (RELEASE_BINARY, f"release build, {APP_ID_PROD}"),
         (DEVPROD_BINARY, f"dev-prod build, {APP_ID_PROD} (hooks compiled in)"),
-        (PREFIX / "bin" / "kogaview", f"installed build, {APP_ID_PROD}"),
+        (PREFIX / "bin" / "kogaview",
+         f"installed dev wrapper, {APP_ID_PROD} (hooks compiled in)"
+         if (PREFIX / "libexec" / "kogaview").is_file()
+         else f"installed build, {APP_ID_PROD}"),
     ):
         if binary == path.resolve():
             return label
@@ -323,10 +328,13 @@ def build() -> int:
     linguist = lrelease()
     if linguist:
         environment["KOGAVIEW_LRELEASE"] = linguist
-    configure = run(["cmake", "--preset", "dev"], env=environment)
-    if configure.returncode != 0:
-        print("build: CMake configure failed; no binary will be run", file=sys.stderr)
-        return configure.returncode
+    # CMake reconfigures itself when `CMakeLists.txt` or presets change; only
+    # run an explicit configure when the build tree does not exist yet.
+    if not (BUILD_DIR / "CMakeCache.txt").is_file():
+        configure = run(["cmake", "--preset", "dev"], env=environment)
+        if configure.returncode != 0:
+            print("build: CMake configure failed; no binary will be run", file=sys.stderr)
+            return configure.returncode
 
     compile_result = run(["cmake", "--build", "--preset", "dev"], env=environment)
     if compile_result.returncode != 0:
@@ -682,67 +690,114 @@ def current_image_handler() -> str:
     return output(["xdg-mime", "query", "default", "image/jpeg"]) or "none"
 
 
+def _desktop_assets_current(targets: dict[str, Path]) -> bool:
+    """True when desktop entry, AppStream metadata and icons are already
+    installed under PREFIX and newer than their repository sources."""
+    checks = [
+        (targets["desktop entry"], DESKTOP_TEMPLATE),
+        (targets["AppStream metadata"], METAINFO_SOURCE),
+        (targets["icon"], ICON_SOURCE),
+    ]
+    for edge in ICON_PIXMAP_SIZES:
+        key = f"icon {edge}"
+        if key in targets:
+            checks.append((targets[key], ICON_SOURCE))
+    for installed, source in checks:
+        if not installed.is_file():
+            return False
+        try:
+            if installed.stat().st_mtime < source.stat().st_mtime:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def install(*, development: bool = False) -> int:
     """Install KogaView under the prefix.
 
-    `development` installs the `dev-prod` binary — the same app ID, the same data
-    directories and the same desktop entry as a release install, plus the
-    `KOGAVIEW_DEV_*` hooks — so a development build can be driven on the real
-    desktop without a second identity. `just install` always builds Release and
-    is what a user gets.
+    `development` reuses `build/dev/bin/kogaview` (building `dev` only when it
+    is missing) and installs it under `PREFIX/libexec/kogaview` with a small
+    `KOGAVIEW_PROFILE=prod` wrapper at `PREFIX/bin/kogaview` so it shares the
+    production app ID, data directories and desktop entry without a second
+    build. `just install` always builds Release and installs the binary
+    directly.
     """
-    stage = DEVPROD_DIR if development else RELEASE_DIR
-    binary = DEVPROD_BINARY if development else RELEASE_BINARY
-    result = (build_preset("dev-prod", DEVPROD_BINARY) if development
-              else build_release())
-    if result != 0:
-        return result
-
-    # Everything the install writes is staged under the build directory first,
-    # so a failure anywhere below leaves the system untouched.
-    rendered = stage / f"{APP_ID_PROD}.desktop"
-    rendered.write_text(render_desktop_entry(), encoding="utf-8")
-    rendered_metainfo = stage / f"{APP_ID_PROD}.metainfo.xml"
-    rendered_metainfo.write_text(render_metainfo(), encoding="utf-8")
-    validator = which("desktop-file-validate")
-    if validator:
-        check = run([validator, str(rendered)])
-        if check.returncode != 0:
-            print("install: the desktop entry is invalid; nothing was installed", file=sys.stderr)
-            return check.returncode
-    appstream = which("appstreamcli")
-    if appstream:
-        check = run([appstream, "validate", "--no-net", str(rendered_metainfo)])
-        if check.returncode != 0:
-            print(
-                "install: the AppStream metadata is invalid; nothing was installed",
-                file=sys.stderr,
-            )
-            return check.returncode
-
-    # The raster fallbacks come from the one SVG, rendered here rather than
-    # committed, so the icon cannot fork into two drawings.
-    rendered_pixmaps: list[Path] = []
-    for edge in ICON_PIXMAP_SIZES:
-        staged = stage / "icons" / f"{edge}x{edge}" / f"{APP_ID_PROD}.png"
-        if rasterise_icon(edge, staged) != 0:
-            break
-        rendered_pixmaps.append(staged)
+    libexec_binary = PREFIX / "libexec" / "kogaview"
+    if development:
+        # Build the optimized `dev-prod` preset (RelWithDebInfo: release-speed
+        # Rust image decoding & thumbnails, with KOGAVIEW_DEV_* hooks kept).
+        stage = DEVPROD_DIR
+        result = build_preset("dev-prod", DEVPROD_BINARY)
+        if result != 0:
+            return result
+        binary = DEVPROD_BINARY
+    else:
+        stage = RELEASE_DIR
+        binary = RELEASE_BINARY
+        result = build_release()
+        if result != 0:
+            return result
 
     targets = installed_files()
-    sources = {
-        "binary": (binary, "755"),
-        "desktop entry": (rendered, "644"),
-        "icon": (ICON_SOURCE, "644"),
-        "AppStream metadata": (rendered_metainfo, "644"),
-    }
-    for index, staged in enumerate(rendered_pixmaps):
-        sources[f"icon {ICON_PIXMAP_SIZES[index]}"] = (staged, "644")
+    refresh_assets = not (development and _desktop_assets_current(targets))
+    sources: dict[str, tuple[Path, str]] = {}
+
+    if development:
+        wrapper = stage / "kogaview-wrapper.sh"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            'export KOGAVIEW_PROFILE="${KOGAVIEW_PROFILE:-prod}"\n'
+            f'exec "{libexec_binary}" "$@"\n',
+            encoding="utf-8",
+        )
+        targets["dev binary"] = libexec_binary
+        sources["dev binary"] = (binary, "755")
+        sources["binary"] = (wrapper, "755")
+    else:
+        sources["binary"] = (binary, "755")
+
+    if refresh_assets:
+        # Everything the install writes is staged under the build directory first,
+        # so a failure anywhere below leaves the system untouched.
+        rendered = stage / f"{APP_ID_PROD}.desktop"
+        rendered.write_text(render_desktop_entry(), encoding="utf-8")
+        rendered_metainfo = stage / f"{APP_ID_PROD}.metainfo.xml"
+        rendered_metainfo.write_text(render_metainfo(), encoding="utf-8")
+        validator = which("desktop-file-validate")
+        if validator:
+            check = run([validator, str(rendered)])
+            if check.returncode != 0:
+                print("install: the desktop entry is invalid; nothing was installed", file=sys.stderr)
+                return check.returncode
+        appstream = which("appstreamcli")
+        if appstream:
+            check = run([appstream, "validate", "--no-net", str(rendered_metainfo)])
+            if check.returncode != 0:
+                print(
+                    "install: the AppStream metadata is invalid; nothing was installed",
+                    file=sys.stderr,
+                )
+                return check.returncode
+
+        # The raster fallbacks come from the one SVG, rendered here rather than
+        # committed, so the icon cannot fork into two drawings.
+        rendered_pixmaps: list[Path] = []
+        for edge in ICON_PIXMAP_SIZES:
+            staged = stage / "icons" / f"{edge}x{edge}" / f"{APP_ID_PROD}.png"
+            if rasterise_icon(edge, staged) != 0:
+                break
+            rendered_pixmaps.append(staged)
+
+        sources["desktop entry"] = (rendered, "644")
+        sources["icon"] = (ICON_SOURCE, "644")
+        sources["AppStream metadata"] = (rendered_metainfo, "644")
+        for index, staged in enumerate(rendered_pixmaps):
+            sources[f"icon {ICON_PIXMAP_SIZES[index]}"] = (staged, "644")
 
     handler_before = current_image_handler()
     for name in list(targets):
         if name not in sources:
-            # A raster size the staging step could not produce (no PySide6).
             del targets[name]
             continue
         source, mode = sources[name]
@@ -751,11 +806,15 @@ def install(*, development: bool = False) -> int:
             print(f"install: cannot write {targets[name]}; stopping here", file=sys.stderr)
             return result.returncode
 
-    refresh_desktop_caches()
-    forget_icon_caches()
+    if not development and libexec_binary.exists():
+        run(privileged(["rm", "-f", str(libexec_binary)]))
 
-    flavour = ("development build (RelWithDebInfo, KOGAVIEW_DEV_* hooks, "
-               "production identity)" if development
+    if refresh_assets:
+        refresh_desktop_caches()
+        forget_icon_caches()
+
+    flavour = ("dev build (reused Debug binary, KOGAVIEW_DEV_* hooks, "
+               "KOGAVIEW_PROFILE=prod wrapper)" if development
                else "release build")
     print(f"install: {PROJECT} {APP_ID_PROD} installed under {PREFIX} — {flavour}")
     for name, target in targets.items():
@@ -793,6 +852,9 @@ def uninstall() -> int:
     settings and their unsaved session history.
     """
     targets = installed_files()
+    libexec_binary = PREFIX / "libexec" / "kogaview"
+    if libexec_binary.exists():
+        targets["dev binary"] = libexec_binary
     missing = [target for target in targets.values() if not target.exists()]
     if len(missing) == len(targets):
         print(f"uninstall: nothing of {APP_ID_PROD} is installed under {PREFIX}")
@@ -827,9 +889,40 @@ def uninstall() -> int:
 
 
 TEST_USAGE = (
-    "usage: just test [cargo|translations|packaging|qml|viewer|browser|cache|"
-    "state|settings|dialogs|editor|language|toolbar]"
+    "usage: just test [--no-build] [cargo|translations|packaging|qml|viewer|browser|"
+    "batch|cache|state|settings|dialogs|editor|language|toolbar]"
 )
+
+
+def _latest_compiled_source_mtime() -> float:
+    """Newest mtime across compiled C++/Rust/CMake inputs (excludes `.qml`)."""
+    newest = 0.0
+    for root_file in ("CMakeLists.txt", "CMakePresets.json", "Cargo.toml", "Cargo.lock"):
+        path = ROOT / root_file
+        if path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+    for directory, suffixes in (
+        (ROOT / "cpp", {".cpp", ".h", ".hpp", ".c"}),
+        (ROOT / "tests" / "qml", {".cpp", ".h", ".hpp"}),
+        (ROOT / "crates", {".rs", ".toml"}),
+    ):
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if path.suffix in suffixes and path.is_file():
+                newest = max(newest, path.stat().st_mtime)
+    return newest
+
+
+def _qml_binaries_fresh(suites: dict[str, tuple[str, Path]]) -> bool:
+    """True only when every selected QML test binary exists and is newer than
+    all compiled C++/Rust/CMake sources (so skipping `cmake --build` cannot run
+    a stale binary)."""
+    binaries = [binary for _target, binary in suites.values()]
+    if not all(binary.is_file() for binary in binaries):
+        return False
+    oldest_binary = min(binary.stat().st_mtime for binary in binaries)
+    return oldest_binary >= _latest_compiled_source_mtime()
 
 
 def translation_tests() -> int:
@@ -865,12 +958,21 @@ def test(selection: list[str]) -> int:
     Bare `just test` is the pre-commit gate: everything. `just test cargo` and
     `just test <suite>` exist because that gate is ~19 s warm and ~45 s when a
     change forces a rebuild, most of it in suites the edit cannot affect — too
-    slow to sit through while editing one file.
+    slow to sit through while editing one file. `--no-build` skips `cmake --build`
+    for QML-only edits when every selected test binary is newer than compiled
+    C++/Rust sources.
     """
-    if len(selection) > 1:
+    no_build = False
+    positional: list[str] = []
+    for arg in selection:
+        if arg == "--no-build":
+            no_build = True
+        else:
+            positional.append(arg)
+    if len(positional) > 1:
         print(f"test: expected at most one selection\n{TEST_USAGE}", file=sys.stderr)
         return 2
-    choice = selection[0] if selection else "all"
+    choice = positional[0] if positional else "all"
     if choice in ("all", "qml"):
         suites = dict(QML_TEST_SUITES)
     elif choice in ("cargo", "translations", "packaging"):
@@ -895,10 +997,26 @@ def test(selection: list[str]) -> int:
             return cargo_result
     if not suites:
         return 0
-    return qml_tests(suites)
+    return qml_tests(suites, no_build=no_build)
 
 
-def qml_tests(suites: dict[str, tuple[str, Path]]) -> int:
+def _run_qml_suite(name: str, target: str, binary: Path) -> tuple[str, str, int, str, str]:
+    with tempfile.TemporaryDirectory(prefix=f"kogaview-test-{name}-") as tmp:
+        tmp_path = Path(tmp)
+        env = dict(
+            os.environ,
+            QT_QPA_PLATFORM="offscreen",
+            XDG_STATE_HOME=str(tmp_path / "state"),
+            XDG_CONFIG_HOME=str(tmp_path / "config"),
+            XDG_CACHE_HOME=str(tmp_path / "cache"),
+        )
+        result = subprocess.run(
+            [str(binary)], cwd=ROOT, env=env, capture_output=True, text=True, check=False
+        )
+        return name, target, result.returncode, result.stdout, result.stderr
+
+
+def qml_tests(suites: dict[str, tuple[str, Path]], *, no_build: bool = False) -> int:
     """Run the selected Qt Quick suites against the real QML sources.
 
     The tests load `crates/desktop/qml/*.qml` unchanged and assert on what Qt
@@ -906,43 +1024,82 @@ def qml_tests(suites: dict[str, tuple[str, Path]]) -> int:
     commands the browser/explorer emit for real clicks. A binding or gesture
     that regresses fails here instead of only being visible on screen.
     """
-    setup_result = setup()
-    if setup_result != 0:
-        print("test: refusing to run the QML tests without prerequisites", file=sys.stderr)
-        return setup_result
+    skip_build = False
+    if no_build:
+        if _qml_binaries_fresh(suites):
+            skip_build = True
+            print("test: --no-build: QML test binaries are up to date; skipping cmake --build", flush=True)
+        else:
+            print("test: --no-build: compiled sources are newer (or binary missing); rebuilding", flush=True)
 
-    # CMake reconfigures itself when `CMakeLists.txt` or the preset changes, so
-    # configuring on every run only bought 0.9 s of latency. Configure once, when
-    # there is no build tree yet.
-    if not (BUILD_DIR / "CMakeCache.txt").is_file():
-        configure = run(["cmake", "--preset", "dev"])
-        if configure.returncode != 0:
-            print("test: CMake configure failed; QML tests were not run", file=sys.stderr)
-            return configure.returncode
+    if not skip_build:
+        setup_result = setup()
+        if setup_result != 0:
+            print("test: refusing to run the QML tests without prerequisites", file=sys.stderr)
+            return setup_result
 
-    # One invocation for every selected target: CMake then overlaps what it can,
-    # instead of paying the (single-threaded, CXX-Qt-linked) dependency walk once
-    # per suite. Measured on this tree: 14.7 s in three calls, 11.5 s in one.
-    targets: list[str] = []
-    for target, _binary in suites.values():
-        targets.extend(["--target", target])
-    compile_result = run(["cmake", "--build", "--preset", "dev", *targets])
-    if compile_result.returncode != 0:
-        print("test: QML test build failed; no suite was run", file=sys.stderr)
-        return compile_result.returncode
+        # CMake reconfigures itself when `CMakeLists.txt` or the preset changes, so
+        # configuring on every run only bought 0.9 s of latency. Configure once, when
+        # there is no build tree yet.
+        if not (BUILD_DIR / "CMakeCache.txt").is_file():
+            configure = run(["cmake", "--preset", "dev"])
+            if configure.returncode != 0:
+                print("test: CMake configure failed; QML tests were not run", file=sys.stderr)
+                return configure.returncode
 
-    # `offscreen` keeps the suites out of the desktop session; the input tests
-    # drive explicit mouse/wheel events, so nothing depends on real input.
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    for name, (target, binary) in suites.items():
+        # One invocation for every selected target: CMake then overlaps what it can,
+        # instead of paying the (single-threaded, CXX-Qt-linked) dependency walk once
+        # per suite. Measured on this tree: 14.7 s in three calls, 11.5 s in one.
+        targets: list[str] = []
+        for target, _binary in suites.values():
+            targets.extend(["--target", target])
+        compile_result = run(["cmake", "--build", "--preset", "dev", *targets])
+        if compile_result.returncode != 0:
+            print("test: QML test build failed; no suite was run", file=sys.stderr)
+            return compile_result.returncode
+
+    for _name, (_target, binary) in suites.items():
         if not binary.is_file():
             print(f"test: expected QML test binary missing: {binary}", file=sys.stderr)
             return 1
+
+    # Single suite: stream directly to stdout/stderr.
+    if len(suites) == 1:
+        name, (target, binary) = next(iter(suites.items()))
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
         print(f"+ {name}: {binary}", flush=True)
         result = run([str(binary)], env=env)
         if result.returncode != 0:
             print(f"test: QML suite failed ({target})", file=sys.stderr)
             return result.returncode
+        return 0
+
+    # Multiple suites: run in parallel with isolated per-suite XDG temp roots,
+    # then print outputs in deterministic suite order.
+    max_workers = min(len(suites), max(2, os.cpu_count() or 2))
+    print(f"+ running {len(suites)} QML suites in parallel (workers={max_workers})", flush=True)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            (name, binary, pool.submit(_run_qml_suite, name, target, binary))
+            for name, (target, binary) in suites.items()
+        ]
+        failed_target: str | None = None
+        failed_code = 0
+        for name, binary, future in futures:
+            _name, target, code, stdout, stderr = future.result()
+            print(f"+ {name}: {binary}", flush=True)
+            if stdout:
+                sys.stdout.write(stdout)
+                sys.stdout.flush()
+            if stderr:
+                sys.stderr.write(stderr)
+                sys.stderr.flush()
+            if code != 0 and failed_target is None:
+                failed_target = target
+                failed_code = code
+        if failed_target is not None:
+            print(f"test: QML suite failed ({failed_target})", file=sys.stderr)
+            return failed_code
     return 0
 
 

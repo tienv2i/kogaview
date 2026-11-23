@@ -579,6 +579,65 @@ fn a_transform_of_one_corner_keeps_the_far_side_and_undoes_by_snapshot() {
 }
 
 #[test]
+fn free_transform_scales_inside_frame_fills_background_and_undoes() {
+    let dir = temp_dir();
+    let mut document = open(&dir);
+    let original = document.pixels();
+    // Identity rect is a no-op.
+    assert!(!document
+        .apply(EditOperation::FreeTransform {
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 32,
+            rotation: 0.0,
+            fill: Some([10, 20, 30]),
+            fill_alpha: 255,
+        })
+        .unwrap());
+    // Place scaled 32x16 image at (16, 8) with opaque background fill.
+    assert!(document
+        .apply(EditOperation::FreeTransform {
+            x: 16,
+            y: 8,
+            width: 32,
+            height: 16,
+            rotation: 0.0,
+            fill: Some([10, 20, 30]),
+            fill_alpha: 255,
+        })
+        .unwrap());
+    assert_eq!(document.dimensions(), (64, 32));
+    let transformed = document.pixels();
+    // Uncovered corner gets the background fill.
+    assert_eq!(*transformed.get_pixel(0, 0), image::Rgba([10, 20, 30, 255]));
+    // Interior pixel inside the placed rect is not the background fill.
+    assert_ne!(
+        *transformed.get_pixel(32, 16),
+        image::Rgba([10, 20, 30, 255])
+    );
+    // Transparent background leaves uncovered pixels at alpha 0 and clips off-canvas cleanly.
+    assert!(document
+        .apply(EditOperation::FreeTransform {
+            x: -8,
+            y: -4,
+            width: 40,
+            height: 20,
+            rotation: 30.0,
+            fill: None,
+            fill_alpha: 0,
+        })
+        .unwrap());
+    assert_eq!(document.dimensions(), (64, 32));
+    assert_eq!(document.pixels().get_pixel(63, 31)[3], 0);
+    // Two undos restore the original image bit-for-bit.
+    assert!(document.undo());
+    assert!(document.undo());
+    assert_eq!(document.pixels().as_raw(), original.as_raw());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn a_folded_or_outside_quad_is_rejected_with_a_line() {
     let dir = temp_dir();
     let mut document = open(&dir);
@@ -1313,4 +1372,92 @@ fn operation_labels_are_codes_not_sentences() {
             "the code must be a stable key, not a sentence: {label:?}"
         );
     }
+}
+
+#[test]
+fn canvas_size_grows_and_shrinks_without_scaling_and_respects_anchor() {
+    let dir = temp_dir();
+    let path = source_file(&dir, "photo.png", 4, 4);
+    let mut document = open_document(&path).unwrap();
+    let origin_pixel = *document.pixels().get_pixel(0, 0);
+
+    // Grow to 8x6 anchored at top_left: source stays at (0..4, 0..4), new area gets fill.
+    assert!(document
+        .apply(EditOperation::CanvasSize {
+            width: 8,
+            height: 6,
+            anchor: "top_left".to_owned(),
+            fill: Some([10, 20, 30]),
+            fill_alpha: 255,
+        })
+        .unwrap());
+    assert_eq!(document.dimensions(), (8, 6));
+    assert_eq!(document.pixels().get_pixel(0, 0), &origin_pixel);
+    assert_eq!(
+        document.pixels().get_pixel(7, 5),
+        &image::Rgba([10, 20, 30, 255])
+    );
+
+    // Undo restores the original 4x4 document.
+    assert!(document.undo());
+    assert_eq!(document.dimensions(), (4, 4));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn rotate_angle_expands_canvas_and_fills_corners() {
+    let dir = temp_dir();
+    let path = source_file(&dir, "photo.png", 20, 10);
+    let mut document = open_document(&path).unwrap();
+
+    // 45° rotation expands bounding box beyond 20x10 and fills corners with background.
+    assert!(document
+        .apply(EditOperation::RotateAngle {
+            degrees: 45.0,
+            fill: Some([40, 50, 60]),
+            fill_alpha: 255,
+        })
+        .unwrap());
+    let (w, h) = document.dimensions();
+    assert!(w > 20 && h > 10, "expected expanded bounds, got {w}x{h}");
+    assert_eq!(
+        document.pixels().get_pixel(0, 0),
+        &image::Rgba([40, 50, 60, 255])
+    );
+    assert!(document.undo());
+    assert_eq!(document.dimensions(), (20, 10));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn adjust_color_modifies_pixels_and_undoes() {
+    let dir = temp_dir();
+    let path = source_file(&dir, "photo.png", 8, 8);
+    let mut document = open_document(&path).unwrap();
+    let before = *document.pixels().get_pixel(4, 4);
+
+    // Zero adjustment is a no-op.
+    assert!(!document
+        .apply(EditOperation::AdjustColor {
+            brightness: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+        })
+        .unwrap());
+
+    // Brightening increases RGB channels while preserving alpha.
+    assert!(document
+        .apply(EditOperation::AdjustColor {
+            brightness: 0.25,
+            contrast: 0.1,
+            saturation: 0.0,
+        })
+        .unwrap());
+    let after = *document.pixels().get_pixel(4, 4);
+    assert_ne!(after, before);
+    assert_eq!(after[3], before[3]);
+
+    assert!(document.undo());
+    assert_eq!(*document.pixels().get_pixel(4, 4), before);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

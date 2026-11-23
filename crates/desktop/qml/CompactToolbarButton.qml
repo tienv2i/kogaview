@@ -56,6 +56,20 @@ ToolButton {
                 : hovered ? theme.text
                 : theme.textMuted
 
+    function applyPalette() {
+        palette.button = root.theme.surface
+        palette.buttonText = root.theme.text
+        palette.windowText = root.theme.text
+        palette.highlight = root.theme.accent
+        palette.highlightedText = root.theme.accentText
+    }
+
+    Connections {
+        target: root.theme
+        function onDarkChanged() { root.applyPalette() }
+    }
+    Component.onCompleted: root.applyPalette()
+
     background: Rectangle {
         radius: root.theme.radius
         color: root.checked ? root.theme.selection

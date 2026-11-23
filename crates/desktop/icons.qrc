@@ -17,9 +17,16 @@
 <RCC>
   <qresource prefix="/qt/qml/io/github/tienv2i/KogaView/qml">
     <file alias="icons/pointer.svg">qml/icons/pointer.svg</file>
+    <file alias="icons/hand.svg">qml/icons/hand.svg</file>
+    <file alias="icons/canvas-size.svg">qml/icons/canvas-size.svg</file>
+    <file alias="icons/rotate-angle.svg">qml/icons/rotate-angle.svg</file>
+    <file alias="icons/adjust.svg">qml/icons/adjust.svg</file>
     <file alias="icons/crop.svg">qml/icons/crop.svg</file>
     <file alias="icons/transform.svg">qml/icons/transform.svg</file>
+    <file alias="icons/transform-free.svg">qml/icons/transform-free.svg</file>
+    <file alias="icons/transform-scale.svg">qml/icons/transform-scale.svg</file>
     <file alias="icons/brush.svg">qml/icons/brush.svg</file>
+    <file alias="icons/eyedropper.svg">qml/icons/eyedropper.svg</file>
     <file alias="icons/eraser.svg">qml/icons/eraser.svg</file>
     <file alias="icons/resize.svg">qml/icons/resize.svg</file>
     <file alias="icons/rotate-left.svg">qml/icons/rotate-left.svg</file>

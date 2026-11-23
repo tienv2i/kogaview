@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(KogaView VERSION 0.1.0 LANGUAGES CXX)
+project(KogaView VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -242,3 +242,26 @@ endif()
 
 message(STATUS "KogaView app ID: io.github.tienv2i.KogaView.Dev (debug) / io.github.tienv2i.KogaView (release)")
 message(STATUS "KogaView runtime artifact: ${CMAKE_BINARY_DIR}/bin/kogaview")
+
+# Packaging install rules and CPack metadata (DEB / RPM / TGZ)
+install(TARGETS kogaview RUNTIME DESTINATION bin)
+install(FILES packaging/linux/io.github.tienv2i.KogaView.metainfo.xml
+        DESTINATION share/metainfo)
+install(FILES packaging/linux/io.github.tienv2i.KogaView.svg
+        DESTINATION share/icons/hicolor/scalable/apps)
+install(FILES LICENSE DESTINATION share/licenses/kogaview)
+
+set(CPACK_PACKAGE_NAME "kogaview")
+set(CPACK_PACKAGE_VENDOR "KogaView Contributors")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Fast native desktop photo manager, viewer, and non-destructive editor")
+set(CPACK_PACKAGE_CONTACT "https://github.com/tienv2i/kogaview")
+set(CPACK_DEBIAN_PACKAGE_SECTION "graphics")
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "KogaView Contributors <https://github.com/tienv2i/kogaview>")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6t64 | libqt6core6, libqt6gui6t64 | libqt6gui6, libqt6qml6, libqt6quick6, libqt6quickcontrols2-6, libqt6dbus6")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+set(CPACK_RPM_PACKAGE_GROUP "Applications/Multimedia")
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+include(CPack)

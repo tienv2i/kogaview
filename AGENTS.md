@@ -9,13 +9,16 @@ Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implem
   - `qt-quick-pitfalls` — input handlers, transform math, binding loops, popup placement and menu width. Load it before editing QML or debugging presentation.
   - `cxx-qt` — the bridge (`bridge.rs`), its generated header, the `cxx-qt-build`/CMake wiring and the `KogaViewBridge` QML type. Load it before changing anything that crosses Rust ↔ Qt.
 - `.opencode/commands/` wraps the repeatable steps: `/doctor`, `/rebuild`, `/test`, `/run`, `/logs`, `/verify`, `/handoff`. They are prompts, not a second command path — they still go through `just` and the same gateway.
-- Scratch space is `/tmp/opencode` (isolated `XDG_*` roots, fixtures, screenshots). Generated artifacts, runtime state and temporary fixtures stay out of the repository, and project state is never parked in an external service.
+- Scratch space is `/tmp/opencode` (fixtures, screenshots, optional isolated `XDG_*` roots when testing clean-start). Generated artifacts, runtime state and temporary fixtures stay out of the repository, and project state is never parked in an external service.
 
 ## Instruction precedence and fast start
 - Follow the nearest applicable `AGENTS.md`; explicit user requirements take precedence over repository guidance.
 - When documents conflict, use the newer decision recorded in `docs/adr/` and update the stale document in the same change.
-- Before editing: run `just doctor`, inspect `git status --short`, and identify the owning layer (protocol, Core, adapter, QML, or platform).
-- After editing: run the narrowest relevant check, then the full `just test` gate when practical; run `cargo fmt --check` for Rust changes.
+- Before editing: inspect `git status --short` and identify the owning layer (protocol, Core, adapter, QML, or platform). Run `just doctor` only when starting on a new/changed environment or when build/toolchain issues appear — do not repeat it before every small edit.
+- Use tiered verification (details in `docs/WORKFLOW.md`):
+  - **Tier 1 (Fast, default while iterating):** run only the narrowest relevant check (`just test cargo`, `just test <suite>`, `just test translations`) plus `cargo fmt --check` for Rust edits. Record skipped deep checks in `docs/VERIFICATION-QUEUE.md`.
+  - **Tier 2 (Standard, pre-commit / batching changes):** run full `just test` once + `cargo fmt --check`; run the real dev window only if visible UI (layout, dialogs, menus, fonts, icons, theme) changed.
+  - **Tier 3 (Deep, on `/verify` or milestone close):** work through `docs/VERIFICATION-QUEUE.md` with real-window runs, screenshots, log/journal checks, failure paths, and selective mutation checks.
 - Never report a test, launch, screenshot, or platform check that was not actually performed.
 
 ## Non-negotiable rules
@@ -28,13 +31,13 @@ Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implem
 - Long-running work must be asynchronous, bounded, cancellable and observable.
 - Secure local IPC by default. Agent tools require explicit capabilities for sensitive actions.
 - Log structured traces, sequential journal, state revisions, task lifecycle and events; redact sensitive data.
-- A green test suite does NOT prove a feature works. Build, launch and exercise the real UI; inspect logs, screenshots and actual outputs. Do not claim verification that did not occur. Meaningful verification must assert state delta (`after != before`), never accept unchanged state as proof.
+- A green test suite does NOT prove a feature works on the real desktop. Distinguish clearly between **test-checked (Tier 1/2, pending deep verification in `docs/VERIFICATION-QUEUE.md`)** and **verified (Tier 3, exercised on the real UI with logs/screenshots/outputs)**. Never claim verification that did not occur. Meaningful verification must assert state delta (`after != before`), never accept unchanged state as proof.
 
 ## Working loop
-1. Read docs and identify the smallest end-to-end vertical slice.
+1. Read relevant docs and identify the smallest end-to-end vertical slice.
 2. Implement protocol -> Core -> adapter -> QML with clear ownership.
-3. Build and run the real desktop app, inspect startup logs.
-4. Exercise feature by mouse/keyboard/drag-and-drop as applicable, then via CLI/MCP when exposed.
+3. Verify according to the active tier (Tier 1 by default; Tier 2 before commit; Tier 3 on `/verify` or milestone close). Do not add temporary `KOGAVIEW_DEV_*` hooks to `cpp/main.cpp` just to drive routine edits unless the user asks for them.
+4. When running the real desktop app (Tier 2 UI changes or Tier 3), use the dev build directly (`~/.local/state/kogaview-dev`, `~/.config/kogaview-dev` — already isolated from prod `kogaview`); only override `XDG_*=/tmp/opencode/...` when testing clean-start, locale/settings resets, or when a clean single-run journal is needed.
 5. Inspect AppState, command journal, events, screenshot and real files/results (for Core domain commands), or visual/property deltas (for QML presentation state). Interface actions that emit no command (open a menu, trigger a signal, raise a dialog) change nothing in the journal — photograph them or assert a property instead of grepping.
 6. If broken, diagnose by layer isolation (QML component -> C++ bridge -> Core -> OS):
    - Two different files, do not confuse them:
@@ -52,9 +55,9 @@ Read `docs/PRD.md`, `docs/ARCHITECTURE.md`, and `docs/WORKFLOW.md` before implem
    - Watch out for Qt 6 PointerHandler pitfalls: `WheelHandler.acceptedDevices` defaults to `PointerDevice.Mouse` only (ignoring Wayland/touchpad events unless set to `PointerDevice.AllDevices`).
    - Watch out for Qt Quick transforms: `Item.scale` transforms around `Item.Center` by default; do not bake `scale` into `x`/`y` item coordinates.
    - Watch out for bindings that read what they write: a `Menu.font` follows `Menu.implicitWidth`, so a `TextMetrics` inside the menu loops the binding ("Binding loop detected" every frame). Measure in C++ (`PlatformHelper::textWidths`) or in an item that does not feed back, and remember Qt 6.12 will not re-evaluate a binding whose function has side effects.
-7. Fix in the owning layer -> re-verify isolated unit -> re-verify real UI scenario.
-8. Mutation-check the fix selectively: revert the fix (or plant one small fault in a code path the fix owns), rebuild, confirm the new test **fails**, restore it and confirm it **passes**. A few targeted mutations, not the whole file — never a mutation framework or a batch script that walks the tree. Report what was mutated and what each mutation did to the suite.
-9. Report what was actually run, OS/session, evidence, limitations and unverified areas.
+7. Fix in the owning layer -> re-verify isolated unit (for bugfixes, prefer writing the failing test *before* the fix so TDD proves the test sees the bug without extra rebuilds).
+8. Selective mutation-check is a **Tier 3 (`/verify`)** step for high-risk fixes/invariants (revert or plant a targeted fault, confirm the test fails, restore and confirm it passes; never a mutation framework or full-file sweep).
+9. Report what was actually run, OS/session (if launched), evidence, and unverified areas (logging pending deep checks in `docs/VERIFICATION-QUEUE.md`). Keep `docs/VERIFICATION-QUEUE.md` and `docs/SESSION-STATE.md` out of unrelated code-fix commits; update/commit them with `/handoff` or `/verify`.
 
 ## Delivery baseline and next milestones
 - The repository currently contains the M0/M1 desktop shell and browsing slice.

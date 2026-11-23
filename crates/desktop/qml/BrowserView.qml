@@ -139,8 +139,64 @@ Item {
         if (view.viewModes.indexOf(mode) < 0 || mode === view.viewMode) return
         view.layoutRequested({ browserView: mode })
     }
-    /// One line of the details list, and the height of its header row.
-    readonly property int detailsRowHeight: 30
+
+    // --------------------------------------------------------- sort & sizes
+    readonly property var sortFields: ["name", "modified", "size", "kind"]
+    readonly property string sortBy: {
+        var saved = "" + (view.layout.browserSortBy || "")
+        return view.sortFields.indexOf(saved) >= 0 ? saved : "name"
+    }
+    readonly property string sortOrder:
+        view.layout.browserSortOrder === "desc" ? "desc" : "asc"
+    readonly property var sortEntries: [
+        { key: "name", label: qsTr("Name") },
+        { key: "modified", label: qsTr("Modified") },
+        { key: "size", label: qsTr("Size") },
+        { key: "kind", label: qsTr("Type") }
+    ]
+    function sortLabel() {
+        for (var i = 0; i < view.sortEntries.length; ++i) {
+            if (view.sortEntries[i].key === view.sortBy) return view.sortEntries[i].label
+        }
+        return qsTr("Name")
+    }
+    function setSortField(field) {
+        if (view.sortFields.indexOf(field) < 0) return
+        if (field === view.sortBy) {
+            view.layoutRequested({ browserSortOrder: view.sortOrder === "asc" ? "desc" : "asc" })
+        } else {
+            view.layoutRequested({ browserSortBy: field, browserSortOrder: "asc" })
+        }
+    }
+    function setSortOrder(order) {
+        if (order !== "asc" && order !== "desc") return
+        if (order === view.sortOrder) return
+        view.layoutRequested({ browserSortOrder: order })
+    }
+
+    // Five discrete thumbnail/item sizes: very small, small, medium, large, very large.
+    readonly property var thumbSizes: ["xs", "s", "m", "l", "xl"]
+    readonly property string thumbSize: {
+        var saved = "" + (view.layout.browserThumbSize || "")
+        return view.thumbSizes.indexOf(saved) >= 0 ? saved : "m"
+    }
+    readonly property int thumbSizeIndex: Math.max(0, view.thumbSizes.indexOf(view.thumbSize))
+    readonly property var thumbSizeLabels: [
+        qsTr("Very small"),
+        qsTr("Small"),
+        qsTr("Medium"),
+        qsTr("Large"),
+        qsTr("Very large")
+    ]
+    readonly property string thumbSizeLabel: view.thumbSizeLabels[view.thumbSizeIndex] || qsTr("Medium")
+    function stepThumbSize(delta) {
+        var next = Math.max(0, Math.min(view.thumbSizes.length - 1, view.thumbSizeIndex + delta))
+        if (next === view.thumbSizeIndex) return
+        view.layoutRequested({ browserThumbSize: view.thumbSizes[next] })
+    }
+
+    /// One line of the details list, scaled by `thumbSize`.
+    readonly property int detailsRowHeight: [24, 27, 30, 36, 44][view.thumbSizeIndex] || 30
     /// The details columns that do not take the leftover width: type, size and
     /// modification time. The header and the rows read the same numbers, so the
     /// two cannot drift into a stair-step.
@@ -149,7 +205,7 @@ Item {
     readonly property int detailsModifiedWidth: 136
     /// The kind-of-file drawing that starts every row; the header leaves the
     /// same gap so its columns sit above the rows' own.
-    readonly property int detailsIconWidth: 16
+    readonly property int detailsIconWidth: [14, 15, 16, 20, 26][view.thumbSizeIndex] || 16
 
     /// How many entries the shape on screen is showing, for the empty-folder
     /// sentence: the grid counts cells, the details list counts lines.
@@ -851,6 +907,109 @@ Item {
                         color: view.theme.textMuted
                     }
 
+                    // Sort button: opens the sort-field & direction menu.
+                    AbstractButton {
+                        id: sortButton
+                        objectName: "browserSortButton"
+                        implicitHeight: 28
+                        leftPadding: 10
+                        rightPadding: 10
+                        topPadding: 4
+                        bottomPadding: 4
+                        implicitWidth: sortRow.implicitWidth + leftPadding + rightPadding
+                        focusPolicy: Qt.NoFocus
+                        activeFocusOnTab: false
+                        hoverEnabled: true
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Sort files")
+                        onClicked: {
+                            sortPopup.x = Math.max(6, Math.min(crumbBar.width - sortPopup.width - 6, sortButton.x))
+                            sortPopup.y = crumbBar.height + 2
+                            sortPopup.open()
+                        }
+
+                        background: Rectangle {
+                            radius: view.theme.radius
+                            color: sortButton.hovered ? view.theme.hover : "transparent"
+                            border.width: 1
+                            border.color: view.theme.border
+                        }
+                        contentItem: RowLayout {
+                            id: sortRow
+                            spacing: 6
+                            Label {
+                                text: view.sortLabel() + (view.sortOrder === "desc" ? " ↓" : " ↑")
+                                color: view.theme.text
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
+
+                    // Thumbnail / item size steppers (5 levels: XS, S, M, L, XL).
+                    RowLayout {
+                        objectName: "thumbSizeSwitch"
+                        spacing: 2
+
+                        AbstractButton {
+                            id: thumbDownButton
+                            objectName: "thumbSizeDown"
+                            implicitWidth: 26
+                            implicitHeight: 28
+                            padding: 0
+                            focusPolicy: Qt.NoFocus
+                            activeFocusOnTab: false
+                            hoverEnabled: true
+                            enabled: view.thumbSizeIndex > 0
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Smaller items (%1)").arg(view.thumbSizeLabel)
+                            onClicked: view.stepThumbSize(-1)
+
+                            background: Rectangle {
+                                radius: view.theme.radius
+                                color: thumbDownButton.hovered && thumbDownButton.enabled
+                                       ? view.theme.hover : "transparent"
+                            }
+                            contentItem: Label {
+                                text: "−"
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                color: thumbDownButton.enabled ? view.theme.text : view.theme.textMuted
+                                font.pixelSize: 14
+                                font.bold: true
+                            }
+                        }
+
+                        AbstractButton {
+                            id: thumbUpButton
+                            objectName: "thumbSizeUp"
+                            implicitWidth: 26
+                            implicitHeight: 28
+                            padding: 0
+                            focusPolicy: Qt.NoFocus
+                            activeFocusOnTab: false
+                            hoverEnabled: true
+                            enabled: view.thumbSizeIndex < view.thumbSizes.length - 1
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Larger items (%1)").arg(view.thumbSizeLabel)
+                            onClicked: view.stepThumbSize(1)
+
+                            background: Rectangle {
+                                radius: view.theme.radius
+                                color: thumbUpButton.hovered && thumbUpButton.enabled
+                                       ? view.theme.hover : "transparent"
+                            }
+                            contentItem: Label {
+                                text: "+"
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                color: thumbUpButton.enabled ? view.theme.text : view.theme.textMuted
+                                font.pixelSize: 14
+                                font.bold: true
+                            }
+                        }
+                    }
+
                     // How the folder is drawn, where a file manager puts it: at
                     // the end of the path bar. The three buttons are the app's
                     // own (the platform's `ToolButton` drew its icons with the
@@ -914,8 +1073,112 @@ Item {
                     }
                 }
 
-                Menu {
+                Popup {
+                    id: sortPopup
+                    objectName: "browserSortMenu"
+                    parent: crumbBar
+                    padding: 6
+                    width: 190
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                    background: Rectangle {
+                        radius: view.theme.radius
+                        color: view.theme.surface
+                        border.width: 1
+                        border.color: view.theme.border
+                    }
+
+                    contentItem: ColumnLayout {
+                        spacing: 2
+
+                        Repeater {
+                            model: view.sortEntries
+                            delegate: AbstractButton {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                implicitHeight: 28
+                                hoverEnabled: true
+                                focusPolicy: Qt.NoFocus
+                                onClicked: {
+                                    view.setSortField(modelData.key)
+                                    sortPopup.close()
+                                }
+                                background: Rectangle {
+                                    radius: view.theme.radius
+                                    color: parent.hovered ? view.theme.hover : "transparent"
+                                }
+                                contentItem: RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    Label {
+                                        text: view.sortBy === modelData.key ? "✓" : ""
+                                        color: view.theme.accent
+                                        Layout.preferredWidth: 14
+                                        font.pixelSize: 12
+                                    }
+                                    Label {
+                                        text: modelData.label
+                                        color: view.theme.text
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 1
+                            Layout.topMargin: 2
+                            Layout.bottomMargin: 2
+                            color: view.theme.border
+                        }
+
+                        Repeater {
+                            model: [
+                                { key: "asc", label: qsTr("Ascending") },
+                                { key: "desc", label: qsTr("Descending") }
+                            ]
+                            delegate: AbstractButton {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                implicitHeight: 28
+                                hoverEnabled: true
+                                focusPolicy: Qt.NoFocus
+                                onClicked: {
+                                    view.setSortOrder(modelData.key)
+                                    sortPopup.close()
+                                }
+                                background: Rectangle {
+                                    radius: view.theme.radius
+                                    color: parent.hovered ? view.theme.hover : "transparent"
+                                }
+                                contentItem: RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    Label {
+                                        text: view.sortOrder === modelData.key ? "✓" : ""
+                                        color: view.theme.accent
+                                        Layout.preferredWidth: 14
+                                        font.pixelSize: 12
+                                    }
+                                    Label {
+                                        text: modelData.label
+                                        color: view.theme.text
+                                        Layout.fillWidth: true
+                                        font.pixelSize: 12
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                AppMenu {
                     id: hiddenMenu
+                    theme: view.theme
                     Instantiator {
                         model: crumbBar.hiddenCrumbs
                         delegate: MenuItem {
@@ -942,14 +1205,19 @@ Item {
                 // nobody is looking at.
                 model: view.detailsShown ? [] : (view.entries || [])
                 visible: !view.detailsShown
-                // Two sizes, one grid. Thumbnails get the room a picture needs;
-                // icons are a folder's furniture, so a row of them fits in half
-                // the width.
+                // Five size presets (XS, S, M, L, XL) for both thumbnails and icons.
+                readonly property int thumbnailTargetWidth: [108, 140, 178, 230, 300][view.thumbSizeIndex] || 178
+                readonly property int thumbnailMinWidth: [92, 112, 132, 172, 224][view.thumbSizeIndex] || 132
+                readonly property int iconTargetWidth: [76, 96, 116, 148, 184][view.thumbSizeIndex] || 116
+                readonly property int iconMinWidth: [68, 82, 96, 120, 152][view.thumbSizeIndex] || 96
                 readonly property int thumbnailCellWidth:
-                    Math.max(132, Math.floor(width / Math.max(1, Math.floor(width / 178))))
+                    Math.max(thumbnailMinWidth, Math.floor(width / Math.max(1, Math.floor(width / thumbnailTargetWidth))))
                 readonly property int iconCellWidth:
-                    Math.max(96, Math.floor(width / Math.max(1, Math.floor(width / 116))))
+                    Math.max(iconMinWidth, Math.floor(width / Math.max(1, Math.floor(width / iconTargetWidth))))
                 readonly property bool iconsShown: view.viewMode === "icons"
+                readonly property int iconGlyphSize:
+                    iconsShown ? ([22, 26, 32, 42, 54][view.thumbSizeIndex] || 32)
+                               : ([28, 36, 44, 56, 72][view.thumbSizeIndex] || 44)
                 cellWidth: iconsShown ? iconCellWidth : thumbnailCellWidth
                 // An icon cell is a drawing and a name, not a picture and a
                 // caption, so it is shorter than it is wide: a row of them reads
@@ -957,6 +1225,9 @@ Item {
                 cellHeight: iconsShown ? Math.round(iconCellWidth * 0.78)
                                        : Math.round(cellWidth * 0.78) + 32
                 boundsBehavior: Flickable.StopAtBounds
+                // Moderate off-screen delegate buffer: keeps adjacent rows warm
+                // during scroll without spiking delegate creation on mode/sort switches.
+                cacheBuffer: Math.max(320, Math.round(height * 0.75))
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 /// A notch moves exactly one row of cells, so the wheel keeps
                 /// the grid under the pointer instead of crawling by 72 px.
@@ -1032,7 +1303,7 @@ Item {
                                 iconName: entry.isDir ? "folder-symbolic"
                                                       : entry.isImage ? "image-x-generic-symbolic"
                                                                       : "text-x-generic-symbolic"
-                                iconSize: grid.iconsShown ? 32 : 44
+                                iconSize: grid.iconGlyphSize
                                 iconColor: view.theme.textMuted
                             }
                         }
@@ -1107,38 +1378,86 @@ Item {
                         Layout.preferredWidth: view.detailsIconWidth
                         Layout.preferredHeight: 1
                     }
-                    Label {
-                        objectName: "detailsNameColumn"
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: qsTr("Name")
-                        color: view.theme.textMuted
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
+                        spacing: 4
+                        Label {
+                            objectName: "detailsNameColumn"
+                            text: qsTr("Name")
+                            color: view.sortBy === "name" ? view.theme.text : view.theme.textMuted
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            visible: view.sortBy === "name"
+                            text: view.sortOrder === "desc" ? "↓" : "↑"
+                            color: view.theme.accent
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onSingleTapped: view.setSortField("name") }
                     }
-                    Label {
-                        objectName: "detailsTypeColumn"
+                    RowLayout {
                         Layout.preferredWidth: view.detailsTypeWidth
-                        text: qsTr("Type")
-                        color: view.theme.textMuted
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
+                        spacing: 4
+                        Label {
+                            objectName: "detailsTypeColumn"
+                            text: qsTr("Type")
+                            color: view.sortBy === "kind" ? view.theme.text : view.theme.textMuted
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            visible: view.sortBy === "kind"
+                            text: view.sortOrder === "desc" ? "↓" : "↑"
+                            color: view.theme.accent
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onSingleTapped: view.setSortField("kind") }
                     }
-                    Label {
-                        objectName: "detailsSizeColumn"
+                    RowLayout {
                         Layout.preferredWidth: view.detailsSizeWidth
-                        text: qsTr("Size")
-                        color: view.theme.textMuted
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignRight
-                        elide: Text.ElideRight
+                        spacing: 4
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            visible: view.sortBy === "size"
+                            text: view.sortOrder === "desc" ? "↓" : "↑"
+                            color: view.theme.accent
+                            font.pixelSize: 11
+                        }
+                        Label {
+                            objectName: "detailsSizeColumn"
+                            text: qsTr("Size")
+                            color: view.sortBy === "size" ? view.theme.text : view.theme.textMuted
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                        }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onSingleTapped: view.setSortField("size") }
                     }
-                    Label {
-                        objectName: "detailsModifiedColumn"
+                    RowLayout {
                         Layout.preferredWidth: view.detailsModifiedWidth
-                        text: qsTr("Modified")
-                        color: view.theme.textMuted
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
+                        spacing: 4
+                        Label {
+                            objectName: "detailsModifiedColumn"
+                            text: qsTr("Modified")
+                            color: view.sortBy === "modified" ? view.theme.text : view.theme.textMuted
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            visible: view.sortBy === "modified"
+                            text: view.sortOrder === "desc" ? "↓" : "↑"
+                            color: view.theme.accent
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onSingleTapped: view.setSortField("modified") }
                     }
                 }
             }
@@ -1153,6 +1472,9 @@ Item {
                 // As in the grid: only the shape on screen holds delegates.
                 model: view.detailsShown ? (view.entries || []) : []
                 boundsBehavior: Flickable.StopAtBounds
+                // Moderate off-screen delegate buffer: keeps adjacent rows warm
+                // during scroll without spiking delegate creation on mode/sort switches.
+                cacheBuffer: Math.max(320, Math.round(height * 0.75))
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 WheelScroll {
                     view: fileList
@@ -1370,9 +1692,10 @@ Item {
     }
 
     // ------------------------------------------------------------ context menus
-    Menu {
+    AppMenu {
         id: fileMenu
         objectName: "fileMenu"
+        theme: view.theme
         implicitWidth: view.menuWidth
 
         MenuItem {
@@ -1446,9 +1769,10 @@ Item {
         }
     }
 
-    Menu {
+    AppMenu {
         id: folderMenu
         objectName: "folderMenu"
+        theme: view.theme
         implicitWidth: view.menuWidth
 
         MenuItem {
@@ -1507,9 +1831,10 @@ Item {
         }
     }
 
-    Menu {
+    AppMenu {
         id: quickMenu
         objectName: "quickMenu"
+        theme: view.theme
         implicitWidth: view.menuWidth
 
         MenuItem {
@@ -1555,9 +1880,10 @@ Item {
     /// The actions the mini toolbar cannot show. Same actions, labels and keys
     /// as the toolbar buttons it replaces; see `Viewer.qml` for why the labels
     /// come from `Theme.menuEntries`.
-    Menu {
+    AppMenu {
         id: browserOverflow
         objectName: "browserOverflowMenu"
+        theme: view.theme
         implicitWidth: view.menuWidth
 
         MenuItem {

@@ -385,6 +385,19 @@ pub const LAYOUT_REFERENCE_TABS: [&str; 3] = ["info", "history", "original"];
 /// value falls back to `thumbnails` when the layout is sanitized.
 pub const LAYOUT_VIEW_MODES: [&str; 3] = ["thumbnails", "icons", "details"];
 
+/// Which entry attribute the Browser sorts by. Unknown values fall back to `name`.
+pub const LAYOUT_SORT_FIELDS: [&str; 4] = ["name", "modified", "size", "kind"];
+
+/// Sort direction in the Browser. Unknown values fall back to `asc`.
+pub const LAYOUT_SORT_ORDERS: [&str; 2] = ["asc", "desc"];
+
+/// Discrete Browser thumbnail/item size presets: very small, small, medium, large, very large.
+pub const LAYOUT_THUMB_SIZES: [&str; 5] = ["xs", "s", "m", "l", "xl"];
+
+fn default_canvas_anchor() -> String {
+    "center".to_owned()
+}
+
 /// The persisted layout: which panels each workspace shows, how wide its docks
 /// are, and how the Editor splits its two halves.
 ///
@@ -411,6 +424,12 @@ pub struct LayoutState {
     pub editor_reference_tab: String,
     /// How the Browser draws a folder: one of `LAYOUT_VIEW_MODES`.
     pub browser_view: String,
+    /// Browser sort attribute: one of `LAYOUT_SORT_FIELDS`.
+    pub browser_sort_by: String,
+    /// Browser sort direction: one of `LAYOUT_SORT_ORDERS`.
+    pub browser_sort_order: String,
+    /// Browser thumbnail/icon size step: one of `LAYOUT_THUMB_SIZES`.
+    pub browser_thumb_size: String,
 }
 
 impl Default for LayoutState {
@@ -426,6 +445,9 @@ impl Default for LayoutState {
             editor_reference_height: 0,
             editor_reference_tab: "info".to_owned(),
             browser_view: "thumbnails".to_owned(),
+            browser_sort_by: "name".to_owned(),
+            browser_sort_order: "asc".to_owned(),
+            browser_thumb_size: "m".to_owned(),
         }
     }
 }
@@ -447,6 +469,15 @@ impl LayoutState {
         }
         if !LAYOUT_VIEW_MODES.contains(&self.browser_view.as_str()) {
             self.browser_view = "thumbnails".to_owned();
+        }
+        if !LAYOUT_SORT_FIELDS.contains(&self.browser_sort_by.as_str()) {
+            self.browser_sort_by = "name".to_owned();
+        }
+        if !LAYOUT_SORT_ORDERS.contains(&self.browser_sort_order.as_str()) {
+            self.browser_sort_order = "asc".to_owned();
+        }
+        if !LAYOUT_THUMB_SIZES.contains(&self.browser_thumb_size.as_str()) {
+            self.browser_thumb_size = "m".to_owned();
         }
         let mut panels = BTreeMap::new();
         for key in LAYOUT_PANEL_KEYS {
@@ -742,12 +773,61 @@ pub enum Command {
     EditorTransform {
         corners: [[f64; 2]; 4],
     },
+    /// Free-transform the working document inside its existing `W × H` frame:
+    /// scale the image to `width × height`, place it at `(x, y)` (clipping any
+    /// overflow), and fill the uncovered canvas with `fill` / `fill_alpha`.
+    EditorFreeTransform {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        rotation: f64,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+    },
     /// Render the transform in the canvas without reshaping the document: the
     /// pixels, the history and the save target stay as they are until
     /// `EditorTransform` is applied. The draft is published as
     /// `editor.previewDraft` with `kind: "transform"`.
     EditorTransformPreview {
         corners: [[f64; 2]; 4],
+    },
+    /// Grow or shrink the canvas without scaling the image pixels.
+    /// `anchor` is one of the 9 positions (`top_left`, `top`, `top_right`,
+    /// `left`, `center`, `right`, `bottom_left`, `bottom`, `bottom_right`);
+    /// uncovered pixels are painted with `fill` / `fill_alpha`.
+    EditorCanvasSize {
+        width: u32,
+        height: u32,
+        #[serde(default = "default_canvas_anchor")]
+        anchor: String,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+    },
+    /// Rotate the working document clockwise by an arbitrary angle in degrees.
+    /// The canvas expands to hold the rotated bounding box and uncovered
+    /// corners are filled with `fill` / `fill_alpha`.
+    EditorRotateAngle {
+        degrees: f64,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+    },
+    /// Adjust brightness, contrast and saturation of the working document.
+    /// Values are normalized in `-1.0..=1.0` (`0.0` = unchanged).
+    EditorAdjustColor {
+        #[serde(default)]
+        brightness: f64,
+        #[serde(default)]
+        contrast: f64,
+        #[serde(default)]
+        saturation: f64,
     },
     /// Rotate the working document clockwise; degrees must be 90, 180 or 270
     /// (negative values rotate counter-clockwise).
@@ -830,7 +910,11 @@ impl Command {
             Self::EditorCrop { .. } => "editor_crop",
             Self::EditorCropPreview { .. } => "editor_crop_preview",
             Self::EditorTransform { .. } => "editor_transform",
+            Self::EditorFreeTransform { .. } => "editor_free_transform",
             Self::EditorTransformPreview { .. } => "editor_transform_preview",
+            Self::EditorCanvasSize { .. } => "editor_canvas_size",
+            Self::EditorRotateAngle { .. } => "editor_rotate_angle",
+            Self::EditorAdjustColor { .. } => "editor_adjust_color",
             Self::EditorRotate { .. } => "editor_rotate",
             Self::EditorFlip { .. } => "editor_flip",
             Self::EditorPaintStroke { .. } => "editor_paint_stroke",
@@ -1229,6 +1313,18 @@ mod tests {
                     corners: [[4.0, 2.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]],
                 },
                 "editor_transform",
+            ),
+            (
+                Command::EditorFreeTransform {
+                    x: 10,
+                    y: 20,
+                    width: 200,
+                    height: 150,
+                    rotation: 0.0,
+                    fill: Some([12, 34, 56]),
+                    fill_alpha: 255,
+                },
+                "editor_free_transform",
             ),
             (
                 Command::EditorTransformPreview {

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 
 Item {
@@ -47,9 +48,9 @@ Item {
         folderMenu.popup()
     }
 
-    property real zoom: 1
-    property real offsetX: 0
-    property real offsetY: 0
+    property alias zoom: viewport.zoom
+    property alias offsetX: viewport.offsetX
+    property alias offsetY: viewport.offsetY
     // `rotation` is already an Item property; the image rotation must not
     // shadow it, or the whole workspace would rotate.
     property int rotationAngle: 0
@@ -60,7 +61,7 @@ Item {
     /// so resizing the window keeps the whole picture inside the new area.
     /// Any deliberate zoom (wheel, buttons, 100 %) turns it off, and `fit()`
     /// turns it back on.
-    property bool autoFit: true
+    property alias autoFit: viewport.autoFit
 
     /// True when the picture is smaller than the viewport, so fitting leaves
     /// it at its natural size instead of blowing it up. It drives a quiet one
@@ -189,97 +190,15 @@ Item {
         }
     }
 
-    function setZoom(value) {
-        // A typed or stepped zoom is a deliberate one; it leaves auto fit.
-        view.autoFit = false;
-        view.zoom = Math.max(0.05, Math.min(16, value));
-    }
-
-    // Zoom while keeping the image point under the cursor fixed.
-    // `pointX`/`pointY` are in viewport coordinates.
-    function zoomAt(factor, pointX, pointY) {
-        var previous = view.zoom > 0 ? view.zoom : 1;
-        var next = Math.max(0.05, Math.min(16, previous * factor));
-        if (Math.abs(next - previous) < 0.000001) {
-            return;
-        }
-        // A deliberate zoom is the user leaving auto fit; the wheel would
-        // otherwise be undone by the next window resize.
-        view.autoFit = false;
-        var centerX = viewport.width / 2 + view.offsetX;
-        var centerY = viewport.height / 2 + view.offsetY;
-        var shift = 1 - next / previous;
-        view.offsetX += (pointX - centerX) * shift;
-        view.offsetY += (pointY - centerY) * shift;
-        view.zoom = next;
-    }
-
-    function zoomIn() {
-        view.setZoom(view.zoom * 1.25);
-    }
-
-    function zoomOut() {
-        view.setZoom(view.zoom / 1.25);
-    }
-
-    /// Scale the picture so it fits the viewport, and stay in that mode: the
-    /// view refits itself when the window or the picture changes size.
-    function fit() {
-        if (viewport.width > 0 && viewport.height > 0
-                && image.implicitWidth > 0 && image.implicitHeight > 0) {
-            view.autoFit = true;
-            view.zoom = fittedZoom();
-            view.offsetX = 0;
-            view.offsetY = 0;
-        }
-    }
-
-    /// The zoom that shows the whole picture in the viewport, leaving a 2 %
-    /// margin so a fit does not look flush against the edge.
-    ///
-    /// Never above 100 %: a picture smaller than the window is shown at its
-    /// natural size, centred, rather than enlarged until it is soft. The wheel
-    /// and the zoom buttons still go past 100 % — that is a deliberate choice,
-    /// which is why it is not what "fit" means.
-    function fittedZoom() {
-        if (image.implicitWidth <= 0 || image.implicitHeight <= 0) {
-            return view.zoom;
-        }
-        // A quarter-turned picture is as wide as it is tall, so the viewport
-        // axis it must fit is not the one the source dimensions suggest.
-        var turned = view.rotationAngle % 180 !== 0;
-        var sourceWidth = turned ? image.implicitHeight : image.implicitWidth;
-        var sourceHeight = turned ? image.implicitWidth : image.implicitHeight;
-        return Math.min(1, Math.min(viewport.width / sourceWidth,
-                                   viewport.height / sourceHeight) * 0.98);
-    }
-
-    /// Re-apply the view's own rule after something that could invalidate the
-    /// current view: fitted views refit, hand-chosen ones only re-clamp.
-    function refitOrClamp() {
-        if (view.autoFit) {
-            view.fit();
-        } else {
-            view.clampOffsets();
-        }
-    }
-
-    /// Keep the pan reachable after the viewport or the zoom changed.
-    function clampOffsets() {
-        var shownX = image.implicitWidth * view.zoom;
-        var shownY = image.implicitHeight * view.zoom;
-        var maxX = Math.max(0, (shownX - viewport.width) / 2);
-        var maxY = Math.max(0, (shownY - viewport.height) / 2);
-        view.offsetX = Math.max(-maxX, Math.min(maxX, view.offsetX));
-        view.offsetY = Math.max(-maxY, Math.min(maxY, view.offsetY));
-    }
-
-    function actualSize() {
-        view.autoFit = false;
-        view.zoom = 1;
-        view.offsetX = 0;
-        view.offsetY = 0;
-    }
+    function setZoom(value) { viewport.setZoom(value) }
+    function zoomAt(factor, pointX, pointY) { viewport.zoomAt(factor, pointX, pointY) }
+    function zoomIn() { viewport.zoomIn() }
+    function zoomOut() { viewport.zoomOut() }
+    function fit() { viewport.fit() }
+    function fittedZoom() { return viewport.fittedZoom() }
+    function refitOrClamp() { viewport.refitOrClamp() }
+    function clampOffsets() { viewport.clampOffsets() }
+    function actualSize() { viewport.actualSize() }
 
     function rotateLeft() {
         view.rotationAngle = (view.rotationAngle + 270) % 360;
@@ -297,14 +216,18 @@ Item {
         view.flipV = !view.flipV;
     }
 
+    /// Reset zoom, pan, rotation and flip back to the fitted default view.
+    function resetView() {
+        view.rotationAngle = 0;
+        view.flipH = false;
+        view.flipV = false;
+        view.fit();
+    }
+
     /// Nudge the picture with the arrow keys. Only meaningful when the zoomed
     /// picture is larger than the viewport; `clampOffsets()` decides that, so a
     /// fitted picture simply stays centred.
-    function panBy(dx, dy) {
-        view.offsetX += dx;
-        view.offsetY += dy;
-        view.clampOffsets();
-    }
+    function panBy(dx, dy) { viewport.panBy(dx, dy) }
 
     /// Ask Core for the neighbouring image. The Viewer only translates the key;
     /// `viewer_previous`/`viewer_next` own the wrap-around and the state.
@@ -521,21 +444,40 @@ Item {
             Layout.fillHeight: true
             spacing: 0
 
-            Item {
+            ImageCanvas {
                 id: viewport
                 objectName: "viewerViewport"
+                wheelHandlerName: "viewerWheelHandler"
+                panHandlerName: "viewerPanHandler"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-                // The area the picture is fitted into changes on a window resize,
-                // a panel split and a filmstrip toggle; fitting here covers all
-                // three, not just the window.
-                onWidthChanged: view.refitOrClamp()
-                onHeightChanged: view.refitOrClamp()
+                color: view.canvasBgUseTheme
+                       ? view.theme.background
+                       : (view.canvasBgChecker ? "transparent" : view.canvasBgColor)
+                hasContent: !!view.currentPath && image.implicitWidth > 0 && image.implicitHeight > 0
+                contentWidth: image.implicitWidth
+                contentHeight: image.implicitHeight
+                minZoom: 0.05
+                maxZoom: 16
+                fitPadding: 0
+                fitScaleFactor: 0.98
+                fitCapAtOne: true
+                clampOnZoom: false
+                // Free pan in Viewer (always behaves like Hand tool without a separate mode).
+                panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
+                inputBlocked: viewerBgColorDialog.visible
+                rotationAngle: view.rotationAngle
+                flipH: view.flipH
+                flipV: view.flipV
+                allowLeftPan: true
+                allowMiddlePan: true
+                allowDoubleTapZoom: true
 
-                Rectangle {
+                Checkerboard {
+                    objectName: "viewerViewportCheckerboard"
                     anchors.fill: parent
-                    color: view.theme.background
+                    square: 12
+                    visible: !view.canvasBgUseTheme && view.canvasBgChecker
                 }
 
                 Item {
@@ -543,18 +485,11 @@ Item {
                     objectName: "viewerCanvas"
                     width: Math.max(1, image.implicitWidth)
                     height: Math.max(1, image.implicitHeight)
-                    // `scale` and `rotation` pivot on the item centre, so the
-                    // position is the unscaled top-left that centres the item in
-                    // the viewport. Multiplying `width` by `scale` here would
-                    // count the scale twice and push the image down/right.
-                    scale: view.zoom
+                    scale: viewport.zoom
                     rotation: view.rotationAngle
-                    x: (viewport.width - width) / 2 + view.offsetX
-                    y: (viewport.height - height) / 2 + view.offsetY
+                    x: viewport.itemX
+                    y: viewport.itemY
 
-                    // A `Scale` transform pivots on its `origin`, which defaults to
-                    // the item's top-left corner; mirroring there would throw the
-                    // image out of the viewport, so flip around the centre.
                     transform: Scale {
                         origin.x: canvas.width / 2
                         origin.y: canvas.height / 2
@@ -566,11 +501,6 @@ Item {
                         id: image
                         objectName: "viewerImage"
                         anchors.fill: parent
-                        // A `source` string that does not change never re-reads
-                        // the file, so opening the same picture again after
-                        // another program rewrote it kept the old pixels. Core
-                        // publishes the bytes' own identity, and the query
-                        // string makes "same path, new bytes" a new source.
                         source: view.currentPath
                                 ? "file://" + view.currentPath
                                   + "?v=" + view.state.viewerModified + "-" + view.state.viewerSize
@@ -578,62 +508,19 @@ Item {
                         asynchronous: true
                         cache: false
                         fillMode: Image.PreserveAspectFit
+                        // Presentation-only light & colour preview (never saved).
+                        layer.enabled: viewerAdjustPanel.changed
+                        layer.effect: MultiEffect {
+                            brightness: viewerAdjustPanel.brightness
+                            contrast: viewerAdjustPanel.contrast
+                            saturation: viewerAdjustPanel.saturation
+                        }
 
                         onStatusChanged: {
                             if (status === Image.Ready && view.autoFit) {
                                 view.fit();
                             }
                         }
-                    }
-                }
-
-                WheelHandler {
-                    objectName: "viewerWheelHandler"
-                    acceptedDevices: PointerDevice.AllDevices
-                    onWheel: function(event) {
-                        if (!view.currentPath) return;
-                        // A mouse wheel reports `angleDelta`; Wayland touchpads
-                        // report continuous `pixelDelta` with angleDelta 0, so both
-                        // must be supported or scrolling does nothing on a laptop.
-                        var factor = 1;
-                        if (event.angleDelta.y !== 0) {
-                            factor = Math.pow(1.0015, event.angleDelta.y);
-                        } else if (event.pixelDelta.y !== 0) {
-                            factor = Math.pow(1.01, event.pixelDelta.y);
-                        } else {
-                            return;
-                        }
-                        // Keep a single event from jumping wildly on high-resolution
-                        // wheels or very fast trackpad gestures.
-                        factor = Math.max(0.5, Math.min(2, factor));
-                        view.zoomAt(factor, event.x, event.y);
-                        event.accepted = true;
-                    }
-                }
-
-                DragHandler {
-                    id: pan
-                    target: null
-                    property real startX: 0
-                    property real startY: 0
-
-                    onActiveChanged: {
-                        if (active) {
-                            startX = view.offsetX;
-                            startY = view.offsetY;
-                        }
-                    }
-                    onTranslationChanged: {
-                        view.offsetX = startX + translation.x;
-                        view.offsetY = startY + translation.y;
-                    }
-                }
-
-                TapHandler {
-                    acceptedButtons: Qt.LeftButton
-                    onDoubleTapped: {
-                        if (view.autoFit) view.actualSize();
-                        else view.fit();
                     }
                 }
 
@@ -855,10 +742,8 @@ Item {
             }
         }
 
-        // One page, no strip: a viewer has exactly one thing to say about
-        // the file on screen. The same `InfoPanel` as the Browser's, so the
-        // words for a file's details are written once. The burger menu's
-        // `View > Sidebar` submenu hides the page and brings it back.
+        // Right dock in Viewer: file Information + view-only Light & Color
+        // adjustments (presentation-only, never saved to disk).
         RightDock {
             objectName: "viewerRightPanel"
             visible: view.sidebarShown
@@ -866,9 +751,14 @@ Item {
             Layout.fillHeight: true
             theme: view.theme
             backgroundColor: view.theme.sidebar
-            tabs: [{ key: "info", label: qsTr("Info"), icon: "icons/info.svg",
-                     shown: view.infoPanelVisible }]
-            currentKey: "info"
+            tabs: [
+                { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
+                  shown: view.infoPanelVisible },
+                { key: "adjust", label: qsTr("Color"), icon: "icons/adjust.svg",
+                  shown: view.infoPanelVisible }
+            ]
+            currentKey: view.viewerRightTab
+            onActivated: function(key) { view.viewerRightTab = key }
             stripObjectName: "viewerRightTabs"
             tabKeyPrefix: "viewerTab"
             pagesObjectName: "viewerRightPages"
@@ -891,6 +781,29 @@ Item {
                     Item { Layout.fillHeight: true }
                 }
             }
+
+            ScrollView {
+                id: viewerAdjustPage
+                contentWidth: availableWidth
+                clip: true
+
+                ColumnLayout {
+                    width: viewerAdjustPage.availableWidth
+                    spacing: 8
+
+                    ColorAdjustPanel {
+                        id: viewerAdjustPanel
+                        objectName: "viewerColorAdjustPanel"
+                        Layout.fillWidth: true
+                        Layout.margins: 12
+                        theme: view.theme
+                        viewOnly: true
+                        showReset: true
+                    }
+
+                    Item { Layout.fillHeight: true }
+                }
+            }
         }
     }
 
@@ -899,9 +812,10 @@ Item {
     /// so there is no "Open" entry — it is already open); the last block is the
     /// viewer's own presentation state, which Qt owns and which therefore runs
     /// the same functions the toolbar buttons call.
-    Menu {
+    AppMenu {
         id: canvasMenu
         objectName: "viewerMenu"
+        theme: view.theme
         implicitWidth: view.menuWidth
 
         MenuItem {
@@ -1004,9 +918,10 @@ Item {
     /// `ToolbarMetrics.compactToolbarWidth`; the labels come from
     /// `Theme.menuEntries` so they are the strings the menu width was measured
     /// from, and the keys are the ones the tooltips name.
-    Menu {
+    AppMenu {
         id: viewerOverflow
         objectName: "viewerOverflowMenu"
+        theme: view.theme
         implicitWidth: view.menuWidth
 
         MenuItem {
@@ -1219,6 +1134,17 @@ Item {
                 ToolTip.text: qsTr("Flip vertically (V)")
                 onClicked: view.toggleFlipV()
             }
+            ToolbarButton {
+                objectName: "viewerResetView"
+                theme: view.theme
+                visible: !view.miniToolbar
+                icon.name: "view-refresh-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: !!view.currentPath
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Reset view")
+                onClicked: view.resetView()
+            }
 
             ToolbarSeparator {
                 theme: view.theme
@@ -1226,15 +1152,49 @@ Item {
             }
 
             ToolbarButton {
+                objectName: "viewerFilmstripToggle"
                 theme: view.theme
                 visible: !view.miniToolbar
                 checkable: true
                 checked: !!view.state.filmstrip
-                icon.name: "view-list-symbolic"
+                icon.source: "icons/view-thumbnails.svg"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
                 onClicked: view.command({ type: "toggle_filmstrip" })
+            }
+            Rectangle {
+                id: viewerBgSwatch
+                objectName: "viewerBgSwatch"
+                visible: !view.miniToolbar
+                implicitWidth: 24
+                implicitHeight: 24
+                radius: view.theme.radius
+                color: (!view.canvasBgUseTheme && view.canvasBgChecker)
+                       ? "transparent"
+                       : (view.canvasBgUseTheme ? view.theme.background : view.canvasBgColor)
+                border.width: 1
+                border.color: viewerBgHover.hovered ? view.theme.accent : view.theme.border
+                clip: true
+
+                Checkerboard {
+                    anchors.fill: parent
+                    visible: !view.canvasBgUseTheme && view.canvasBgChecker
+                }
+                HoverHandler { id: viewerBgHover; cursorShape: Qt.PointingHandCursor }
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: qsTr("Canvas background")
+                    onClicked: {
+                        viewerBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
+                        viewerBgPopup.colour = view.canvasBgColor
+                        viewerBgPopup.showBelow(viewerBgSwatch)
+                    }
+                }
             }
             ToolbarButton {
                 objectName: "viewerOverflowButton"
@@ -1246,6 +1206,46 @@ Item {
                 ToolTip.text: qsTr("More viewer actions")
                 onClicked: viewerOverflow.popup(this)
             }
+        }
+    }
+
+    property string viewerRightTab: "info"
+    property bool canvasBgUseTheme: true
+    property bool canvasBgChecker: false
+    property color canvasBgColor: "#ffffff"
+
+    BackgroundPopup {
+        id: viewerBgPopup
+        objectName: "viewerBgPopup"
+        theme: view.theme
+        transparent: !view.canvasBgUseTheme && view.canvasBgChecker
+        colour: view.canvasBgColor
+        onTransparentPicked: {
+            view.canvasBgUseTheme = false
+            view.canvasBgChecker = true
+        }
+        onColourPicked: function(value) {
+            view.canvasBgUseTheme = false
+            view.canvasBgChecker = false
+            view.canvasBgColor = value
+        }
+        onCustomPicked: {
+            viewerBgColorDialog.selectedColor = view.canvasBgColor
+            viewerBgColorDialog.open()
+        }
+    }
+
+    ColorPickerDialog {
+        id: viewerBgColorDialog
+        objectName: "viewerBgColorDialog"
+        theme: view.theme
+        title: qsTr("Canvas background")
+        selectedColor: view.canvasBgColor
+        onAccepted: {
+            view.canvasBgUseTheme = false
+            view.canvasBgChecker = false
+            view.canvasBgColor = selectedColor
+            view.forceActiveFocus()
         }
     }
 }

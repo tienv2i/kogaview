@@ -21,7 +21,9 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QImageReader>
+#include <QPalette>
 #include <QProcess>
+#include <QStyleHints>
 #include <QTimer>
 #include <QUrl>
 #include <QWindow>
@@ -35,6 +37,7 @@ constexpr auto kPortalService = "org.freedesktop.portal.Desktop";
 constexpr auto kPortalPath = "/org/freedesktop/portal/desktop";
 constexpr auto kFileChooserInterface = "org.freedesktop.portal.FileChooser";
 constexpr auto kOpenUriInterface = "org.freedesktop.portal.OpenURI";
+constexpr auto kScreenshotInterface = "org.freedesktop.portal.Screenshot";
 constexpr auto kRequestInterface = "org.freedesktop.portal.Request";
 constexpr int kDialogTimeoutMs = 5 * 60 * 1000;
 /// How long to wait for the portal to confirm a request we closed ourselves.
@@ -367,11 +370,70 @@ bool PlatformHelper::requestSaveFile(const QString& title, const QString& curren
   }
   m_folderMode = false;
   m_saveMode = true;
+  m_colorMode = false;
   const bool started = request(QStringLiteral("SaveFile"), title, options);
   if (!started) {
     m_saveMode = false;
   }
   return started;
+}
+
+bool PlatformHelper::requestPickColor()
+{
+  if (!m_portalAvailable) {
+    return false;
+  }
+  if (m_requestActive) {
+    emit dialogError(tr("Another file dialog is already open."));
+    return true;
+  }
+
+  const QString token = nextToken();
+  QVariantMap portalOptions;
+  portalOptions.insert(QStringLiteral("handle_token"), token);
+
+  const QString predicted = predictedRequestPath(token);
+  if (predicted.isEmpty() || !listenTo(predicted)) {
+    qWarning() << "KogaView portal: cannot subscribe to predicted PickColor request" << predicted;
+    return false;
+  }
+  m_requestActive = true;
+  m_folderMode = false;
+  m_saveMode = false;
+  m_colorMode = true;
+
+  QDBusMessage message = QDBusMessage::createMethodCall(
+    QString::fromLatin1(kPortalService),
+    QString::fromLatin1(kPortalPath),
+    QString::fromLatin1(kScreenshotInterface),
+    QStringLiteral("PickColor"));
+  message << parentWindowIdentifier() << portalOptions;
+
+  const QDBusMessage reply = QDBusConnection::sessionBus().call(message, QDBus::Block, 5000);
+  if (reply.type() == QDBusMessage::ErrorMessage) {
+    qWarning() << "KogaView portal: PickColor failed:" << reply.errorMessage();
+    resetRequest();
+    return false;
+  }
+
+  const QString requestPath = objectPathOf(reply.arguments().value(0));
+  if (requestPath.isEmpty()) {
+    qWarning() << "KogaView portal: empty request path for PickColor";
+    abandonRequest();
+    return false;
+  }
+  if (requestPath != predicted) {
+    stopListening();
+    if (!listenTo(requestPath)) {
+      qWarning() << "KogaView portal: cannot subscribe to" << requestPath;
+      abandonRequest();
+      return false;
+    }
+  }
+
+  m_timeout->start();
+  qInfo() << "KogaView portal: PickColor requested at" << m_requestPath;
+  return true;
 }
 
 bool PlatformHelper::request(const QString& method, const QString& title, const QVariantMap& options)
@@ -446,6 +508,7 @@ void PlatformHelper::onPortalResponse(uint response, const QVariantMap& results)
 
   const bool folderMode = m_folderMode;
   const bool saveMode = m_saveMode;
+  const bool colorMode = m_colorMode;
   const bool dismissing = m_dismissing;
   qInfo() << "KogaView portal: response" << response << "on" << m_requestPath;
   m_dismissing = false;
@@ -463,6 +526,30 @@ void PlatformHelper::onPortalResponse(uint response, const QVariantMap& results)
   }
   if (response != 0) {
     emit dialogError(tr("The portal dialog failed (response %1).").arg(response));
+    return;
+  }
+
+  if (colorMode) {
+    const QVariant colorVar = results.value(QStringLiteral("color"));
+    if (colorVar.canConvert<QDBusArgument>()) {
+      double r = 0.0;
+      double g = 0.0;
+      double b = 0.0;
+      const QDBusArgument arg = colorVar.value<QDBusArgument>();
+      arg.beginStructure();
+      arg >> r >> g >> b;
+      arg.endStructure();
+      const int ri = qBound(0, qRound(r * 255.0), 255);
+      const int gi = qBound(0, qRound(g * 255.0), 255);
+      const int bi = qBound(0, qRound(b * 255.0), 255);
+      const QString hex = QStringLiteral("#%1%2%3")
+        .arg(ri, 2, 16, QLatin1Char('0'))
+        .arg(gi, 2, 16, QLatin1Char('0'))
+        .arg(bi, 2, 16, QLatin1Char('0'));
+      emit colorPicked(hex);
+      return;
+    }
+    emit dialogError(tr("The portal color picker returned no usable color."));
     return;
   }
 
@@ -508,6 +595,7 @@ void PlatformHelper::resetRequest()
   m_dismissing = false;
   m_folderMode = false;
   m_saveMode = false;
+  m_colorMode = false;
   m_requestPath.clear();
   m_connectionService.clear();
 }
@@ -856,4 +944,56 @@ void PlatformHelper::revealInFolder(const QString& path)
     return;
   }
   emit dialogError(tr("Cannot open the containing folder."));
+}
+
+void PlatformHelper::applyThemePalette(const QVariantMap& colors, bool dark)
+{
+  const auto pick = [&colors](const char* key, const QColor& fallback) {
+    const QColor value = colors.value(QString::fromLatin1(key)).value<QColor>();
+    return value.isValid() ? value : fallback;
+  };
+
+  const QColor background = pick("background", dark ? QColor("#101216") : QColor("#f3f4f6"));
+  const QColor surface = pick("surface", dark ? QColor("#181b21") : QColor("#ffffff"));
+  const QColor surfaceAlt = pick("surfaceAlt", dark ? QColor("#21252d") : QColor("#eceef2"));
+  const QColor text = pick("text", dark ? QColor("#e8eaed") : QColor("#1c1f24"));
+  const QColor textMuted = pick("textMuted", dark ? QColor("#9aa1ac") : QColor("#5b6370"));
+  const QColor accent = pick("accent", dark ? QColor("#4a9eff") : QColor("#0a66c2"));
+  const QColor accentText = pick("accentText", dark ? QColor("#0b1a2b") : QColor("#ffffff"));
+  const QColor border = pick("border", dark ? QColor("#2b3039") : QColor("#d7dbe2"));
+
+  QPalette palette;
+  const auto setGroup = [&](QPalette::ColorGroup group) {
+    palette.setColor(group, QPalette::Window, background);
+    palette.setColor(group, QPalette::WindowText, text);
+    palette.setColor(group, QPalette::Base, surface);
+    palette.setColor(group, QPalette::AlternateBase, surfaceAlt);
+    palette.setColor(group, QPalette::Text, text);
+    palette.setColor(group, QPalette::Button, surface);
+    palette.setColor(group, QPalette::ButtonText, text);
+    palette.setColor(group, QPalette::BrightText, QColor("#ffffff"));
+    palette.setColor(group, QPalette::Highlight, accent);
+    palette.setColor(group, QPalette::HighlightedText, accentText);
+    palette.setColor(group, QPalette::ToolTipBase, surfaceAlt);
+    palette.setColor(group, QPalette::ToolTipText, text);
+    palette.setColor(group, QPalette::PlaceholderText, textMuted);
+    palette.setColor(group, QPalette::Mid, border);
+    palette.setColor(group, QPalette::Dark, border);
+    palette.setColor(group, QPalette::Light, surfaceAlt);
+    palette.setColor(group, QPalette::Shadow, border);
+  };
+  setGroup(QPalette::Active);
+  setGroup(QPalette::Inactive);
+  setGroup(QPalette::Disabled);
+
+  QColor disabledText = textMuted;
+  disabledText.setAlphaF(0.6);
+  palette.setColor(QPalette::Disabled, QPalette::WindowText, disabledText);
+  palette.setColor(QPalette::Disabled, QPalette::Text, disabledText);
+  palette.setColor(QPalette::Disabled, QPalette::ButtonText, disabledText);
+
+  QGuiApplication::setPalette(palette);
+  if (QStyleHints* hints = QGuiApplication::styleHints()) {
+    hints->setColorScheme(dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light);
+  }
 }

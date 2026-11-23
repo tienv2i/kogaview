@@ -4,13 +4,15 @@ agent: build
 ---
 Update in this order:
 
-1. `docs/SESSION-STATE.md` — working tree (branch, HEAD, dirty/untracked files),
-   environment facts that changed, what was measured this session, and the next
-   natural vertical slice.
-2. `docs/M1-REPORT.md` — a new row (next number) for each change delivered:
-   what changed, the tests and mutations that (dis)proved it, and the
-   real-window evidence actually captured, with the numbers measured.
-3. `AGENTS.md` — only when a rule, command or ownership boundary changed; never
+1. `docs/SESSION-STATE.md` — keep it compact (~50–80 lines: branch, HEAD,
+   environment facts that changed, current summary, next focus). Move older
+   details into `docs/SESSION-STATE-ARCHIVE.md` so context stays small.
+2. `docs/VERIFICATION-QUEUE.md` — ensure any Tier 1/2 unverified items are
+   recorded (or cleared if Tier 3 verified them).
+3. `docs/M1-REPORT.md` — a new row (next number) for each verified change
+   delivered: what changed, the tests and mutations that (dis)proved it, and
+   the real-window evidence actually captured, with the numbers measured.
+4. `AGENTS.md` — only when a rule, command or ownership boundary changed; never
    for a feature.
 
 Rules:
