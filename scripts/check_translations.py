@@ -257,7 +257,12 @@ def table() -> list[tuple[str, str]]:
     ]
 
 
-CORE_DIR = ROOT / "crates" / "app-core" / "src"
+# Every Rust source that can publish a line: Core's gateway and handlers, and the
+# Editor's own crate, which the split in `docs/adr/0023` moved out of `app-core`.
+CORE_DIRS = (
+    ROOT / "crates" / "app-core" / "src",
+    ROOT / "crates" / "app-editor" / "src",
+)
 UI_LINES = QML_DIR / "UiLines.qml"
 
 # `UiText::new("code")` and `UiText::with("code", …)`, including the form that
@@ -276,17 +281,23 @@ def core_codes() -> tuple[set[str], set[str]]:
     reviewer notices.
     """
     published: set[str] = set()
-    for path in sorted(CORE_DIR.glob("*.rs")):
-        text = path.read_text(encoding="utf-8")
-        # Test modules build lines of their own (`selected`, `cancelled`); they
-        # are not part of what Core can publish to the window. The test module
-        # is the last item in the file, so its `#[cfg(test)]` is at column 0 —
-        # the two indented ones inside `Core` gate test-only helpers.
-        test_module = text.find("\n#[cfg(test)]\n")
-        if test_module != -1:
-            text = text[:test_module]
-        for match in CORE_CODE.finditer(text):
-            published.add(match.group("code"))
+    for directory in CORE_DIRS:
+        for path in sorted(directory.glob("*.rs")):
+            # The Editor's suite is a file of its own, and its fixtures build
+            # lines of their own too; neither is something a window can show.
+            if path.name == "tests.rs":
+                continue
+            text = path.read_text(encoding="utf-8")
+            # Test modules build lines of their own (`selected`, `cancelled`);
+            # they are not part of what Core can publish to the window. The test
+            # module is the last item in the file, so its `#[cfg(test)]` is at
+            # column 0 — the two indented ones inside `Core` gate test-only
+            # helpers.
+            test_module = text.find("\n#[cfg(test)]\n")
+            if test_module != -1:
+                text = text[:test_module]
+            for match in CORE_CODE.finditer(text):
+                published.add(match.group("code"))
     drawn: set[str] = set()
     for match in QML_CASE.finditer(UI_LINES.read_text(encoding="utf-8")):
         drawn.add(match.group("code"))

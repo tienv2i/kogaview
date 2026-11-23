@@ -1,41 +1,448 @@
 <?xml version='1.0' encoding='utf-8'?>
 <TS version="2.1" language="vi_VN">
   <context>
+    <name>BatchCropDialog</name>
+    <message>
+      <location filename="../crates/desktop/qml/BatchCropDialog.qml" />
+      <source>Batch crop</source>
+      <translation>Cắt hàng loạt</translation>
+    </message>
+  </context>
+  <context>
+    <name>BatchConvertDialog</name>
+    <message>
+      <location filename="../crates/desktop/qml/BatchConvertDialog.qml" />
+      <source>Batch convert</source>
+      <translation>Chuyển đổi hàng loạt</translation>
+    </message>
+  </context>
+  <context>
+    <name>BatchJobDialog</name>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Stretch to size</source>
+      <translation>Giãn đúng cỡ</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Crop to fill</source>
+      <translation>Cắt vừa khung</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Fit with background</source>
+      <translation>Vừa khung kèm nền</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>None</source>
+      <translation>Không tô</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Transparent</source>
+      <translation>Trong suốt</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Black</source>
+      <translation>Đen</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>White</source>
+      <translation>Trắng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Gray</source>
+      <translation>Xám</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Custom color…</source>
+      <translation>Màu tùy chọn…</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Auto</source>
+      <translation>Tự động</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Bilinear</source>
+      <translation>Bilinear</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Bicubic</source>
+      <translation>Bicubic</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>BSpline</source>
+      <translation>BSpline</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Lanczos3</source>
+      <translation>Lanczos3</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Nearest</source>
+      <translation>Gần nhất</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>the open folder</source>
+      <translation>thư mục đang mở</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>their own folder</source>
+      <translation>thư mục của chính chúng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Select at least one image, or use the open folder.</source>
+      <translation>Hãy chọn ít nhất một ảnh, hoặc dùng thư mục đang mở.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Open a folder first, or select images.</source>
+      <translation>Hãy mở một thư mục trước, hoặc chọn ảnh.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Choose the folder to process.</source>
+      <translation>Hãy chọn thư mục cần xử lý.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Width and height must be at least 1 pixel.</source>
+      <translation>Chiều rộng và chiều cao phải ít nhất 1 pixel.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Enter a number for X, Y, width and height.</source>
+      <translation>Hãy nhập số cho X, Y, chiều rộng và chiều cao.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Width and height must be above 0 %.</source>
+      <translation>Chiều rộng và chiều cao phải lớn hơn 0 %.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>The rectangle must stay inside the image: X + width and Y + height cannot pass 100 %.</source>
+      <translation>Hình chữ nhật phải nằm trong ảnh: X + chiều rộng và Y + chiều cao không được vượt quá 100 %.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>That rectangle covers the whole image; set a width or height below 100 %.</source>
+      <translation>Hình chữ nhật đó phủ toàn bộ ảnh; hãy đặt chiều rộng hoặc chiều cao dưới 100 %.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Choose an output folder, or write beside the source.</source>
+      <translation>Hãy chọn thư mục đầu ra, hoặc ghi cạnh tệp gốc.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>A suffix cannot contain a path separator.</source>
+      <translation>Hậu tố không được chứa dấu phân cách đường dẫn.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>An empty suffix beside the source would replace it; add a suffix, choose another folder, or tick “Replace the originals”.</source>
+      <translation>Hậu tố trống cạnh tệp gốc sẽ thay thế chính tệp đó; hãy thêm hậu tố, chọn thư mục khác, hoặc đánh dấu “Thay thế tệp gốc”.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>%1 is already %2; add a suffix to keep a copy.</source>
+      <translation>%1 đã là %2; hãy thêm hậu tố để giữ một bản sao.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>%1 selected image(s)</source>
+      <translation>%1 ảnh được chọn</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>every image in %1</source>
+      <translation>mọi ảnh trong %1</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>%1 will be replaced in place; a .bak copy is kept.</source>
+      <translation>%1 sẽ được thay thế tại chỗ; một bản sao .bak được giữ lại.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>into %1</source>
+      <translation>vào %1</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>beside each source</source>
+      <translation>cạnh mỗi tệp gốc</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>with %1 before the extension</source>
+      <translation>với %1 trước phần mở rộng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>keeping the name</source>
+      <translation>giữ nguyên tên</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>%1 will be written %2 %3.</source>
+      <translation>%1 sẽ được ghi %2 %3.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>×</source>
+      <translation>×</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Width</source>
+      <translation>Rộng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Constrain proportions</source>
+      <translation>Giữ nguyên tỉ lệ</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Height</source>
+      <translation>Cao</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Fit</source>
+      <translation>Vừa khung</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Background</source>
+      <translation>Nền</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Filter</source>
+      <translation>Bộ lọc</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>X</source>
+      <translation>X</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Y</source>
+      <translation>Y</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Percentages are of each image&apos;s own sides, so one rectangle trims the same relative area from every size.</source>
+      <translation>Tỉ lệ phần trăm tính theo từng cạnh của mỗi ảnh, nên một hình chữ nhật sẽ cắt cùng một vùng tương đối ở mọi kích thước.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Format</source>
+      <translation>Định dạng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Quality</source>
+      <translation>Chất lượng</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Images</source>
+      <translation>Ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>The selection (%1 image(s))</source>
+      <translation>Vùng chọn (%1 ảnh)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Every image in %1</source>
+      <translation>Mọi ảnh trong %1</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Another folder</source>
+      <translation>Thư mục khác</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>No folder chosen</source>
+      <translation>Chưa chọn thư mục</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Choose…</source>
+      <translation>Chọn…</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Save to</source>
+      <translation>Lưu vào</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>The images&apos; folder (%1)</source>
+      <translation>Thư mục của ảnh (%1)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Options</source>
+      <translation>Tuỳ chọn</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Suffix</source>
+      <translation>Hậu tố</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>(none)</source>
+      <translation>(không)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Replace the originals (a .bak copy is kept)</source>
+      <translation>Thay thế tệp gốc (giữ bản sao .bak)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Cancel</source>
+      <translation>Huỷ</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Run</source>
+      <translation>Chạy</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Choose a folder of images</source>
+      <translation>Chọn thư mục chứa ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Choose an output folder</source>
+      <translation>Chọn thư mục đầu ra</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchJobDialog.qml" />
+      <source>Background color</source>
+      <translation>Màu nền</translation>
+    </message>
+  </context>
+  <context>
+    <name>BatchResizeDialog</name>
+    <message>
+      <location filename="../crates/desktop/qml/BatchResizeDialog.qml" />
+      <source>Batch resize</source>
+      <translation>Đổi kích thước hàng loạt</translation>
+    </message>
+  </context>
+  <context>
     <name>BatchPanel</name>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="23" />
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
       <source>Batch action</source>
       <translation>Tác vụ hàng loạt</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="33" />
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
       <source>No images selected</source>
       <translation>Chưa chọn ảnh nào</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="34" />
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
       <source>%1 selected</source>
       <translation>%1 ảnh được chọn</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="47" />
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
       <source>Resize…</source>
       <translation>Đổi kích thước…</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="54" />
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Crop…</source>
+      <translation>Cắt…</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
       <source>Convert…</source>
       <translation>Chuyển đổi…</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="61" />
-      <source>Export…</source>
-      <translation>Xuất…</translation>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>%1 · %2 of %3</source>
+      <translation>%1 · %2 trên %3</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/BatchPanel.qml" line="70" />
-      <source>Batch actions are not available yet.</source>
-      <translation>Tác vụ hàng loạt chưa khả dụng.</translation>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>%1 cancelled after %2 of %3</source>
+      <translation>%1 đã hủy sau %2 trên %3 ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>%1 finished: %2 of %3</source>
+      <translation>%1 hoàn tất: %2 trên %3 ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>%1 finished: %2 of %3, %4 failed</source>
+      <translation>%1 hoàn tất: %2 trên %3 ảnh, %4 lỗi</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Writing %1</source>
+      <translation>Đang ghi %1</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Cancel</source>
+      <translation>Huỷ</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Select images first, or batch every image in the open folder from the form.</source>
+      <translation>Hãy chọn ảnh trước, hoặc xử lý hàng loạt mọi ảnh trong thư mục đang mở từ biểu mẫu.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>The source files are kept unless the form asks to replace them.</source>
+      <translation>Các tệp gốc được giữ nguyên trừ khi biểu mẫu yêu cầu thay thế.</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Resize</source>
+      <translation>Đổi kích thước</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Crop</source>
+      <translation>Cắt</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/BatchPanel.qml" />
+      <source>Convert</source>
+      <translation>Chuyển đổi</translation>
     </message>
   </context>
   <context>
@@ -500,9 +907,29 @@
       <translation>#rrggbb</translation>
     </message>
     <message>
-      <location filename="../crates/desktop/qml/EditorView.qml" line="3679" />
+      <location filename="../crates/desktop/qml/EditorView.qml" line="3763" />
       <source>Swap the foreground and background colours (X)</source>
       <translation>Đổi màu tiền cảnh và hậu cảnh (X)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="3681" />
+      <source>Background color</source>
+      <translation>Màu nền</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="3704" />
+      <source>Foreground color</source>
+      <translation>Màu tiền cảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="3802" />
+      <source>Reset the colours to black and white (D)</source>
+      <translation>Đặt lại màu về đen và trắng (D)</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/EditorView.qml" line="3816" />
+      <source>Foreground</source>
+      <translation>Tiền cảnh</translation>
     </message>
     <message>
       <location filename="../crates/desktop/qml/EditorView.qml" line="3751" />
@@ -1519,6 +1946,11 @@
       <source>Toggle tool and reference panel</source>
       <translation>Bật/tắt bảng công cụ và tham chiếu</translation>
     </message>
+    <message>
+      <location filename="../crates/desktop/qml/Theme.qml" />
+      <source>Tools…</source>
+      <translation>Công cụ…</translation>
+    </message>
   </context>
   <context>
     <name>UiLines</name>
@@ -2116,6 +2548,96 @@
       <location filename="../crates/desktop/qml/UiLines.qml" line="178" />
       <source>Eraser stroke</source>
       <translation>Nét tẩy</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Starting a batch of %1 image(s)…</source>
+      <translation>Bắt đầu xử lý hàng loạt %1 ảnh…</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Batch finished: %1 of %2 image(s)</source>
+      <translation>Xử lý hàng loạt xong: %1 trên %2 ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Batch finished: %1 of %2 image(s), %3 failed</source>
+      <translation>Xử lý hàng loạt xong: %1 trên %2 ảnh, %3 lỗi</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Batch cancelled after %1 of %2 image(s)</source>
+      <translation>Đã hủy xử lý hàng loạt sau %1 trên %2 ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>The batch stopped before it finished</source>
+      <translation>Tác vụ hàng loạt dừng trước khi hoàn tất</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>A batch is already running</source>
+      <translation>Đang có một tác vụ hàng loạt chạy</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>There is no image to process</source>
+      <translation>Không có ảnh nào để xử lý</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>A batch can process at most %1 images at once</source>
+      <translation>Mỗi lượt chỉ xử lý hàng loạt tối đa %1 ảnh</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Two files would be written to %1; add a suffix or choose another folder</source>
+      <translation>Hai tệp sẽ được ghi vào %1; hãy thêm hậu tố hoặc chọn thư mục khác</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Cannot name an output file for %1</source>
+      <translation>Không thể đặt tên tệp đầu ra cho %1</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>That would write over %1; add a suffix or choose another folder</source>
+      <translation>Thao tác đó sẽ ghi đè %1; hãy thêm hậu tố hoặc chọn thư mục khác</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Replacing %1 in place would keep its old format; choose a suffix or another folder</source>
+      <translation>Thay thế %1 tại chỗ sẽ giữ định dạng cũ; hãy chọn hậu tố hoặc thư mục khác</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>A crop must stay inside the image: X and Y at least 0, width and height above 0, and each side ending at 100 %</source>
+      <translation>Vùng cắt phải nằm trong ảnh: X và Y ít nhất 0, chiều rộng và chiều cao lớn hơn 0, và mỗi cạnh kết thúc ở 100 %</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>That crop covers the whole image; set a width or height below 100 %</source>
+      <translation>Vùng cắt đó phủ toàn bộ ảnh; hãy đặt chiều rộng hoặc chiều cao dưới 100 %</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>The JPEG quality must be between 1 and 100</source>
+      <translation>Chất lượng JPEG phải nằm trong khoảng 1 đến 100</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>A suffix cannot contain a path separator</source>
+      <translation>Hậu tố không được chứa dấu phân cách đường dẫn</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>Replacing the originals cannot also choose an output folder</source>
+      <translation>Không thể vừa thay thế tệp gốc vừa chọn thư mục đầu ra</translation>
+    </message>
+    <message>
+      <location filename="../crates/desktop/qml/UiLines.qml" />
+      <source>The output folder does not exist: %1</source>
+      <translation>Thư mục đầu ra không tồn tại: %1</translation>
     </message>
   </context>
   <context>

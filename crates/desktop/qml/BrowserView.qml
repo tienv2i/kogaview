@@ -42,6 +42,9 @@ Item {
     signal requestDelete(var paths)
     /// "Open folder": the shell owns the dialog, so the view only asks for it.
     signal requestOpenFolder()
+    /// The Batch page asked for its form. The shell owns the dialog because it
+    /// is modal for the whole window; `mode` is `resize`, `crop` or `convert`.
+    signal requestBatch(string mode)
     /// Ask the shell to select the file in the desktop's file manager (`Show
     /// in folder`). The platform layer owns the FileManager1/portal choice, so
     /// the view only names the path.
@@ -64,6 +67,10 @@ Item {
     /// remembers the cell the next arrow starts from, because a selection that
     /// left the folder (or an empty one) has no index to walk from.
     property int keyboardCursor: -1
+    /// The cell a Shift-click or Shift-arrow range grows from. A plain click
+    /// and a Ctrl-click move it; a range never does, so the anchor stays put
+    /// while the other end moves.
+    property int selectionAnchor: -1
 
     /// The saved layout: which panels this workspace shows, the two dock
     /// widths and the Editor's split. The shell owns one copy for the three
@@ -142,6 +149,52 @@ Item {
             }
         }
         return count
+    }
+    /// The selected paths that are images, in the order the selection names
+    /// them. The batch form sends exactly these: Core would filter the rest,
+    /// but the count on the form must match the count the job reports.
+    readonly property var selectedImagePaths: {
+        var selection = view.state.selection || []
+        var entries = view.entries || []
+        var paths = []
+        for (var index = 0; index < selection.length; ++index) {
+            for (var entry = 0; entry < entries.length; ++entry) {
+                if (entries[entry].path === selection[index]) {
+                    if (entries[entry].isImage) paths.push(entries[entry].path)
+                    break
+                }
+            }
+        }
+        return paths
+    }
+    /// The first image a batch would process, so its form opens on a real
+    /// picture's shape. The selection wins; an empty one falls back to the
+    /// folder's first image.
+    readonly property var batchSample: {
+        var selection = view.state.selection || []
+        var entries = view.entries || []
+        for (var index = 0; index < selection.length; ++index) {
+            for (var entry = 0; entry < entries.length; ++entry) {
+                if (entries[entry].path === selection[index] && entries[entry].isImage) {
+                    return entries[entry]
+                }
+            }
+        }
+        for (var fallback = 0; fallback < entries.length; ++fallback) {
+            if (entries[fallback].isImage) return entries[fallback]
+        }
+        return null
+    }
+    /// Show the Batch page: a job just started there, and its progress is the
+    /// answer the form promised — and the page names the three tools a form
+    /// belongs to. A layout that hides the panel would show neither, so the
+    /// page asks for the panel as well.
+    function showBatchPage() {
+        if (!view.batchPanelVisible) {
+            view.setPanelVisible("batch", true)
+            return
+        }
+        view.rightPage = "batch"
     }
     /// Settings' Appearance tab toggled one of this workspace's panels. The
     /// layout is Core's, so the view reports which key changed; opening a page
@@ -249,11 +302,77 @@ Item {
         if (list.length === 0) return;
         index = Math.max(0, Math.min(list.length - 1, index));
         view.keyboardCursor = index;
+        view.selectionAnchor = index;
         grid.currentIndex = index;
         grid.positionViewAtIndex(index, GridView.Contain);
         var selection = view.state.selection || [];
         if (selection.length === 1 && selection[0] === list[index].path) return;
         view.command({ type: "select", paths: [list[index].path] });
+    }
+
+    /// A click on one cell. A plain click selects exactly that cell; Ctrl
+    /// toggles it and leaves the rest of the selection alone; Shift selects the
+    /// range from the anchor to this cell. The modifiers come from the click
+    /// itself, so the same gesture works whether the window's last key was a
+    /// Ctrl or not.
+    function clickIndex(index, modifiers) {
+        var list = view.entries || [];
+        if (index < 0 || index >= list.length || !list[index]) return;
+        var path = list[index].path;
+        var selection = (view.state.selection || []).slice();
+        if ((modifiers & Qt.ShiftModifier) !== 0) {
+            view.extendSelectionTo(index);
+            return;
+        }
+        view.keyboardCursor = index;
+        view.selectionAnchor = index;
+        grid.currentIndex = index;
+        if ((modifiers & Qt.ControlModifier) !== 0) {
+            var at = selection.indexOf(path);
+            if (at >= 0) {
+                selection.splice(at, 1);
+            } else {
+                selection.push(path);
+            }
+            view.command({ type: "select", paths: selection });
+            return;
+        }
+        grid.positionViewAtIndex(index, GridView.Contain);
+        if (selection.length === 1 && selection[0] === path) return;
+        view.command({ type: "select", paths: [path] });
+    }
+
+    /// The cell a Shift+arrow grows or shrinks from: the keyboard cursor when
+    /// one is set, otherwise the first selected entry. The anchor is the other
+    /// end and stays put.
+    function rangeCursor() {
+        var count = (view.entries || []).length;
+        if (view.keyboardCursor >= 0 && view.keyboardCursor < count) {
+            return view.keyboardCursor;
+        }
+        return view.currentIndex();
+    }
+
+    /// Select the range from the anchor to `index`, inclusive. The anchor is    /// the cell the range grows from; when there is none yet, the range starts
+    /// where the keyboard cursor is (or at `index` itself).
+    function extendSelectionTo(index) {
+        var list = view.entries || [];
+        if (list.length === 0) return;
+        index = Math.max(0, Math.min(list.length - 1, index));
+        if (view.selectionAnchor < 0) {
+            view.selectionAnchor = view.currentIndex();
+        }
+        var anchor = view.selectionAnchor < 0 ? index : view.selectionAnchor;
+        var start = Math.min(anchor, index);
+        var end = Math.max(anchor, index);
+        var paths = [];
+        for (var step = start; step <= end; ++step) {
+            if (list[step]) paths.push(list[step].path);
+        }
+        view.keyboardCursor = index;
+        grid.currentIndex = index;
+        grid.positionViewAtIndex(index, GridView.Contain);
+        view.command({ type: "select", paths: paths });
     }
 
     /// How many cells fit in a row, so Up/Down move by a real row.
@@ -295,10 +414,12 @@ Item {
             if (list[index]) paths.push(list[index].path);
         }
         view.keyboardCursor = view.currentIndex();
+        view.selectionAnchor = 0;
         view.command({ type: "select", paths: paths });
     }
 
     function clearSelection() {
+        view.selectionAnchor = -1;
         if ((view.state.selection || []).length > 0) {
             view.command({ type: "select", paths: [] });
         }
@@ -326,6 +447,42 @@ Item {
 
     Keys.onPressed: function(event) {
         if ((event.modifiers & Qt.AltModifier) !== 0) {
+            return;
+        }
+        // Shift extends the selection from the anchor instead of moving it.
+        // The anchor is where the last plain click (or arrow) landed, so a
+        // range can grow and shrink without losing its other end.
+        if ((event.modifiers & Qt.ShiftModifier) !== 0) {
+            var cursor = view.rangeCursor();
+            if (cursor < 0) return;
+            switch (event.key) {
+            case Qt.Key_Left:
+                view.extendSelectionTo(cursor - 1);
+                event.accepted = true;
+                break;
+            case Qt.Key_Right:
+                view.extendSelectionTo(cursor + 1);
+                event.accepted = true;
+                break;
+            case Qt.Key_Up:
+                view.extendSelectionTo(cursor - view.gridColumns());
+                event.accepted = true;
+                break;
+            case Qt.Key_Down:
+                view.extendSelectionTo(cursor + view.gridColumns());
+                event.accepted = true;
+                break;
+            case Qt.Key_Home:
+                view.extendSelectionTo(0);
+                event.accepted = true;
+                break;
+            case Qt.Key_End:
+                view.extendSelectionTo((view.entries || []).length - 1);
+                event.accepted = true;
+                break;
+            default:
+                break;
+            }
             return;
         }
         if ((event.modifiers & Qt.ControlModifier) !== 0) {
@@ -739,15 +896,26 @@ Item {
 
                     HoverHandler { id: cellHover }
 
-                    TapHandler {
+                    // A MouseArea rather than a TapHandler because the
+                    // modifiers of the click are what decide between "this
+                    // one", "add this one" and "the range to here" — and a
+                    // TapHandler's point carries no modifiers.
+                    MouseArea {
+                        anchors.fill: parent
                         acceptedButtons: Qt.LeftButton
-                        onSingleTapped: view.command({ type: "select", paths: [entry.path] })
-                        onDoubleTapped: view.openEntry(entry)
+                        onClicked: function(mouse) { view.clickIndex(index, mouse.modifiers) }
+                        onDoubleClicked: view.openEntry(entry)
                     }
                     TapHandler {
                         acceptedButtons: Qt.RightButton
                         onSingleTapped: {
-                            view.command({ type: "select", paths: [entry.path] });
+                            // Right-clicking inside a multi-selection keeps it:
+                            // the menu then acts on everything the user chose.
+                            var selection = view.state.selection || [];
+                            if (selection.indexOf(entry.path) < 0) {
+                                view.selectionAnchor = index;
+                                view.command({ type: "select", paths: [entry.path] });
+                            }
                             view.openFileMenu(entry);
                         }
                     }
@@ -853,6 +1021,11 @@ Item {
                     width: browserBatchPage.availableWidth
                     theme: view.theme
                     selectionCount: view.selectedImages
+                    batch: view.state.batch || null
+                    onRequestResize: view.requestBatch("resize")
+                    onRequestCrop: view.requestBatch("crop")
+                    onRequestConvert: view.requestBatch("convert")
+                    onRequestCancel: view.command({ type: "cancel_operation" })
                 }
             }
         }

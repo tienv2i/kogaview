@@ -105,6 +105,20 @@ QStringList menuItemLabelsIn(const QString& path, const QStringList& catalogue =
           labels.append(QStringLiteral("<slot %1>").arg(slot));
         }
       }
+      // `Theme.batchToolsLabel` names the last catalogue entry instead of an
+      // index, so resolve it to the entry that carries "Tools" — and if the
+      // catalogue has lost that word this test says so rather than skipping the
+      // entry.
+      if (stripped.contains(QStringLiteral("batchToolsLabel"))) {
+        QString tools;
+        for (const QString& label : catalogue) {
+          if (label.contains(QStringLiteral("Tools"))) {
+            tools = label;
+            break;
+          }
+        }
+        labels.append(tools.isEmpty() ? QStringLiteral("<no Tools label>") : tools);
+      }
       auto matches = literal.globalMatch(stripped);
       while (matches.hasNext()) {
         labels.append(matches.next().captured(1));
@@ -458,6 +472,41 @@ private:
              "the Browser never took keyboard focus");
   }
 
+  /// A listing of four images, so a range has something to span.
+  void showFourImages()
+  {
+    // `baseState()` writes the two-entry fixture into `entryList`, so the four
+    // cells replace it afterwards — the same order `downMovesByOneGridRow`
+    // uses.
+    QVariantMap state = baseState();
+    QVariantList entries;
+    for (int index = 0; index < 4; ++index) {
+      entries.append(entry(QStringLiteral("pic%1.png").arg(index),
+                           QStringLiteral("/root/pic%1.png").arg(index), false, true));
+    }
+    entryList = entries;
+    state.insert(QStringLiteral("treeRevision"), 0);
+    showState(browserItem(), state);
+    settle();
+  }
+
+  /// Publish a selection back to a view showing the four-image fixture. Not
+  /// `showSelection`, which rebuilds `baseState()`'s two-entry listing.
+  void showFourImageSelection(const QStringList& paths)
+  {
+    QVariantMap state = baseState();
+    QVariantList entries;
+    for (int index = 0; index < 4; ++index) {
+      entries.append(entry(QStringLiteral("pic%1.png").arg(index),
+                           QStringLiteral("/root/pic%1.png").arg(index), false, true));
+    }
+    entryList = entries;
+    state.insert(QStringLiteral("treeRevision"), 0);
+    state.insert(QStringLiteral("selection"), paths);
+    showState(browserItem(), state);
+    settle();
+  }
+
 private slots:
   /// Merge a `layoutRequested` patch into `m_layout`, key by key, exactly as
   /// `Main.qml`'s `mergeLayout` does; the view then sees the new layout.
@@ -544,6 +593,10 @@ private slots:
       explorer->setProperty("lastTreeRevision", -1);
     }
     view->setProperty("keyboardCursor", -1);
+    view->setProperty("selectionAnchor", -1);
+    // The sidebar page is presentation state; a case that opened Batch must
+    // not decide what the next one shows when it asserts the Preview page.
+    view->setProperty("rightPage", QStringLiteral("preview"));
     // The stub cache of a previous test lived on its stack; drop it before it
     // dangles and before this test decides whether it wants a cache at all.
     // (A null *QObject pointer*, not an invalid QVariant: the property is `var`
@@ -1817,6 +1870,81 @@ private slots:
     QCOMPARE(labels.at(2), QStringLiteral("Open in editor…"));
   }
 
+  /// The shell menu's batch entry names the Tools label, not a slot — and it
+  /// opens the Batch page, which names the three tools, rather than one form.
+  ///
+  /// This was wrong on a real window: the entry was written against
+  /// `menuEntries[39]`, which is the folder menu's "Toggle information panel",
+  /// so the burger menu offered "Toggle information panel" and opened the batch
+  /// form — and driving the menu by its own text could not find "Tools…". The
+  /// label list is index-addressed and append-only, so the entry now reads the
+  /// named slot; this case pins both halves.
+  void theBatchMenuEntryNamesTheToolsLabel()
+  {
+    QQuickItem* view = browserItem();
+    QObject* theme = view->property("theme").value<QObject*>();
+    QVERIFY(theme != nullptr);
+    const QVariantList entries = theme->property("menuEntryLabels").value<QVariantList>();
+    QVERIFY(!entries.isEmpty());
+    const QString last = entries.last().toString();
+    QVERIFY2(last.contains(QStringLiteral("Tools")),
+             qPrintable(QStringLiteral("the last menu label is \"%1\", not the Tools entry")
+                          .arg(last)));
+    // The named slot is the last label, by definition in the theme's own source.
+    QCOMPARE(theme->property("batchToolsLabel").toString(), last);
+
+    QFile source(qmlDir() + QStringLiteral("/Main.qml"));
+    QVERIFY2(source.open(QIODevice::ReadOnly | QIODevice::Text), "Main.qml is missing");
+    const QString text = QString::fromUtf8(source.readAll());
+    const int batchEntry = text.indexOf(QStringLiteral("onTriggered: root.openBatchTools()"));
+    QVERIFY2(batchEntry > 0, "the shell menu no longer opens the batch tools");
+    // The text that opens the form is the entry's own label line, a few lines
+    // above the handler.
+    const int labelStart = text.lastIndexOf(QStringLiteral("MenuItem {"), batchEntry);
+    QVERIFY2(labelStart >= 0, "the batch handler is not inside a MenuItem");
+    const QString entry = text.mid(labelStart, batchEntry - labelStart);
+    QVERIFY2(entry.contains(QStringLiteral("text: appTheme.batchToolsLabel")),
+             qPrintable(QStringLiteral("the batch entry draws %1")
+                          .arg(entry.section(QLatin1Char('\n'), 1, 1).trimmed())));
+    QVERIFY2(!entry.contains(QRegularExpression(QStringLiteral("menuEntries\\s*\\["))),
+             "the batch entry addresses the label list by index again");
+  }
+
+  /// The shell's Tools… entry calls `showBatchPage`, which is this view's name
+  /// for "put the batch tools in front of me": with the page hidden by the
+  /// layout it must bring the column back, and with the page visible it must
+  /// only switch the tab. A page that is only a tab switch would make the entry
+  /// a no-op for anyone who switched the Batch panel off.
+  void showBatchPageBringsTheToolsBack()
+  {
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("rightPanel"), true);
+    showState(browserItem(), state);
+    settle();
+    QObject* root = browserRoot();
+    QVERIFY2(root->property("batchPanelVisible").toBool(), "a fresh layout hides the page");
+    QCOMPARE(root->property("rightPage").toString(), QStringLiteral("preview"));
+
+    QVERIFY(QMetaObject::invokeMethod(root, "showBatchPage"));
+    settle();
+    QCOMPARE(root->property("rightPage").toString(), QStringLiteral("batch"));
+    QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
+
+    // Switched off in Settings › Appearance: naming the page also asks for it.
+    QQmlExpression hide(QQmlEngine::contextForObject(root), root,
+                        QStringLiteral("setPanelVisible('batch', false)"));
+    QVERIFY(!hide.hasError());
+    hide.evaluate();
+    settle();
+    QVERIFY(!root->property("batchPanelVisible").toBool());
+
+    QVERIFY(QMetaObject::invokeMethod(root, "showBatchPage"));
+    settle();
+    QVERIFY2(root->property("batchPanelVisible").toBool(), "the page stayed hidden");
+    QCOMPARE(root->property("rightPage").toString(), QStringLiteral("batch"));
+    QVERIFY(findItem(QStringLiteral("batchSelection"))->isVisible());
+  }
+
   /// A folder's context menu used to offer `Open` and `Explore here`, two
   /// entries that sent the same `open_folder` command. A menu may repeat a
   /// *verb* only when the two rows do different things; one action per row is
@@ -2174,6 +2302,200 @@ private slots:
              QStringList{ QStringLiteral("/root/dirA") });
   }
 
+  // ------------------------------------------------------------ multi-select
+
+  /// Ctrl-click adds one cell to the selection and a second Ctrl-click on the
+  /// same cell takes it back — the toggle a file manager means by Ctrl.
+  void ctrlClickTogglesOneCell()
+  {
+    showFourImages();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QQuickItem* second = findCell(QStringLiteral("/root/pic1.png"));
+    QVERIFY2(second != nullptr, "no second cell");
+
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::ControlModifier,
+                      second->mapToScene(QPointF(second->width() / 2,
+                                                 second->height() / 2)).toPoint());
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/pic1.png") });
+
+    // The view names the new set; the shell publishes it back, which is what
+    // the second Ctrl-click reads. Publishing rebuilds the delegates, so the
+    // cell is looked up again instead of reusing the pointer.
+    showFourImageSelection(QStringList{ QStringLiteral("/root/pic0.png"),
+                                        QStringLiteral("/root/pic1.png") });
+    second = findCell(QStringLiteral("/root/pic1.png"));
+    QVERIFY2(second != nullptr, "the second cell left the grid");
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::ControlModifier,
+                      second->mapToScene(QPointF(second->width() / 2,
+                                                 second->height() / 2)).toPoint());
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/pic0.png") });
+  }
+
+  /// Shift-click selects the range between the anchor and the clicked cell,
+  /// and a second Shift-click to a further cell grows the same range.
+  void shiftClickSelectsTheRangeFromTheAnchor()
+  {
+    showFourImages();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+
+    QQuickItem* first = findCell(QStringLiteral("/root/pic0.png"));
+    QQuickItem* third = findCell(QStringLiteral("/root/pic2.png"));
+    QVERIFY2(first != nullptr && third != nullptr, "the fixture needs three cells");
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::NoModifier,
+                      first->mapToScene(QPointF(first->width() / 2,
+                                                first->height() / 2)).toPoint());
+    settle();
+    spy.clear();
+
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::ShiftModifier,
+                      third->mapToScene(QPointF(third->width() / 2,
+                                                third->height() / 2)).toPoint());
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/pic0.png"),
+                           QStringLiteral("/root/pic1.png"),
+                           QStringLiteral("/root/pic2.png") }));
+
+    // The anchor did not move, so the fourth cell extends the same range.
+    QQuickItem* fourth = findCell(QStringLiteral("/root/pic3.png"));
+    QVERIFY2(fourth != nullptr, "no fourth cell");
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::ShiftModifier,
+                      fourth->mapToScene(QPointF(fourth->width() / 2,
+                                                 fourth->height() / 2)).toPoint());
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/pic0.png"),
+                           QStringLiteral("/root/pic1.png"),
+                           QStringLiteral("/root/pic2.png"),
+                           QStringLiteral("/root/pic3.png") }));
+  }
+
+  /// Shift+arrow grows the selection from the anchor by keyboard, the same
+  /// range a Shift-click draws.
+  void shiftArrowExtendsTheSelection()
+  {
+    showFourImages();
+    giveKeyboardFocus();
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QTest::keyClick(m_browser, Qt::Key_Right);
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/pic0.png") });
+    showFourImageSelection(QStringList{ QStringLiteral("/root/pic0.png") });
+
+    QTest::keyClick(m_browser, Qt::Key_Right, Qt::ShiftModifier);
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/pic0.png"),
+                           QStringLiteral("/root/pic1.png") }));
+
+    showFourImageSelection(QStringList{ QStringLiteral("/root/pic0.png"),
+                                        QStringLiteral("/root/pic1.png") });
+    QTest::keyClick(m_browser, Qt::Key_Right, Qt::ShiftModifier);
+    settle();
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(2).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/pic0.png"),
+                           QStringLiteral("/root/pic1.png"),
+                           QStringLiteral("/root/pic2.png") }));
+  }
+
+  /// A plain click after a range collapses the selection back to one cell and
+  /// becomes the new anchor: the next Shift-click starts from there.
+  void aPlainClickResetsTheAnchor()
+  {
+    showFourImages();
+    showFourImageSelection(QStringList{ QStringLiteral("/root/pic0.png"),
+                                        QStringLiteral("/root/pic1.png"),
+                                        QStringLiteral("/root/pic2.png") });
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QQuickItem* third = findCell(QStringLiteral("/root/pic2.png"));
+    QQuickItem* fourth = findCell(QStringLiteral("/root/pic3.png"));
+    QVERIFY2(third != nullptr && fourth != nullptr, "no third and fourth cell");
+
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::NoModifier,
+                      third->mapToScene(QPointF(third->width() / 2,
+                                                third->height() / 2)).toPoint());
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             QStringList{ QStringLiteral("/root/pic2.png") });
+
+    QTest::mouseClick(m_browser, Qt::LeftButton, Qt::ShiftModifier,
+                      fourth->mapToScene(QPointF(fourth->width() / 2,
+                                                 fourth->height() / 2)).toPoint());
+    settle();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(0).toMap().value(QStringLiteral("paths")).toStringList(),
+             (QStringList{ QStringLiteral("/root/pic2.png"),
+                           QStringLiteral("/root/pic3.png") }));
+  }
+
+  /// The Batch page draws Core's job: the count while it runs, the Cancel that
+  /// stops it, and the outcome once it stops. This page owns no worker; it
+  /// renders the `batch` slot the snapshot carries.
+  void theBatchPageDrawsThePublishedJob()
+  {
+    QVariantMap state = baseState();
+    state.insert(QStringLiteral("batch"), QVariantMap{
+        { QStringLiteral("operation"), QStringLiteral("resize") },
+        { QStringLiteral("total"), 4 },
+        { QStringLiteral("done"), 1 },
+        { QStringLiteral("failed"), 0 },
+        { QStringLiteral("running"), true },
+        { QStringLiteral("cancelled"), false },
+        { QStringLiteral("current"), QStringLiteral("pic1.png") } });
+    showState(browserItem(), state);
+    settle();
+    browserRoot()->setProperty("rightPage", QStringLiteral("batch"));
+    settle();
+
+    QQuickItem* label = findItem(QStringLiteral("batchProgressLabel"));
+    QVERIFY2(label != nullptr, "the Batch page draws no progress");
+    QTRY_VERIFY(label->isVisible());
+    QCOMPARE(label->property("text").toString(), QStringLiteral("Resize · 1 of 4"));
+    QCOMPARE(findItem(QStringLiteral("batchCurrent"))->property("text").toString(),
+             QStringLiteral("Writing pic1.png"));
+    QVERIFY(findItem(QStringLiteral("batchCancel"))->isVisible());
+    QCOMPARE(findItem(QStringLiteral("batchProgress"))->property("value").toInt(), 1);
+
+    // Cancel is the job's own command, not one per file.
+    QSignalSpy spy(browserRoot(), SIGNAL(command(QVariant)));
+    QVERIFY(QMetaObject::invokeMethod(findItem(QStringLiteral("batchCancel")), "click"));
+    settle();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toMap().value(QStringLiteral("type")).toString(),
+             QStringLiteral("cancel_operation"));
+
+    // A finished job keeps its counts and words the outcome; the running-only
+    // controls are gone.
+    QVariantMap finished = state;
+    finished.insert(QStringLiteral("batch"), QVariantMap{
+        { QStringLiteral("operation"), QStringLiteral("crop") },
+        { QStringLiteral("total"), 4 },
+        { QStringLiteral("done"), 3 },
+        { QStringLiteral("failed"), 1 },
+        { QStringLiteral("running"), false },
+        { QStringLiteral("cancelled"), false },
+        { QStringLiteral("current"), QStringLiteral("pic3.png") } });
+    showState(browserItem(), finished);
+    settle();
+    QCOMPARE(findItem(QStringLiteral("batchProgressLabel"))->property("text").toString(),
+             QStringLiteral("Crop finished: 3 of 4, 1 failed"));
+    QVERIFY(!findItem(QStringLiteral("batchCancel"))->isVisible());
+    QVERIFY(findItem(QStringLiteral("batchResize"))->isEnabled());
+  }
+
   /// The right column holds two pages now: Preview (the picture and the
   /// file's details, which are read together) and Batch action (the selection
   /// as its own question). The checklist on the right edge hides either one
@@ -2234,7 +2556,22 @@ private slots:
     QCOMPARE(selection->property("text").toString(),
              QStringLiteral("No images selected"));
     QVERIFY(!findItem(QStringLiteral("previewThumbnail"))->isVisible());
-    QVERIFY(!findItem(QStringLiteral("batchResize"))->isEnabled());
+
+    // Batch's three verbs are live now: each one asks the shell for its form,
+    // and the page names the action it is for. The Export button is gone —
+    // exporting a copy was one file at a time and belongs to the Editor.
+    QSignalSpy batchRequests(browserRoot(), SIGNAL(requestBatch(QString)));
+    for (const char* name : {"batchResize", "batchCrop", "batchConvert"}) {
+      QQuickItem* button = findItem(QString::fromLatin1(name));
+      QVERIFY2(button != nullptr, qPrintable(QString::fromLatin1(name) + " is missing"));
+      QVERIFY2(button->isEnabled(), qPrintable(QString::fromLatin1(name) + " is disabled"));
+    }
+    QVERIFY2(findItem(QStringLiteral("batchExport")) == nullptr,
+             "the Batch page still offers a one-file Export action");
+    QVERIFY(QMetaObject::invokeMethod(findItem(QStringLiteral("batchCrop")), "click"));
+    settle();
+    QCOMPARE(batchRequests.count(), 1);
+    QCOMPARE(batchRequests.at(0).at(0).toString(), QStringLiteral("crop"));
 
     // Settings › Appearance drives the same two panels: both are visible on a
     // fresh layout. Hiding Preview keeps the dock on Batch action; hiding both

@@ -35,6 +35,14 @@ public:
   /// used, so the caller can show a fallback dialog.
   Q_INVOKABLE bool requestOpenFile(const QString& title);
   Q_INVOKABLE bool requestOpenFolder(const QString& title);
+  /// Ask where a file should be written (`FileChooser.SaveFile`).
+  ///
+  /// "Save as" is the same desktop dialog as "Open", with the desktop's own
+  /// overwrite question; the Qt fallback was the only chooser that *did not*
+  /// go through the portal, so the user met a different, cramped dialog with a
+  /// file-type combo on one workspace and the desktop's own everywhere else.
+  /// `currentName` is the file name the dialog opens on (no folder).
+  Q_INVOKABLE bool requestSaveFile(const QString& title, const QString& currentName);
 
   /// Close the file dialog that is still open. Used when the window goes away
   /// (and by the QA harness) so no portal request is left behind; the portal
@@ -91,6 +99,8 @@ public:
 signals:
   void filesSelected(const QStringList& paths);
   void folderSelected(const QString& path);
+  /// The answer to `requestSaveFile`: one path, already a local file path.
+  void saveFileSelected(const QString& path);
   void copyResult(bool ok, const QString& message);
   void dialogError(const QString& message);
   void info(const QString& message);
@@ -134,6 +144,7 @@ private:
 
   bool m_portalAvailable = false;
   bool m_folderMode = false;
+  bool m_saveMode = false;
   bool m_requestActive = false;
   bool m_dismissing = false;
   QString m_requestPath;

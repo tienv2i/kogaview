@@ -15,6 +15,7 @@ fn main() {
         "qml/Theme.qml",
         "qml/PanelSplitter.qml",
         "qml/PanelTabs.qml",
+        "qml/PanelAction.qml",
         "qml/RightDock.qml",
         "qml/InfoPanel.qml",
         "qml/PreviewPanel.qml",
@@ -34,6 +35,10 @@ fn main() {
         "qml/EditorView.qml",
         "qml/SettingsDialog.qml",
         "qml/ResizeDialog.qml",
+        "qml/BatchJobDialog.qml",
+        "qml/BatchResizeDialog.qml",
+        "qml/BatchCropDialog.qml",
+        "qml/BatchConvertDialog.qml",
     ]))
     // The Editor tool rail's own icons. They are not themed icons: Breeze
     // ships crop/brush/eraser drawings, Adwaita and Papirus do not, and an

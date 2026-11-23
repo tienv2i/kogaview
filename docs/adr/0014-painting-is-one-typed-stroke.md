@@ -72,6 +72,13 @@ under the pointer as it is drawn.
 - The brush is one hard-edged round tip. Pressure, tilt, softness, spacing,
   blending modes and a colour picker eyedropper are not modelled; the colour
   field and eight swatches are the whole palette question for now.
+- The two colours are drawn as Photoshop's pair — a foreground box raised over
+  a background one, each opening its own chooser, with the swap arrow (X) and
+  the reset square (D) beside them — because two colours must be visible as two
+  boxes: a swap the user did not ask for would otherwise be silent. Only the
+  foreground reaches a stroke; the background is the other place a colour is
+  kept, so `D` always has somewhere to reset to and `X` always has something to
+  bring forward.
 - The overlay is cleared when the button comes up, so the picture returns to
   Core's previous preview for the moment the new one takes to render. The
   alternative — holding the overlay until `previewRevision` advances — was not

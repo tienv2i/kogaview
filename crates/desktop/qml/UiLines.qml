@@ -67,6 +67,32 @@ QtObject {
         case "cancelled_after_delete":
             return qsTr("Cancelled after deleting %1 item(s)").arg(args[0]);
 
+        // --- batch -------------------------------------------------------
+        case "batch_started": return qsTr("Starting a batch of %1 image(s)…").arg(args[0]);
+        case "batch_done": return qsTr("Batch finished: %1 of %2 image(s)").arg(args[0]).arg(args[1]);
+        case "batch_done_failed":
+            return qsTr("Batch finished: %1 of %2 image(s), %3 failed").arg(args[0]).arg(args[1]).arg(args[2]);
+        case "batch_cancelled":
+            return qsTr("Batch cancelled after %1 of %2 image(s)").arg(args[0]).arg(args[1]);
+        case "batch_incomplete": return qsTr("The batch stopped before it finished");
+        case "batch_already_running": return qsTr("A batch is already running");
+        case "batch_no_images": return qsTr("There is no image to process");
+        case "batch_too_many": return qsTr("A batch can process at most %1 images at once").arg(args[0]);
+        case "batch_duplicate_output":
+            return qsTr("Two files would be written to %1; add a suffix or choose another folder").arg(args[0]);
+        case "batch_bad_name": return qsTr("Cannot name an output file for %1").arg(args[0]);
+        case "batch_output_is_source":
+            return qsTr("That would write over %1; add a suffix or choose another folder").arg(args[0]);
+        case "batch_convert_overwrite":
+            return qsTr("Replacing %1 in place would keep its old format; choose a suffix or another folder").arg(args[0]);
+        case "batch_crop_outside":
+            return qsTr("A crop must stay inside the image: X and Y at least 0, width and height above 0, and each side ending at 100 %");
+        case "batch_crop_noop": return qsTr("That crop covers the whole image; set a width or height below 100 %");
+        case "batch_bad_quality": return qsTr("The JPEG quality must be between 1 and 100");
+        case "batch_bad_suffix": return qsTr("A suffix cannot contain a path separator");
+        case "batch_overwrite_with_folder": return qsTr("Replacing the originals cannot also choose an output folder");
+        case "batch_output_missing": return qsTr("The output folder does not exist: %1").arg(args[0]);
+
         // --- editor ------------------------------------------------------
         case "opening_in_editor": return qsTr("Opening %1 in the editor…").arg(args[0]);
         case "editing": return qsTr("Editing %1 · %2 × %3").arg(args[0]).arg(args[1]).arg(args[2]);

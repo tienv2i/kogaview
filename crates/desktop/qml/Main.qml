@@ -213,6 +213,9 @@ ApplicationWindow {
     /// while the picture slid behind it. Disabling the workspace loader is
     /// also the modal contract for the wheel, taps and clicks, not just drags.
     readonly property bool modalDialogOpen: settingsDialog.visible
+                                            || batchResizeDialog.visible
+                                            || batchCropDialog.visible
+                                            || batchConvertDialog.visible
                                             || unsavedDialog.visible
                                             || deleteDialog.visible
                                             || fileFallback.visible
@@ -494,12 +497,41 @@ ApplicationWindow {
         root.sendSequence(root.editorOpenCommands(path, selectFirst));
     }
 
+    /// Which save chooser is waiting for an answer: "document" (Save as…), or
+    /// "export" (Export a copy…'s Browse). A portal answer arrives as one
+    /// signal with a path, so the shell has to remember what it asked.
+    property string pendingSave: ""
+
+    /// The answer to either save chooser, from the portal or from the Qt
+    /// fallback. Both dialogs send it here so the two routes cannot drift.
+    function handleSaveFileChosen(path) {
+        var purpose = root.pendingSave;
+        root.pendingSave = "";
+        if (!path) return;
+        if (purpose === "export") {
+            var editor = workspaceLoader.item;
+            if (editor && editor.applyExportPath) editor.applyExportPath(path);
+        } else {
+            root.send({ type: "editor_save_as", path: path });
+        }
+    }
+
     /// Save As: the chooser suggests where the document would go now. The
     /// dialog is opened from the Editor's button; the chosen path becomes
     /// `editor_save_as`.
+    ///
+    /// The desktop's own dialog is asked first (`FileChooser.SaveFile`) — the
+    /// same `xdg-desktop-portal` window every *open* chooser in this window
+    /// uses. Save as was the one chooser that went straight to the Qt
+    /// `FileDialog`, so the user met the platform's stripped-down dialog with
+    /// a file-type combo here and the desktop's own everywhere else.
     function chooseEditorSaveAs() {
         var editor = workspaceLoader.item;
-        saveFallback.currentFile = "file://" + (editor && editor.saveAsPath ? editor.saveAsPath : "")
+        var path = editor && editor.saveAsPath ? editor.saveAsPath : "";
+        root.pendingSave = "document";
+        if (Platform.requestSaveFile(qsTr("Save image as"), path)) return;
+        root.pendingSave = "";
+        saveFallback.currentFile = "file://" + path;
         saveFallback.open();
     }
 
@@ -507,8 +539,11 @@ ApplicationWindow {
     /// opened on, and its answer is written back into that dialog's field.
     function chooseEditorExportPath() {
         var editor = workspaceLoader.item;
-        exportFallback.currentFile = "file://"
-                + (editor && editor.exportPath ? editor.exportPath : "")
+        var path = editor && editor.exportPath ? editor.exportPath : "";
+        root.pendingSave = "export";
+        if (Platform.requestSaveFile(qsTr("Export image as"), path)) return;
+        root.pendingSave = "";
+        exportFallback.currentFile = "file://" + path;
         exportFallback.open()
     }
 
@@ -613,6 +648,90 @@ ApplicationWindow {
         } else {
             root.send({ type: "open_folder", path: path });
         }
+    }
+
+    // ---------------------------------------------------------------- batch
+    //
+    // One dialog per batch action, and one page that names all three. The
+    // Browser's Batch page asks for a form by naming its action; the shell's
+    // Tools entry opens that page. A form only formats the command; Core
+    // resolves the folder, validates the job and publishes its progress, which
+    // the page draws.
+
+    /// The selected paths that are images, in the selection's order.
+    function batchSelectionPaths() {
+        var selection = root.state.selection || [];
+        var entries = snapshot.entries || [];
+        var paths = [];
+        for (var index = 0; index < selection.length; ++index) {
+            for (var entry = 0; entry < entries.length; ++entry) {
+                if (entries[entry].path === selection[index]) {
+                    if (entries[entry].isImage) paths.push(entries[entry].path);
+                    break;
+                }
+            }
+        }
+        return paths;
+    }
+
+    /// The first image a job would process, so the size form opens on a real
+    /// picture's shape instead of a guess.
+    function batchSample(selection) {
+        var entries = snapshot.entries || [];
+        var wanted = selection || [];
+        for (var index = 0; index < wanted.length; ++index) {
+            for (var entry = 0; entry < entries.length; ++entry) {
+                if (entries[entry].path === wanted[index] && entries[entry].isImage) {
+                    return entries[entry];
+                }
+            }
+        }
+        for (var fallback = 0; fallback < entries.length; ++fallback) {
+            if (entries[fallback].isImage) return entries[fallback];
+        }
+        return null;
+    }
+
+    /// The dialog that asks for `operation`: one per batch action, each with
+    /// its own title and its own options (`BatchResizeDialog`, `BatchCropDialog`,
+    /// `BatchConvertDialog`). An unknown or empty name is the first action, so
+    /// the Tools… entry — which names no action — has something to open.
+    function batchDialogFor(operation) {
+        switch (operation) {
+        case "crop": return batchCropDialog
+        case "convert": return batchConvertDialog
+        default: return batchResizeDialog
+        }
+    }
+
+    /// The Tools… entry: the page that names all three batch tools — and that
+    /// draws a running job's progress — not one of the forms. The entry says
+    /// "Tools…", so it should not decide which tool the user wants; the page's
+    /// own Resize…, Crop… and Convert… buttons open the three dialogs.
+    function openBatchTools() {
+        if (root.state.workspace !== "browser") return;
+        var browser = workspaceLoader.item;
+        if (browser && browser.showBatchPage) browser.showBatchPage();
+    }
+
+    function openBatchDialog(operation) {
+        if (root.state.workspace !== "browser") return;
+        var dialog = root.batchDialogFor(operation);
+        var selection = root.batchSelectionPaths();
+        dialog.selectionPaths = selection;
+        dialog.currentFolder = root.state.currentFolder || "";
+        var sample = root.batchSample(selection);
+        dialog.sampleWidth = sample ? (sample.width || 0) : 0;
+        dialog.sampleHeight = sample ? (sample.height || 0) : 0;
+        dialog.open();
+    }
+
+    /// A form's Run: one `batch_run`, then the page that draws Core's progress
+    /// for it. The three dialogs share this so none of them can forget the page.
+    function startBatchJob(command) {
+        root.send(command);
+        var browser = workspaceLoader.item;
+        if (browser && browser.showBatchPage) browser.showBatchPage();
     }
 
     function toLocalPath(url) {
@@ -756,6 +875,9 @@ ApplicationWindow {
         }
         function onFolderSelected(path) {
             root.handleFolderSelected(path);
+        }
+        function onSaveFileSelected(path) {
+            root.handleSaveFileChosen(path);
         }
         function onCopyResult(ok, message) {
             root.showToast(message);
@@ -1035,6 +1157,7 @@ ApplicationWindow {
                 deleteDialog.open();
             }
             onRequestOpenFolder: root.chooseFolder()
+            onRequestBatch: function(mode) { root.openBatchDialog(mode) }
         }
     }
 
@@ -1111,6 +1234,18 @@ ApplicationWindow {
             icon.name: "document-edit-symbolic"
             onTriggered: root.chooseEditorImage()
         }
+        MenuItem {
+            // The last label in the list, by name: an index here is a footgun
+            // (see `batchToolsLabel`).
+            text: appTheme.batchToolsLabel
+            icon.name: "applications-graphics-symbolic"
+            // The forms act on the Browser's listing; in the Viewer and the
+            // Editor there is no selection to batch. The entry names three
+            // tools, so it opens the page that names them (`openBatchTools`),
+            // not one guessing form.
+            enabled: root.state.workspace === "browser"
+            onTriggered: root.openBatchTools()
+        }
         MenuSeparator {}
         MenuItem {
             text: root.state.theme === "dark" ? appTheme.menuEntries[17] : appTheme.menuEntries[18]
@@ -1130,6 +1265,33 @@ ApplicationWindow {
             icon.name: "application-exit-symbolic"
             onTriggered: Qt.quit()
         }
+    }
+
+    /// The three batch forms: one per action, each with its own title and its
+    /// own options, sharing `BatchJobDialog`'s input/output/policy half so the
+    /// three cannot disagree about where images come from or results go. They
+    /// live in the shell, not in the Browser, so the window can make them modal
+    /// for the whole workspace (`modalDialogOpen`) while the dialog itself stays
+    /// interactive. The Browser's Batch page names which one to open.
+    BatchResizeDialog {
+        id: batchResizeDialog
+        objectName: "batchResizeDialog"
+        theme: appTheme
+        onRunRequested: function(command) { root.startBatchJob(command) }
+    }
+
+    BatchCropDialog {
+        id: batchCropDialog
+        objectName: "batchCropDialog"
+        theme: appTheme
+        onRunRequested: function(command) { root.startBatchJob(command) }
+    }
+
+    BatchConvertDialog {
+        id: batchConvertDialog
+        objectName: "batchConvertDialog"
+        theme: appTheme
+        onRunRequested: function(command) { root.startBatchJob(command) }
     }
 
     SettingsDialog {
@@ -1236,10 +1398,8 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         nameFilters: Platform.saveNameFilters()
         defaultSuffix: "png"
-        onAccepted: {
-            var path = root.toLocalPath(selectedFile);
-            if (path) root.send({ type: "editor_save_as", path: path });
-        }
+        onAccepted: root.handleSaveFileChosen(root.toLocalPath(selectedFile))
+        onRejected: root.pendingSave = ""
     }
 
     // Export picks a destination only; the quality and metadata live in the
@@ -1251,11 +1411,8 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         nameFilters: Platform.saveNameFilters()
         defaultSuffix: "jpg"
-        onAccepted: {
-            var path = root.toLocalPath(selectedFile);
-            var editor = workspaceLoader.item;
-            if (path && editor && editor.applyExportPath) editor.applyExportPath(path);
-        }
+        onAccepted: root.handleSaveFileChosen(root.toLocalPath(selectedFile))
+        onRejected: root.pendingSave = ""
     }
 
     // Asked before leaving the Editor with edits that are not on disk, and

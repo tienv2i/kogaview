@@ -95,6 +95,7 @@ private slots:
   void thePaintToolSendsOneStrokeOnRelease();
   void theEraserStrokeCarriesItsModeAndBrush();
   void theKritaKeysPickTheToolsAndAdjustTheBrush();
+  void theColourPairIsTwoBoxesWithTwoChoosers();
   void ctrlZUndoesAndCtrlShiftZRedoes();
   void spacePansInsteadOfPainting();
   void theOriginalThumbnailCarriesTheSavedFileIdentity();
@@ -4168,6 +4169,99 @@ void TestEditor::theKritaKeysPickTheToolsAndAdjustTheBrush()
   QTest::keyClick(m_view, Qt::Key_B);
   QCOMPARE(m_editor->property("paintMode").toString(), QStringLiteral("eraser"));
   m_editor->forceActiveFocus();
+
+  QCOMPARE(m_commands->count(), 0);
+}
+
+/// Photoshop's colour pair, in the paint options: two boxes, the foreground
+/// raised over the background one, each opening its own chooser, with the swap
+/// arrow (X) and the reset square (D) beside them. The boxes, the hex field and
+/// both choosers all read the two properties, so a box can never show a colour
+/// the next stroke would not use.
+void TestEditor::theColourPairIsTwoBoxesWithTwoChoosers()
+{
+  setState(documentState());
+  clickItem(expectItem("toolBrush"));
+  QTRY_VERIFY(expectItem("paintColorPair")->isVisible());
+
+  QQuickItem* pair = expectItem("paintColorPair");
+  QQuickItem* foreground = expectItem("paintSwatch");
+  QQuickItem* background = expectItem("paintBackgroundSwatch");
+  QCOMPARE(foreground->parentItem(), pair);
+  QCOMPARE(background->parentItem(), pair);
+
+  // Two targets, not one picture: the background sits offset behind the
+  // foreground, and both fit inside the pair's own box — which is what makes
+  // each corner of the pair a clickable colour rather than dead background.
+  QVERIFY(background->x() > foreground->x());
+  QVERIFY(background->y() > foreground->y());
+  QVERIFY(pair->width() >= background->x() + background->width());
+  QVERIFY(pair->height() >= background->y() + background->height());
+  QVERIFY(expectItem("paintSwap")->isVisible());
+  QVERIFY(expectItem("paintResetColors")->isVisible());
+
+  // One chooser per box, opening on that box's own colour: a chooser can never
+  // be the reason the wrong one of the two changed.
+  QObject* foregroundChooser = findObject(QStringLiteral("paintForegroundColorDialog"));
+  QObject* backgroundChooser = findObject(QStringLiteral("paintBackgroundColorDialog"));
+  QVERIFY(foregroundChooser != nullptr);
+  QVERIFY(backgroundChooser != nullptr);
+  QVERIFY(foregroundChooser != backgroundChooser);
+  QCOMPARE(foregroundChooser->property("title").toString(),
+           QStringLiteral("Foreground color"));
+  QCOMPARE(backgroundChooser->property("title").toString(),
+           QStringLiteral("Background color"));
+  QCOMPARE(foregroundChooser->property("selectedColor").value<QColor>(), QColor(0, 0, 0));
+  QCOMPARE(backgroundChooser->property("selectedColor").value<QColor>(),
+           QColor(255, 255, 255));
+
+  // The boxes draw the properties and nothing else. A typed value lands in
+  // both the pair and the chooser that would edit it, and a value that is not
+  // a colour is refused rather than shown as a different colour.
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setPaintColor",
+                                    Q_ARG(QVariant, QStringLiteral("123456"))));
+  QVERIFY(QMetaObject::invokeMethod(m_editor, "setPaintBackgroundColor",
+                                    Q_ARG(QVariant, QStringLiteral("#abcdef"))));
+  QCOMPARE(foreground->property("color").value<QColor>(), QColor(0x12, 0x34, 0x56));
+  QCOMPARE(background->property("color").value<QColor>(), QColor(0xab, 0xcd, 0xef));
+  QCOMPARE(expectItem("paintColorField")->property("text").toString(),
+           QStringLiteral("#123456"));
+  QCOMPARE(foregroundChooser->property("selectedColor").value<QColor>(),
+           QColor(0x12, 0x34, 0x56));
+  QMetaObject::invokeMethod(m_editor, "setPaintBackgroundColor",
+                            Q_ARG(QVariant, QStringLiteral("#12345")));
+  QMetaObject::invokeMethod(m_editor, "setPaintBackgroundColor",
+                            Q_ARG(QVariant, QStringLiteral("no")));
+  QCOMPARE(background->property("color").value<QColor>(), QColor(0xab, 0xcd, 0xef));
+
+  // A click on a box is what opens a chooser, and it opens that box's: the
+  // pair needs no mode switch, and a click on the background cannot change the
+  // colour a left-button stroke uses.
+  clickItem(foreground);
+  QTRY_VERIFY_WITH_TIMEOUT(foregroundChooser->property("visible").toBool(), 2000);
+  QVERIFY2(!backgroundChooser->property("visible").toBool(),
+           "a click on the foreground box opened the background chooser");
+  QVERIFY(QMetaObject::invokeMethod(foregroundChooser, "close"));
+  QTRY_VERIFY_WITH_TIMEOUT(!foregroundChooser->property("visible").toBool(), 2000);
+  clickItem(background);
+  QTRY_VERIFY_WITH_TIMEOUT(backgroundChooser->property("visible").toBool(), 2000);
+  QVERIFY2(!foregroundChooser->property("visible").toBool(),
+           "a click on the background box opened the foreground chooser");
+  QVERIFY(QMetaObject::invokeMethod(backgroundChooser, "close"));
+  QTRY_VERIFY_WITH_TIMEOUT(!backgroundChooser->property("visible").toBool(), 2000);
+  // A popup takes the keyboard while it is open; hand it back, or every later
+  // test that types into the view fails on a focus it did not lose.
+  m_view->requestActivate();
+  m_editor->forceActiveFocus();
+  QTest::qWait(50);
+
+  // An answer from a chooser carries an alpha byte (`#ff1e2d3c`); the pair, and
+  // so the stroke's three-byte colour, drops it.
+  QVariant colourText;
+  QVERIFY(QMetaObject::invokeMethod(
+    m_editor, "colorText", Q_RETURN_ARG(QVariant, colourText),
+    Q_ARG(QVariant, QColor(30, 45, 60, 128))));
+  QCOMPARE(colourText.toString(), QStringLiteral("#1e2d3c"));
 
   QCOMPARE(m_commands->count(), 0);
 }

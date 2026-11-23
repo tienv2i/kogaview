@@ -474,6 +474,10 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     draw one stroke through the canvas helpers (`_ARG` = `x1,y1;x2,y2;…`
   //     in document pixels, `_ARG2` = `eraser`, `_ARG3` = `#rrggbb`, `_ARG4` =
   //     the brush size in px, `_ARG5` = the opacity 1–100)
+  //   KOGAVIEW_DEV_UI_REQUEST=editor-save-as   -> the Editor's Save as…,
+  //     through the shell's own `chooseEditorSaveAs`. It opens the desktop's
+  //     save dialog, so a run with `KOGAVIEW_DEV_PORTAL_DISMISS_MS` shows
+  //     whether the request reached the portal at all.
   //   KOGAVIEW_DEV_UI_REQUEST=editor-export     -> click the toolbar's Export
   //     button, write the dialog's path/quality/size, and optionally press
   //     Export (`_ARG4` is a long-edge preset in pixels, `0` for the original)
@@ -485,6 +489,26 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
   //     or drag the divider to a height with `_ARG6` — the tab, the checklist,
   //     the width and the split are view state and send no command. `_ARG7=menu`
   //     clicks the checklist button so its rows can be photographed.
+  //   KOGAVIEW_DEV_UI_REQUEST=batch           -> open the Browser's batch form
+  //     through the shell's own `openBatchDialog` (the function the Tools…
+  //     menu entry calls), write its fields, and optionally press Run. `_ARG`
+  //     is the action (`resize`, `crop`, `convert`), `_ARG2` its answer
+  //     (`640x480` for resize, `10,5,80,90` for crop's percentages, the encoder
+  //     key for convert), `_ARG3=overwrite` ticks Replace the originals, `_ARG8`
+  //     is an output folder (ticking "Another folder" first), `_ARG6=free`
+  //     unlocks the aspect chain (typing both sides of a locked pair is a
+  //     contradiction the form resolves) and `_ARG9=page` opens it from the
+  //     Batch page's own button (the panel emits `requestBatch(mode)`) instead
+  //     of calling the shell's function. `_ARG4` is `fill` to stop with the form
+  //     open, `cancel` to press the page's Cancel while the job runs, or empty
+  //     for Run; `_ARG5` is the delay before Run and `_ARG7` how long the job
+  //     runs before that Cancel, both in milliseconds, so a grab can catch the
+  //     progress bar. `_ARG10` clicks the grid's cells first (`0:plain`,
+  //     `1:ctrl`, `2:shift` — `BrowserView.clickIndex`, the handler the cell's
+  //     own `MouseArea` runs) and logs the selection after each one, so a job
+  //     can be started on a multi-selection. It logs the command the form
+  //     produced and the `batch` slot Core published, which is what the page
+  //     draws.
   //   KOGAVIEW_DEV_UI_REQUEST=sidebar-dock     -> the Browser's or the Viewer's
   //     sidebar without a pointer: `_ARG` names a page (`preview`, `batch`,
   //     `info`), `_ARG2`/`_ARG5` are comma-separated lists of panels to
@@ -607,7 +631,12 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
         // The three commands the entry sends in one turn, replayed for the log:
         // if the entry's own `editor_open` is dropped, this shows whether the
         // same three calls survive when made from outside the menu.
-        if (emitted) {
+        // The replay exists for `fileMenu`'s entry: its three commands are the
+        // behaviour that test is about. Any other menu is clicked for its own
+        // effect only — replaying `set_workspace editor` after the burger menu's
+        // Tools entry dragged the window into the Editor before a grab could
+        // show what the entry had done.
+        if (emitted && which == QLatin1String("fileMenu")) {
           QJsonArray results;
           const QJsonArray commands{QJsonObject{{"type", "select"},
                                                 {"paths", QJsonArray{requestArg}}},
@@ -1287,6 +1316,218 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
           openMainMenu(rootObject);
         }
         emitted = true;
+      } else if (uiRequest == QLatin1String("batch")) {
+        // The batch form without a pointer: the shell's `openBatchDialog` is
+        // called (the function the Tools… menu entry and the page's three
+        // buttons call), the fields are written the way the form's own controls
+        // write them, and Run is pressed through `run()` — the same handler the
+        // button's `onClicked` runs, so the form's validation still decides.
+        // The selection first, made the way a Ctrl click and a Shift click make
+        // it: `_ARG10` is a list of `index:how` (`0:plain`, `1:ctrl`,
+        // `2:shift`) and each step calls the grid's own `clickIndex` — the
+        // handler the cell's `MouseArea` calls with its event's modifiers. The
+        // selection is Core's, so each step waits for it before the next one
+        // extends from it.
+        const QString clicks = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG10");
+        for (const QString& step : clicks.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+          const QStringList pair = step.split(QLatin1Char(':'));
+          const int index = pair.value(0).toInt();
+          const QString how = pair.value(1);
+          int modifiers = Qt::NoModifier;
+          if (how == QLatin1String("ctrl")) {
+            modifiers = Qt::ControlModifier;
+          } else if (how == QLatin1String("shift")) {
+            modifiers = Qt::ShiftModifier;
+          }
+          QMetaObject::invokeMethod(browser, "clickIndex", Q_ARG(QVariant, index),
+                                    Q_ARG(QVariant, modifiers));
+          QTest::qWait(150);
+          const QVariantList chosen =
+            rootObject->property("state").toMap().value(QStringLiteral("selection")).toList();
+          QStringList names;
+          for (const QVariant& path : chosen) {
+            names << QFileInfo(path.toString()).fileName();
+          }
+          qInfo().noquote() << "KogaView dev ui request batch selection"
+                            << QString::number(chosen.size()) << names.join(QLatin1Char(' '));
+        }
+        const QString mode = requestArg.isEmpty() ? QStringLiteral("resize") : requestArg;
+        bool opened = false;
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG9") == QLatin1String("page")) {
+          // The page's own button: `BatchPanel` emits `requestBatch(mode)` and
+          // the shell opens the form, which is the path a user's click takes.
+          const QString button = QStringLiteral("batch")
+                                 + mode.at(0).toUpper() + mode.mid(1);
+          QObject* pageButton = rootObject->findChild<QObject*>(button);
+          if (pageButton == nullptr) {
+            qWarning() << "KogaView dev ui request: no batch page button" << button;
+            return;
+          }
+          opened = QMetaObject::invokeMethod(pageButton, "click");
+          qInfo().noquote() << "KogaView dev ui request batch page button" << button
+                            << (opened ? "clicked" : "not clickable");
+        } else {
+          opened = QMetaObject::invokeMethod(rootObject, "openBatchDialog",
+                                             Q_ARG(QVariant, QVariant(mode)));
+        }
+        // Each action is its own dialog (`BatchResizeDialog`, `BatchCropDialog`,
+        // `BatchConvertDialog`), so the hook looks up the one that action owns —
+        // the same object `openBatchDialog` picked.
+        const QString dialogName = QStringLiteral("batch") + mode.at(0).toUpper() + mode.mid(1)
+                                   + QStringLiteral("Dialog");
+        QObject* dialog = rootObject->findChild<QObject*>(dialogName);
+        if (!opened || dialog == nullptr) {
+          qWarning() << "KogaView dev ui request: no batch dialog" << dialogName;
+          qWarning() << "KogaView dev ui request: batch dialog not opened";
+          return;
+        }
+        for (int wait = 0; wait < 100 && !dialog->property("visible").toBool(); ++wait) {
+          QCoreApplication::processEvents();
+          QTest::qWait(10);
+        }
+        if (!dialog->property("visible").toBool()) {
+          qWarning() << "KogaView dev ui request: batch dialog did not open";
+          return;
+        }
+        const QString answer = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2");
+        // `_ARG2` writes the field the action asks about: a size for resize, the
+        // percentages for crop, the encoder for convert.
+        auto writeField = [dialog](const char* name, const QString& text) {
+          QObject* field = dialog->findChild<QObject*>(QString::fromLatin1(name));
+          if (field == nullptr) {
+            qWarning() << "KogaView dev ui request: no batch field" << name;
+            return;
+          }
+          // `UnitField` holds the number in its own input, and its `textEdited`
+          // is what links the other side; writing `text` alone would leave the
+          // fields describing different sizes.
+          QObject* input = field->property("inputField").value<QObject*>();
+          if (input != nullptr) {
+            input->setProperty("text", text);
+            QMetaObject::invokeMethod(field, "textEdited");
+          } else {
+            field->setProperty("text", text);
+          }
+        };
+        if (qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG6") == QLatin1String("free")) {
+          // Before the fields: with the chain on, typing the first side rewrites
+          // the second, and the pair the hook asked for would not survive.
+          QMetaObject::invokeMethod(dialog, "setConstraint", Q_ARG(QVariant, false));
+        }
+        if (mode == QLatin1String("resize")) {
+          const QStringList parts = answer.split(QLatin1Char('x'));
+          writeField("batchResizeWidth", parts.value(0));
+          writeField("batchResizeHeight", parts.value(1));
+        } else if (mode == QLatin1String("crop")) {
+          const QStringList parts = answer.split(QLatin1Char(','));
+          writeField("batchCropX", parts.value(0));
+          writeField("batchCropY", parts.value(1));
+          writeField("batchCropWidth", parts.value(2));
+          writeField("batchCropHeight", parts.value(3));
+        } else if (!answer.isEmpty()) {
+          // The format combo applies its choice from `onActivated`, which a
+          // `currentIndex` write does not emit; go through the same handler.
+          QObject* box = dialog->findChild<QObject*>(QStringLiteral("batchConvertFormat"));
+          const QVariantList formats = dialog->property("formats").toList();
+          int index = -1;
+          for (int i = 0; i < formats.size(); ++i) {
+            if (formats.at(i).toMap().value(QStringLiteral("key")).toString() == answer) {
+              index = i;
+              break;
+            }
+          }
+          if (box == nullptr || index < 0) {
+            qWarning() << "KogaView dev ui request: no convert format" << answer;
+            return;
+          }
+          box->setProperty("currentIndex", index);
+          QMetaObject::invokeMethod(box, "activated", Q_ARG(int, index));
+        }
+        // Another folder is the third destination and it is a radio, so the
+        // write has to go through the control's own handler as well.
+        const QString folderArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG8");
+        if (!folderArg.isEmpty()) {
+          QObject* radio = dialog->findChild<QObject*>(QStringLiteral("batchOutputFolder"));
+          if (radio == nullptr) {
+            qWarning() << "KogaView dev ui request: no output folder radio";
+            return;
+          }
+          QMetaObject::invokeMethod(radio, "click");
+          dialog->setProperty("outputFolder", folderArg);
+          if (dialog->property("outputKind").toString() != QLatin1String("folder")) {
+            qWarning() << "KogaView dev ui request: the folder radio did not take";
+            return;
+          }
+        }
+        const QString overwriteArg = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG3");
+        if (overwriteArg == QLatin1String("overwrite")) {
+          QObject* box = dialog->findChild<QObject*>(QStringLiteral("batchOverwrite"));
+          if (box != nullptr) {
+            box->setProperty("checked", true);
+          }
+        }
+        // What the form would send, before it sends it: the payload is the one
+        // contract a batch has with Core.
+        QVariant command;
+        const bool computed =
+          QMetaObject::invokeMethod(dialog, "command", Q_RETURN_ARG(QVariant, command));
+        qInfo().noquote() << "KogaView dev ui request batch command"
+                          << (computed ? command.typeName() : "not invokable")
+                          << QString::fromUtf8(QJsonDocument::fromVariant(command.toMap())
+                                                 .toJson(QJsonDocument::Compact));
+        QVariant refusalValue;
+        QMetaObject::invokeMethod(dialog, "validationError",
+                                  Q_RETURN_ARG(QVariant, refusalValue));
+        const QString refusal = refusalValue.toString();
+        qInfo().noquote() << "KogaView dev ui request batch validation"
+                          << (refusal.isEmpty() ? QStringLiteral("ready") : refusal);
+        emitted = true;
+        const QString action = qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG4");
+        if (!refusal.isEmpty()) {
+          return;
+        }
+        if (action == QLatin1String("fill")) {
+          return;
+        }
+        const int delay = qEnvironmentVariableIntValue("KOGAVIEW_DEV_UI_REQUEST_ARG5");
+        QTimer::singleShot(delay > 0 ? delay : 300, rootObject, [rootObject, dialog, action]() {
+          QMetaObject::invokeMethod(dialog, "run");
+          qInfo().noquote() << "KogaView dev ui request batch run pressed";
+          if (action == QLatin1String("cancel")) {
+            // The page's own Cancel, mid-run: the button `click()` is the same
+            // handler a press runs, and it emits `cancel_operation` like any
+            // other Cancel. `_ARG7` is how long the job runs first.
+            const int runFor = qEnvironmentVariableIntValue("KOGAVIEW_DEV_UI_REQUEST_ARG7");
+            QTimer::singleShot(runFor > 0 ? runFor : 600, rootObject, [rootObject]() {
+              QObject* cancel = rootObject->findChild<QObject*>(QStringLiteral("batchCancel"));
+              if (cancel == nullptr) {
+                qWarning() << "KogaView dev ui request: no batch Cancel";
+                return;
+              }
+              QMetaObject::invokeMethod(cancel, "click");
+              qInfo().noquote() << "KogaView dev ui request batch cancel pressed";
+            });
+          }
+          // What Core published afterwards, sampled once the job has had time
+          // to move: the page draws this and nothing else.
+          QTimer::singleShot(1200, rootObject, [rootObject]() {
+            const QVariantMap state =
+              rootObject->property("state").toMap().value(QStringLiteral("batch")).toMap();
+            if (state.isEmpty()) {
+              qInfo().noquote() << "KogaView dev ui request batch state none";
+              return;
+            }
+            qInfo().noquote() << "KogaView dev ui request batch state"
+                              << state.value(QStringLiteral("operation")).toString()
+                              << "done" << state.value(QStringLiteral("done")).toInt()
+                              << "of" << state.value(QStringLiteral("total")).toInt()
+                              << "failed" << state.value(QStringLiteral("failed")).toInt()
+                              << "running" << state.value(QStringLiteral("running")).toBool()
+                              << "cancelled"
+                              << state.value(QStringLiteral("cancelled")).toBool()
+                              << "current" << state.value(QStringLiteral("current")).toString();
+          });
+        });
       } else if (uiRequest == QLatin1String("sidebar-dock")) {
         // The Browser's and the Viewer's sidebar without a pointer. Both views
         // expose the same `setPanelVisible` function Settings › Appearance
@@ -1339,6 +1580,48 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
                           << "pages" << (dock ? dock->property("shownTabCount").toInt() : 0)
                           << "strip" << (dock ? dock->property("stripShown").toBool() : false);
         emitted = true;
+      } else if (uiRequest == QLatin1String("editor-save-as")) {
+        // The Editor's Save as… without a pointer: `chooseEditorSaveAs` is what
+        // the toolbar button's signal runs. It asks the desktop's own save
+        // dialog (`FileChooser.SaveFile`), so the log line that matters is the
+        // portal's; nothing is written until the dialog answers. `_ARG2=export`
+        // takes the other save chooser — the Export dialog's Browse — which is
+        // the same request with a different answer to write.
+        const bool exportAsk =
+          qEnvironmentVariable("KOGAVIEW_DEV_UI_REQUEST_ARG2") == QLatin1String("export");
+        emitted = QMetaObject::invokeMethod(rootObject, exportAsk ? "chooseEditorExportPath"
+                                                                  : "chooseEditorSaveAs");
+        qInfo().noquote() << "KogaView dev ui request editor-save-as"
+                          << (exportAsk ? "export browse" : "save as")
+                          << (emitted ? "asked" : "not invokable");
+        // `_ARG` answers the chooser with a path, through `handleSaveFileChosen`
+        // — the one handler the portal's `saveFileSelected` signal and the Qt
+        // fallback's `onAccepted` both call. The run shows the request reaching
+        // the desktop; this shows what its answer writes.
+        if (!requestArg.isEmpty()) {
+          const QString answer = requestArg;
+          QTimer::singleShot(1500, rootObject, [rootObject, answer, exportAsk]() {
+            QMetaObject::invokeMethod(rootObject, "handleSaveFileChosen",
+                                      Q_ARG(QVariant, QVariant(answer)));
+            QTest::qWait(900);
+            const QVariantMap editor =
+              rootObject->property("state").toMap().value(QStringLiteral("editor")).toMap();
+            qInfo().noquote() << "KogaView dev ui request editor-save-as wrote"
+                              << QFileInfo::exists(answer) << "saved"
+                              << editor.value(QStringLiteral("saved")).toBool()
+                              << "modified"
+                              << editor.value(QStringLiteral("modified")).toBool();
+            if (exportAsk) {
+              // The Export dialog's field is where its Browse answer lands, and
+              // nothing is written until Export is pressed: the path arriving
+              // there is the whole contract of this route.
+              QQmlExpression field(QQmlEngine::contextForObject(rootObject), rootObject,
+                                   QStringLiteral("workspaceLoader.item.exportPath"));
+              qInfo().noquote() << "KogaView dev ui request editor-save-as export path"
+                                << field.evaluate().toString();
+            }
+          });
+        }
       } else if (uiRequest == QLatin1String("editor-export")) {
         // The toolbar's Export button is `click()`ed, which is the same handler
         // a press runs, and the dialog's fields are written the way the dialog's

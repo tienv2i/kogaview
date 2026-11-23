@@ -812,13 +812,24 @@ name = "kogaview-core"
 version = "0.1.0"
 dependencies = [
  "image",
- "jpeg-decoder",
+ "kogaview-editor",
  "kogaview-protocol",
  "serde",
  "serde_json",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "kogaview-editor"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "jpeg-decoder",
+ "kogaview-protocol",
+ "serde",
+ "tracing",
 ]
 
 [[package]]

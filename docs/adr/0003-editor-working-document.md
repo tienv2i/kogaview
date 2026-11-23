@@ -26,8 +26,9 @@ the memory bounded, and how the UI renders a document that Core owns.
 ## Decision
 
 - Editing starts by **decoding the source once into a working document** that
-  lives in Core (`crates/app-core/src/editor.rs`). The source path and bytes are
-  never written to.
+  lives in Core's Editor crate (`crates/app-editor`, since ADR 0023; it was
+  `crates/app-core/src/editor.rs`). The source path and bytes are never written
+  to.
 - A **serializable [`EditOperation`]** is the unit of edit: `Rotate`, `Flip`,
   `Crop`, `Resize` today, more later. Each lands in the command journal as its
   prototyped editor command, so every front end (UI, CLI, IPC, MCP) edits
@@ -72,3 +73,13 @@ the memory bounded, and how the UI renders a document that Core owns.
   touch pixels except through the gateway.
 - `KOGAVIEW_DEV_COMMANDS_START_MS` was added to the Debug harness so async
   commands (editor open) can be driven for window evidence.
+
+## Revision — the document moved to a crate of its own (2026-11-22)
+
+Nothing about the model above changed; its home did. The working document,
+`EditOperation`, the validators, the codecs, the pixel arithmetic and the
+workers are now `crates/app-editor` (`kogaview-editor`), and `kogaview-core`
+re-exports the crate as `kogaview_core::editor`, so every path in Core's
+handlers and in the batch worker is spelled as before. ADR 0023 records why the
+split happened and what it leaves in Core: the source path, the command
+gateway, the journal and the UI state.

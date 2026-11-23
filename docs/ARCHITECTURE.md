@@ -20,6 +20,11 @@ UI owns only ephemeral presentation state (hover, focus, animations). Core owns 
 - `app-cli`: human/script CLI.
 - `desktop`: Qt 6 QML, CXX-Qt Rust bridge and platform UI adapter.
 
+Today's tree is four members, not the full list: `app-protocol`, `app-core`,
+`app-editor` (the Editor's document, operations and pixels — ADR 0023) and
+`desktop`. The rest of the list is where a boundary goes when it is proven, not
+a scaffold to fill in.
+
 ## Command protocol
 - Envelope: `protocol_version`, `request_id`, `command`, `payload`, `context.expected_revision` (where relevant), optional idempotency key and correlation context.
 - Result: `request_id`, `status` (`completed` / `accepted` / `failed`), typed result/error, `state_revision` where applicable, `task_id` for accepted asynchronous work.

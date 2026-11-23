@@ -412,6 +412,27 @@ Item {
         view.paintColor = text.toLowerCase()
     }
 
+    /// The same for the background box. It is `#rrggbb` for the same reason:
+    /// the pair shows two values of one kind, so the types cannot differ.
+    function setPaintBackgroundColor(value) {
+        var text = String(value).trim()
+        if (/^[0-9a-fA-F]{6}$/.test(text)) text = "#" + text
+        if (!/^#[0-9a-fA-F]{6}$/.test(text)) return
+        view.paintBackgroundColor = text.toLowerCase()
+    }
+
+    /// A `ColorDialog` answers with a `color`, whose `toString()` carries an
+    /// alpha byte (`#ff1e2d3c`) when the chooser leaves one set. The paint
+    /// commands carry three bytes, so the pair is written as `#rrggbb` and no
+    /// alpha ever reaches a stroke.
+    function colorText(color) {
+        function byte(value) {
+            var text = Math.round(value * 255).toString(16)
+            return text.length < 2 ? "0" + text : text
+        }
+        return "#" + byte(color.r) + byte(color.g) + byte(color.b)
+    }
+
     /// Krita's X: foreground and background swap places.
     function swapPaintColors() {
         var previous = view.paintColor
@@ -3626,60 +3647,224 @@ Item {
                                     }
                                 }
 
-                                // The colour row is the foreground swatch, its hex
-                                // field, the background swatch X swaps with, and the
-                                // swap button itself.
+                                // The two colours, as Photoshop draws them: the
+                                // foreground box in front and the background one
+                                // behind it, so the pair reads as one control. A
+                                // click on a box opens that box's chooser, the
+                                // small arrow swaps them (Krita's X) and the small
+                                // black-and-white square resets them (D). The hex
+                                // field beside the pair edits the foreground's
+                                // exact value, which a chooser cannot say.
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 6
+                                    spacing: 8
 
-                                    Rectangle {
-                                        objectName: "paintSwatch"
-                                        implicitWidth: 22
-                                        implicitHeight: 22
-                                        radius: 3
-                                        color: view.paintColor
-                                        border.width: 1
-                                        border.color: view.theme.border
-                                    }
+                                    Item {
+                                        objectName: "paintColorPair"
+                                        implicitWidth: 62
+                                        implicitHeight: 62
 
-                                    TextField {
-                                        id: paintColorField
-                                        objectName: "paintColorField"
-                                        Layout.fillWidth: true
-                                        font.pixelSize: 12
-                                        text: view.paintColor
-                                        placeholderText: qsTr("#rrggbb")
-                                        onEditingFinished: {
-                                            view.setPaintColor(text)
-                                            text = view.paintColor
-                                            // Enter belongs to the field; the next key
-                                            // should reach the canvas keys again.
-                                            view.forceActiveFocus()
+                                        // The box a brush uses is the raised one:
+                                        // foreground on top, background behind and
+                                        // to the right, exactly as in Photoshop.
+                                        Rectangle {
+                                            objectName: "paintBackgroundSwatch"
+                                            x: 22
+                                            y: 22
+                                            width: 34
+                                            height: 34
+                                            radius: 3
+                                            color: view.paintBackgroundColor
+                                            border.width: backgroundArea.containsMouse ? 2 : 1
+                                            border.color: backgroundArea.containsMouse
+                                                          ? view.theme.accent : view.theme.border
+                                            Accessible.role: Accessible.Button
+                                            Accessible.name: qsTr("Background color")
+
+                                            MouseArea {
+                                                id: backgroundArea
+                                                objectName: "paintBackgroundArea"
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                ToolTip.visible: containsMouse
+                                                ToolTip.delay: 500
+                                                ToolTip.text: qsTr("Background color")
+                                                onClicked: {
+                                                    // The chooser is seeded on the
+                                                    // click, not only by its first
+                                                    // binding: the dialog writes
+                                                    // `selectedColor` itself while the
+                                                    // user drags, which ends the
+                                                    // binding, so a pair that changed
+                                                    // since (X, D or a typed hex)
+                                                    // would otherwise reopen on the old
+                                                    // colour.
+                                                    paintBackgroundColorDialog.selectedColor =
+                                                        view.paintBackgroundColor
+                                                    paintBackgroundColorDialog.open()
+                                                }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            objectName: "paintSwatch"
+                                            width: 34
+                                            height: 34
+                                            radius: 3
+                                            color: view.paintColor
+                                            border.width: foregroundArea.containsMouse ? 2 : 1
+                                            border.color: foregroundArea.containsMouse
+                                                          ? view.theme.accent : view.theme.border
+                                            Accessible.role: Accessible.Button
+                                            Accessible.name: qsTr("Foreground color")
+
+                                            MouseArea {
+                                                id: foregroundArea
+                                                objectName: "paintForegroundArea"
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                ToolTip.visible: containsMouse
+                                                ToolTip.delay: 500
+                                                ToolTip.text: qsTr("Foreground color")
+                                                onClicked: {
+                                                    paintForegroundColorDialog.selectedColor =
+                                                        view.paintColor
+                                                    paintForegroundColorDialog.open()
+                                                }
+                                            }
+                                        }
+
+                                        // Krita's X, drawn as Photoshop's arrow: two
+                                        // arrowheads so a swap reads as an exchange.
+                                        Item {
+                                            objectName: "paintSwap"
+                                            x: 44
+                                            y: 0
+                                            width: 16
+                                            height: 16
+
+                                            Canvas {
+                                                id: swapCanvas
+                                                anchors.fill: parent
+                                                Connections {
+                                                    target: swapArea
+                                                    function onContainsMouseChanged() {
+                                                        swapCanvas.requestPaint()
+                                                    }
+                                                }
+                                                onPaint: {
+                                                    var ctx = getContext("2d")
+                                                    ctx.reset()
+                                                    ctx.strokeStyle = swapArea.containsMouse
+                                                            ? view.theme.accent : view.theme.textMuted
+                                                    ctx.lineWidth = 1.2
+                                                    ctx.lineCap = "round"
+                                                    // Top arrow pointing right, bottom
+                                                    // arrow pointing left.
+                                                    ctx.beginPath()
+                                                    ctx.moveTo(2, 5); ctx.lineTo(13, 5)
+                                                    ctx.moveTo(10, 2); ctx.lineTo(13, 5)
+                                                    ctx.lineTo(10, 8)
+                                                    ctx.moveTo(13, 11); ctx.lineTo(2, 11)
+                                                    ctx.moveTo(5, 8); ctx.lineTo(2, 11)
+                                                    ctx.lineTo(5, 14)
+                                                    ctx.stroke()
+                                                }
+                                            }
+
+                                            MouseArea {
+                                                id: swapArea
+                                                objectName: "paintSwapArea"
+                                                Accessible.role: Accessible.Button
+                                                Accessible.name: qsTr("Swap the foreground and background colours (X)")
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                ToolTip.visible: containsMouse
+                                                ToolTip.delay: 500
+                                                ToolTip.text: qsTr("Swap the foreground and background colours (X)")
+                                                onClicked: {
+                                                    view.swapPaintColors()
+                                                    view.forceActiveFocus()
+                                                }
+                                            }
+                                        }
+
+                                        // Krita's D, drawn as Photoshop's tiny
+                                        // black-over-white square: the colours as
+                                        // they start.
+                                        Item {
+                                            objectName: "paintResetColors"
+                                            x: 0
+                                            y: 44
+                                            width: 16
+                                            height: 16
+
+                                            Rectangle {
+                                                x: 0; y: 0; width: 11; height: 11
+                                                color: "#ffffff"
+                                                border.width: 1
+                                                border.color: resetArea.containsMouse
+                                                              ? view.theme.accent : view.theme.border
+                                            }
+                                            Rectangle {
+                                                x: 4; y: 4; width: 11; height: 11
+                                                color: "#000000"
+                                                border.width: 1
+                                                border.color: resetArea.containsMouse
+                                                              ? view.theme.accent : view.theme.border
+                                            }
+                                            MouseArea {
+                                                id: resetArea
+                                                objectName: "paintResetArea"
+                                                Accessible.role: Accessible.Button
+                                                Accessible.name: qsTr("Reset the colours to black and white (D)")
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                ToolTip.visible: containsMouse
+                                                ToolTip.delay: 500
+                                                ToolTip.text: qsTr("Reset the colours to black and white (D)")
+                                                onClicked: {
+                                                    view.resetPaintColors()
+                                                    view.forceActiveFocus()
+                                                }
+                                            }
                                         }
                                     }
 
-                                    Rectangle {
-                                        objectName: "paintBackgroundSwatch"
-                                        implicitWidth: 22
-                                        implicitHeight: 22
-                                        radius: 3
-                                        color: view.paintBackgroundColor
-                                        border.width: 1
-                                        border.color: view.theme.border
-                                    }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 2
 
-                                    Button {
-                                        objectName: "paintSwap"
-                                        implicitWidth: 30
-                                        text: qsTr("X")
-                                        enabled: view.documentReady
-                                        focusPolicy: Qt.NoFocus
-                                        ToolTip.visible: hovered
-                                        ToolTip.text: qsTr("Swap the foreground and background colours (X)")
-                                        onClicked: {
-                                            view.swapPaintColors()
-                                            view.forceActiveFocus()
+                                        Label {
+                                            text: qsTr("Foreground")
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 11
+                                        }
+
+                                        // The field is the pair's value, not a
+                                        // spacer: the hex text is seven characters,
+                                        // so it keeps a field's width instead of
+                                        // stretching across the panel as a white bar
+                                        // beside the two small boxes.
+                                        TextField {
+                                            id: paintColorField
+                                            objectName: "paintColorField"
+                                            Layout.preferredWidth: 118
+                                            Layout.maximumWidth: 118
+                                            font.pixelSize: 12
+                                            text: view.paintColor
+                                            placeholderText: qsTr("#rrggbb")
+                                            onEditingFinished: {
+                                                view.setPaintColor(text)
+                                                text = view.paintColor
+                                                // Enter belongs to the field; the next key
+                                                // should reach the canvas keys again.
+                                                view.forceActiveFocus()
+                                            }
                                         }
                                     }
                                 }
@@ -4397,6 +4582,31 @@ Item {
                 mode: mode,
                 filter: filter
             })
+        }
+    }
+
+    /// The paint pair's two choosers. Each box opens its own, so a click says
+    /// which of the two colours is being changed; a cancelled chooser changes
+    /// nothing, and the box keeps showing what a stroke would get.
+    ColorDialog {
+        id: paintForegroundColorDialog
+        objectName: "paintForegroundColorDialog"
+        title: qsTr("Foreground color")
+        selectedColor: view.paintColor
+        onAccepted: {
+            view.setPaintColor(view.colorText(selectedColor))
+            view.forceActiveFocus()
+        }
+    }
+
+    ColorDialog {
+        id: paintBackgroundColorDialog
+        objectName: "paintBackgroundColorDialog"
+        title: qsTr("Background color")
+        selectedColor: view.paintBackgroundColor
+        onAccepted: {
+            view.setPaintBackgroundColor(view.colorText(selectedColor))
+            view.forceActiveFocus()
         }
     }
 

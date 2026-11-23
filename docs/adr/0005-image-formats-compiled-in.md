@@ -21,7 +21,8 @@ libraries it needs". That last part conflicts with the deployment target:
 ## Decision
 
 - **Every decoder is a Cargo feature of the `image` crate, compiled in.**
-  `crates/app-core/Cargo.toml` enables `png`, `jpeg`, `gif`, `webp`, `bmp`,
+  `crates/app-core/Cargo.toml` (today `crates/app-editor/Cargo.toml`, ADR 0023)
+  enables `png`, `jpeg`, `gif`, `webp`, `bmp`,
   `tiff`, `avif`, `dds`, `exr`, `ff`, `hdr`, `ico`, `pnm`, `qoi` and `tga`. The
   build needs no network, the sandbox needs no network, and a file either opens
   or the app says why.
@@ -94,3 +95,13 @@ dialog's filter hid it. That list now carries `.jpe`,
 `scripts/check_packaging.py` compares the two spellings (missing and extra
 entries are both named), and the two mutations that prove the comparison work
 are dropping `.jpe` and adding `jxl` to the C++ array.
+
+## Revision — the feature list lives with the Editor (2026-11-22)
+
+The decision is unchanged: every decoder is a Cargo feature, compiled in, and
+the build needs no network. The list is no longer `crates/app-core/Cargo.toml`'s.
+ADR 0023 moved the Editor — and with it `image`, its format features and the
+`jpeg-decoder` reader for a 1/2, 1/4 or 1/8 JPEG decode — into `crates/app-editor`.
+`app-core` now names `kogaview-editor` and carries no format features of its own;
+`avif-native` still links the system `libdav1d`, so `CMakeLists.txt` and `just
+doctor` are as they were.

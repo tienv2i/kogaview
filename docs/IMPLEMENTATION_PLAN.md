@@ -92,6 +92,7 @@ scripts/dev.py                 # cross-platform orchestration, real recipes
 crates/
   app-protocol/                # M1: Envelope/Command/Query/Event/Result/Error/ImageId
   app-core/                    # M1: AppState, gateway, handlers, journal, task registry
+  app-editor/                  # M1: the Editor's document, operations, pixels and workers (ADR 0023)
   app-image/                   # M2/M3: decode, orientation, transforms, export
   app-storage/                 # M2: SQLite, cache, migrations, atomic writes
   app-runtime/                 # M2: tokio/rayon workers, progress, cancellation, limits
@@ -108,7 +109,17 @@ tests/                         # contract, IPC, golden-image, UI smoke
 packaging/                     # existing templates, later real metadata
 ```
 
-Initial crate set is deliberately **three**: `app-protocol`, `app-core`, `desktop` (plus the `kogaview` binary target). Split later only when a boundary is proven.
+Initial crate set is deliberately **three**: `app-protocol`, `app-core`,
+`desktop` (plus the `kogaview` binary target). Split later only when a boundary is proven.
+
+The first split has happened (ADR 0023): `app-editor` is the Editor's working
+document, its operations and the pixels they render. The boundary was proven two
+ways — `editor.rs` had already written the separation down in its own module
+documentation ("this module owns pixels and history only; file paths, the command
+gateway and UI state stay in Core"), and it had grown past 3,000 lines of code
+plus its suite inside a crate whose other half is 5,000. `app-core` re-exports it
+as `kogaview_core::editor`, so no caller changed. The next honest split is
+`core.rs` itself, which is larger and touches the desktop bridge.
 
 ### Runtime identity (decided in M0)
 

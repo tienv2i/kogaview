@@ -20,6 +20,10 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/UnitField.qml \
           ../crates/desktop/qml/SettingsDialog.qml \
           ../crates/desktop/qml/ResizeDialog.qml \
+          ../crates/desktop/qml/BatchJobDialog.qml \
+          ../crates/desktop/qml/BatchResizeDialog.qml \
+          ../crates/desktop/qml/BatchCropDialog.qml \
+          ../crates/desktop/qml/BatchConvertDialog.qml \
           ../crates/desktop/qml/InfoPanel.qml \
           ../crates/desktop/qml/PreviewPanel.qml \
           ../crates/desktop/qml/HistoryPanel.qml \

@@ -42,6 +42,26 @@ pub struct SelectionInfo {
     pub height: Option<u32>,
 }
 
+/// A live batch job, or the last one that finished.
+///
+/// Core publishes this so the Browser's Batch page can draw "12 of 40" and a
+/// Cancel button without owning any of the work. `running` is false after the
+/// job ends, and the counts stay so the page can report what happened until the
+/// next job replaces them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchState {
+    /// `resize`, `crop` or `convert` — the operation's stable name.
+    pub operation: String,
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub running: bool,
+    pub cancelled: bool,
+    /// The file being written now, or the last one the job reported.
+    pub current: String,
+}
+
 /// A live-preview render: which tool produced it (`resize` or `crop`), the
 /// target size and where the pixels are, so the canvas can draw the result
 /// without the document moving.
@@ -160,6 +180,9 @@ pub struct UiState {
     /// The Editor's working document, or `None` when nothing is open. Pixels
     /// live in Core's `EditorDocument`; this is the published description.
     pub editor: Option<EditorState>,
+    /// The batch job in flight, or the last one that finished. `None` until the
+    /// first job, so the Batch page can tell "never run" from "finished".
+    pub batch: Option<BatchState>,
     pub busy: bool,
     /// What the status bar says, as a translatable line.
     pub status: UiText,
@@ -203,6 +226,7 @@ impl UiState {
             viewer_modified: 0,
             viewer_size: 0,
             editor: None,
+            batch: None,
             busy: false,
             status: UiText::new("ready"),
             config_path,
@@ -246,6 +270,7 @@ impl UiState {
             viewer_modified: self.viewer_modified,
             viewer_size: self.viewer_size,
             editor: &self.editor,
+            batch: &self.batch,
             busy: self.busy,
             status: &self.status,
             config_path: &self.config_path,
@@ -297,6 +322,7 @@ pub struct StateMeta<'a> {
     pub viewer_modified: u64,
     pub viewer_size: u64,
     pub editor: &'a Option<EditorState>,
+    pub batch: &'a Option<BatchState>,
     pub busy: bool,
     pub status: &'a UiText,
     pub config_path: &'a str,

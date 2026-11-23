@@ -131,6 +131,154 @@ impl ResizeMode {
     }
 }
 
+/// A file format a batch convert can write.
+///
+/// The Editor picks its save format from the destination's extension, but a
+/// batch destination is built by Core: the user names a format, Core names the
+/// file. The variants are the encoders this build carries, so the dropdown can
+/// offer nothing the worker would refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Webp,
+    Tiff,
+    Gif,
+    Bmp,
+    Tga,
+    Qoi,
+}
+
+impl ImageFormat {
+    /// Every format a convert offers, in the order the form lists them.
+    pub const ALL: [Self; 8] = [
+        Self::Png,
+        Self::Jpeg,
+        Self::Webp,
+        Self::Tiff,
+        Self::Gif,
+        Self::Bmp,
+        Self::Tga,
+        Self::Qoi,
+    ];
+
+    /// The extension the written file carries, without the dot.
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Webp => "webp",
+            Self::Tiff => "tiff",
+            Self::Gif => "gif",
+            Self::Bmp => "bmp",
+            Self::Tga => "tga",
+            Self::Qoi => "qoi",
+        }
+    }
+
+    /// The dotted extension the form shows.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Png => ".png",
+            Self::Jpeg => ".jpg",
+            Self::Webp => ".webp",
+            Self::Tiff => ".tiff",
+            Self::Gif => ".gif",
+            Self::Bmp => ".bmp",
+            Self::Tga => ".tga",
+            Self::Qoi => ".qoi",
+        }
+    }
+}
+
+/// What one batch job does to every input image.
+///
+/// A batch is one typed job, not a list of per-file commands: the three
+/// operations share the input list, the output policy, the progress counter and
+/// the cancellation flag, and a front end that sent a hundred commands could
+/// neither cancel them together nor say "12 of 40" honestly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum BatchOperation {
+    /// Scale every image to exactly `width` × `height`.
+    ///
+    /// The mode and filter mean what they mean in `EditorResize`; `cover` and
+    /// `pad` are how one target size fits a folder of mixed shapes.
+    Resize {
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        mode: ResizeMode,
+        #[serde(default)]
+        filter: ResizeFilter,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+    },
+    /// Cut a proportional rectangle from every image.
+    ///
+    /// Each value is a percentage (0–100) of that image's own side, so one job
+    /// describes the same trim on a folder of mixed sizes: `0,0,100,100` is the
+    /// whole picture and `10,10,80,80` trims ten percent from each side.
+    Crop {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
+    /// Re-encode every image in `format`, with `quality` for the lossy encoder.
+    Convert {
+        format: ImageFormat,
+        #[serde(default)]
+        quality: Option<u8>,
+    },
+}
+
+impl BatchOperation {
+    /// Stable name for the journal, the progress label and the logs.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Resize { .. } => "resize",
+            Self::Crop { .. } => "crop",
+            Self::Convert { .. } => "convert",
+        }
+    }
+}
+
+/// Where a batch job gets its files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum BatchSource {
+    /// The explicit list the interface sends — normally the selection.
+    Selection { paths: Vec<String> },
+    /// Every image directly inside `path`. Non-recursive: the Browser shows one
+    /// folder, and a batch that silently descended would touch files the user
+    /// never saw.
+    Folder { path: String },
+}
+
+/// Where a batch job writes its results.
+///
+/// The default the interface sends is a suffix beside the source; replacing the
+/// originals is a separate, explicit answer because a batch is not a save and
+/// the project never overwrites a source by default.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchOutput {
+    /// Destination folder; `None` writes beside each source.
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// Text inserted before the extension. Empty keeps the name.
+    #[serde(default)]
+    pub suffix: String,
+    /// Replace the source files in place. Never inferred from an empty suffix:
+    /// this flag is the only way a destination may be its own source.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
 /// Interface language. The UI text is translated at runtime from `.ts` files
 /// compiled into the binary; Core only carries the selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -616,6 +764,18 @@ pub enum Command {
     EditorReset,
     /// Drop the working document. The source file is untouched.
     EditorClose,
+    /// Run one operation over a list of images on a worker thread.
+    ///
+    /// The job is bounded (`MAX_BATCH_FILES`), cancellable
+    /// (`cancel_operation`) and observable: Core publishes a `batch` slot with
+    /// the count and the file being written. The sources are never modified
+    /// unless `output.overwrite` says so.
+    BatchRun {
+        operation: BatchOperation,
+        source: BatchSource,
+        #[serde(default)]
+        output: BatchOutput,
+    },
     CancelOperation,
 }
 
@@ -666,6 +826,7 @@ impl Command {
             Self::EditorRedo => "editor_redo",
             Self::EditorReset => "editor_reset",
             Self::EditorClose => "editor_close",
+            Self::BatchRun { .. } => "batch_run",
         }
     }
 }
@@ -825,6 +986,79 @@ mod tests {
         let json = serde_json::to_string(&command).unwrap();
         assert!(json.contains("\"copy_to\""));
         assert!(json.contains("\"destination\""));
+    }
+
+    #[test]
+    fn a_batch_job_round_trips_with_its_operation_and_policy() {
+        // The shape the QML sends: one command, one operation, one policy.
+        let env: Envelope = serde_json::from_str(
+            r#"{"id":"b","command":{"type":"batch_run",
+                "operation":{"operation":"crop","x":10,"y":10,"width":80,"height":80},
+                "source":{"source":"selection","paths":["/pics/a.png"]},
+                "output":{"suffix":"_cropped"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(env.command.name(), "batch_run");
+        match env.command {
+            Command::BatchRun {
+                operation,
+                source,
+                output,
+            } => {
+                assert_eq!(
+                    operation,
+                    BatchOperation::Crop {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 80.0,
+                        height: 80.0
+                    }
+                );
+                assert_eq!(
+                    source,
+                    BatchSource::Selection {
+                        paths: vec!["/pics/a.png".into()]
+                    }
+                );
+                // An older payload carries no folder or overwrite: the safe
+                // default is a suffixed copy beside the source.
+                assert_eq!(output.folder, None);
+                assert_eq!(output.suffix, "_cropped");
+                assert!(!output.overwrite);
+            }
+            other => panic!("parsed as {}", other.name()),
+        }
+
+        let command = Command::BatchRun {
+            operation: BatchOperation::Resize {
+                width: 800,
+                height: 600,
+                mode: ResizeMode::Cover,
+                filter: ResizeFilter::Lanczos3,
+                fill: None,
+                fill_alpha: 255,
+            },
+            source: BatchSource::Folder {
+                path: "/pics".into(),
+            },
+            output: BatchOutput {
+                folder: Some("/out".into()),
+                suffix: "_small".into(),
+                overwrite: false,
+            },
+        };
+        let json = serde_json::to_string(&command).unwrap();
+        assert!(json.contains("\"operation\":\"resize\""), "{json}");
+        assert!(json.contains("\"mode\":\"cover\""), "{json}");
+        let round: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.name(), "batch_run");
+        match round {
+            Command::BatchRun { operation, .. } => {
+                assert_eq!(operation.name(), "resize");
+                assert!(matches!(operation, BatchOperation::Resize { .. }));
+            }
+            other => panic!("round trip changed the command to {}", other.name()),
+        }
     }
 
     #[test]

@@ -27,6 +27,7 @@ QML_TEST_SUITES = {
         "kogaview_browser_qml_tests",
         BUILD_DIR / "bin" / "kogaview_browser_qml_tests",
     ),
+    "batch": ("kogaview_batch_tests", BUILD_DIR / "bin" / "kogaview_batch_tests"),
     "cache": (
         "kogaview_browser_cache_tests",
         BUILD_DIR / "bin" / "kogaview_browser_cache_tests",

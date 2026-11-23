@@ -30,11 +30,7 @@ image = { version = "0.25", default-features = false, features = [
     "qoi",
     "tga",
 ] }
-# The Editor's first preview is decoded straight to a reduced DCT scale, which
-# `image` does not expose: this decoder reads 1/2, 1/4 or 1/8 of a JPEG without
-# touching the pixels it throws away. Pure Rust and no threads (`rayon` off), so
-# a Flatpak build carries it like the rest.
-jpeg-decoder = { version = "0.3", default-features = false }
+kogaview-editor = { path = "../app-editor" }
 kogaview-protocol = { path = "../app-protocol" }
 serde.workspace = true
 serde_json.workspace = true

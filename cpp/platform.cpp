@@ -3,9 +3,11 @@
 
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusMetaType>
 #include <QDBusObjectPath>
 #include <QDBusUnixFileDescriptor>
 #include <QDBusVariant>
@@ -66,6 +68,103 @@ QString senderToken(const QString& busName)
   }
   token.replace(QLatin1Char('.'), QLatin1Char('_'));
   return token;
+}
+
+/// The save chooser's formats: a label and the globs it accepts.
+///
+/// One table feeds both the Qt fallback's `"Name (*.png)"` strings and the
+/// portal's structured `a(ssa(ss))` filters, so the two dialogs can never offer
+/// different formats. Spelled out for the same reason `imageNameFilter` is: no
+/// extension list should travel through CXX-Qt, and the packaging check reads
+/// these names.
+struct SaveFilter
+{
+  const char* name;
+  const char* patterns;
+};
+
+constexpr SaveFilter kSaveFilters[] = {{"PNG image", "*.png"},
+                                       {"JPEG image", "*.jpg *.jpeg"},
+                                       {"WebP image", "*.webp"},
+                                       {"TIFF image", "*.tiff"},
+                                       {"GIF image", "*.gif"},
+                                       {"BMP image", "*.bmp"},
+                                       {"TGA image", "*.tga"},
+                                       {"QOI image", "*.qoi"}};
+
+/// The globs of one filter, split.
+QStringList filterPatterns(const SaveFilter& filter)
+{
+  return QString::fromLatin1(filter.patterns).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+}
+
+/// One portal filter pattern: `(u type, s pattern)`. Type 0 is the only kind
+/// the file chooser accepts — a glob — so every pattern carries it. The type
+/// comes first: `SaveFile` reads `a(sa(us))` and rejects the pair the other way
+/// round.
+struct PortalPattern
+{
+  uint type = 0;
+  QString glob;
+};
+
+/// One portal filter: `(s name, a(us) patterns)`.
+struct PortalFilter
+{
+  QString name;
+  QList<PortalPattern> patterns;
+};
+} // namespace
+
+Q_DECLARE_METATYPE(PortalPattern)
+Q_DECLARE_METATYPE(QList<PortalPattern>)
+Q_DECLARE_METATYPE(PortalFilter)
+Q_DECLARE_METATYPE(QList<PortalFilter>)
+
+QDBusArgument& operator<<(QDBusArgument& argument, const PortalPattern& pattern)
+{
+  argument.beginStructure();
+  argument << pattern.type << pattern.glob;
+  argument.endStructure();
+  return argument;
+}
+
+const QDBusArgument& operator>>(const QDBusArgument& argument, PortalPattern& pattern)
+{
+  argument.beginStructure();
+  argument >> pattern.type >> pattern.glob;
+  argument.endStructure();
+  return argument;
+}
+
+QDBusArgument& operator<<(QDBusArgument& argument, const PortalFilter& filter)
+{
+  argument.beginStructure();
+  argument << filter.name << filter.patterns;
+  argument.endStructure();
+  return argument;
+}
+
+const QDBusArgument& operator>>(const QDBusArgument& argument, PortalFilter& filter)
+{
+  argument.beginStructure();
+  argument >> filter.name >> filter.patterns;
+  argument.endStructure();
+  return argument;
+}
+
+namespace {
+/// Register the filter structures with QDBus once, before the first request.
+void registerPortalFilters()
+{
+  static const bool registered = [] {
+    qDBusRegisterMetaType<PortalPattern>();
+    qDBusRegisterMetaType<QList<PortalPattern>>();
+    qDBusRegisterMetaType<PortalFilter>();
+    qDBusRegisterMetaType<QList<PortalFilter>>();
+    return true;
+  }();
+  (void)registered;
 }
 } // namespace
 
@@ -214,6 +313,7 @@ bool PlatformHelper::requestOpenFile(const QString& title)
   QVariantMap options;
   options.insert(QStringLiteral("multiple"), true);
   m_folderMode = false;
+  m_saveMode = false;
   return request(QStringLiteral("OpenFile"), title, options);
 }
 
@@ -231,7 +331,47 @@ bool PlatformHelper::requestOpenFolder(const QString& title)
   options.insert(QStringLiteral("multiple"), false);
   options.insert(QStringLiteral("directory"), true);
   m_folderMode = true;
+  m_saveMode = false;
   return request(QStringLiteral("OpenFile"), title, options);
+}
+
+bool PlatformHelper::requestSaveFile(const QString& title, const QString& currentName)
+{
+  registerPortalFilters();
+
+  const QString locale = interfaceLocale();
+  QList<PortalFilter> filters;
+  for (const SaveFilter& filter : kSaveFilters) {
+    PortalFilter entry;
+    entry.name = kogaview::i18n::translate(locale, filter.name);
+    for (const QString& glob : filterPatterns(filter)) {
+      entry.patterns.append(PortalPattern{0, glob});
+    }
+    filters.append(entry);
+  }
+
+  QVariantMap options;
+  // `SaveFile` has no `multiple`: one name, one file.
+  options.insert(QStringLiteral("filters"), QVariant::fromValue(filters));
+  if (!currentName.isEmpty()) {
+    const QFileInfo info(currentName);
+    options.insert(QStringLiteral("current_name"), info.fileName());
+    // `current_folder` is a byte array (the path is a plain path, NUL
+    // terminated), not a string: the portal reads it as `ay`.
+    const QString folder = info.absolutePath();
+    if (!folder.isEmpty()) {
+      QByteArray bytes = folder.toUtf8();
+      bytes.append('\0');
+      options.insert(QStringLiteral("current_folder"), bytes);
+    }
+  }
+  m_folderMode = false;
+  m_saveMode = true;
+  const bool started = request(QStringLiteral("SaveFile"), title, options);
+  if (!started) {
+    m_saveMode = false;
+  }
+  return started;
 }
 
 bool PlatformHelper::request(const QString& method, const QString& title, const QVariantMap& options)
@@ -305,6 +445,7 @@ void PlatformHelper::onPortalResponse(uint response, const QVariantMap& results)
   }
 
   const bool folderMode = m_folderMode;
+  const bool saveMode = m_saveMode;
   const bool dismissing = m_dismissing;
   qInfo() << "KogaView portal: response" << response << "on" << m_requestPath;
   m_dismissing = false;
@@ -346,7 +487,11 @@ void PlatformHelper::onPortalResponse(uint response, const QVariantMap& results)
     return;
   }
 
-  if (folderMode) {
+  if (saveMode) {
+    // A save answer is one path: the file the user named, whether or not it
+    // exists yet. The overwrite question is the desktop dialog's own.
+    emit saveFileSelected(paths.first());
+  } else if (folderMode) {
     emit folderSelected(paths.first());
   } else {
     emit filesSelected(paths);
@@ -361,6 +506,8 @@ void PlatformHelper::resetRequest()
   }
   m_requestActive = false;
   m_dismissing = false;
+  m_folderMode = false;
+  m_saveMode = false;
   m_requestPath.clear();
   m_connectionService.clear();
 }
@@ -467,17 +614,12 @@ QString PlatformHelper::imageNameFilter() const
 QStringList PlatformHelper::saveNameFilters() const
 {
   const QString locale = interfaceLocale();
-  auto label = [&locale](const char* name) {
-    return kogaview::i18n::translate(locale, name);
-  };
-  return { label("PNG image") + QStringLiteral(" (*.png)"),
-           label("JPEG image") + QStringLiteral(" (*.jpg *.jpeg)"),
-           label("WebP image") + QStringLiteral(" (*.webp)"),
-           label("TIFF image") + QStringLiteral(" (*.tiff)"),
-           label("GIF image") + QStringLiteral(" (*.gif)"),
-           label("BMP image") + QStringLiteral(" (*.bmp)"),
-           label("TGA image") + QStringLiteral(" (*.tga)"),
-           label("QOI image") + QStringLiteral(" (*.qoi)") };
+  QStringList filters;
+  for (const SaveFilter& filter : kSaveFilters) {
+    filters << kogaview::i18n::translate(locale, filter.name) + QStringLiteral(" (")
+                 + filterPatterns(filter).join(QLatin1Char(' ')) + QLatin1Char(')');
+  }
+  return filters;
 }
 
 QString PlatformHelper::interfaceLocale() const

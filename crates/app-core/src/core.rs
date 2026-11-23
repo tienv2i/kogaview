@@ -10,18 +10,20 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 
 use kogaview_protocol::{
-    Command, Envelope, MoveDirection, ProtocolError, Query, ResizeFilter, ResizeMode, Theme,
-    Workspace,
+    BatchOperation, BatchOutput, BatchSource, Command, Envelope, MoveDirection, ProtocolError,
+    Query, ResizeFilter, ResizeMode, Theme, Workspace,
 };
 use serde_json::{json, Value};
 
+use crate::batch::{self, BatchEvent};
 use crate::config::Config;
 use crate::editor::{self, EditOperation, EditorDocument, EditorTask};
 use crate::journal::{Journal, JournalEntry};
 use crate::ops;
 use crate::paths::AppPaths;
 use crate::state::{
-    Crumb, EditorPreviewDraft, EditorState, FolderListing, SelectionInfo, UiState, UiText,
+    BatchState, Crumb, EditorPreviewDraft, EditorState, FolderListing, SelectionInfo, UiState,
+    UiText,
 };
 use crate::AppIdentity;
 
@@ -163,6 +165,11 @@ pub struct Core {
     /// The worker's answer for the save in flight.
     pending_save: Option<Receiver<EditorSaveResult>>,
     pending_export: Option<Receiver<EditorExportResult>>,
+    /// A batch job's worker. Progress and the final line arrive here; a batch
+    /// has its own cancel flag so a Cancel never reaches a copy that happens to
+    /// be running at the same time.
+    batch_rx: Option<Receiver<BatchEvent>>,
+    batch_cancel: Option<Arc<AtomicBool>>,
     /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
     /// listing on its own and only re-sends it when this changes, because it is
     /// the one part of the snapshot that grows with the folder.
@@ -220,6 +227,8 @@ impl Core {
             editor_save_generation: 0,
             pending_save: None,
             pending_export: None,
+            batch_rx: None,
+            batch_cancel: None,
             listing_epoch: 0,
         };
 
@@ -316,6 +325,8 @@ impl Core {
             editor_save_generation: 0,
             pending_save: None,
             pending_export: None,
+            batch_rx: None,
+            batch_cancel: None,
             listing_epoch: 0,
         }
     }
@@ -606,6 +617,60 @@ impl Core {
             }
         }
 
+        // A batch worker reports once per file and once when it stops. The
+        // receiver is taken out while it is drained so the state updates below
+        // can borrow `self`; an idle channel goes back untouched.
+        if let Some(receiver) = self.batch_rx.take() {
+            let mut finished = false;
+            loop {
+                match receiver.try_recv() {
+                    Ok(BatchEvent::Progress(progress)) => {
+                        if let Some(batch) = &mut self.state.batch {
+                            batch.done = progress.done;
+                            batch.failed = progress.failed;
+                            batch.current = progress.current;
+                        }
+                        changed = true;
+                    }
+                    Ok(BatchEvent::Finished(result)) => {
+                        if let Some(batch) = &mut self.state.batch {
+                            batch.done = result.done;
+                            batch.failed = result.failed;
+                            batch.running = false;
+                            batch.cancelled = result.cancelled;
+                        }
+                        self.batch_cancel = None;
+                        self.state.busy = false;
+                        self.state.status = result.message;
+                        // The tree on disk may differ now even when the
+                        // refreshed listing looks the same.
+                        self.state.tree_revision += 1;
+                        if result.refresh {
+                            self.refresh_current();
+                        }
+                        finished = true;
+                        changed = true;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.batch_cancel = None;
+                        if let Some(batch) = &mut self.state.batch {
+                            batch.running = false;
+                        }
+                        self.state.busy = false;
+                        self.state.status = UiText::new("batch_incomplete");
+                        finished = true;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if !finished {
+                self.batch_rx = Some(receiver);
+            }
+        }
+
         if changed {
             self.state.bump();
         }
@@ -826,9 +891,22 @@ impl Core {
             Command::EditorRedo => self.editor_step(false),
             Command::EditorReset => self.editor_reset(),
             Command::EditorClose => self.editor_close(),
+            Command::BatchRun {
+                operation,
+                source,
+                output,
+            } => self.batch_run(operation, source, output),
             Command::CancelOperation => {
+                let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {
                     cancel.store(true, Ordering::SeqCst);
+                    cancelled = true;
+                }
+                if let Some(cancel) = &self.batch_cancel {
+                    cancel.store(true, Ordering::SeqCst);
+                    cancelled = true;
+                }
+                if cancelled {
                     self.state.status = UiText::new("cancelling");
                     Ok(Some(UiText::new("cancelling")))
                 } else {
@@ -2377,6 +2455,106 @@ impl Core {
         Ok(result)
     }
 
+    /// Start one batch job on a worker.
+    ///
+    /// The gateway resolves the input list and validates the whole policy
+    /// before a thread exists, so a rejected job never publishes a `batch`
+    /// slot. The job then owns its own cancel flag; `cancel_operation` sets it
+    /// beside any file operation's, and `poll()` publishes progress and the
+    /// final line.
+    fn batch_run(
+        &mut self,
+        operation: BatchOperation,
+        source: BatchSource,
+        output: BatchOutput,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if self.batch_rx.is_some() {
+            return Err(ProtocolError::line(
+                "busy",
+                UiText::new("batch_already_running"),
+            ));
+        }
+        let inputs = self.batch_inputs(source)?;
+        let plan = batch::BatchPlan::build(operation, inputs, output)?;
+        let total = plan.total();
+        let name = operation.name();
+
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.batch_cancel = Some(cancel.clone());
+        self.batch_rx = Some(receiver);
+        self.state.batch = Some(BatchState {
+            operation: name.to_owned(),
+            total,
+            running: true,
+            ..BatchState::default()
+        });
+        self.state.busy = true;
+        let line = UiText::with("batch_started", [total.to_string()]);
+        self.state.status = line.clone();
+        plan.spawn(cancel, sender);
+        Ok(Some(line))
+    }
+
+    /// Resolve the command's input source to the files this build can decode.
+    ///
+    /// A folder is read here, not in QML: the listing rule (one folder, images
+    /// only, the same `is_image` the grid draws) belongs to Core, and a batch
+    /// must touch exactly what the Browser would show.
+    fn batch_inputs(&self, source: BatchSource) -> Result<Vec<PathBuf>, ProtocolError> {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        match source {
+            BatchSource::Selection { paths: raw } => {
+                for raw in raw {
+                    let path = ops::normalize_path(&PathBuf::from(raw));
+                    if batch::is_batchable(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+            BatchSource::Folder { path } => {
+                let folder = ops::normalize_path(&PathBuf::from(path));
+                if !folder.is_dir() {
+                    return Err(ProtocolError::line(
+                        "not_a_directory",
+                        UiText::with("not_a_folder", [folder.display().to_string()]),
+                    ));
+                }
+                let entries = ops::read_entries(&folder).map_err(|error| {
+                    ProtocolError::with_line(
+                        "folder_error",
+                        error,
+                        UiText::with("folder_error", [folder.display().to_string()]),
+                    )
+                })?;
+                for entry in entries {
+                    if entry.is_image {
+                        let path = PathBuf::from(&entry.path);
+                        if batch::is_batchable(&path) {
+                            paths.push(path);
+                        }
+                    }
+                }
+            }
+        }
+        // A selection can name the same file twice; the same output would then
+        // be written twice. Keep the first occurrence and the order the user
+        // selected, so the progress count matches the panel's.
+        let mut unique = Vec::with_capacity(paths.len());
+        for path in paths {
+            if !unique.contains(&path) {
+                unique.push(path);
+            }
+        }
+        if unique.is_empty() {
+            return Err(ProtocolError::line(
+                "no_images",
+                UiText::new("batch_no_images"),
+            ));
+        }
+        Ok(unique)
+    }
+
     fn start_operation<F>(&mut self, status: UiText, work: F)
     where
         F: FnOnce(Arc<AtomicBool>) -> OpResult + Send + 'static,
@@ -2697,6 +2875,18 @@ mod tests {
     fn settle_scan(core: &mut Core) -> bool {
         for _ in 0..2000 {
             if core.poll() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// Wait for a batch worker to publish its final line.
+    fn settle_batch(core: &mut Core) -> bool {
+        for _ in 0..4000 {
+            core.poll();
+            if matches!(&core.state.batch, Some(batch) if !batch.running) {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -4744,6 +4934,282 @@ mod tests {
         assert_eq!(
             (editor.file_modified, editor.file_size),
             file_identity(&destination)
+        );
+
+        remove_tree(&base);
+    }
+
+    /// A batch is one typed job: the counts it publishes, the files it writes
+    /// and the source it must not touch are all one assertion each.
+    #[test]
+    fn a_batch_resize_writes_beside_the_source_and_keeps_it() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 40, 20);
+        let mut core = Core::for_test(&base.join("runtime"));
+        let source = serde_json::to_string(&photo.to_string_lossy()).unwrap();
+
+        let response = dispatch_json(
+            &mut core,
+            "batch-1",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"resize","width":20,"height":10}},
+                    "source":{{"source":"selection","paths":[{source}]}},
+                    "output":{{"suffix":"_small"}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_batch(&mut core), "the batch never finished");
+
+        let output = base.join("photo_small.png");
+        assert!(output.is_file(), "the batch wrote no copy");
+        assert_eq!(
+            image::image_dimensions(&output).unwrap(),
+            (20, 10),
+            "the copy is not the target size"
+        );
+        assert_eq!(
+            image::image_dimensions(&photo).unwrap(),
+            (40, 20),
+            "the source must not be resized"
+        );
+        let batch = core.state.batch.as_ref().expect("no batch state");
+        assert_eq!((batch.done, batch.failed, batch.total), (1, 0, 1));
+        assert!(!batch.running);
+        assert_eq!(core.state.status.code, "batch_done");
+
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn a_batch_crop_is_proportional_to_each_image() {
+        let base = temp_dir();
+        write_png(&base.join("wide.png"), 40, 20);
+        write_png(&base.join("square.png"), 20, 20);
+        write_png(&base.join("small.png"), 8, 8);
+        let mut core = Core::for_test(&base.join("runtime"));
+        let folder = serde_json::to_string(&base.to_string_lossy()).unwrap();
+
+        let response = dispatch_json(
+            &mut core,
+            "batch-1",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"crop","x":0,"y":0,"width":50,"height":50}},
+                    "source":{{"source":"folder","path":{folder}}},
+                    "output":{{"suffix":"_half"}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_batch(&mut core), "the batch never finished");
+
+        // Half of each image's own sides: 20 × 10 from the wide one, 10 × 10
+        // from the square one. A percentage crop is the only shape that can do
+        // both in one job.
+        assert_eq!(
+            image::image_dimensions(&base.join("wide_half.png")).unwrap(),
+            (20, 10)
+        );
+        assert_eq!(
+            image::image_dimensions(&base.join("square_half.png")).unwrap(),
+            (10, 10)
+        );
+        assert_eq!(
+            image::image_dimensions(&base.join("small_half.png")).unwrap(),
+            (4, 4),
+            "the folder source processes every image it lists"
+        );
+        let batch = core.state.batch.as_ref().unwrap();
+        assert_eq!((batch.done, batch.failed, batch.total), (3, 0, 3));
+
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn a_batch_convert_writes_the_new_format_and_keeps_the_original() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 12, 8);
+        let mut core = Core::for_test(&base.join("runtime"));
+        let source = serde_json::to_string(&photo.to_string_lossy()).unwrap();
+
+        let response = dispatch_json(
+            &mut core,
+            "batch-1",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"convert","format":"jpeg","quality":80}},
+                    "source":{{"source":"selection","paths":[{source}]}},
+                    "output":{{}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_batch(&mut core), "the batch never finished");
+
+        let converted = base.join("photo.jpg");
+        assert!(converted.is_file(), "the conversion wrote no JPEG");
+        assert!(photo.is_file(), "the PNG source must stay");
+        assert_eq!(image::image_dimensions(&converted).unwrap(), (12, 8));
+        // The bytes really are JPEG, not a PNG under another name.
+        assert_eq!(
+            image::ImageReader::open(&converted)
+                .unwrap()
+                .with_guessed_format()
+                .unwrap()
+                .format(),
+            Some(image::ImageFormat::Jpeg)
+        );
+
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn a_batch_refuses_to_overwrite_a_source_unless_asked() {
+        let base = temp_dir();
+        let photo = base.join("photo.png");
+        write_png(&photo, 12, 8);
+        let before = std::fs::read(&photo).unwrap();
+        let mut core = Core::for_test(&base.join("runtime"));
+        let source = serde_json::to_string(&photo.to_string_lossy()).unwrap();
+
+        // An empty suffix beside the source is the one policy that would be a
+        // silent overwrite, so it is refused before any worker exists.
+        let response = dispatch_json(
+            &mut core,
+            "batch-1",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"crop","x":0,"y":0,"width":50,"height":50}},
+                    "source":{{"source":"selection","paths":[{source}]}},
+                    "output":{{}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "output_is_source", "{response}");
+        assert!(core.state.batch.is_none(), "a refused job must not publish");
+
+        // The explicit flag is the only way to replace the original.
+        let response = dispatch_json(
+            &mut core,
+            "batch-2",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"crop","x":0,"y":0,"width":50,"height":50}},
+                    "source":{{"source":"selection","paths":[{source}]}},
+                    "output":{{"overwrite":true}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_batch(&mut core), "the batch never finished");
+        assert_ne!(
+            std::fs::read(&photo).unwrap(),
+            before,
+            "the overwrite did not change the source"
+        );
+        assert_eq!(
+            image::image_dimensions(&photo).unwrap(),
+            (6, 4),
+            "the overwrite is the crop, in place"
+        );
+        assert!(
+            base.join("photo.png.bak").is_file(),
+            "an overwrite keeps the previous bytes, like a save does"
+        );
+
+        remove_tree(&base);
+    }
+
+    /// The third destination: a folder of its own. The sources stay where they
+    /// are, the copies keep their names, and a folder that is not there is
+    /// refused before a worker starts rather than failing per file.
+    #[test]
+    fn a_batch_writes_into_another_folder() {
+        let base = temp_dir();
+        let wide = base.join("wide.png");
+        let tall = base.join("tall.png");
+        write_png(&wide, 40, 20);
+        write_png(&tall, 20, 40);
+        let out = base.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut core = Core::for_test(&base.join("runtime"));
+        let wide_source = serde_json::to_string(&wide.to_string_lossy()).unwrap();
+        let tall_source = serde_json::to_string(&tall.to_string_lossy()).unwrap();
+        let out_folder = serde_json::to_string(&out.to_string_lossy()).unwrap();
+
+        let response = dispatch_json(
+            &mut core,
+            "batch-1",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"resize","width":10,"height":10}},
+                    "source":{{"source":"selection","paths":[{wide_source},{tall_source}]}},
+                    "output":{{"folder":{out_folder},"suffix":"_small"}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(settle_batch(&mut core), "the batch never finished");
+
+        for name in ["wide_small.png", "tall_small.png"] {
+            let copy = out.join(name);
+            assert!(copy.is_file(), "{name} was not written into the folder");
+            assert_eq!(
+                image::image_dimensions(&copy).unwrap(),
+                (10, 10),
+                "{name} is not the target size"
+            );
+        }
+        // The copies live in the folder, not beside the sources.
+        assert!(!base.join("wide_small.png").exists());
+        assert_eq!(image::image_dimensions(&wide).unwrap(), (40, 20));
+        assert_eq!(image::image_dimensions(&tall).unwrap(), (20, 40));
+
+        // A folder that does not exist is a refusal with a line, not a run that
+        // fails once per image.
+        let missing = serde_json::to_string(&base.join("nope").to_string_lossy()).unwrap();
+        let response = dispatch_json(
+            &mut core,
+            "batch-2",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"resize","width":10,"height":10}},
+                    "source":{{"source":"selection","paths":[{wide_source}]}},
+                    "output":{{"folder":{missing},"suffix":"_small"}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "missing_folder", "{response}");
+        assert_eq!(
+            response["error"]["ui"]["code"], "batch_output_missing",
+            "a rejection the interface can word"
+        );
+
+        remove_tree(&base);
+    }
+
+    #[test]
+    fn a_batch_with_nothing_to_do_is_refused_with_a_line() {
+        let base = temp_dir();
+        let text = base.join("notes.txt");
+        std::fs::write(&text, b"not a picture").unwrap();
+        let mut core = Core::for_test(&base.join("runtime"));
+        let source = serde_json::to_string(&text.to_string_lossy()).unwrap();
+
+        let response = dispatch_json(
+            &mut core,
+            "batch-1",
+            &format!(
+                r#"{{"type":"batch_run",
+                    "operation":{{"operation":"resize","width":10,"height":10}},
+                    "source":{{"source":"selection","paths":[{source}]}},
+                    "output":{{"suffix":"_small"}}}}"#
+            ),
+        );
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "no_images", "{response}");
+        assert_eq!(
+            response["error"]["ui"]["code"], "batch_no_images",
+            "a rejection the interface can word"
         );
 
         remove_tree(&base);

@@ -151,7 +151,8 @@ the whole-dock toggle in `config.json`), a hidden page keeps its stack slot and
 is never drawn, and hiding every panel leaves the gutter and a top-aligned
 "No panels shown" sentence rather than a blank column. Batch action is a real
 surface with the count of selected images, three visibly disabled verbs and a
-note that Core owns no batch command yet. The Editor's tool zone is now exactly
+note that Core owns no batch command yet (superseded by gap 18: the verbs open
+the batch form and Core owns `batch_run`). The Editor's tool zone is now exactly
 as tall as its options and pinned to the dock's top, with Apply/Reset/Clear
 directly under the fields they act on; the pointer's empty column no longer
 floats in the middle when its reference pages are hidden.
@@ -189,10 +190,30 @@ The panel list moved out of the burger menu into Settings › Appearance, four p
 and right-aligned with no submenu left. Settings previews the whole layout on the
 real window before Apply/OK writes it, and `Reset layout` restores Core's defaults.
 
+The last pass is not a feature: the Editor left `app-core` and became
+`crates/app-editor` (`kogaview-editor`), because `editor.rs` had grown to 3,280
+lines under a module comment that already described a crate boundary — "this
+module owns pixels and history only; file paths, the command gateway and UI
+state stay in Core". Core re-exports it as `kogaview_core::editor`, so no
+handler, no protocol type and no batch worker changed, and the whole gate is
+green with the same 38 Editor cases in their new home (ADR 0023).
+
 Nothing here is a plan; it is what was measured, what was not, and why.
 
 ## Tree
 
+- Branch `main`. The Editor is a **crate of its own**, uncommitted on top of
+  `a7c9d7e`: `crates/app-editor/` (`kogaview-editor`, new workspace member) with
+  `lib.rs`, `operation.rs`, `document.rs`, `validate.rs`, `pixels.rs`,
+  `codec.rs`, `render.rs`, `tasks.rs` and `tests.rs`, and a `Cargo.toml` that
+  takes the `image` feature list and the `jpeg-decoder` reader with it;
+  `crates/app-core/src/editor.rs` deleted and `crates/app-core/src/lib.rs`
+  re-exporting the crate as `pub use kogaview_editor as editor;`;
+  `crates/app-core/Cargo.toml` naming `kogaview-editor`;
+  `scripts/check_translations.py` reading both crates' sources (`CORE_DIRS`,
+  skipping `app-editor/src/tests.rs`); ADR 0023 plus revision notes in ADR 0003
+  and ADR 0005, `docs/IMPLEMENTATION_PLAN.md`, `docs/M1-REPORT.md` row 107.
+  `git status` is the authority.
 - Branch `main`. Row 106 is **uncommitted** on top of `57341cb`: the protocol's
   `LayoutState`/`LAYOUT_PANEL_KEYS`/`LAYOUT_REFERENCE_TABS`/`Command::SetLayout`
   and its tests, `Config.layout` with `from_legacy` and its two tests,
@@ -543,18 +564,21 @@ Arch Linux, GNOME on Wayland (`wayland-0`), Qt 6.12.0, rustc 1.99.1, icon theme
 one now; `/tmp/opencode/lrel` no longer exists):
 
 ```
-translations: 367 strings in kogaview_vi.ts, 105 of them compiled into C++, 362 drawn by the QML, 4 looked up by context
+translations: 438 strings in kogaview_vi.ts, 105 of them compiled into C++, 433 drawn by the QML, 4 looked up by context
 packaging: 19 MIME types, 3 categories, icon and metainfo named io.github.tienv2i.KogaView
-cargo: 102 passed (kogaview-core) + 6 passed (kogaview-protocol)
-viewer 44 · browser 52 · cache 15 · state 7 · settings 21 · editor 70 · language 7 · toolbar 18
+cargo: 75 passed (kogaview-core) + 38 passed (kogaview-editor) + 7 passed (kogaview-protocol)
+viewer 44 · browser 59 · batch 14 · cache 15 · state 7 · settings 21 · editor 71 · language 7 · toolbar 18
 ```
 
-`cargo fmt --check` clean. `cargo clippy -p kogaview-protocol -p kogaview-core --all-targets`
-still reports the two pre-existing `derivable_impls` warnings in
-`crates/app-protocol/src/lib.rs` (`impl Default for Workspace`/`Theme`, lines 53 and 135) and
-the pre-existing core warnings (`too_many_arguments`, `while_let_loop`, `sort_by_key`,
-`field_reassign_with_default`, `needless_return`); rows 91 and 92 add no new warning (the
-protocol's `Anchor` and the anchored Core helpers are still gone).
+`cargo fmt --check` clean, `just build` clean (no QML warning) and reporting the
+canonical binary. `cargo clippy -p kogaview-protocol -p kogaview-core -p kogaview-editor
+--all-targets` reports no new *kind* of warning: the two pre-existing
+`derivable_impls` warnings in `crates/app-protocol/src/lib.rs` (`impl Default for
+Workspace`/`Theme`), the pre-existing core ones (`too_many_arguments`,
+`while_let_loop`, `sort_by_key`, `field_reassign_with_default`, `needless_return`),
+and in `app-editor` the single `too_many_arguments` on `validate_crop_mode`, which
+moved there unchanged from `editor.rs`. The split (ADR 0023) added no warning and
+removed none — the counts are the ones the same code produced before the move.
 
 ## Design decisions, keyboard session
 
@@ -1054,6 +1078,23 @@ protocol's `Anchor` and the anchored Core helpers are still gone).
 - **A press on the matte is not a dab.** The canvas host extends beyond the
   picture; a press outside the document is ignored, because it would send a
   stroke Core clips away and still cost an undo step and a preview render.
+- **The two colours are a pair of boxes, as in Photoshop.** The inspector draws
+  the foreground box raised over the background one, each box opening its own
+  `ColorDialog` (`paintForegroundColorDialog` / `paintBackgroundColorDialog`)
+  rather than one chooser that has to be told which colour it edits, with the
+  swap arrow and the black-over-white reset square beside them. The pair, the
+  hex field and both choosers read the same two properties (`#rrggbb`, three
+  bytes like the command), so a box cannot show a colour the next stroke would
+  not use; a `ColorDialog` answer carries an alpha byte, which `colorText()`
+  drops. Only the foreground reaches a stroke — the background is the colour X
+  swaps in and D resets to — so it needs no command of its own. The chooser is
+  seeded on the click as well as by its binding, because the dialog writes
+  `selectedColor` itself while the user drags and that ends the binding. Seen on
+  the window with the brush armed: the pair at 62 px with the hex field beside
+  it, the Vietnamese label `Tiền cảnh`
+  (`docs/evidence/M1-paint-colour-pair-vi.png`); the two choosers were opened by
+  `tst_editor::theColourPairIsTwoBoxesWithTwoChoosers`, which clicks each box
+  and checks that the other chooser stayed shut.
 
 ## Design decisions, dialog-open fix (row 86)
 
@@ -1483,9 +1524,10 @@ the defect exactly. Each restored, then `just test` green.
   that shrank because the last export asked for a small one would be a surprise.
 - **Core decides the size; the view only picks a preset.** `export_dimensions`
   is the rule (aspect kept, longer side = the limit, never upscaled, never a
-  zero side) and lives in `editor.rs`; the QML labels the rows and holds one
-  integer. The view therefore never predicts the other side and cannot disagree
-  with what is written.
+  zero side) and lives in the Editor's `codec` module (`crates/app-editor/src/codec.rs`
+  since ADR 0023; `editor.rs` when this row was written); the QML labels the rows
+  and holds one integer. The view therefore never predicts the other side and
+  cannot disagree with what is written.
 - **The combo box and the property are one choice.** `chooseExportSize` sets
   both, and `onActivated` goes through it, so a preset applied from a test or
   the dev harness moves the visible row too. The first window grab of this
@@ -1828,6 +1870,8 @@ the defect exactly. Each restored, then `just test` green.
   picture — and shows three visibly disabled verbs with a note that Core owns no
   batch command yet. A working button over a command that does not exist would
   be a lie about the product; the count is the honest half this pass can prove.
+  *(Superseded: Core has `batch_run` now — see gap 18. The page's verbs open the
+  batch form and the count is what the form defaults its input to.)*
 - **Two Browser pages share one strip; Info stays under the preview.**
   `Preview` is the thumbnail over the file's details because the two are read
   together, and `Batch action` is the selection as its own question. Two pages
@@ -1973,6 +2017,54 @@ the defect exactly. Each restored, then `just test` green.
   by `tst_editor`/`tst_browser`/`tst_viewer` calling `setPanelVisible`, while
   `M1-sidebar-menu-editor-vi.png` shows `Xem ›` and stops there.
 
+## Design decisions, the Editor is a crate (ADR 0023)
+
+The Editor left `app-core`: `crates/app-editor` is `kogaview-editor`, and Core
+re-exports it as `kogaview_core::editor`, so no handler, no batch worker and no
+protocol type changed.
+
+- **The split follows seams the file already had**, not a line-count cut: what an
+  edit *is* (`operation`), why it is refused (`validate`), the arithmetic that
+  renders it (`pixels`), reading and writing pixels (`codec`), applying one
+  operation to a document (`render`), the document and its history (`document`),
+  and the three slow jobs that answer down a channel (`tasks`). The 38 existing
+  cases moved into `tests.rs` unchanged — a fixture file whose first lines are
+  the temp-directory and pixel-pattern helpers every case shares.
+- **One public surface, wide on purpose.** `codec`, `render`, `validate`,
+  `tasks` and `document` are re-exported wholesale because Core validates a
+  pending edit with the same functions it applies it with, and the batch worker
+  renders with the same branch a single edit does. A narrower API would only
+  make Core re-implement checks. `pixels` is the exception: `pub(crate)`, since
+  nothing outside the crate calls `resample` or `cover_rect` directly.
+- **`pub use kogaview_editor as editor` is not a shim.** It is Core saying the
+  Editor is a dependency of it rather than a part of it, and it keeps the twelve
+  call sites (`editor::SaveFormat`, `editor::spawn_open`, `editor::render_operation`,
+  `editor::validate_resize…`) spelled the way they have always been.
+- **The translation gate had to learn about the second crate.** Core's lines are
+  now published from two source directories, so `scripts/check_translations.py`
+  scans a list and skips `app-editor/src/tests.rs` for the same reason it skips a
+  `#[cfg(test)]` module: the suites build `UiText` codes of their own and no
+  window can show them. The gate noticed the move on its own — still pointed at
+  `app-core/src` it stopped the run with `translations: 30 problem(s)`, starting
+  `UiLines.qml draws the line "brush_stroke", which no Core UiText publishes` —
+  so what the change bought is a gate that checks both crates rather than one
+  that fails loudly. The `tests.rs` skip was measured, not assumed: removing it
+  leaves the gate green, because every code that suite builds is one Core
+  publishes anyway.
+- **What did not move:** the source path, the save target's bookkeeping in
+  `Core`, the command gateway, the journal, the preview cache directory and the
+  UI state. Those are Core's, and the new crate cannot reach them — the boundary
+  is now enforced by the compiler rather than by a paragraph in the module docs.
+- **The next split is `core.rs` (5,217 lines)** and it is bigger: the desktop
+  bridge names `Core` directly. It was not attempted here.
+- **Evidence it still runs:** the freshly built dev binary, on a real xcb window,
+  opened `/tmp/opencode/batch/pics`, switched to the Editor and decoded
+  `wide.png` — journal `editor_open ok:true` rev 4, the canvas drawing the
+  picture at `1200 × 800` with every tool live and the footer reading
+  `Editing wide.png · 1200 × 800` (`docs/evidence/M1-editor-after-crate-split.png`).
+  No hand was on that window; the dev commands are the harness's own gateway
+  calls, which is why the *code move* is what this proves and not a new feature.
+
 ## Known gaps, in the words they were last measured with
 
 - **The sidebar's panel list is a menu of menus, and only the first menu was
@@ -1992,11 +2084,11 @@ the defect exactly. Each restored, then `just test` green.
   the empty column, the Batch page counting images) are the same states the menu
   now produces, but the grabs no longer show the current control. Row 105's own
   grabs are the three panels-off columns and the tool frame.
-- **The Batch page has no engine, by design.** Resize/Convert/Export are
-  disabled and there is no batch command in the protocol or Core; the only real
-  number is `selectedImages`, which counts selected entries whose `isImage` is
-  true. Whether a batch action is one command per file or a typed job list is a
-  contract question the next pass has to answer before the verbs can work.
+- **The Batch page's engine is now the Editor's.** Resize/Crop/Convert send one
+  typed job and Core runs it on one worker, but the Batch page still counts
+  `selectedImages` for its own line: a job's file list is resolved by Core from
+  the selection or the folder, so the page and the job can disagree before Run
+  if the listing changed under it.
 - **A page's visibility is forgotten on the next launch.** All the new flags are
   view state; `config.json` still carries only the three whole-dock switches
   row 96 added. Persisting "History but not Info" would be a settings field and
@@ -2545,13 +2637,137 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     comparison covers it. The same is true of the shell's unsaved-changes
     question for an Editor open: it is a source guard plus Core's command order,
     not a dialog somebody answered.
-18. **Batch action needs a contract before its verbs can be enabled.** The
-    Browser's page is a surface with a real image count and three disabled
-    tasks; whether a batch is one command per file (as `editor_paint_stroke` is
-    one stroke) or one typed job with its own progress and cancellation is a
-    protocol decision, and every answer needs the async/bounded/observable rules
-    of `AGENTS.md` before the first button is enabled. The count is already
-    exact, so the first command can be written against a known selection.
+18. **The batch contract is answered, driven on a real window, and five
+    defects that window found are fixed.** The Browser's page is three working
+    tasks — Resize, Crop, Convert — behind one typed job (`batch_run`:
+    operation + input + output policy), a single worker with progress and one
+    Cancel, and a published `batch` slot the page draws. The three open
+    questions are settled: one job, not one command per file; a proportional
+    crop, so one rectangle means the same trim on a folder of mixed sizes; and
+    a default destination beside each source with a suffix, with "Replace the
+    originals" as the only way a job may write over its input. **What the
+    window showed** (`KOGAVIEW_DEV_UI_REQUEST=batch`, isolated `XDG_*`,
+    1472 × 943): the burger menu's Tools… opened the form, and the page's own
+    `Convert…` button opened the same form through `requestBatch`; Resize
+    640 × 480 over three PNGs wrote three `*_resized.png` at 640 × 480 and left
+    the sources untouched; Crop `10,10,80,80` trimmed the same relative area
+    from 1200 × 800 (960 × 640), 600 × 900 (480 × 720) and 700 × 700
+    (560 × 560); Convert wrote `.jpg` beside the `.png` originals; "Replace the
+    originals" put the three sources at 300 × 200 and kept each one as
+    `<name>.png.bak`; "Another folder" wrote the three copies into
+    `/tmp/opencode/batch/out` with nothing beside the sources, and a folder
+    that is not there was refused before a worker started (`missing_folder` /
+    `batch_output_missing`); png → png with no suffix was refused as
+    `output_is_source` (`ok:false` in the journal, no worker); and Cancel
+    pressed on 24 × 3000 × 2000 images (`cancel_operation ok cancelling`)
+    stopped the job after one file, with "Resize cancelled after 1 of 24" on
+    the page. The multi-selection was made the way a user makes it —
+    `_ARG10` calls the grid's own `clickIndex` with the modifier the cell's
+    `MouseArea` would pass — a plain click on `square.png` then Ctrl on
+    `wide.png` left two selected and the form's job resized exactly those two
+    (`tall.png` untouched), and a plain click then Shift on the next image
+    selected the range of two. Evidence: `docs/evidence/M1-batch-form.png`,
+    `M1-batch-crop-form.png`, `M1-batch-page.png`, `M1-batch-cancelled.png`,
+    `M1-batch-multiselect.png`.
+    **What that run found and fixed:** `BatchDialog.qml` was missing from
+    `crates/desktop/build.rs`, so the binary logged `application starting` and
+    stopped 40 ms later with `BatchDialog is not a type` — a QML file outside
+    the module cannot be loaded at all, and no test noticed because the suites
+    load the file by path; the shell's entry read `menuEntries[39]`, which is
+    the folder menu's "Toggle information panel", so the burger offered that
+    sentence and opened the batch form (now `Theme.batchToolsLabel`, a named
+    slot; `tst_browser::theBatchMenuEntryNamesTheToolsLabel` fails when the
+    index comes back); the mode strip was a stock `TabBar`, whose
+    platform-painted light strip is the measured collision `PanelTabs` exists
+    for (now `PanelTabs`, tabs named `batchMode_<key>` — the strip itself went
+    in the pass below, when the three actions became three dialogs); the radio
+    and checkbox
+    labels resolved the *platform* palette inside the `Popup` and drew
+    `#26292e` on `#181b21` (now drawn in the theme's colours,
+    `tst_batchdialog::everyChoiceIsDrawnInTheThemeColour`); the page's three
+    actions were stock `Button`s, painted as white slabs on the dark dock (now
+    `PanelAction.qml`, with the progress bar drawn in the theme's colours);
+    and the form's title said "Batch tools" while the page says "Batch action".
+    **Still unverified:** no hand has clicked the grid — Ctrl-click and
+    Shift-click went through `clickIndex`, and Shift+arrows (the view's
+    `Keys.onPressed` path) is proven by `tst_browser.cpp` alone, because
+    synthetic pointer and key input does not reach this Wayland window; the
+    Tools… entry is disabled outside the Browser by design, and that has not
+    been looked at on a window either; `MAX_BATCH_FILES = 500` is a guard that
+    has never been timed on a folder that large; and none of this was run in
+    Vietnamese.
+    **The next pass split that form in three and fixed Save as.** One form with
+    a mode strip asked three actions; it is now three dialogs with their own
+    titles — `Batch resize`, `Batch crop`, `Batch convert` — built on
+    `BatchJobDialog.qml`, the half they share (input, output, policy), so no
+    half-filled resize can become a crop without saying so and the three cannot
+    disagree about where images come from or where the results go. The strip,
+    `modes`, `modeIndex()` and `setMode()` are gone; `mode` is now `operation`,
+    fixed by each file. The form asks in the order a user decides: the action's
+    own options (a size with the editor's aspect chain, a rectangle in `%`, a
+    format with the editor's quality slider), then **Images** — the selection,
+    every image in the open folder, or another folder picked here — then **Save
+    to** (the images' own folder, named, or another folder), then **Options**
+    (the suffix and "Replace the originals"). The third input reuses
+    `BatchSource::Folder`, so the protocol did not change; the shell narrows
+    `state.selection` to images itself (`batchSelectionPaths`). Each form
+    validates its own action, including the extension an encoder writes but
+    does not spell: converting to JPEG refuses a `.jpg` source beside itself,
+    which Core would otherwise have refused only after Run
+    (`tst_batchdialog::aConvertRefusesItsOwnExtension`). The burger's Tools…
+    entry now opens the Batch page instead of one guessing form —
+    `Main.qml::openBatchTools` → `BrowserView::showBatchPage`, which also brings
+    the column back when the layout switched the page off
+    (`tst_browser::showBatchPageBringsTheToolsBack`) — because "Tools…" names
+    three tools, and the page's own three buttons open the three forms.
+    **On the window** (`KOGAVIEW_DEV_UI_REQUEST=batch`, isolated `XDG_*`):
+    resize 640 × 480 over three PNGs wrote three `*_resized.png` at 640 × 480;
+    crop `10,10,80,80` trimmed the same relative area from 1200 × 800
+    (960 × 640), 600 × 900 (480 × 720) and 700 × 700 (560 × 560); convert to
+    `.jpg` wrote `square.jpg`, `tall.jpg`, `wide.jpg` beside the PNGs; the
+    page's own `Crop…` button logged `batch page button batchCrop clicked` and
+    ran; "Replace the originals" left the source at 200 × 200 with its
+    700 × 700 original kept as `square.png.bak`; "Another folder" wrote the
+    three copies into `/tmp/opencode/batch/out` with nothing beside the
+    sources; Cancel on 25 images stopped after one file ("Resize cancelled
+    after 1 of 25"); the menu's Tools… opened the Batch action page; and a
+    plain click then a Ctrl click selected exactly two images, which the form's
+    job resized with the third untouched. Evidence:
+    `docs/evidence/M1-batch-form.png`, `M1-batch-crop-form.png`,
+    `M1-batch-convert-form.png`, `M1-batch-cancelled.png`,
+    `M1-batch-multiselect.png`, `M1-batch-tools-entry.png`.
+    **Save as did not go through the desktop.** `chooseEditorSaveAs` and
+    Export's Browse opened the Qt `FileDialog` directly, so the one chooser in
+    this window that skipped `xdg-desktop-portal` was the save one: the user met
+    the platform's cramped dialog with a file-type combo where every open
+    chooser is the desktop's own. `PlatformHelper::requestSaveFile` now asks
+    `org.freedesktop.portal.FileChooser.SaveFile` with `current_name`,
+    `current_folder` and structured `filters`, emits `saveFileSelected`, and
+    keeps the Qt dialog as the fallback; both routes answer one handler
+    (`Main.qml::handleSaveFileChosen`), so Save as still sends
+    `editor_save_as` and Export's Browse still fills the dialog's field. Two
+    portal details cost a build each: the filter pattern is `(u type, s glob)`
+    — the portal reads `a(sa(us))` and rejected `a(sa(su))` with *Expected type
+    'a(sa(us))' for option 'filters'* — and the structures need
+    `qDBusRegisterMetaType` plus stream operators in both directions before the
+    first request. On the window (`KOGAVIEW_DEV_UI_REQUEST=editor-save-as`) the
+    request reached
+    `/org/freedesktop/portal/desktop/request/1_241/kogaview_17658_1`, the
+    answer wrote `square_copy.png` with `saved true, modified false`, and
+    `_ARG2=export` put the same answer into the Export dialog's field without
+    writing anything.
+    **Still unverified from this pass:** the portal's save window was dismissed
+    by `KOGAVIEW_DEV_PORTAL_DISMISS_MS` rather than used by a hand, so what is
+    proven is the request and the answer's route, not a person typing a name
+    into the desktop's dialog; the Qt `FileDialog` fallback only runs where the
+    portal is unavailable and has not been seen at all; the "Tools…" entry was
+    triggered through the menu item's own `click()`, not by a hand. The three
+    forms *were* seen in Vietnamese, on a `config.json` set to `vi`: "Đổi kích
+    thước hàng loạt", "Cắt hàng loạt" and "Chuyển đổi hàng loạt", with "Ảnh",
+    "Lưu vào", "Tuỳ chọn", "Thư mục của ảnh (pics)", "Hậu tố" and the
+    percentages sentence in Vietnamese — the new strings in the catalogue, not
+    English leaking through (`docs/evidence/M1-batch-form-vi.png`,
+    `M1-batch-convert-form-vi.png`).
 19. **The panel list is remembered, but Settings has no keyboard route.** Row
     106 answered the memory question: visibility, widths, the rail's columns,
     the reference height and the tab are `LayoutState` in `config.json`, not
@@ -2559,3 +2775,12 @@ crop evidence all comes from `build/dev/bin/kogaview`.
     form are pointer-reached like the rest of the compact toolbar. A person who
     wants "History but not Info" now has one place to say so, and a CLI can say
     it with `set_layout`, but neither has been driven by a hand here.
+20. **`core.rs` is the last 5,217-line file.** The Editor's split (ADR 0023)
+    moved the pixels, the operations, the document, the codecs and the workers
+    out; what is left is the gateway, every handler, the scan and the task
+    registry in one file, plus 1,900 lines of suite. It is not the same move:
+    `crates/desktop/src/bridge.rs` names `Core` directly, so the boundary has to
+    be drawn around what a front end can call (dispatch, state, cache paths)
+    rather than around what happens to be long. Nothing was attempted here —
+    the Editor's crate was the boundary that had already been written down, and
+    this one has not been.
