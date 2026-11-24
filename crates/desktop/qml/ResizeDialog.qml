@@ -254,11 +254,11 @@ DialogFrame {
     /// A `color` as `#rrggbb`, which is what the Editor's pair stores and what
     /// the row shows beside the swatch.
     function colorText(value) {
-        function byte(part) {
+        function hexByte(part) {
             var text = Math.round(part * 255).toString(16)
             return text.length < 2 ? "0" + text : text
         }
-        return "#" + byte(value.r) + byte(value.g) + byte(value.b)
+        return "#" + hexByte(value.r) + hexByte(value.g) + hexByte(value.b)
     }
 
     /// Open the background list under the row's swatch. The list is the same

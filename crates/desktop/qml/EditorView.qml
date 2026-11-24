@@ -824,11 +824,11 @@ Item {
     /// carry three bytes, so every colour is written as `#rrggbb` and no alpha
     /// ever reaches one.
     function colorText(color) {
-        function byte(value) {
+        function hexByte(value) {
             var text = Math.round(value * 255).toString(16)
             return text.length < 2 ? "0" + text : text
         }
-        return "#" + byte(color.r) + byte(color.g) + byte(color.b)
+        return "#" + hexByte(color.r) + hexByte(color.g) + hexByte(color.b)
     }
 
     /// Krita's X, now Editor-wide: the two colours swap places. Transparency

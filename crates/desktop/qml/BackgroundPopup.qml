@@ -135,11 +135,11 @@ Popup {
     /// The three bytes as `#rrggbb`. The view's own state is a string of that
     /// shape, and a `color` written straight into it would carry an alpha byte.
     function colourText(value) {
-        function byte(part) {
+        function hexByte(part) {
             var text = Math.round(part * 255).toString(16)
             return text.length < 2 ? "0" + text : text
         }
-        return "#" + byte(value.r) + byte(value.g) + byte(value.b)
+        return "#" + hexByte(value.r) + hexByte(value.g) + hexByte(value.b)
     }
 
     /// Which row carries the check: the named colour the background currently
