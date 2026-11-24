@@ -314,19 +314,24 @@ private slots:
                                      QStringLiteral("viewer"),
                                      QStringLiteral("editor") };
     for (const QString& workspace : workspaces) {
+      const qreal collapsed = number(workspace + QStringLiteral("CollapsedRowWidth"));
       const qreal compact = number(workspace + QStringLiteral("CompactRowWidth"));
       const qreal labelled = number(workspace + QStringLiteral("LabelThreshold"));
+      QVERIFY2(collapsed > 0 && collapsed < compact,
+               qPrintable(workspace + QStringLiteral(" collapsed width must sit below compact")));
       QVERIFY2(compact > 0, qPrintable(workspace + QStringLiteral(" has no compact width")));
       QVERIFY2(labelled > compact,
                qPrintable(QStringLiteral("%1: labels are allowed at %2 but the icon row needs %3")
                             .arg(workspace)
                             .arg(labelled)
                             .arg(compact)));
-      // All three modes are reachable, at that workspace's own points.
+      // All four progressive tiers are reachable at that workspace's own points.
       QCOMPARE(mode(workspace, labelled), QStringLiteral("full"));
       QCOMPARE(mode(workspace, labelled - 1), QStringLiteral("compact"));
       QCOMPARE(mode(workspace, compact), QStringLiteral("compact"));
-      QCOMPARE(mode(workspace, compact - 1), QStringLiteral("mini"));
+      QCOMPARE(mode(workspace, compact - 1), QStringLiteral("collapsed"));
+      QCOMPARE(mode(workspace, collapsed), QStringLiteral("collapsed"));
+      QCOMPARE(mode(workspace, collapsed - 1), QStringLiteral("mini"));
     }
 
     // The same window width, two workspaces, two answers. The Browser's row

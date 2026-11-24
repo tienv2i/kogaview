@@ -1218,7 +1218,8 @@ Item {
                 onClicked: view.command({ type: "viewer_previous" })
             }
             Label {
-                visible: view.images.length > 0
+                objectName: "viewerImageCounter"
+                visible: !view.miniToolbar && view.images.length > 0
                 text: (view.imageIndex + 1) + " / " + view.images.length
                 color: view.theme.textMuted
                 padding: 6

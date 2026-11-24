@@ -93,28 +93,31 @@ RowLayout {
         activeFocusOnTab: false
         checked: switcherMenu.visible
 
-        contentItem: Row {
-            anchors.centerIn: parent
-            spacing: 3
-
-            IconImage {
-                source: root.currentEntry.bundledIcon
-                sourceSize: Qt.size(32, 32)
-                width: 16
-                height: 16
-                fillMode: Image.PreserveAspectFit
+        contentItem: Item {
+            Row {
                 anchors.verticalCenter: parent.verticalCenter
-                color: root.theme.accent
-            }
+                x: 10
+                spacing: 6
 
-            IconImage {
-                source: "icons/chevron.svg"
-                sourceSize: Qt.size(20, 20)
-                width: 10
-                height: 10
-                fillMode: Image.PreserveAspectFit
-                anchors.verticalCenter: parent.verticalCenter
-                color: dropdownButton.hovered ? root.theme.text : root.theme.textMuted
+                IconImage {
+                    source: root.currentEntry.bundledIcon
+                    sourceSize: Qt.size(32, 32)
+                    width: 16
+                    height: 16
+                    fillMode: Image.PreserveAspectFit
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: root.theme.accent
+                }
+
+                IconImage {
+                    source: "icons/chevron.svg"
+                    sourceSize: Qt.size(20, 20)
+                    width: 10
+                    height: 10
+                    fillMode: Image.PreserveAspectFit
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: dropdownButton.hovered ? root.theme.text : root.theme.textMuted
+                }
             }
         }
 

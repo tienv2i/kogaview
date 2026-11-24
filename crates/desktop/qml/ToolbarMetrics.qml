@@ -161,8 +161,8 @@ Item {
         + (metrics.switcherLabelWidths.length - 1) * metrics.buttonSpacing
 
     /// The switcher collapsed into a single icon + chevron dropdown button
-    /// when the window enters mini-toolbar width.
-    readonly property int switcherCollapsedWidth: 46
+    /// with comfortable left padding before folding secondary toolbar buttons.
+    readonly property int switcherCollapsedWidth: 52
 
     /// The switcher, three `<icon> <text>` buttons.
     readonly property real switcherLabelsWidth: {
@@ -206,9 +206,9 @@ Item {
     /// that change that zoom are the ones that moved into the menu.
     readonly property real browserMiniToolbarWidth:
         metrics.toolbarWidth(metrics.browserMiniButtons, 0)
+    // In mini mode the Viewer also hides its `1 / N` image counter label.
     readonly property real viewerMiniToolbarWidth:
         metrics.toolbarWidth(metrics.viewerMiniButtons, 0)
-        + viewerCounterLabel.advanceWidth
     readonly property real editorMiniToolbarWidth:
         metrics.toolbarWidth(metrics.editorMiniButtons, 0)
     readonly property real widestMiniToolbarWidth:
@@ -240,8 +240,17 @@ Item {
     readonly property real editorCompactRowWidth:
         metrics.rowWidth(metrics.switcherIconsWidth, metrics.editorToolbarWidth)
 
-    /// The same rows folded (with the switcher collapsed to one dropdown button).
-    /// One of these is what the window floor fits.
+    /// The row with the switcher collapsed to 1 dropdown button while every
+    /// workspace icon still fits.
+    readonly property real browserCollapsedRowWidth:
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.browserToolbarWidth)
+    readonly property real viewerCollapsedRowWidth:
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.viewerToolbarWidth)
+    readonly property real editorCollapsedRowWidth:
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.editorToolbarWidth)
+
+    /// The same rows folded (with the switcher collapsed to one dropdown button
+    /// and the Viewer's image counter hidden).
     readonly property real browserMiniRowWidth:
         metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.browserMiniToolbarWidth)
     readonly property real viewerMiniRowWidth:
@@ -278,8 +287,7 @@ Item {
                  Math.max(metrics.viewerLabelledRowWidth, metrics.editorLabelledRowWidth))
 
     /// The Browser's and the Editor's fixed side panels, plus a picture wide
-    /// enough to be worth looking at. A window that satisfies only the toolbar
-    /// would leave the Editor's canvas a few pixels wide.
+    /// enough to be worth looking at. Keeps the window from being resized too small.
     readonly property real sidePanelWidth: 260
     readonly property real pictureWidth: 320
 
@@ -320,6 +328,15 @@ Item {
         return metrics.browserCompactRowWidth
     }
 
+    /// One workspace's switcher-collapse point: below `compactRowFor` the
+    /// 3-button switcher collapses into 1 dropdown while keeping all workspace
+    /// icons visible; below `collapsedRowFor` secondary buttons fold into `⋯`.
+    function collapsedRowFor(workspace) {
+        if (workspace === "viewer") return metrics.viewerCollapsedRowWidth
+        if (workspace === "editor") return metrics.editorCollapsedRowWidth
+        return metrics.browserCollapsedRowWidth
+    }
+
     /// One workspace's label point: at or above this width its row fits with
     /// the switcher and Menu labels showing.
     function labelThresholdFor(workspace) {
@@ -328,23 +345,18 @@ Item {
         return metrics.browserLabelThreshold
     }
 
-    /// Which of the three modes a workspace is in at an arbitrary window width.
-    ///
-    /// `Main.qml` calls this with the open workspace and the real window width,
-    /// and the toolbar test calls it directly. Keeping the decision here —
-    /// instead of a boolean in the shell that mentions only the widest row —
-    /// is what makes switching workspace re-measure the row: the switcher's
-    /// three buttons are in every row width, and each workspace has its own
-    /// fold and label points.
-    ///
-    ///   width ≥ that workspace's label threshold  ⇒ "full"
-    ///   width ≥ that workspace's compact row      ⇒ "compact"
-    ///   anything narrower                          ⇒ "mini"
+    /// Progressive 4-tier toolbar compaction per workspace:
+    ///   width ≥ labelThreshold  ⇒ "full"      (switcher text + all icons)
+    ///   width ≥ compactRow      ⇒ "compact"   (3 switcher icons + all icons)
+    ///   width ≥ collapsedRow    ⇒ "collapsed" (1 switcher dropdown + all icons)
+    ///   anything narrower       ⇒ "mini"      (1 switcher dropdown + folded `⋯` + hide image counter)
     function modeFor(workspace, width) {
+        var collapsed = metrics.collapsedRowFor(workspace)
         var compact = metrics.compactRowFor(workspace)
         var labelled = metrics.labelThresholdFor(workspace)
         if (width >= labelled) return "full"
         if (width >= compact) return "compact"
+        if (width >= collapsed) return "collapsed"
         return "mini"
     }
 

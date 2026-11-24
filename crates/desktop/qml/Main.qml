@@ -15,7 +15,7 @@ ApplicationWindow {
     // `ToolbarMetrics.minimumWindowWidth` and
     // `docs/adr/0010-earned-labels-and-picture-sized-windows.md`.
     minimumWidth: root.minimumWindowWidth
-    minimumHeight: 420
+    minimumHeight: 480
     visible: true
     title: qsTr("KogaView") + (bridge.profile === "dev" ? " " + qsTr("(Dev)") : "")
     color: appTheme.background
@@ -84,8 +84,11 @@ ApplicationWindow {
         toolbarMetrics.modeFor(root.toolbarWorkspace, root.width)
     /// True while the open workspace's row can afford labels beside the icons.
     readonly property bool toolbarLabels: root.toolbarMode === "full"
-    /// True below the open workspace's icon row: the view folds its secondary
-    /// buttons into one overflow menu (`*OverflowMenu` in the view).
+    /// True once the 3-button switcher collapses into 1 dropdown button.
+    readonly property bool toolbarSwitcherCollapsed:
+        root.toolbarMode === "collapsed" || root.toolbarMode === "mini"
+    /// True below the collapsed row: secondary buttons fold into `⋯` and
+    /// Viewer hides its `1 / N` counter.
     readonly property bool toolbarMini: root.toolbarMode === "mini"
 
     /// The layout on screen. Core owns the saved one (`state.layout`); while
@@ -1117,7 +1120,7 @@ ApplicationWindow {
                 theme: appTheme
                 metrics: toolbarMetrics
                 showLabels: root.toolbarLabels
-                collapsed: root.toolbarMini
+                collapsed: root.toolbarSwitcherCollapsed
                 workspace: root.state.workspace || "browser"
                 onSelected: function(workspace) {
                     // Leaving the Editor with unsaved edits asks first; any
