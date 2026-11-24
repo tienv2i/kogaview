@@ -376,7 +376,7 @@ private slots:
     QCOMPARE(hideBelowCollapsed.toBool(), true);
     QCOMPARE(foldAtNoCounter.toInt(), 0);
     QVERIFY(foldNarrow.toInt() > 0 && foldNarrow.toInt() < foldFloor.toInt());
-    QVERIFY(foldFloor.toInt() < 12);
+    QVERIFY(foldFloor.toInt() < 13);
   }
 
   /// The counted buttons in `ToolbarMetrics` must match the real toolbars. A

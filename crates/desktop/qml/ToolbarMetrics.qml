@@ -69,7 +69,7 @@ Item {
     /// never draws.
     readonly property int browserButtons: 4
     readonly property int browserSeparators: 1
-    readonly property int viewerButtons: 14
+    readonly property int viewerButtons: 15
     readonly property int viewerSeparators: 3
     readonly property int editorButtons: 11
     readonly property int editorSeparators: 3
@@ -406,13 +406,14 @@ Item {
             slot,                        // 3: Info & color
             slot,                        // 4: Filmstrip
             slot + sepSlot,              // 5: Fullscreen + sep 3
-            slot,                        // 6: Flip vertical
-            slot,                        // 7: Flip horizontal
-            slot,                        // 8: Rotate right
-            slot + sepSlot,              // 9: Rotate left + sep 2
-            slot,                        // 10: Actual size 100%
-            slot,                        // 11: Zoom in
-            slot + sepSlot               // 12: Zoom out + sep 1
+            slot,                        // 6: Reset view
+            slot,                        // 7: Flip vertical
+            slot,                        // 8: Flip horizontal
+            slot,                        // 9: Rotate right
+            slot + sepSlot,              // 10: Rotate left + sep 2
+            slot,                        // 11: Actual size 100%
+            slot,                        // 12: Zoom in
+            slot + sepSlot               // 13: Zoom out + sep 1
         ]
         var folded = 0
         for (var i = 0; i < widths.length; ++i) {

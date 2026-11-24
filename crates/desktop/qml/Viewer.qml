@@ -129,7 +129,7 @@ Item {
     /// (0 = none folded, 1 = Canvas bg, 2 = +Viewer mode, 3 = +Info & color, ...).
     property int toolbarFoldCount: 0
     readonly property int effectiveFoldCount:
-        view.toolbarFoldCount > 0 ? view.toolbarFoldCount : (view.miniToolbar ? 12 : 0)
+        view.toolbarFoldCount > 0 ? view.toolbarFoldCount : (view.miniToolbar ? 13 : 0)
     readonly property bool counterHidden:
         view.hideCounter || view.effectiveFoldCount > 0 || view.miniToolbar
     readonly property bool overflowVisible: view.effectiveFoldCount > 0
@@ -1112,7 +1112,7 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
-            visible: view.effectiveFoldCount >= 11
+            visible: view.effectiveFoldCount >= 12
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[30]
             icon.name: "zoom-in-symbolic"
@@ -1121,7 +1121,7 @@ Item {
             MenuShortcut { text: "+" }
         }
         MenuItem {
-            visible: view.effectiveFoldCount >= 12
+            visible: view.effectiveFoldCount >= 13
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[31]
             icon.name: "zoom-out-symbolic"
@@ -1130,7 +1130,7 @@ Item {
             MenuShortcut { text: "-" }
         }
         MenuItem {
-            visible: view.effectiveFoldCount >= 10
+            visible: view.effectiveFoldCount >= 11
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[22]
             icon.name: "zoom-original-symbolic"
@@ -1139,11 +1139,11 @@ Item {
             MenuShortcut { text: "0/1" }
         }
         MenuSeparator {
-            visible: view.effectiveFoldCount >= 10
+            visible: view.effectiveFoldCount >= 11
             height: visible ? implicitHeight : 0
         }
         MenuItem {
-            visible: view.effectiveFoldCount >= 9
+            visible: view.effectiveFoldCount >= 10
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[23]
             icon.name: "object-rotate-left-symbolic"
@@ -1152,7 +1152,7 @@ Item {
             MenuShortcut { text: "Shift+R" }
         }
         MenuItem {
-            visible: view.effectiveFoldCount >= 8
+            visible: view.effectiveFoldCount >= 9
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[24]
             icon.name: "object-rotate-right-symbolic"
@@ -1161,7 +1161,7 @@ Item {
             MenuShortcut { text: "R" }
         }
         MenuItem {
-            visible: view.effectiveFoldCount >= 7
+            visible: view.effectiveFoldCount >= 8
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[25]
             icon.name: "object-flip-horizontal-symbolic"
@@ -1170,7 +1170,7 @@ Item {
             MenuShortcut { text: "H" }
         }
         MenuItem {
-            visible: view.effectiveFoldCount >= 6
+            visible: view.effectiveFoldCount >= 7
             height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[26]
             icon.name: "object-flip-vertical-symbolic"
@@ -1291,12 +1291,12 @@ Item {
 
             ToolbarSeparator {
                 theme: view.theme
-                visible: view.effectiveFoldCount < 12
+                visible: view.effectiveFoldCount < 13
             }
 
             ToolbarButton {
                 theme: view.theme
-                visible: view.effectiveFoldCount < 12
+                visible: view.effectiveFoldCount < 13
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1315,7 +1315,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
-                visible: view.effectiveFoldCount < 11
+                visible: view.effectiveFoldCount < 12
                 icon.name: "zoom-in-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1325,7 +1325,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
-                visible: view.effectiveFoldCount < 10
+                visible: view.effectiveFoldCount < 11
                 icon.name: "zoom-original-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1336,13 +1336,13 @@ Item {
 
             ToolbarSeparator {
                 theme: view.theme
-                visible: view.effectiveFoldCount < 9
+                visible: view.effectiveFoldCount < 10
             }
 
             ToolbarButton {
                 objectName: "viewerRotateLeftButton"
                 theme: view.theme
-                visible: view.effectiveFoldCount < 9
+                visible: view.effectiveFoldCount < 10
                 icon.source: "icons/rotate-left.svg"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1353,7 +1353,7 @@ Item {
             ToolbarButton {
                 objectName: "viewerRotateRightButton"
                 theme: view.theme
-                visible: view.effectiveFoldCount < 8
+                visible: view.effectiveFoldCount < 9
                 icon.source: "icons/rotate-right.svg"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1364,7 +1364,7 @@ Item {
             ToolbarButton {
                 objectName: "viewerFlipHButton"
                 theme: view.theme
-                visible: view.effectiveFoldCount < 7
+                visible: view.effectiveFoldCount < 8
                 checked: view.flipH
                 icon.source: "icons/flip-horizontal.svg"
                 display: AbstractButton.IconOnly
@@ -1376,7 +1376,7 @@ Item {
             ToolbarButton {
                 objectName: "viewerFlipVButton"
                 theme: view.theme
-                visible: view.effectiveFoldCount < 6
+                visible: view.effectiveFoldCount < 7
                 checked: view.flipV
                 icon.source: "icons/flip-vertical.svg"
                 display: AbstractButton.IconOnly
@@ -1384,6 +1384,17 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Flip vertical (V)")
                 onClicked: view.toggleFlipV()
+            }
+            ToolbarButton {
+                objectName: "viewerResetViewButton"
+                theme: view.theme
+                visible: view.effectiveFoldCount < 6
+                icon.name: "view-refresh-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: !!view.currentPath
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Reset view")
+                onClicked: view.resetView()
             }
 
             ToolbarSeparator {

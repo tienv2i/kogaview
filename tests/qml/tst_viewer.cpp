@@ -1314,6 +1314,8 @@ private slots:
         QStringLiteral("Flip horizontal (H)") },
       { QStringLiteral("viewerFlipVButton"),
         QStringLiteral("Flip vertical (V)") },
+      { QStringLiteral("viewerResetViewButton"),
+        QStringLiteral("Reset view") },
       { QStringLiteral("viewerFullscreenButton"),
         QStringLiteral("Fullscreen (F11)") },
       { QStringLiteral("viewerFilmstripToggle"),
@@ -1423,7 +1425,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 4 : 14);
+    QCOMPARE(buttons, mini ? 4 : 15);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.
