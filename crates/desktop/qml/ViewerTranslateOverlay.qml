@@ -93,6 +93,24 @@ Item {
         overlay.currentBubbles = list
     }
 
+    function moveBubble(idx, newImgX, newImgY) {
+        var list = overlay.currentBubbles.slice()
+        if (idx < 0 || idx >= list.length) return
+        var old = list[idx]
+        list[idx] = {
+            x: Math.round(newImgX),
+            y: Math.round(newImgY),
+            w: old.w,
+            h: old.h,
+            original: old.original,
+            translated: old.translated
+        }
+        var map = overlay.bubblesByPath
+        map[overlay.imagePath] = list
+        overlay.bubblesByPath = map
+        overlay.currentBubbles = list
+    }
+
     onImagePathChanged: overlay.syncBubblesForPath()
 
     onAiTaskChanged: {
@@ -179,13 +197,18 @@ Item {
         radius: 6
     }
 
-    // --------------------------------------------------- In-place translated / OCR bubbles
+    // --------------------------------------------------- In-place draggable translated / OCR bubbles
     Repeater {
         model: overlay.showOverlayBoxes ? overlay.currentBubbles : []
 
         delegate: Rectangle {
+            id: bubbleRect
             required property var modelData
             required property int index
+
+            property real dragDx: 0
+            property real dragDy: 0
+            property bool moving: false
 
             readonly property var mapped: {
                 var _z = overlay.zoom
@@ -197,71 +220,158 @@ Item {
                 return {
                     x: Math.min(tl.x, br.x),
                     y: Math.min(tl.y, br.y),
-                    w: Math.max(64, Math.abs(br.x - tl.x)),
-                    h: Math.max(32, Math.abs(br.y - tl.y))
+                    w: Math.max(96, Math.abs(br.x - tl.x)),
+                    h: Math.max(48, Math.abs(br.y - tl.y))
                 }
             }
 
-            x: mapped.x
-            y: mapped.y
+            x: mapped.x + dragDx
+            y: mapped.y + dragDy
             width: mapped.w
-            height: Math.max(mapped.h, bubbleText.implicitHeight + 20)
+            height: Math.max(mapped.h, bubbleText.implicitHeight + 44)
+            z: moving ? 4 : 2
             radius: 8
             color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b,
-                           overlay.translucentBubbles ? 0.78 : 0.95)
-            border.width: 1
+                           overlay.translucentBubbles ? 0.80 : 0.95)
+            border.width: moving ? 2 : 1
             border.color: overlay.theme.accent
+            clip: true
 
-            Label {
-                id: bubbleText
-                anchors.fill: parent
-                anchors.leftMargin: 10
-                anchors.topMargin: 10
-                anchors.bottomMargin: 10
-                anchors.rightMargin: 28
-                text: modelData.translated || modelData.original || ""
-                color: overlay.theme.text
-                font.pixelSize: Math.max(11, Math.min(15, Math.round(mapped.h * 0.22)))
-                wrapMode: Text.WordWrap
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
+            // Top drag-handle bar: drag here to move bubble without blocking text selection below
+            Rectangle {
+                id: bubbleHeader
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 24
+                color: Qt.rgba(overlay.theme.surfaceAlt.r, overlay.theme.surfaceAlt.g, overlay.theme.surfaceAlt.b, 0.9)
+
+                MouseArea {
+                    id: bubbleDragArea
+                    anchors.fill: parent
+                    anchors.rightMargin: 28
+                    acceptedButtons: Qt.LeftButton
+                    preventStealing: true
+                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+
+                    property real startScreenX: 0
+                    property real startScreenY: 0
+
+                    onPressed: function(mouse) {
+                        var pt = bubbleHeader.mapToItem(overlay, mouse.x, mouse.y)
+                        startScreenX = pt.x
+                        startScreenY = pt.y
+                        bubbleRect.dragDx = 0
+                        bubbleRect.dragDy = 0
+                        bubbleRect.moving = true
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!bubbleRect.moving) return
+                        var pt = bubbleHeader.mapToItem(overlay, mouse.x, mouse.y)
+                        bubbleRect.dragDx = pt.x - startScreenX
+                        bubbleRect.dragDy = pt.y - startScreenY
+                    }
+                    onReleased: {
+                        if (!bubbleRect.moving) return
+                        bubbleRect.moving = false
+                        var dx = bubbleRect.dragDx
+                        var dy = bubbleRect.dragDy
+                        bubbleRect.dragDx = 0
+                        bubbleRect.dragDy = 0
+                        if ((Math.abs(dx) > 1 || Math.abs(dy) > 1) && overlay.canvasItem) {
+                            var newTopLeft = overlay.canvasItem.mapFromItem(
+                                overlay,
+                                bubbleRect.mapped.x + dx,
+                                bubbleRect.mapped.y + dy
+                            )
+                            overlay.moveBubble(index, newTopLeft.x, newTopLeft.y)
+                        }
+                    }
+                    onCanceled: {
+                        bubbleRect.moving = false
+                        bubbleRect.dragDx = 0
+                        bubbleRect.dragDy = 0
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 8
+                    text: "⋮⋮"
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 10
+                    opacity: 0.8
+                }
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 4
+                    width: 18
+                    height: 18
+                    radius: 9
+                    z: 2
+                    color: removeHover.hovered ? overlay.theme.danger : "transparent"
+                    HoverHandler { id: removeHover }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "×"
+                        color: removeHover.hovered ? overlay.theme.surface : overlay.theme.textMuted
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: overlay.removeBubble(index)
+                    }
+                }
+
+                Rectangle {
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: overlay.theme.border
+                }
             }
 
-            Rectangle {
-                anchors.top: parent.top
+            // Selectable read-only text inside the bubble (Ctrl+C copies selection)
+            TextEdit {
+                id: bubbleText
+                anchors.top: bubbleHeader.bottom
+                anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.margins: 5
-                width: 18
-                height: 18
-                radius: 9
-                color: removeHover.hovered ? overlay.theme.danger : overlay.theme.surfaceAlt
-                border.width: 1
-                border.color: removeHover.hovered ? overlay.theme.danger : overlay.theme.border
-                HoverHandler { id: removeHover }
-                Text {
-                    anchors.centerIn: parent
-                    text: "×"
-                    color: removeHover.hovered ? overlay.theme.surface : overlay.theme.textMuted
-                    font.pixelSize: 12
-                    font.bold: true
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: overlay.removeBubble(index)
-                }
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                anchors.topMargin: 8
+                anchors.bottomMargin: 10
+                readOnly: true
+                selectByMouse: true
+                text: modelData.translated || modelData.original || ""
+                color: overlay.theme.text
+                selectionColor: overlay.theme.accent
+                selectedTextColor: overlay.theme.accentText
+                font.pixelSize: Math.max(11, Math.min(15, Math.round(mapped.h * 0.22)))
+                wrapMode: TextEdit.WordWrap
+                horizontalAlignment: TextEdit.AlignHCenter
+                verticalAlignment: TextEdit.AlignVCenter
+                Keys.onEscapePressed: focus = false
             }
         }
     }
 
-    // --------------------------------------------------- Top floating bar (12 px inset, responsive Flow)
+    // --------------------------------------------------- Top floating bar (14 px inset, responsive Flow)
     Rectangle {
         id: topBar
         anchors.top: parent.top
-        anchors.topMargin: 12
+        anchors.topMargin: 14
         anchors.horizontalCenter: parent.horizontalCenter
-        width: Math.min(parent.width - 24, barFlow.implicitWidth + 24)
-        height: barFlow.implicitHeight + 16
+        width: Math.min(parent.width - 28, barFlow.implicitWidth + 28)
+        height: barFlow.implicitHeight + 20
         radius: 10
         color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.96)
         border.width: 1
@@ -273,11 +383,11 @@ Item {
         Flow {
             id: barFlow
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            anchors.topMargin: 8
-            anchors.bottomMargin: 8
-            spacing: 8
+            anchors.leftMargin: 14
+            anchors.rightMargin: 14
+            anchors.topMargin: 10
+            anchors.bottomMargin: 10
+            spacing: 10
 
             // Group 1: Mode switcher (Translate vs Offline OCR)
             Row {
@@ -437,16 +547,16 @@ Item {
         }
     }
 
-    // --------------------------------------------------- Bottom floating result card (12 px padding)
+    // --------------------------------------------------- Bottom floating result card (14 px padding)
     Rectangle {
         id: resultCard
         visible: overlay.cardVisible || overlay.busy
                  || !!(overlay.aiTask && overlay.aiTask.kind === "translate" && overlay.aiTask.error)
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 14
+        anchors.bottomMargin: 16
         anchors.horizontalCenter: parent.horizontalCenter
-        width: Math.min(parent.width - 24, 580)
-        implicitHeight: cardCol.implicitHeight + 24
+        width: Math.min(parent.width - 28, 600)
+        implicitHeight: cardCol.implicitHeight + 28
         radius: 10
         color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.97)
         border.width: 1
@@ -458,7 +568,7 @@ Item {
         ColumnLayout {
             id: cardCol
             anchors.fill: parent
-            anchors.margins: 12
+            anchors.margins: 14
             spacing: 10
 
             // Busy progress row
@@ -513,18 +623,23 @@ Item {
 
                 Flickable {
                     anchors.fill: parent
-                    anchors.margins: 8
+                    anchors.margins: 10
                     contentWidth: width
                     contentHeight: origText.implicitHeight
                     boundsBehavior: Flickable.StopAtBounds
-                    Label {
+                    TextEdit {
                         id: origText
                         width: parent.width
+                        readOnly: true
+                        selectByMouse: true
                         text: overlay.latestResult ? overlay.latestResult.originalText : ""
                         color: (overlay.latestResult && overlay.latestResult.translatedText)
                                ? overlay.theme.textMuted : overlay.theme.text
+                        selectionColor: overlay.theme.accent
+                        selectedTextColor: overlay.theme.accentText
                         font.pixelSize: (overlay.latestResult && overlay.latestResult.translatedText) ? 12 : 14
-                        wrapMode: Text.WordWrap
+                        wrapMode: TextEdit.WordWrap
+                        Keys.onEscapePressed: focus = false
                     }
                 }
             }
@@ -533,7 +648,7 @@ Item {
             Rectangle {
                 visible: !overlay.busy && !!(overlay.latestResult && overlay.latestResult.translatedText)
                 Layout.fillWidth: true
-                implicitHeight: Math.min(140, transText.implicitHeight + 20)
+                implicitHeight: Math.min(140, transText.implicitHeight + 24)
                 radius: 6
                 color: overlay.theme.surfaceAlt
                 border.width: 1
@@ -542,17 +657,22 @@ Item {
 
                 Flickable {
                     anchors.fill: parent
-                    anchors.margins: 10
+                    anchors.margins: 12
                     contentWidth: width
                     contentHeight: transText.implicitHeight
                     boundsBehavior: Flickable.StopAtBounds
-                    Label {
+                    TextEdit {
                         id: transText
                         width: parent.width
+                        readOnly: true
+                        selectByMouse: true
                         text: overlay.latestResult ? overlay.latestResult.translatedText : ""
                         color: overlay.theme.text
+                        selectionColor: overlay.theme.accent
+                        selectedTextColor: overlay.theme.accentText
                         font.pixelSize: 14
-                        wrapMode: Text.WordWrap
+                        wrapMode: TextEdit.WordWrap
+                        Keys.onEscapePressed: focus = false
                     }
                 }
             }

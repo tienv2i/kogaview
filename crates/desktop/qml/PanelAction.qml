@@ -22,6 +22,10 @@ AbstractButton {
     property bool primary: false
 
     implicitHeight: 30
+    leftPadding: 12
+    rightPadding: 12
+    topPadding: 4
+    bottomPadding: 4
     focusPolicy: Qt.NoFocus
     activeFocusOnTab: false
 
