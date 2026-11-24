@@ -16,10 +16,12 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use image::imageops::{self, FilterType};
 use image::RgbaImage;
 use ndarray::{Array2, Array3, Array4};
+use ort::environment::Environment;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
@@ -75,15 +77,24 @@ fn emit_error(id: &str, code: &str, message: &str) {
     }));
 }
 
+static ORT_ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
+
+fn ort_env() -> Result<&'static Environment, String> {
+    let res = ORT_ENV.get_or_init(|| {
+        ort::init()
+            .with_name("kogaview-plugin-ai-ocr")
+            .build()
+            .map_err(|e| format!("ort environment init failed: {e}"))
+    });
+    res.as_ref().map_err(Clone::clone)
+}
+
 fn build_session(model_path: &Path) -> Result<Session, String> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().clamp(1, 8))
         .unwrap_or(4);
-    let env = ort::init()
-        .with_name("kogaview-plugin-ai-ocr")
-        .build()
-        .map_err(|e| format!("ort environment init failed: {e}"))?;
-    Session::builder(&env)
+    let env = ort_env()?;
+    Session::builder(env)
         .map_err(|e| format!("ort session builder failed: {e}"))?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| format!("ort optimization level failed: {e}"))?
