@@ -24,13 +24,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config python3 \
-            qt6-base-dev qt6-declarative-dev qt6-svg-dev qt6-5compat-dev \
-            qt6-l10n-tools libgl1-mesa-dev desktop-file-utils appstream \
-            dpkg-dev file fuse libfuse2
+            qt6-base-dev qt6-declarative-dev qt6-svg-dev libqt6core5compat6-dev \
+            qt6-l10n-tools libdav1d-dev libgl1-mesa-dev desktop-file-utils appstream \
+            dpkg-dev file fuse libfuse2 librsvg2-bin
       - uses: dtolnay/rust-toolchain@stable
       - name: Build KogaView Release
         run: |
-          cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DKOGAVIEW_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build/release --target kogaview kogaview_translations -j"$(nproc)"
       - name: Build all 8 standalone plugins
         run: |
@@ -44,12 +44,20 @@ jobs:
           VER="${TAG#v}"
           mkdir -p dist
 
+          # Render .desktop from template
+          python3 -c "
+          import pathlib
+          tpl = pathlib.Path('packaging/linux/io.github.tienv2i.KogaView.desktop.in').read_text()
+          out = tpl.replace('@EXEC@', '/usr/bin/kogaview').replace('@ICON@', 'io.github.tienv2i.KogaView').replace('@NAME@', 'KogaView').replace('@MIME_TYPES@', 'image/png;image/jpeg;image/webp;image/gif;image/bmp;image/tiff;image/avif;image/x-tga;image/qoi;')
+          pathlib.Path('dist/io.github.tienv2i.KogaView.desktop').write_text(out)
+          "
+
           # 1. Portable Linux .tar.gz
           STAGE="dist/kogaview-${VER}-linux-x86_64"
           mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/metainfo" "$STAGE/share/icons/hicolor/scalable/apps"
           install -m755 build/release/bin/kogaview "$STAGE/bin/kogaview"
-          install -m644 build/release/io.github.tienv2i.KogaView.desktop "$STAGE/share/applications/"
-          install -m644 build/release/io.github.tienv2i.KogaView.metainfo.xml "$STAGE/share/metainfo/"
+          install -m644 dist/io.github.tienv2i.KogaView.desktop "$STAGE/share/applications/"
+          install -m644 packaging/linux/io.github.tienv2i.KogaView.metainfo.xml "$STAGE/share/metainfo/"
           install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$STAGE/share/icons/hicolor/scalable/apps/"
           tar -C dist -czf "dist/kogaview-${VER}-linux-x86_64.tar.gz" "kogaview-${VER}-linux-x86_64"
 
@@ -77,8 +85,8 @@ jobs:
           DEB="dist/deb-root"
           mkdir -p "$DEB/DEBIAN" "$DEB/usr/bin" "$DEB/usr/share/applications" "$DEB/usr/share/metainfo" "$DEB/usr/share/icons/hicolor/scalable/apps"
           install -m755 build/release/bin/kogaview "$DEB/usr/bin/kogaview"
-          install -m644 build/release/io.github.tienv2i.KogaView.desktop "$DEB/usr/share/applications/"
-          install -m644 build/release/io.github.tienv2i.KogaView.metainfo.xml "$DEB/usr/share/metainfo/"
+          install -m644 dist/io.github.tienv2i.KogaView.desktop "$DEB/usr/share/applications/"
+          install -m644 packaging/linux/io.github.tienv2i.KogaView.metainfo.xml "$DEB/usr/share/metainfo/"
           install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$DEB/usr/share/icons/hicolor/scalable/apps/"
           cat > "$DEB/DEBIAN/control" <<EOF
           Package: kogaview
@@ -86,7 +94,7 @@ jobs:
           Section: graphics
           Priority: optional
           Architecture: amd64
-          Depends: libqt6core6t64 | libqt6core6, libqt6gui6t64 | libqt6gui6, libqt6qml6, libqt6quick6, libqt6svg6
+          Depends: libqt6core6t64 | libqt6core6, libqt6gui6t64 | libqt6gui6, libqt6qml6, libqt6quick6, libqt6svg6, libdav1d7 | libdav1d6
           Maintainer: KogaView Contributors <tienv2i@gmail.com>
           Description: Fast native desktop photo manager, manga reader, editor & AI plugin suite
           EOF
@@ -96,9 +104,9 @@ jobs:
           APPDIR="dist/KogaView.AppDir"
           mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/scalable/apps"
           install -m755 build/release/bin/kogaview "$APPDIR/usr/bin/kogaview"
-          install -m644 build/release/io.github.tienv2i.KogaView.desktop "$APPDIR/io.github.tienv2i.KogaView.desktop"
-          install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$APPDIR/io.github.tienv2i.KogaView.svg"
-          ln -sf io.github.tienv2i.KogaView.svg "$APPDIR/.DirIcon"
+          install -m644 dist/io.github.tienv2i.KogaView.desktop "$APPDIR/io.github.tienv2i.KogaView.desktop"
+          rsvg-convert -w 256 -h 256 packaging/linux/io.github.tienv2i.KogaView.svg -o "$APPDIR/io.github.tienv2i.KogaView.png"
+          install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/"
           cat > "$APPDIR/AppRun" <<'EOF'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
@@ -128,7 +136,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Arch build dependencies
         run: |
-          pacman -Syu --noconfirm base-devel cmake ninja rust cargo qt6-base qt6-declarative qt6-svg qt6-5compat qt6-tools python git
+          pacman -Syu --noconfirm base-devel cmake ninja pkgconf dav1d rust cargo qt6-base qt6-declarative qt6-svg qt6-5compat qt6-tools python git
       - name: Build .pkg.tar.zst via makepkg
         run: |
           useradd -m builder
@@ -150,9 +158,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Fedora RPM build dependencies
         run: |
-          dnf install -y rpm-build cmake ninja-build gcc-c++ rust cargo \
+          dnf install -y rpm-build cmake ninja-build pkgconf-pkg-config gcc-c++ rust cargo \
             qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtsvg-devel qt6-qt5compat-devel \
-            qt6-linguist python3 git desktop-file-utils
+            qt6-linguist libdav1d-devel python3 git desktop-file-utils
       - name: Build .rpm via rpmbuild
         env:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}

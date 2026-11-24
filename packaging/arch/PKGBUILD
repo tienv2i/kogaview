@@ -6,8 +6,8 @@ pkgdesc="Fast native desktop photo manager, viewer, and non-destructive editor"
 arch=('x86_64')
 url="https://github.com/tienv2i/kogaview"
 license=('MIT')
-depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-5compat')
-makedepends=('cmake' 'rust' 'cargo' 'qt6-tools' 'python')
+depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-5compat' 'dav1d')
+makedepends=('cmake' 'ninja' 'pkgconf' 'rust' 'cargo' 'qt6-tools' 'python')
 source=()
 
 build() {
@@ -15,8 +15,9 @@ build() {
   if [ -n "${KOGAVIEW_PREBUILT:-}" ] && [ -x "$KOGAVIEW_PREBUILT" ]; then
     return 0
   fi
-  cmake -S "$src" -B "$srcdir/build" \
+  cmake -S "$src" -B "$srcdir/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DKOGAVIEW_BUILD_TESTS=OFF \
     -DCMAKE_INSTALL_PREFIX=/usr
   cmake --build "$srcdir/build" --target kogaview kogaview_translations -j"$(nproc)"
 }

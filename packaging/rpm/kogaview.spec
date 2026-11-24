@@ -8,6 +8,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cmake >= 3.24
 BuildRequires:  ninja-build
+BuildRequires:  pkgconf-pkg-config
 BuildRequires:  gcc-c++
 BuildRequires:  rust
 BuildRequires:  cargo
@@ -15,11 +16,13 @@ BuildRequires:  qt6-qtbase-devel
 BuildRequires:  qt6-qtdeclarative-devel
 BuildRequires:  qt6-qtsvg-devel
 BuildRequires:  qt6-linguist
+BuildRequires:  libdav1d-devel
 BuildRequires:  python3
 
 Requires:       qt6-qtbase
 Requires:       qt6-qtdeclarative
 Requires:       qt6-qtsvg
+Requires:       libdav1d
 
 %description
 KogaView is a fast, native desktop photo manager, viewer, and non-destructive
@@ -29,7 +32,7 @@ image editor built with Rust and Qt 6 / QML via CXX-Qt.
 %autosetup
 
 %build
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=%{_prefix}
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKOGAVIEW_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=%{_prefix}
 cmake --build build --target kogaview kogaview_translations
 
 %install
