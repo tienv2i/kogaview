@@ -772,12 +772,13 @@ Item {
                     offsetX: view.offsetX
                     offsetY: view.offsetY
                     aiTask: (view.state && view.state.aiTask) || null
-                    onTranslateRequested: function(sourceLang, targetLang, region) {
+                    onTranslateRequested: function(sourceLang, targetLang, region, ocrEngine) {
                         var cmd = {
                             type: "viewer_translate",
                             path: view.currentPath,
                             source_lang: sourceLang,
-                            target_lang: targetLang
+                            target_lang: targetLang,
+                            ocr_engine: ocrEngine || "tesseract"
                         }
                         if (region) cmd.region = region
                         view.command(cmd)

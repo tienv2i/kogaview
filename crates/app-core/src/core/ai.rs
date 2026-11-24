@@ -442,15 +442,17 @@ impl Core {
     }
 
     /// Translate or OCR-only an entire image or a cropped `[x, y, w, h]` region
-    /// in Viewer. When `target_lang` is empty, routes to the offline
-    /// `viewer.ocr_copy` plugin (`kogaview-plugin-ocr`); otherwise routes to
-    /// `viewer.translate` (`kogaview-plugin-translate`).
+    /// in Viewer.
+    /// - `ocr_engine == "manga_ocr"` or `"rapidocr"`: routes to `kogaview.ocr.ai` (`viewer.ai_ocr`)
+    /// - `ocr_engine == "tesseract"` (or empty): routes to `viewer.ocr_copy` when `target_lang`
+    ///   is empty, or `viewer.translate` when `target_lang` is set.
     pub(super) fn viewer_translate(
         &mut self,
         path: &str,
         source_lang: &str,
         target_lang: &str,
         region: Option<[i32; 4]>,
+        ocr_engine: &str,
     ) -> Result<Option<UiText>, ProtocolError> {
         if self.ai_rx.is_some() {
             return Err(ProtocolError::with_line(
@@ -471,7 +473,10 @@ impl Core {
         self.refresh_ai_inventory();
 
         let ocr_only = target_lang.trim().is_empty();
-        let wanted_action = if ocr_only {
+        let use_ai_ocr = ocr_engine == "manga_ocr" || ocr_engine == "rapidocr";
+        let wanted_action = if use_ai_ocr {
+            "viewer.ai_ocr"
+        } else if ocr_only {
             "viewer.ocr_copy"
         } else {
             "viewer.translate"
@@ -491,7 +496,9 @@ impl Core {
         else {
             return Err(ProtocolError::with_line(
                 "plugin_missing",
-                if ocr_only {
+                if use_ai_ocr {
+                    "AI OCR plugin (Manga-OCR / RapidOCR) is not installed (run: just build-plugin-ai-ocr)"
+                } else if ocr_only {
                     "OCR plugin is not installed (run: just build-plugin-ocr)"
                 } else {
                     "Read & Translate plugin is not installed (run: just build-plugin-translate)"
@@ -513,7 +520,13 @@ impl Core {
             target: path.to_owned(),
             running: true,
             percent: 10,
-            stage: if ocr_only {
+            stage: if use_ai_ocr {
+                if ocr_engine == "manga_ocr" {
+                    "Running Manga-OCR…".to_owned()
+                } else {
+                    "Running RapidOCR…".to_owned()
+                }
+            } else if ocr_only {
                 "Scanning text (OCR)…".to_owned()
             } else {
                 "Translating…".to_owned()
@@ -526,7 +539,14 @@ impl Core {
 
         let device = self.config.ai.device;
         let models_dir = self.paths.models_dir.display().to_string();
-        let mut params = if ocr_only {
+        let mut params = if use_ai_ocr {
+            json!({
+                "engine": ocr_engine,
+                "sourceLang": source_lang,
+                "targetLang": target_lang,
+                "modelsDir": models_dir,
+            })
+        } else if ocr_only {
             json!({
                 "lang": source_lang,
                 "modelsDir": models_dir,

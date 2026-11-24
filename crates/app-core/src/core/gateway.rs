@@ -577,7 +577,8 @@ impl Core {
                 source_lang,
                 target_lang,
                 region,
-            } => self.viewer_translate(&path, &source_lang, &target_lang, region),
+                ocr_engine,
+            } => self.viewer_translate(&path, &source_lang, &target_lang, region, &ocr_engine),
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {

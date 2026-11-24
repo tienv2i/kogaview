@@ -72,5 +72,10 @@ build-plugin-translate:
     cargo build --manifest-path plugins/kogaview-plugin-translate/Cargo.toml --release
     @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-translate"); bin_src = src / "target/release/kogaview-plugin-translate"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-translate")) for d in [data/"kogaview-dev/plugins/kogaview-translate", data/"kogaview/plugins/kogaview-translate"] ]; print("Installed kogaview-plugin-translate to", data/"kogaview[-dev]/plugins/kogaview-translate")'
 
+# Optional AI OCR ONNX plugin (Manga-OCR for Japanese manga + RapidOCR PP-OCRv4 for complex backgrounds).
+build-plugin-ai-ocr:
+    cargo build --manifest-path plugins/kogaview-plugin-ai-ocr/Cargo.toml --release
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-ai-ocr"); rel = src / "target/release"; bin_src = rel / "kogaview-plugin-ai-ocr"; libs = list(rel.glob("libonnxruntime*.so*")) + list(rel.glob("onnxruntime*.dll")); [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-ai-ocr"), [shutil.copy2(l, d/"bin"/l.name) for l in libs]) for d in [data/"kogaview-dev/plugins/kogaview-ocr-ai", data/"kogaview/plugins/kogaview-ocr-ai"] ]; print("Installed kogaview-plugin-ai-ocr +", len(libs), "runtime lib(s) to", data/"kogaview[-dev]/plugins/kogaview-ocr-ai")'
+
 # Build & install all optional plugins at once.
-build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr build-plugin-translate
+build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr build-plugin-translate build-plugin-ai-ocr

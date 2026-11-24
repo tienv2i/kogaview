@@ -1227,6 +1227,9 @@ pub enum Command {
         /// Optional `[x, y, width, height]` in document pixels.
         #[serde(default)]
         region: Option<[i32; 4]>,
+        /// OCR engine: `"tesseract"` (default), `"manga_ocr"`, or `"rapidocr"`.
+        #[serde(default)]
+        ocr_engine: String,
     },
     CancelOperation,
 }

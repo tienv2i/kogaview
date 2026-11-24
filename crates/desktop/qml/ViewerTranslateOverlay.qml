@@ -25,7 +25,7 @@ Item {
     property real offsetY: 0
     property var aiTask: null
 
-    signal translateRequested(string sourceLang, string targetLang, var region)
+    signal translateRequested(string sourceLang, string targetLang, var region, string ocrEngine)
     signal copyTextRequested(string text)
     signal cancelRequested()
     signal closeRequested()
@@ -46,10 +46,14 @@ Item {
     readonly property bool isOcrMode: overlay.overlayMode === "ocr"
     readonly property bool busy: !!(overlay.aiTask && overlay.aiTask.running && overlay.aiTask.kind === "translate")
 
-    // Language tables (5 languages: EN, JA + JA Vertical Manga, VI, ZH, KO)
+    // Language & OCR engine tables
+    readonly property var ocrEngineCodes: ["tesseract", "manga_ocr", "rapidocr"]
     readonly property var sourceLangCodes: ["eng", "jpn", "jpn_vert", "vie", "chi_sim", "kor"]
     readonly property var targetLangCodes: ["vi", "en", "ja", "zh-CN", "ko"]
 
+    function engineCode() {
+        return overlay.ocrEngineCodes[engineCombo.currentIndex] || "tesseract"
+    }
     function sourceCode() {
         return overlay.sourceLangCodes[sourceLangCombo.currentIndex] || "eng"
     }
@@ -179,7 +183,7 @@ Item {
             var h = Math.round(Math.abs(p2.y - p1.y))
             if (w < 4 || h < 4) return
             overlay.lastRegion = [x, y, w, h]
-            overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion)
+            overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
         }
         onCanceled: overlay.dragging = false
     }
@@ -417,13 +421,31 @@ Item {
                 color: overlay.theme.border
             }
 
-            // Group 2: Explicit Input & Output language ComboBoxes + Swap
+            // Group 2: OCR Engine + Explicit Input & Output language ComboBoxes + Swap
             Row {
                 spacing: 6
                 height: 30
 
                 Label {
                     anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("OCR:")
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                ComboBox {
+                    id: engineCombo
+                    objectName: "translateOcrEngine"
+                    anchors.verticalCenter: parent.verticalCenter
+                    focusPolicy: Qt.NoFocus
+                    implicitWidth: 118
+                    model: ["Tesseract", "Manga-OCR", "RapidOCR"]
+                    currentIndex: 0
+                }
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: engineCombo.currentIndex !== 1
                     text: qsTr("From:")
                     color: overlay.theme.textMuted
                     font.pixelSize: 12
@@ -433,6 +455,7 @@ Item {
                     id: sourceLangCombo
                     objectName: "translateSourceLang"
                     anchors.verticalCenter: parent.verticalCenter
+                    visible: engineCombo.currentIndex !== 1
                     focusPolicy: Qt.NoFocus
                     implicitWidth: 136
                     model: [
@@ -500,7 +523,7 @@ Item {
                     enabled: !overlay.busy && !!overlay.imagePath
                     onClicked: {
                         overlay.lastRegion = null
-                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), null)
+                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), null, overlay.engineCode())
                     }
                 }
 
@@ -708,7 +731,7 @@ Item {
                     text: qsTr("Translate this")
                     onClicked: {
                         overlay.overlayMode = "translate"
-                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion)
+                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
                     }
                 }
 
