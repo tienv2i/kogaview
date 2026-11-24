@@ -568,14 +568,23 @@ pub fn run_plugin_inference(
         .map(|arg| arg.replace("${device}", device.as_str()))
         .collect();
 
-    let mut child = match ProcessCommand::new(&plugin.executable)
-        .args(&expanded_args)
+    let mut cmd = ProcessCommand::new(&plugin.executable);
+    cmd.args(&expanded_args)
         .current_dir(&plugin.root_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    if let Some(bin_dir) = plugin.executable.parent() {
+        let existing = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let combined = if existing.is_empty() {
+            bin_dir.display().to_string()
+        } else {
+            format!("{}:{existing}", bin_dir.display())
+        };
+        cmd.env("LD_LIBRARY_PATH", combined);
+    }
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) => {
             let _ = tx.send(AiWorkerEvent::Failed {

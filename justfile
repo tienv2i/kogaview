@@ -46,7 +46,7 @@ flatpak-run:
     @python3 scripts/dev.py flatpak-run
 
 # Optional AI plugin: builds the standalone Rust ONNX Remove Background worker
-# and installs its binary + manifest into the XDG user plugins directory.
+# and installs its binary, runtime libs, and manifest into the XDG user plugins directory.
 build-plugin-rembg:
     cargo build --manifest-path plugins/kogaview-plugin-rembg/Cargo.toml --release
-    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-rembg"); bin_src = src / "target/release/kogaview-plugin-rembg"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-rembg")) for d in [data/"kogaview-dev/plugins/kogaview-rmbg-onnx", data/"kogaview/plugins/kogaview-rmbg-onnx"] ]; print("Installed kogaview-plugin-rembg to", data/"kogaview[-dev]/plugins/kogaview-rmbg-onnx")'
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-rembg"); rel = src / "target/release"; bin_src = rel / "kogaview-plugin-rembg"; libs = list(rel.glob("libonnxruntime*.so*")) + list(rel.glob("onnxruntime*.dll")); [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-rembg"), [shutil.copy2(l, d/"bin"/l.name) for l in libs]) for d in [data/"kogaview-dev/plugins/kogaview-rmbg-onnx", data/"kogaview/plugins/kogaview-rmbg-onnx"] ]; print("Installed kogaview-plugin-rembg +", len(libs), "runtime lib(s) to", data/"kogaview[-dev]/plugins/kogaview-rmbg-onnx")'
