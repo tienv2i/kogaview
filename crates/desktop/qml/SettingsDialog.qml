@@ -118,7 +118,8 @@ DialogFrame {
     readonly property var defaultLayout: ({
         leftWidth: 260, rightWidth: 300, editorToolColumns: 2,
         editorReferenceHeight: 0, editorReferenceTab: "info",
-        viewerUiMode: "simple", viewerDisplayMode: "single", panels: ({})
+        viewerUiMode: "simple", viewerDisplayMode: "single",
+        compactHudEdge: "top", compactHudPinned: false, panels: ({})
     })
 
     readonly property bool hardwareAccelerationValue: hwAccelChoice.checked
@@ -188,6 +189,8 @@ DialogFrame {
         if ((a.editorReferenceTab || "info") !== (b.editorReferenceTab || "info")) return false
         if ((a.viewerUiMode || "simple") !== (b.viewerUiMode || "simple")) return false
         if ((a.viewerDisplayMode || "single") !== (b.viewerDisplayMode || "single")) return false
+        if ((a.compactHudEdge || "top") !== (b.compactHudEdge || "top")) return false
+        if (!!a.compactHudPinned !== !!b.compactHudPinned) return false
         for (var index = 0; index < dialog.allPanelKeys.length; ++index) {
             var key = dialog.allPanelKeys[index]
             var leftPanels = a.panels || ({})

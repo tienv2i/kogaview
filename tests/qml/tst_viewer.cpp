@@ -2115,6 +2115,7 @@ private slots:
     hud->setProperty("pinned", true);
     QTRY_VERIFY(grip->isVisible());
 
+    QSignalSpy layoutSpy(m_viewer, SIGNAL(layoutRequested(QVariant)));
     const QPoint start = grip->mapToScene(QPointF(grip->width() / 2.0, grip->height() / 2.0)).toPoint();
     const QPoint target(24, m_view->height() / 2);
     QTest::mousePress(m_view, Qt::LeftButton, Qt::NoModifier, start);
@@ -2126,6 +2127,9 @@ private slots:
     QTest::qWait(50);
 
     QCOMPARE(hud->property("edge").toString(), QStringLiteral("left"));
+    QCOMPARE(layoutSpy.count(), 1);
+    QCOMPARE(layoutSpy.at(0).at(0).toMap().value(QStringLiteral("compactHudEdge")).toString(),
+             QStringLiteral("left"));
     QVERIFY2(qAbs(m_viewer->property("offsetX").toReal()) < 0.5,
              "dragging the Compact HUD panned the image horizontally");
     QVERIFY2(qAbs(m_viewer->property("offsetY").toReal()) < 0.5,

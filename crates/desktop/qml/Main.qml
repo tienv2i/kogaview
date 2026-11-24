@@ -191,6 +191,10 @@ ApplicationWindow {
                                 ? changes.mangaCoverSeparate : source.mangaCoverSeparate,
             mangaPageGap: changes.mangaPageGap !== undefined
                           ? changes.mangaPageGap : source.mangaPageGap,
+            compactHudEdge: changes.compactHudEdge !== undefined
+                            ? changes.compactHudEdge : source.compactHudEdge,
+            compactHudPinned: changes.compactHudPinned !== undefined
+                              ? changes.compactHudPinned : source.compactHudPinned,
             panels: {}
         }
         var panels = source.panels || ({})

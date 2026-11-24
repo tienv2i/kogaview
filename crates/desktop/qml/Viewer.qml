@@ -175,6 +175,13 @@ Item {
     readonly property int mangaPageGap:
         (view.layout && view.layout.mangaPageGap !== undefined)
         ? Math.max(0, Math.min(64, view.layout.mangaPageGap)) : 8
+    readonly property string savedCompactHudEdge: {
+        var edge = view.layout && view.layout.compactHudEdge
+        return (edge === "top" || edge === "bottom" || edge === "left" || edge === "right")
+               ? edge : "top"
+    }
+    readonly property bool savedCompactHudPinned:
+        !!(view.layout && view.layout.compactHudPinned)
 
     function setUiMode(mode) {
         if (mode !== "compact" && mode !== "simple" && mode !== "standard") return
@@ -763,7 +770,15 @@ Item {
                     canvasBgUseTheme: view.canvasBgUseTheme
                     canvasBgChecker: view.canvasBgChecker
                     canvasBgColor: view.canvasBgColor
+                    edge: view.savedCompactHudEdge
+                    pinned: view.savedCompactHudPinned
                     keepOpen: viewerModePopup.visible || viewerColorPopover.visible || viewerBgPopup.visible
+                    onEdgeSelected: function(edge) {
+                        view.layoutRequested({ compactHudEdge: edge })
+                    }
+                    onPinnedToggled: function(pinned) {
+                        view.layoutRequested({ compactHudPinned: pinned })
+                    }
                     onPreviousRequested: view.stepImage(-1)
                     onNextRequested: view.stepImage(1)
                     onZoomOutRequested: view.zoomOut()

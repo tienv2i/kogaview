@@ -421,6 +421,9 @@ pub const LAYOUT_VIEWER_UI_MODES: [&str; 3] = ["compact", "simple", "standard"];
 /// - `webtoon`: continuous virtualized vertical strip.
 pub const LAYOUT_VIEWER_DISPLAY_MODES: [&str; 3] = ["single", "dual", "webtoon"];
 
+/// Compact / Fullscreen floating HUD docked edges.
+pub const LAYOUT_COMPACT_HUD_EDGES: [&str; 4] = ["top", "bottom", "left", "right"];
+
 fn default_true() -> bool {
     true
 }
@@ -475,6 +478,10 @@ pub struct LayoutState {
     pub manga_cover_separate: bool,
     /// Gap in pixels between pages in Dual and Webtoon modes (`0..=64`).
     pub manga_page_gap: u16,
+    /// Docked edge of the Compact / Fullscreen floating HUD toolbar.
+    pub compact_hud_edge: String,
+    /// Whether the Compact / Fullscreen floating HUD stays permanently visible.
+    pub compact_hud_pinned: bool,
 }
 
 impl Default for LayoutState {
@@ -498,6 +505,8 @@ impl Default for LayoutState {
             manga_rtl: false,
             manga_cover_separate: true,
             manga_page_gap: 8,
+            compact_hud_edge: "top".to_owned(),
+            compact_hud_pinned: false,
         }
     }
 }
@@ -536,6 +545,9 @@ impl LayoutState {
             self.viewer_display_mode = "single".to_owned();
         }
         self.manga_page_gap = self.manga_page_gap.min(64);
+        if !LAYOUT_COMPACT_HUD_EDGES.contains(&self.compact_hud_edge.as_str()) {
+            self.compact_hud_edge = "top".to_owned();
+        }
         let mut panels = BTreeMap::new();
         for key in LAYOUT_PANEL_KEYS {
             panels.insert(

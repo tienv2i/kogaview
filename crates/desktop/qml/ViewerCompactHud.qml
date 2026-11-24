@@ -86,6 +86,8 @@ Item {
     signal modeToggleRequested(Item anchor, string edge)
     signal fullscreenToggleRequested()
     signal bgToggleRequested(Item anchor)
+    signal edgeSelected(string edge)
+    signal pinnedToggled(bool pinned)
     signal browserRequested()
     signal editorRequested()
 
@@ -335,6 +337,7 @@ Item {
                         hud.dragging = false
                         hud.snapPreviewEdge = ""
                         hud.edge = target
+                        hud.edgeSelected(target)
                         hud.showBriefly()
                     }
                     onCanceled: {
@@ -757,32 +760,32 @@ Item {
             text: qsTr("Dock top")
             checkable: true
             checked: hud.edge === "top"
-            onTriggered: hud.edge = "top"
+            onTriggered: { hud.edge = "top"; hud.edgeSelected("top") }
         }
         MenuItem {
             text: qsTr("Dock bottom")
             checkable: true
             checked: hud.edge === "bottom"
-            onTriggered: hud.edge = "bottom"
+            onTriggered: { hud.edge = "bottom"; hud.edgeSelected("bottom") }
         }
         MenuItem {
             text: qsTr("Dock left")
             checkable: true
             checked: hud.edge === "left"
-            onTriggered: hud.edge = "left"
+            onTriggered: { hud.edge = "left"; hud.edgeSelected("left") }
         }
         MenuItem {
             text: qsTr("Dock right")
             checkable: true
             checked: hud.edge === "right"
-            onTriggered: hud.edge = "right"
+            onTriggered: { hud.edge = "right"; hud.edgeSelected("right") }
         }
         MenuSeparator {}
         MenuItem {
             text: qsTr("Keep toolbar visible")
             checkable: true
             checked: hud.pinned
-            onTriggered: hud.pinned = !hud.pinned
+            onTriggered: { hud.pinned = !hud.pinned; hud.pinnedToggled(hud.pinned) }
         }
     }
 }
