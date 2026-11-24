@@ -371,27 +371,26 @@ impl Core {
             ));
         };
 
-        let parent = src_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let stem = src_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("image");
-        let mut out_path = parent.join(format!("{stem}-nobg.png"));
-        let mut suffix = 2u32;
-        while out_path.exists() {
-            out_path = parent.join(format!("{stem}-nobg-{suffix}.png"));
-            suffix += 1;
-        }
+        fs::create_dir_all(&self.paths.ai_ipc_dir).map_err(|error| {
+            ProtocolError::with_line(
+                "io_error",
+                format!("cannot create ai-ipc directory: {error}"),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+
+        self.ai_generation += 1;
+        let gen = self.ai_generation;
+        let tmp_out = self.paths.ai_ipc_dir.join(format!("qa-out-{gen}.png"));
+        let _ = fs::remove_file(&tmp_out);
 
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         self.ai_rx = Some(rx);
         self.ai_cancel = Some(Arc::clone(&cancel));
         self.ai_temp_input = None;
-        self.ai_temp_output = None;
-        self.ai_quick_action_output = Some(out_path.clone());
+        self.ai_temp_output = Some(tmp_out.clone());
+        self.ai_quick_action_output = Some(src_path.clone());
         self.state.busy = true;
         self.state.ai_task = Some(AiTaskState {
             kind: "inference".to_owned(),
@@ -416,7 +415,7 @@ impl Core {
                 &model_path,
                 device,
                 &src_path,
-                &out_path,
+                &tmp_out,
                 params,
                 cancel,
                 &tx,
@@ -471,21 +470,42 @@ impl Core {
                     device_used,
                 } => {
                     finished = true;
-                    if let Some(qa_out) = self.ai_quick_action_output.take() {
-                        let out_name = qa_out
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("output.png")
-                            .to_owned();
-                        if let Some(task) = self.state.ai_task.as_mut() {
-                            task.running = false;
-                            task.percent = 100;
-                            task.stage = format!("Saved {out_name} ({device_used})");
-                            task.error = None;
+                    if let Some(target_path) = self.ai_quick_action_output.take() {
+                        match backup_and_overwrite(&target_path, &output_path) {
+                            Ok(backup_path) => {
+                                let out_name = target_path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("image")
+                                    .to_owned();
+                                tracing::info!(
+                                    target: "kogaview::plugins",
+                                    target = %target_path.display(),
+                                    backup = %backup_path.display(),
+                                    device = %device_used,
+                                    "quick action backed up original and overwrote target"
+                                );
+                                if let Some(task) = self.state.ai_task.as_mut() {
+                                    task.running = false;
+                                    task.percent = 100;
+                                    task.stage = format!("Saved {out_name} ({device_used})");
+                                    task.error = None;
+                                }
+                                self.state.tree_revision += 1;
+                                self.refresh_current();
+                                let target_str = target_path.to_string_lossy().into_owned();
+                                let _ = self.open_file(vec![target_str]);
+                                self.state.status =
+                                    UiText::with("ai_quick_action_saved", [out_name]);
+                            }
+                            Err(message) => {
+                                if let Some(task) = self.state.ai_task.as_mut() {
+                                    task.running = false;
+                                    task.error = Some(message);
+                                }
+                                self.state.status = UiText::new("ai_inference_failed");
+                            }
                         }
-                        self.state.tree_revision += 1;
-                        self.refresh_current();
-                        self.state.status = UiText::with("ai_quick_action_saved", [out_name]);
                     } else {
                         match image::open(&output_path).map(|img| img.into_rgba8()) {
                             Ok(rgba) => {
@@ -562,5 +582,91 @@ impl Core {
         }
 
         changed
+    }
+}
+
+/// Compute the backup path next to `target`:
+/// - First backup: `<filename>~` (e.g. `photo.png~`)
+/// - Subsequent backups when it already exists: `<filename>.2~`, `<filename>.3~`, …
+/// Every backup filename ends with `~`.
+pub(crate) fn next_backup_path(target: &Path) -> PathBuf {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image");
+    let first = parent.join(format!("{name}~"));
+    if !first.exists() {
+        return first;
+    }
+    let mut index = 2u32;
+    loop {
+        let candidate = parent.join(format!("{name}.{index}~"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+/// Back up `target` to `next_backup_path(target)` and atomically overwrite
+/// `target` with `result_png` (staged in the same directory so cross-device
+/// `rename` never fails).
+pub(crate) fn backup_and_overwrite(target: &Path, result_png: &Path) -> Result<PathBuf, String> {
+    let backup = next_backup_path(target);
+    fs::copy(target, &backup)
+        .map_err(|e| format!("cannot create backup '{}': {e}", backup.display()))?;
+
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image");
+    let staged = parent.join(format!(".{name}.kogaview-qa.tmp"));
+    if let Err(e) = fs::copy(result_png, &staged) {
+        let _ = fs::remove_file(&staged);
+        return Err(format!("cannot stage quick action output: {e}"));
+    }
+    if let Err(e) = fs::rename(&staged, target) {
+        let _ = fs::remove_file(&staged);
+        return Err(format!("cannot overwrite '{}': {e}", target.display()));
+    }
+    Ok(backup)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_paths_append_tilde_and_increment_number() {
+        let dir =
+            std::env::temp_dir().join(format!("kogaview-qa-backup-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("photo.png");
+        let res = dir.join("result.png");
+        fs::write(&src, b"original-v1").unwrap();
+        fs::write(&res, b"edited-v2").unwrap();
+
+        let b1 = backup_and_overwrite(&src, &res).unwrap();
+        assert_eq!(b1, dir.join("photo.png~"));
+        assert_eq!(fs::read(&b1).unwrap(), b"original-v1");
+        assert_eq!(fs::read(&src).unwrap(), b"edited-v2");
+
+        fs::write(&res, b"edited-v3").unwrap();
+        let b2 = backup_and_overwrite(&src, &res).unwrap();
+        assert_eq!(b2, dir.join("photo.png.2~"));
+        assert_eq!(fs::read(&b2).unwrap(), b"edited-v2");
+        assert_eq!(fs::read(&src).unwrap(), b"edited-v3");
+
+        fs::write(&res, b"edited-v4").unwrap();
+        let b3 = backup_and_overwrite(&src, &res).unwrap();
+        assert_eq!(b3, dir.join("photo.png.3~"));
+        assert_eq!(fs::read(&b3).unwrap(), b"edited-v3");
+        assert_eq!(fs::read(&src).unwrap(), b"edited-v4");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
