@@ -519,7 +519,7 @@ Item {
                 clampOnZoom: false
                 // Free pan in Viewer (always behaves like Hand tool without a separate mode).
                 panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
-                inputBlocked: viewerBgColorDialog.visible
+                inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
                 rotationAngle: view.rotationAngle
                 flipH: view.flipH
                 flipV: view.flipV
@@ -698,7 +698,7 @@ Item {
                         brightness: viewerAdjustPanel.brightness
                         contrast: viewerAdjustPanel.contrast
                         saturation: viewerAdjustPanel.saturation
-                        inputBlocked: viewerBgColorDialog.visible
+                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
                         onPageCentered: function(idx) {
                             view.openImageAt(idx)
                         }

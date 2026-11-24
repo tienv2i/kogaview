@@ -190,6 +190,15 @@ Item {
             }
         }
 
+        // Swallow stray left clicks/drags on the pill's padding so they never
+        // leak through to ImageCanvas's pan handler underneath.
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            preventStealing: true
+            z: -1
+        }
+
         TapHandler {
             acceptedButtons: Qt.RightButton
             onSingleTapped: function(point) {
@@ -225,46 +234,64 @@ Item {
                             width: 2.5
                             height: 2.5
                             radius: 1.25
-                            color: gripHover.hovered || hud.dragging
+                            color: gripMouse.containsMouse || hud.dragging
                                    ? hud.theme.text : hud.theme.textMuted
                         }
                     }
                 }
 
-                HoverHandler {
-                    id: gripHover
-                    cursorShape: hud.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-                }
+                // MouseArea with `preventStealing: true` accepts the press
+                // immediately so ImageCanvas's pan DragHandler underneath never
+                // receives or steals the drag gesture.
+                MouseArea {
+                    id: gripMouse
+                    objectName: "compactHudDragArea"
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+                    preventStealing: true
+                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
 
-                DragHandler {
-                    id: gripDrag
-                    target: null
-                    acceptedDevices: PointerDevice.AllDevices
+                    property real pressSceneX: 0
+                    property real pressSceneY: 0
                     property real startX: 0
                     property real startY: 0
-                    onActiveChanged: {
-                        if (active) {
-                            startX = pill.dockedX
-                            startY = pill.dockedY
-                            pill.dragX = startX
-                            pill.dragY = startY
-                            hud.dragging = true
-                            hud.snapPreviewEdge = hud.edge
-                            hideTimer.stop()
-                        } else if (hud.dragging) {
-                            var target = hud.snapPreviewEdge || hud.edge
-                            hud.dragging = false
-                            hud.snapPreviewEdge = ""
-                            hud.edge = target
-                            hud.showBriefly()
-                        }
+
+                    onPressed: function(mouse) {
+                        mouse.accepted = true
+                        var p = mapToItem(hud, mouse.x, mouse.y)
+                        pressSceneX = p.x
+                        pressSceneY = p.y
+                        startX = pill.dockedX
+                        startY = pill.dockedY
+                        pill.dragX = startX
+                        pill.dragY = startY
+                        hud.dragging = true
+                        hud.snapPreviewEdge = hud.edge
+                        hideTimer.stop()
                     }
-                    onTranslationChanged: {
-                        if (!active) return
-                        pill.dragX = Math.max(8, Math.min(hud.width - pill.width - 8, startX + translation.x))
-                        pill.dragY = Math.max(8, Math.min(hud.height - pill.height - 8, startY + translation.y))
+                    onPositionChanged: function(mouse) {
+                        if (!hud.dragging) return
+                        var p = mapToItem(hud, mouse.x, mouse.y)
+                        var dx = p.x - pressSceneX
+                        var dy = p.y - pressSceneY
+                        pill.dragX = Math.max(8, Math.min(hud.width - pill.width - 8, startX + dx))
+                        pill.dragY = Math.max(8, Math.min(hud.height - pill.height - 8, startY + dy))
                         hud.snapPreviewEdge = hud.nearestEdge(pill.dragX + pill.width / 2,
                                                               pill.dragY + pill.height / 2)
+                    }
+                    onReleased: {
+                        if (!hud.dragging) return
+                        var target = hud.snapPreviewEdge || hud.edge
+                        hud.dragging = false
+                        hud.snapPreviewEdge = ""
+                        hud.edge = target
+                        hud.showBriefly()
+                    }
+                    onCanceled: {
+                        hud.dragging = false
+                        hud.snapPreviewEdge = ""
+                        hud.showBriefly()
                     }
                 }
             }

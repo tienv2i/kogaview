@@ -2038,6 +2038,46 @@ private slots:
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
   }
+
+  /// Regression test: dragging the Compact HUD's grip handle snaps the HUD to
+  /// another edge without panning the zoomed image underneath.
+  void draggingCompactHudDoesNotPanImage()
+  {
+    QVariantMap layout;
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("compact"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+    zoomTo(2.0);
+
+    QQuickItem* hud = item("viewerCompactHud");
+    QQuickItem* grip = item("compactHudDragGrip");
+    QVERIFY(hud != nullptr && grip != nullptr);
+    hud->setProperty("edge", QStringLiteral("top"));
+    hud->setProperty("pinned", true);
+    QTRY_VERIFY(grip->isVisible());
+
+    const QPoint start = grip->mapToScene(QPointF(grip->width() / 2.0, grip->height() / 2.0)).toPoint();
+    const QPoint target(24, m_view->height() / 2);
+    QTest::mousePress(m_view, Qt::LeftButton, Qt::NoModifier, start);
+    for (int step = 1; step <= 5; ++step) {
+      const QPoint pt = start + (target - start) * step / 5;
+      QTest::mouseMove(m_view, pt);
+    }
+    QTest::mouseRelease(m_view, Qt::LeftButton, Qt::NoModifier, target);
+    QTest::qWait(50);
+
+    QCOMPARE(hud->property("edge").toString(), QStringLiteral("left"));
+    QVERIFY2(qAbs(m_viewer->property("offsetX").toReal()) < 0.5,
+             "dragging the Compact HUD panned the image horizontally");
+    QVERIFY2(qAbs(m_viewer->property("offsetY").toReal()) < 0.5,
+             "dragging the Compact HUD panned the image vertically");
+
+    hud->setProperty("pinned", false);
+    hud->setProperty("edge", QStringLiteral("top"));
+    layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("standard"));
+    m_viewer->setProperty("layout", layout);
+    QCoreApplication::processEvents();
+  }
 };
 
 QTEST_MAIN(TestViewer)
