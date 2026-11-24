@@ -368,21 +368,54 @@ Item {
         }
     }
 
-    // --------------------------------------------------- Top floating bar (14 px inset, responsive Flow)
+    // --------------------------------------------------- Top floating bar (draggable, 14 px inset, responsive Flow)
     Rectangle {
         id: topBar
-        anchors.top: parent.top
-        anchors.topMargin: 14
-        anchors.horizontalCenter: parent.horizontalCenter
+        property real userOffsetX: 0
+        property real userOffsetY: 0
+        property bool moving: false
+
+        x: Math.max(12, Math.min(overlay.width - width - 12, Math.round((overlay.width - width) / 2) + userOffsetX))
+        y: Math.max(12, Math.min(overlay.height - height - 12, 14 + userOffsetY))
         width: Math.min(parent.width - 28, barFlow.implicitWidth + 28)
         height: barFlow.implicitHeight + 20
         radius: 10
         color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.96)
-        border.width: 1
-        border.color: overlay.theme.border
-        z: 5
+        border.width: moving ? 2 : 1
+        border.color: moving ? overlay.theme.accent : overlay.theme.border
+        z: moving ? 7 : 5
 
-        MouseArea { anchors.fill: parent; preventStealing: true; z: -1 }
+        // Drag anywhere on the bar's background or grip handle to move it; double-click resets position.
+        MouseArea {
+            anchors.fill: parent
+            preventStealing: true
+            z: -1
+            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+            property real startX: 0
+            property real startY: 0
+            property real baseOffX: 0
+            property real baseOffY: 0
+            onPressed: function(mouse) {
+                var pt = topBar.mapToItem(overlay, mouse.x, mouse.y)
+                startX = pt.x
+                startY = pt.y
+                baseOffX = topBar.userOffsetX
+                baseOffY = topBar.userOffsetY
+                topBar.moving = true
+            }
+            onPositionChanged: function(mouse) {
+                if (!topBar.moving) return
+                var pt = topBar.mapToItem(overlay, mouse.x, mouse.y)
+                topBar.userOffsetX = baseOffX + (pt.x - startX)
+                topBar.userOffsetY = baseOffY + (pt.y - startY)
+            }
+            onReleased: topBar.moving = false
+            onCanceled: topBar.moving = false
+            onDoubleClicked: {
+                topBar.userOffsetX = 0
+                topBar.userOffsetY = 0
+            }
+        }
 
         Flow {
             id: barFlow
@@ -392,6 +425,18 @@ Item {
             anchors.topMargin: 10
             anchors.bottomMargin: 10
             spacing: 10
+
+            // Explicit drag-grip handle
+            Item {
+                width: 14
+                height: 30
+                Text {
+                    anchors.centerIn: parent
+                    text: "⋮⋮"
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 12
+                }
+            }
 
             // Group 1: Mode switcher (Translate vs Offline OCR)
             Row {
@@ -570,27 +615,99 @@ Item {
         }
     }
 
-    // --------------------------------------------------- Bottom floating result card (14 px padding)
+    // --------------------------------------------------- Bottom floating result card (draggable, 14 px padding)
     Rectangle {
         id: resultCard
+        property real userOffsetX: 0
+        property real userOffsetY: 0
+        property bool moving: false
+
         visible: overlay.cardVisible || overlay.busy
                  || !!(overlay.aiTask && overlay.aiTask.kind === "translate" && overlay.aiTask.error)
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 16
-        anchors.horizontalCenter: parent.horizontalCenter
+        x: Math.max(12, Math.min(overlay.width - width - 12, Math.round((overlay.width - width) / 2) + userOffsetX))
+        y: Math.max(12, Math.min(overlay.height - height - 12, overlay.height - height - 16 + userOffsetY))
         width: Math.min(parent.width - 28, 600)
-        implicitHeight: cardCol.implicitHeight + 28
+        implicitHeight: cardHeader.height + cardCol.implicitHeight + 28
         radius: 10
         color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.97)
-        border.width: 1
-        border.color: overlay.theme.border
-        z: 5
+        border.width: moving ? 2 : 1
+        border.color: moving ? overlay.theme.accent : overlay.theme.border
+        clip: true
+        z: moving ? 7 : 5
 
-        MouseArea { anchors.fill: parent; preventStealing: true; z: -1 }
+        // Drag-handle header bar for moving the result card without interfering with text selection
+        Rectangle {
+            id: cardHeader
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 26
+            color: Qt.rgba(overlay.theme.surfaceAlt.r, overlay.theme.surfaceAlt.g, overlay.theme.surfaceAlt.b, 0.92)
+
+            MouseArea {
+                anchors.fill: parent
+                preventStealing: true
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                property real startX: 0
+                property real startY: 0
+                property real baseOffX: 0
+                property real baseOffY: 0
+                onPressed: function(mouse) {
+                    var pt = cardHeader.mapToItem(overlay, mouse.x, mouse.y)
+                    startX = pt.x
+                    startY = pt.y
+                    baseOffX = resultCard.userOffsetX
+                    baseOffY = resultCard.userOffsetY
+                    resultCard.moving = true
+                }
+                onPositionChanged: function(mouse) {
+                    if (!resultCard.moving) return
+                    var pt = cardHeader.mapToItem(overlay, mouse.x, mouse.y)
+                    resultCard.userOffsetX = baseOffX + (pt.x - startX)
+                    resultCard.userOffsetY = baseOffY + (pt.y - startY)
+                }
+                onReleased: resultCard.moving = false
+                onCanceled: resultCard.moving = false
+                onDoubleClicked: {
+                    resultCard.userOffsetX = 0
+                    resultCard.userOffsetY = 0
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                text: "⋮⋮"
+                color: overlay.theme.textMuted
+                font.pixelSize: 11
+                opacity: 0.85
+            }
+
+            Rectangle {
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 1
+                color: overlay.theme.border
+            }
+        }
+
+        MouseArea {
+            anchors.top: cardHeader.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            preventStealing: true
+            z: -1
+        }
 
         ColumnLayout {
             id: cardCol
-            anchors.fill: parent
+            anchors.top: cardHeader.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
             anchors.margins: 14
             spacing: 10
 
