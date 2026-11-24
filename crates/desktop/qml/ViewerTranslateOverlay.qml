@@ -67,6 +67,28 @@ Item {
     property bool cardShowOriginal: false
     property string _lastResultKey: ""
 
+    // Font controls (shared across bubbles & resultCard, preserved across pages & Review mode)
+    property string fontFamily: ""
+    property bool fontSizeAuto: true
+    property int fixedFontSize: 14
+    property real fontScale: 1.0
+    property bool fontPanelOpen: false
+
+    function stepFontSize(delta) {
+        if (overlay.fontSizeAuto) {
+            overlay.fontScale = Math.max(0.6, Math.min(2.2, Math.round((overlay.fontScale + delta * 0.1) * 10) / 10))
+        } else {
+            overlay.fixedFontSize = Math.max(9, Math.min(36, overlay.fixedFontSize + delta))
+        }
+    }
+
+    function resetFontSettings() {
+        overlay.fontFamily = ""
+        overlay.fontSizeAuto = true
+        overlay.fixedFontSize = 14
+        overlay.fontScale = 1.0
+    }
+
     readonly property bool isOcrMode: overlay.overlayMode === "ocr"
     readonly property bool busy: !!(overlay.aiTask && overlay.aiTask.running && overlay.aiTask.kind === "translate")
 
@@ -576,7 +598,10 @@ Item {
                 color: overlay.theme.text
                 selectionColor: overlay.theme.accent
                 selectedTextColor: overlay.theme.accentText
-                font.pixelSize: Math.max(11, Math.min(15, Math.round(mapped.h * 0.22)))
+                font.family: overlay.fontFamily
+                font.pixelSize: overlay.fontSizeAuto
+                                ? Math.max(9, Math.min(32, Math.round(Math.max(11, Math.min(16, mapped.h * 0.22)) * overlay.fontScale)))
+                                : overlay.fixedFontSize
                 wrapMode: TextEdit.WordWrap
                 horizontalAlignment: TextEdit.AlignHCenter
                 verticalAlignment: TextEdit.AlignVCenter
@@ -881,6 +906,17 @@ Item {
                 }
 
                 PanelAction {
+                    objectName: "translateFontButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: "Aa"
+                    primary: overlay.fontPanelOpen
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Font & size")
+                    onClicked: overlay.fontPanelOpen = !overlay.fontPanelOpen
+                }
+
+                PanelAction {
                     objectName: "translateReviewButton"
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
@@ -933,6 +969,25 @@ Item {
 
             PanelAction {
                 theme: overlay.theme
+                text: "A−"
+                onClicked: overlay.stepFontSize(-1)
+            }
+
+            PanelAction {
+                theme: overlay.theme
+                text: "A+"
+                onClicked: overlay.stepFontSize(1)
+            }
+
+            PanelAction {
+                theme: overlay.theme
+                text: "Aa"
+                primary: overlay.fontPanelOpen
+                onClicked: overlay.fontPanelOpen = !overlay.fontPanelOpen
+            }
+
+            PanelAction {
+                theme: overlay.theme
                 text: qsTr("Edit translation")
                 onClicked: overlay.reviewMode = false
             }
@@ -942,7 +997,124 @@ Item {
                 text: qsTr("Close")
                 onClicked: {
                     overlay.reviewMode = false
+                    overlay.fontPanelOpen = false
                     overlay.closeRequested()
+                }
+            }
+        }
+    }
+
+    // --------------------------------------------------- Floating Font & Size Popover (12 px padding)
+    Rectangle {
+        id: fontPanel
+        objectName: "translateFontPanel"
+        visible: overlay.fontPanelOpen && !overlay.spacePanning && !overlay.canvasPanning
+        anchors.top: overlay.reviewMode ? reviewPill.bottom : topBar.bottom
+        anchors.topMargin: 8
+        anchors.right: overlay.reviewMode ? reviewPill.right : undefined
+        anchors.horizontalCenter: overlay.reviewMode ? undefined : topBar.horizontalCenter
+        width: Math.min(parent.width - 28, 360)
+        implicitHeight: fontCol.implicitHeight + 24
+        radius: 10
+        color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.98)
+        border.width: 1
+        border.color: overlay.theme.border
+        z: 8
+
+        MouseArea { anchors.fill: parent; preventStealing: true; z: -1 }
+
+        ColumnLayout {
+            id: fontCol
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label {
+                    text: qsTr("Font:")
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 12
+                    Layout.preferredWidth: 52
+                }
+                ComboBox {
+                    id: fontFamilyCombo
+                    objectName: "translateFontFamilyCombo"
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    readonly property var families: {
+                        var list = [""]
+                        var sys = Qt.fontFamilies() || []
+                        for (var i = 0; i < sys.length; ++i) list.push(sys[i])
+                        return list
+                    }
+                    model: {
+                        var labels = [qsTr("System default")]
+                        for (var i = 1; i < families.length; ++i) labels.push(families[i])
+                        return labels
+                    }
+                    currentIndex: {
+                        var idx = families.indexOf(overlay.fontFamily)
+                        return idx >= 0 ? idx : 0
+                    }
+                    onActivated: function(index) {
+                        overlay.fontFamily = families[index] || ""
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label {
+                    text: qsTr("Size:")
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 12
+                    Layout.preferredWidth: 52
+                }
+                PanelAction {
+                    theme: overlay.theme
+                    text: qsTr("Auto")
+                    primary: overlay.fontSizeAuto
+                    onClicked: overlay.fontSizeAuto = true
+                }
+                PanelAction {
+                    theme: overlay.theme
+                    text: qsTr("Fixed")
+                    primary: !overlay.fontSizeAuto
+                    onClicked: overlay.fontSizeAuto = false
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                PanelAction {
+                    theme: overlay.theme
+                    text: "A−"
+                    onClicked: overlay.stepFontSize(-1)
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    color: overlay.theme.text
+                    font.pixelSize: 12
+                    font.bold: true
+                    text: overlay.fontSizeAuto
+                          ? (qsTr("Auto") + " " + Math.round(overlay.fontScale * 100) + "%")
+                          : (overlay.fixedFontSize + " px")
+                }
+                PanelAction {
+                    theme: overlay.theme
+                    text: "A+"
+                    onClicked: overlay.stepFontSize(1)
+                }
+                PanelAction {
+                    theme: overlay.theme
+                    text: qsTr("Reset")
+                    onClicked: overlay.resetFontSettings()
                 }
             }
         }
@@ -1110,6 +1282,7 @@ Item {
 
             // Single active text box (either Translated or Original)
             Rectangle {
+                id: cardTextBox
                 readonly property string activeText: {
                     if (!overlay.latestResult) return ""
                     if (overlay.cardShowOriginal || !overlay.latestResult.translatedText) {
@@ -1137,11 +1310,14 @@ Item {
                         width: parent.width
                         readOnly: true
                         selectByMouse: true
-                        text: parent.parent.activeText
+                        text: cardTextBox.activeText
                         color: overlay.theme.text
                         selectionColor: overlay.theme.accent
                         selectedTextColor: overlay.theme.accentText
-                        font.pixelSize: 14
+                        font.family: overlay.fontFamily
+                        font.pixelSize: overlay.fontSizeAuto
+                                        ? Math.max(11, Math.min(26, Math.round(14 * overlay.fontScale)))
+                                        : overlay.fixedFontSize
                         wrapMode: TextEdit.WordWrap
                         Keys.onEscapePressed: focus = false
                     }
