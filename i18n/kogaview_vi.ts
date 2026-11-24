@@ -1081,24 +1081,63 @@
     </message>
 </context>
 <context>
-    <name>EditorCanvasSizePanel</name>
+    <name>DimensionRatioGrid</name>
     <message>
-        <location filename="../crates/desktop/qml/EditorCanvasSizePanel.qml" line="72"/>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="259"/>
         <source>Width</source>
         <translation>Rộng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorCanvasSizePanel.qml" line="97"/>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="279"/>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="281"/>
+        <source>Lock width</source>
+        <translation>Khóa chiều rộng</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="286"/>
         <source>Height</source>
         <translation>Cao</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorCanvasSizePanel.qml" line="119"/>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="306"/>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="308"/>
+        <source>Lock height</source>
+        <translation>Khóa chiều cao</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="313"/>
+        <source>Ratio</source>
+        <translation>Tỉ lệ</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="323"/>
+        <source>Free</source>
+        <translation>Tự do</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="332"/>
+        <location filename="../crates/desktop/qml/DimensionRatioGrid.qml" line="334"/>
+        <source>Lock ratio</source>
+        <translation>Khóa tỉ lệ</translation>
+    </message>
+</context>
+<context>
+    <name>EditorCanvasSizePanel</name>
+    <message>
+        <source>Width</source>
+        <translation type="vanished">Rộng</translation>
+    </message>
+    <message>
+        <source>Height</source>
+        <translation type="vanished">Cao</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorCanvasSizePanel.qml" line="73"/>
         <source>Anchor</source>
         <translation>Neo</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorCanvasSizePanel.qml" line="148"/>
+        <location filename="../crates/desktop/qml/EditorCanvasSizePanel.qml" line="102"/>
         <source>Delta</source>
         <translation>Thay đổi</translation>
     </message>
@@ -1106,67 +1145,64 @@
 <context>
     <name>EditorResizePanel</name>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="28"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="27"/>
         <source>Stretch to size</source>
         <translation>Giãn đúng cỡ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="29"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="28"/>
         <source>Crop to fill</source>
         <translation>Cắt vừa khung</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="30"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="29"/>
         <source>Fit with background</source>
         <translation>Vừa khung kèm nền</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="33"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="32"/>
         <source>Automatic</source>
         <translation>Tự động</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="34"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="33"/>
         <source>Lanczos 3</source>
         <translation>Lanczos 3</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="35"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="34"/>
         <source>Catmull-Rom</source>
         <translation>Catmull-Rom</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="36"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="35"/>
         <source>Nearest</source>
         <translation>Gần nhất</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="103"/>
         <source>Width</source>
-        <translation>Rộng</translation>
+        <translation type="vanished">Rộng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="124"/>
         <source>Height</source>
-        <translation>Cao</translation>
+        <translation type="vanished">Cao</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="143"/>
         <source>Lock aspect ratio</source>
-        <translation>Khóa tỉ lệ khung hình</translation>
+        <translation type="vanished">Khóa tỉ lệ khung hình</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="174"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="92"/>
         <source>Fit</source>
         <translation>Vừa khung</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="202"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="120"/>
         <source>Filter</source>
         <translation>Bộ lọc</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="230"/>
+        <location filename="../crates/desktop/qml/EditorResizePanel.qml" line="148"/>
         <source>Output size</source>
         <translation>Kích thước xuất</translation>
     </message>
@@ -1848,7 +1884,7 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/Main.qml" line="454"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1442"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1443"/>
         <source>Open images</source>
         <translation>Mở ảnh</translation>
     </message>
@@ -1864,88 +1900,88 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/Main.qml" line="705"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1461"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1462"/>
         <source>Open folder</source>
         <translation>Mở thư mục</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/Main.qml" line="713"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1460"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1461"/>
         <source>Choose destination folder</source>
         <translation>Chọn thư mục đích</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1154"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1155"/>
         <location filename="../crates/desktop/qml/ToolbarMetrics.qml" line="147"/>
         <source>Menu</source>
         <translation>Menu</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1156"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1157"/>
         <source>Main menu</source>
         <translation>Menu chính</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1199"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1200"/>
         <source>%1 items · %2 images</source>
         <translation>%1 mục · %2 ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1209"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1210"/>
         <source>rev %1</source>
         <translation>bản sửa %1</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1215"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1512"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1606"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1216"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1513"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1607"/>
         <source>Cancel</source>
         <translation>Huỷ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1483"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1484"/>
         <source>Delete permanently?</source>
         <translation>Xoá vĩnh viễn?</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1497"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1498"/>
         <source>Permanently delete %1 item(s)? This cannot be undone.</source>
         <translation>Xoá vĩnh viễn %1 mục? Không thể hoàn tác thao tác này.</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1522"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1523"/>
         <source>Delete</source>
         <translation>Xoá</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/Main.qml" line="612"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1546"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1547"/>
         <source>Save image as</source>
         <translation>Lưu ảnh thành</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/Main.qml" line="624"/>
-        <location filename="../crates/desktop/qml/Main.qml" line="1559"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1560"/>
         <source>Export image as</source>
         <translation>Xuất ảnh thành</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1576"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1577"/>
         <source>Unsaved changes</source>
         <translation>Thay đổi chưa lưu</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1585"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1586"/>
         <source>The editor has changes that are not saved to a file. Save them first?</source>
         <translation>Trình chỉnh sửa có thay đổi chưa lưu vào tệp. Lưu lại trước không?</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1599"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1600"/>
         <source>Discard</source>
         <translation>Bỏ thay đổi</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Main.qml" line="1613"/>
+        <location filename="../crates/desktop/qml/Main.qml" line="1614"/>
         <source>Save</source>
         <translation>Lưu</translation>
     </message>
@@ -3533,72 +3569,72 @@
 <context>
     <name>ViewerCompactHud</name>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="279"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="306"/>
         <source>Browser</source>
         <translation>Duyệt ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="291"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="318"/>
         <source>Edit image</source>
         <translation>Sửa ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="310"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="337"/>
         <source>Previous image (Left)</source>
         <translation>Ảnh trước (Left)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="333"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="360"/>
         <source>Next image (Right)</source>
         <translation>Ảnh sau (Right)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="351"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="378"/>
         <source>Zoom out</source>
         <translation>Thu nhỏ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="362"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="389"/>
         <source>Fit to window (F)</source>
         <translation>Vừa cửa sổ (F)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="373"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="400"/>
         <source>Zoom in</source>
         <translation>Phóng to</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="392"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="419"/>
         <source>Color &amp; light</source>
         <translation>Màu sắc &amp; ánh sáng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="403"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="430"/>
         <source>Viewer mode &amp; layout (M)</source>
         <translation>Chế độ &amp; bố cục Trình xem (M)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="425"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="452"/>
         <source>Dock top</source>
         <translation>Neo cạnh trên</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="431"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="458"/>
         <source>Dock bottom</source>
         <translation>Neo cạnh dưới</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="437"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="464"/>
         <source>Dock left</source>
         <translation>Neo cạnh trái</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="443"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="470"/>
         <source>Dock right</source>
         <translation>Neo cạnh phải</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="450"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="477"/>
         <source>Keep toolbar visible</source>
         <translation>Giữ thanh công cụ luôn hiện</translation>
     </message>
@@ -3619,12 +3655,12 @@
         <translation type="vanished">Chuyển sang chế độ Tiêu chuẩn</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="413"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="440"/>
         <source>Exit fullscreen (F11)</source>
         <translation>Thoát toàn màn hình (F11)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="413"/>
+        <location filename="../crates/desktop/qml/ViewerCompactHud.qml" line="440"/>
         <source>Fullscreen (F11)</source>
         <translation>Toàn màn hình (F11)</translation>
     </message>
@@ -3757,34 +3793,34 @@
     <name>WorkspaceSwitcher</name>
     <message>
         <location filename="../crates/desktop/qml/ToolbarMetrics.qml" line="132"/>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="27"/>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="28"/>
         <source>Browser</source>
         <translation>Duyệt ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="29"/>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="32"/>
         <source>Browser workspace: folders and thumbnails (Ctrl+1)</source>
         <translation>Không gian duyệt ảnh: thư mục và hình thu nhỏ (Ctrl+1)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/ToolbarMetrics.qml" line="137"/>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="33"/>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="36"/>
         <source>Viewer</source>
         <translation>Xem ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="35"/>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="40"/>
         <source>Viewer workspace: zoom, pan, rotate (Ctrl+2)</source>
         <translation>Không gian xem ảnh: thu phóng, di chuyển, xoay (Ctrl+2)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/ToolbarMetrics.qml" line="142"/>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="39"/>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="44"/>
         <source>Editor</source>
         <translation>Trình chỉnh sửa</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="41"/>
+        <location filename="../crates/desktop/qml/WorkspaceSwitcher.qml" line="48"/>
         <source>Editor workspace: non-destructive edits (Ctrl+3)</source>
         <translation>Không gian chỉnh sửa: sửa ảnh không phá huỷ (Ctrl+3)</translation>
     </message>

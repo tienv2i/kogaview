@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 /// Sidebar options panel for Canvas Size (expand/crop canvas without scaling
-/// image pixels) with unit selector (`px` / `%`), 3x3 anchor grid and live
-/// 60 fps canvas preview.
+/// image pixels) using the shared Crop-style Width / Height / Ratio grid
+/// (`DimensionRatioGrid`), 3x3 anchor grid, and live 60 fps canvas preview.
 ColumnLayout {
     id: panel
     objectName: "canvasSizeOptions"
@@ -13,10 +13,9 @@ ColumnLayout {
     property Theme theme: Theme {}
     property int sourceWidth: 0
     property int sourceHeight: 0
-    property int targetWidth: 0
-    property int targetHeight: 0
+    property alias targetWidth: dimGrid.targetWidth
+    property alias targetHeight: dimGrid.targetHeight
     property string anchor: "center"
-    property bool _syncing: false
 
     readonly property bool valid: targetWidth >= 1 && targetWidth <= 16384
                                   && targetHeight >= 1 && targetHeight <= 16384
@@ -49,13 +48,8 @@ ColumnLayout {
     ]
 
     function reset() {
-        _syncing = true
-        targetWidth = Math.max(1, sourceWidth)
-        targetHeight = Math.max(1, sourceHeight)
         anchor = "center"
-        widthField.setPixels(targetWidth)
-        heightField.setPixels(targetHeight)
-        _syncing = false
+        dimGrid.reset(Math.max(1, sourceWidth), Math.max(1, sourceHeight), false)
     }
 
     onSourceWidthChanged: {
@@ -65,54 +59,14 @@ ColumnLayout {
         if (targetHeight <= 0 && sourceHeight > 0) reset()
     }
 
-    RowLayout {
+    DimensionRatioGrid {
+        id: dimGrid
         Layout.fillWidth: true
-        spacing: 6
-        Label {
-            text: qsTr("Width")
-            color: panel.theme.textMuted
-            Layout.preferredWidth: 50
-        }
-        UnitField {
-            id: widthField
-            objectName: "canvasSizePanelWidth"
-            Layout.fillWidth: true
-            Layout.preferredHeight: 30
-            unitReference: panel.sourceWidth > 0 ? panel.sourceWidth : 1
-            minimumPixels: 1
-            maximumPixels: 16384
-            nextField: heightField
-            onTextEdited: {
-                if (panel._syncing) return
-                var w = widthField.pixels()
-                if (w > 0) panel.targetWidth = Math.max(1, Math.min(16384, w))
-            }
-        }
-    }
-
-    RowLayout {
-        Layout.fillWidth: true
-        spacing: 6
-        Label {
-            text: qsTr("Height")
-            color: panel.theme.textMuted
-            Layout.preferredWidth: 50
-        }
-        UnitField {
-            id: heightField
-            objectName: "canvasSizePanelHeight"
-            Layout.fillWidth: true
-            Layout.preferredHeight: 30
-            unitReference: panel.sourceHeight > 0 ? panel.sourceHeight : 1
-            minimumPixels: 1
-            maximumPixels: 16384
-            previousField: widthField
-            onTextEdited: {
-                if (panel._syncing) return
-                var h = heightField.pixels()
-                if (h > 0) panel.targetHeight = Math.max(1, Math.min(16384, h))
-            }
-        }
+        theme: panel.theme
+        namePrefix: "canvasSizePanel"
+        sourceWidth: panel.sourceWidth
+        sourceHeight: panel.sourceHeight
+        lockRatio: false
     }
 
     Label {

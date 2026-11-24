@@ -26,6 +26,7 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/EditorCanvasSizePanel.qml \
           ../crates/desktop/qml/ColorAdjustPanel.qml \
           ../crates/desktop/qml/UnitField.qml \
+          ../crates/desktop/qml/DimensionRatioGrid.qml \
           ../crates/desktop/qml/SettingsDialog.qml \
           ../crates/desktop/qml/ResizeDialog.qml \
           ../crates/desktop/qml/CanvasSizeDialog.qml \

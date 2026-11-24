@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-/// Sidebar options panel for single-image Resize with unit selector (`px` / `%`)
-/// and live 60 fps canvas preview.
+/// Sidebar options panel for single-image Resize using the shared Crop-style
+/// Width / Height / Ratio grid (`DimensionRatioGrid`) and live 60 fps preview.
 ColumnLayout {
     id: panel
     objectName: "resizeOptions"
@@ -12,12 +12,11 @@ ColumnLayout {
     property Theme theme: Theme {}
     property int sourceWidth: 0
     property int sourceHeight: 0
-    property int targetWidth: 0
-    property int targetHeight: 0
-    property bool constraint: true
+    property alias targetWidth: dimGrid.targetWidth
+    property alias targetHeight: dimGrid.targetHeight
+    property alias constraint: dimGrid.lockRatio
     property string fitMode: "stretch"
     property string filter: "auto"
-    property bool _syncing: false
 
     readonly property bool valid: targetWidth >= 1 && targetWidth <= 16384
                                   && targetHeight >= 1 && targetHeight <= 16384
@@ -36,57 +35,16 @@ ColumnLayout {
         { key: "nearest", label: qsTr("Nearest") }
     ]
 
-    function _syncFields() {
-        widthField.setPixels(targetWidth)
-        heightField.setPixels(targetHeight)
-    }
-
     function reset() {
-        _syncing = true
-        targetWidth = Math.max(1, sourceWidth)
-        targetHeight = Math.max(1, sourceHeight)
-        constraint = true
         fitMode = "stretch"
         filter = "auto"
-        _syncFields()
-        _syncing = false
-    }
-
-    function setWidthFromField() {
-        if (_syncing) return
-        var w = widthField.pixels()
-        if (w <= 0) return
-        _syncing = true
-        var clamped = Math.max(1, Math.min(16384, w))
-        targetWidth = clamped
-        if (constraint && sourceWidth > 0 && sourceHeight > 0) {
-            targetHeight = Math.max(1, Math.min(16384, Math.round(clamped * sourceHeight / sourceWidth)))
-            heightField.setPixels(targetHeight)
-        }
-        _syncing = false
-    }
-
-    function setHeightFromField() {
-        if (_syncing) return
-        var h = heightField.pixels()
-        if (h <= 0) return
-        _syncing = true
-        var clamped = Math.max(1, Math.min(16384, h))
-        targetHeight = clamped
-        if (constraint && sourceWidth > 0 && sourceHeight > 0) {
-            targetWidth = Math.max(1, Math.min(16384, Math.round(clamped * sourceWidth / sourceHeight)))
-            widthField.setPixels(targetWidth)
-        }
-        _syncing = false
+        dimGrid.reset(Math.max(1, sourceWidth), Math.max(1, sourceHeight), true)
     }
 
     function applyScale(factor) {
         if (sourceWidth <= 0 || sourceHeight <= 0) return
-        _syncing = true
-        targetWidth = Math.max(1, Math.min(16384, Math.round(sourceWidth * factor)))
-        targetHeight = Math.max(1, Math.min(16384, Math.round(sourceHeight * factor)))
-        _syncFields()
-        _syncing = false
+        dimGrid.setDimensions(Math.round(sourceWidth * factor),
+                              Math.round(sourceHeight * factor))
     }
 
     onSourceWidthChanged: {
@@ -96,54 +54,14 @@ ColumnLayout {
         if (targetHeight <= 0 && sourceHeight > 0) reset()
     }
 
-    RowLayout {
+    DimensionRatioGrid {
+        id: dimGrid
         Layout.fillWidth: true
-        spacing: 6
-        Label {
-            text: qsTr("Width")
-            color: panel.theme.textMuted
-            Layout.preferredWidth: 50
-        }
-        UnitField {
-            id: widthField
-            objectName: "resizePanelWidth"
-            Layout.fillWidth: true
-            Layout.preferredHeight: 30
-            unitReference: panel.sourceWidth > 0 ? panel.sourceWidth : 1
-            minimumPixels: 1
-            maximumPixels: 16384
-            nextField: heightField
-            onTextEdited: panel.setWidthFromField()
-        }
-    }
-
-    RowLayout {
-        Layout.fillWidth: true
-        spacing: 6
-        Label {
-            text: qsTr("Height")
-            color: panel.theme.textMuted
-            Layout.preferredWidth: 50
-        }
-        UnitField {
-            id: heightField
-            objectName: "resizePanelHeight"
-            Layout.fillWidth: true
-            Layout.preferredHeight: 30
-            unitReference: panel.sourceHeight > 0 ? panel.sourceHeight : 1
-            minimumPixels: 1
-            maximumPixels: 16384
-            previousField: widthField
-            onTextEdited: panel.setHeightFromField()
-        }
-    }
-
-    CheckBox {
-        objectName: "resizePanelLockRatio"
-        text: qsTr("Lock aspect ratio")
-        checked: panel.constraint
-        focusPolicy: Qt.NoFocus
-        onToggled: panel.constraint = checked
+        theme: panel.theme
+        namePrefix: "resizePanel"
+        sourceWidth: panel.sourceWidth
+        sourceHeight: panel.sourceHeight
+        lockRatio: true
     }
 
     RowLayout {

@@ -7,6 +7,7 @@ fn main() {
         "qml/ToolbarButton.qml",
         "qml/ToolRailButton.qml",
         "qml/UnitField.qml",
+        "qml/DimensionRatioGrid.qml",
         "qml/CompactToolbarButton.qml",
         "qml/MenuShortcut.qml",
         "qml/AppMenu.qml",
