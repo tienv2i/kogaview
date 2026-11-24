@@ -1,5 +1,5 @@
 Name:           kogaview
-Version:        1.2.0
+Version:        2.0.0
 Release:        1%{?dist}
 Summary:        Fast native desktop photo manager, viewer, and non-destructive editor
 License:        MIT
