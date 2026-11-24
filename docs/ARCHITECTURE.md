@@ -62,10 +62,12 @@ Core unit/property tests, command contract tests, image golden tests, IPC integr
 - CLI args, file-manager activation, QML interactions and MCP requests map to the same typed commands.
 - Dev/prod/Flatpak app identities and IPC namespaces are distinct; file access must remain portal/sandbox-compatible. See `WORKSPACES.md`, `BUILD.md`, `DESKTOP.md`.
 
-## Shared Desktop & QML Component Libraries (v1.1.0)
+## Shared Desktop & QML Component Libraries (v1.2.0)
 - **`ImageCanvas.qml`**: Shared GPU-friendly image viewport for both Viewer and Editor (zoom-at-cursor, free pan via `panMargin`, double-click Fit/100%, document↔viewport coordinate mapping).
 - **`SidePanelRail.qml`**: Vertical panel toggle rail with bottom Hide-all action (used for Editor's right panels).
-- **`ViewerModePopup.qml` / `ViewerCompactHud.qml` / `ViewerColorPopover.qml`**: Modular Viewer chrome controls — unified layout/display popover (single-click preview, double-click apply & close), 4-edge dockable magnetic-snap Floating HUD for Compact & Fullscreen modes, and non-dimming floating Color & Light popover synced with `RightDock`.
+- **`DimensionRatioGrid.qml`**: Shared Crop-style Width / Height / Ratio grid with 2-of-3 lock toggles reused across Editor Crop, Resize, and Canvas Size panels.
+- **`ToolbarMetrics.qml` / `WorkspaceSwitcher.qml`**: Progressive 4-tier toolbar compaction (`full` → `compact` → padded 1-button `collapsed` dropdown → hide `1 / N` counter → 1-by-1 right-to-left button folding into `⋯`) with safe `580 × 480` minimum window floor.
+- **`ViewerModePopup.qml` / `ViewerCompactHud.qml` / `ViewerColorPopover.qml`**: Modular Viewer chrome controls — unified layout/display popover (single-click preview, double-click apply & close), 4-edge dockable magnetic-snap Floating HUD for Compact & Fullscreen modes (synced with Standard toolbar, 1-by-1 overflow folding, persisted `compactHudEdge` & `compactHudPinned`), and non-dimming floating Color & Light popover synced with `RightDock`.
 - **`ViewerDualSpread.qml` / `ViewerWebtoonView.qml`**: Modular Viewer display engines — header-only smart two-page spread pairing (LTR/RTL, cover & landscape handling) inside `ImageCanvas`, and virtualized continuous vertical Webtoon reader with Smart Auto-Fit and bounded VRAM decoding.
 - **`DialogFrame.qml` / `DialogFooter.qml`**: Shared app-themed dialog chrome with auto-fit height, interactive edge/corner resizing, and overflow-only scrollbars.
 - **`SystemDialogs.qml`**: Unified XDG Desktop Portal facade (`FileChooser.OpenFile`, `SaveFile`, directory selection) with Qt fallback for non-portal environments.

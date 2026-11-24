@@ -1,5 +1,5 @@
 Name:           kogaview
-Version:        1.1.0
+Version:        1.2.0
 Release:        1%{?dist}
 Summary:        Fast native desktop photo manager, viewer, and non-destructive editor
 License:        MIT
@@ -45,6 +45,9 @@ install -Dm644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 %{_datadir}/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg
 
 %changelog
+* Tue Nov 24 2026 KogaView Contributors - 1.2.0-1
+- Release 1.2.0 (1-by-1 progressive toolbar folding, synced & persisted Compact HUD, Simple-mode sidebar & filmstrip toggles, shared Editor DimensionRatioGrid)
+
 * Tue Nov 24 2026 KogaView Contributors - 1.1.0-1
 - Release 1.1.0 (Viewer modes, Dual/Webtoon readers, Fullscreen, 4-edge Compact HUD)
 
