@@ -8,6 +8,7 @@ url="https://github.com/tienv2i/kogaview"
 license=('MIT')
 depends=('qt6-base' 'qt6-declarative' 'qt6-svg' 'qt6-5compat' 'dav1d')
 makedepends=('cmake' 'ninja' 'pkgconf' 'rust' 'cargo' 'qt6-tools' 'python')
+options=('!lto')
 source=()
 
 build() {

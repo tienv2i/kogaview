@@ -1,3 +1,5 @@
+%global _lto_cflags %{nil}
+
 Name:           kogaview
 Version:        2.0.0
 Release:        1%{?dist}
