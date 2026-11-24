@@ -1117,6 +1117,7 @@ ApplicationWindow {
                 theme: appTheme
                 metrics: toolbarMetrics
                 showLabels: root.toolbarLabels
+                collapsed: root.toolbarMini
                 workspace: root.state.workspace || "browser"
                 onSelected: function(workspace) {
                     // Leaving the Editor with unsaved edits asks first; any

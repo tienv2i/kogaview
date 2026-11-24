@@ -160,6 +160,10 @@ Item {
         metrics.switcherLabelWidths.length * metrics.buttonWidth
         + (metrics.switcherLabelWidths.length - 1) * metrics.buttonSpacing
 
+    /// The switcher collapsed into a single icon + chevron dropdown button
+    /// when the window enters mini-toolbar width.
+    readonly property int switcherCollapsedWidth: 46
+
     /// The switcher, three `<icon> <text>` buttons.
     readonly property real switcherLabelsWidth: {
         var total = (metrics.switcherLabelWidths.length - 1) * metrics.buttonSpacing
@@ -236,13 +240,14 @@ Item {
     readonly property real editorCompactRowWidth:
         metrics.rowWidth(metrics.switcherIconsWidth, metrics.editorToolbarWidth)
 
-    /// The same rows folded. One of these is what the window floor fits.
+    /// The same rows folded (with the switcher collapsed to one dropdown button).
+    /// One of these is what the window floor fits.
     readonly property real browserMiniRowWidth:
-        metrics.rowWidth(metrics.switcherIconsWidth, metrics.browserMiniToolbarWidth)
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.browserMiniToolbarWidth)
     readonly property real viewerMiniRowWidth:
-        metrics.rowWidth(metrics.switcherIconsWidth, metrics.viewerMiniToolbarWidth)
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.viewerMiniToolbarWidth)
     readonly property real editorMiniRowWidth:
-        metrics.rowWidth(metrics.switcherIconsWidth, metrics.editorMiniToolbarWidth)
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.editorMiniToolbarWidth)
 
     /// What the two labelled controls add to any row: the switcher's labels
     /// beyond its three icon squares, and the Menu's label beyond its square.

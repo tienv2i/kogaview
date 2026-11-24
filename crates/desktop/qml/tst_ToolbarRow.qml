@@ -51,7 +51,9 @@ RowLayout {
     // The header's children, in order, at their measured widths. The elastic
     // spacer contributes nothing to an implicit width.
     Item {
-        implicitWidth: rowMetrics.switcherIconsWidth
+        implicitWidth: rowFixture.mini
+                       ? rowMetrics.switcherCollapsedWidth
+                       : rowMetrics.switcherIconsWidth
         implicitHeight: 34
     }
     Item {
