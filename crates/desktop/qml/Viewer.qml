@@ -78,11 +78,15 @@ Item {
     readonly property int zoomPercent: Math.round(view.zoom * 100)
     readonly property bool zoomIsNotActual: Math.abs(view.zoom - 1) > 0.005
 
-    /// The filmstrip is shown in Standard mode (except Webtoon) when the user
-    /// asked for it *and* there is a strip worth showing.
+    /// The filmstrip is shown in Standard and Simple modes (except Webtoon)
+    /// when enabled *and* there is a strip worth showing. In Simple mode it is
+    /// hidden by default and toggled on demand via `simpleFilmstripOpen`.
+    property bool simpleFilmstripOpen: false
+    readonly property bool filmstripEnabled:
+        view.uiMode === "simple" ? view.simpleFilmstripOpen : !!view.state.filmstrip
     readonly property bool filmstripShown:
-        view.standardChrome && view.displayMode !== "webtoon"
-        && !!view.state.filmstrip && view.images.length > 1
+        view.rightDockAllowed && view.displayMode !== "webtoon"
+        && view.filmstripEnabled && view.images.length > 1
 
     property bool fullscreen: false
     signal toggleFullscreen()
@@ -191,6 +195,7 @@ Item {
 
     onUiModeChanged: {
         view.simpleSidebarOpen = false
+        view.simpleFilmstripOpen = false
         Qt.callLater(view.refitOrClamp)
     }
     onRightDockVisibleChanged: Qt.callLater(view.refitOrClamp)
@@ -223,6 +228,14 @@ Item {
         var patch = { panels: {} }
         patch.panels["viewer.info"] = visible
         view.layoutRequested(patch)
+    }
+
+    function toggleFilmstrip() {
+        if (view.uiMode === "simple") {
+            view.simpleFilmstripOpen = !view.simpleFilmstripOpen
+            return
+        }
+        view.command({ type: "toggle_filmstrip" })
     }
 
     /// Toggle Info & Color: in Standard and Simple modes toggles the right
@@ -467,7 +480,7 @@ Item {
             }
             break;
         case Qt.Key_T:
-            view.command({ type: "toggle_filmstrip" });
+            view.toggleFilmstrip();
             event.accepted = true;
             break;
         case Qt.Key_M:
@@ -1206,8 +1219,8 @@ Item {
             text: view.theme.menuEntries[32]
             icon.name: "view-list-symbolic"
             checkable: true
-            checked: !!view.state.filmstrip
-            onTriggered: view.command({ type: "toggle_filmstrip" })
+            checked: view.filmstripEnabled
+            onTriggered: view.toggleFilmstrip()
             MenuShortcut { text: "T" }
         }
         MenuItem {
@@ -1418,12 +1431,12 @@ Item {
                 theme: view.theme
                 visible: view.effectiveFoldCount < 4
                 checkable: true
-                checked: !!view.state.filmstrip
+                checked: view.filmstripEnabled
                 icon.source: "icons/view-thumbnails.svg"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
-                onClicked: view.command({ type: "toggle_filmstrip" })
+                onClicked: view.toggleFilmstrip()
             }
             ToolbarButton {
                 objectName: "viewerColorAdjustButton"

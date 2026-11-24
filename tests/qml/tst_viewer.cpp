@@ -1896,6 +1896,17 @@ private slots:
     QCoreApplication::processEvents();
     QVERIFY2(!rightPanel->isVisible(), "Second toggle should close the right sidebar in Simple mode");
 
+    // Simple mode also allows toggling the filmstrip on demand (hidden by default).
+    m_viewer->setProperty("viewerImages", QStringList{ m_landscape, m_portrait });
+    QCoreApplication::processEvents();
+    QVERIFY2(!m_viewer->property("filmstripShown").toBool(), "Filmstrip should be hidden by default in Simple mode");
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleFilmstrip"));
+    QCoreApplication::processEvents();
+    QVERIFY2(m_viewer->property("filmstripShown").toBool(), "Simple mode should allow toggling the filmstrip on");
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleFilmstrip"));
+    QCoreApplication::processEvents();
+    QVERIFY2(!m_viewer->property("filmstripShown").toBool(), "Second toggle should hide the filmstrip in Simple mode");
+
     // Compact mode: right panel hidden, compact HUD active.
     layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("compact"));
     m_viewer->setProperty("layout", layout);
