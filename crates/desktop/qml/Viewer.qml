@@ -795,6 +795,7 @@ Item {
                     offsetX: view.offsetX
                     offsetY: view.offsetY
                     aiTask: (view.state && view.state.aiTask) || null
+                    savedTranslation: (view.state && view.state.viewerSavedTranslation) || null
                     onTranslateRequested: function(sourceLang, targetLang, region, ocrEngine) {
                         var cmd = {
                             type: "viewer_translate",
@@ -805,6 +806,21 @@ Item {
                         }
                         if (region) cmd.region = region
                         view.command(cmd)
+                    }
+                    onSaveTranslationRequested: function(blocks) {
+                        if (!view.currentPath) return
+                        view.command({
+                            type: "viewer_save_translation",
+                            path: view.currentPath,
+                            blocks: blocks || []
+                        })
+                    }
+                    onDeleteTranslationRequested: function() {
+                        if (!view.currentPath) return
+                        view.command({
+                            type: "viewer_delete_translation",
+                            path: view.currentPath
+                        })
                     }
                     onCopyTextRequested: function(text) { view.copyText(text) }
                     onCancelRequested: view.command({ type: "ai_cancel" })

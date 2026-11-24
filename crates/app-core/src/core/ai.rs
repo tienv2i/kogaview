@@ -817,9 +817,214 @@ pub(crate) fn backup_and_overwrite(target: &Path, result_png: &Path) -> Result<P
     Ok(backup)
 }
 
+/// Sidecar JSON path for an image's saved translation bubbles:
+/// `<image_dir>/.kogaview/translation/<file_name>.json`.
+pub(crate) fn translation_sidecar_path(image_path: &Path) -> Option<PathBuf> {
+    let parent = image_path.parent()?;
+    let name = image_path.file_name()?.to_str()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(
+        parent
+            .join(".kogaview")
+            .join("translation")
+            .join(format!("{name}.json")),
+    )
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TranslationSidecarFile {
+    version: u32,
+    image: String,
+    #[serde(default)]
+    blocks: Vec<kogaview_protocol::TranslationBlock>,
+}
+
+/// Load persisted translation bubbles for `image_path` if a valid sidecar exists.
+pub(crate) fn load_saved_translation(
+    image_path: &str,
+) -> Option<kogaview_protocol::SavedTranslation> {
+    let sidecar = translation_sidecar_path(Path::new(image_path))?;
+    let raw = fs::read_to_string(&sidecar).ok()?;
+    let parsed: TranslationSidecarFile = serde_json::from_str(&raw).ok()?;
+    if parsed.blocks.is_empty() {
+        return None;
+    }
+    Some(kogaview_protocol::SavedTranslation {
+        path: image_path.to_owned(),
+        blocks: parsed.blocks,
+    })
+}
+
+fn remove_sidecar_and_prune(sidecar: &Path) -> Result<(), String> {
+    if sidecar.exists() {
+        fs::remove_file(sidecar)
+            .map_err(|e| format!("cannot remove '{}': {e}", sidecar.display()))?;
+    }
+    if let Some(trans_dir) = sidecar.parent() {
+        let _ = fs::remove_dir(trans_dir);
+        if let Some(meta_dir) = trans_dir.parent() {
+            let _ = fs::remove_dir(meta_dir);
+        }
+    }
+    Ok(())
+}
+
+impl Core {
+    /// Save Viewer translation bubbles to `<dir>/.kogaview/translation/<file>.json`.
+    /// When `blocks` is empty, removes the sidecar file instead of keeping an empty file.
+    pub(super) fn viewer_save_translation(
+        &mut self,
+        path: &str,
+        blocks: Vec<kogaview_protocol::TranslationBlock>,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let img_path = Path::new(path);
+        let Some(sidecar) = translation_sidecar_path(img_path) else {
+            return Err(ProtocolError::with_line(
+                "invalid_path",
+                format!("cannot resolve translation sidecar path for '{path}'"),
+                UiText::new("no_existing_paths"),
+            ));
+        };
+
+        if blocks.is_empty() {
+            remove_sidecar_and_prune(&sidecar).map_err(|msg| {
+                ProtocolError::with_line("io_error", msg, UiText::new("ai_inference_failed"))
+            })?;
+            if self.state.viewer_path.as_deref() == Some(path) {
+                self.state.viewer_saved_translation = None;
+            }
+            return Ok(None);
+        }
+
+        if let Some(dir) = sidecar.parent() {
+            fs::create_dir_all(dir).map_err(|e| {
+                ProtocolError::with_line(
+                    "io_error",
+                    format!(
+                        "cannot create translation directory '{}': {e}",
+                        dir.display()
+                    ),
+                    UiText::new("ai_inference_failed"),
+                )
+            })?;
+        }
+
+        let image_name = img_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_owned();
+        let payload = TranslationSidecarFile {
+            version: 1,
+            image: image_name,
+            blocks: blocks.clone(),
+        };
+        let bytes = serde_json::to_vec_pretty(&payload).map_err(|e| {
+            ProtocolError::with_line(
+                "serialize_error",
+                format!("cannot serialize translation sidecar: {e}"),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+
+        let tmp = sidecar.with_extension("json.tmp");
+        fs::write(&tmp, &bytes).map_err(|e| {
+            ProtocolError::with_line(
+                "io_error",
+                format!("cannot write '{}': {e}", tmp.display()),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+        if let Err(e) = fs::rename(&tmp, &sidecar) {
+            let _ = fs::remove_file(&tmp);
+            return Err(ProtocolError::with_line(
+                "io_error",
+                format!("cannot save '{}': {e}", sidecar.display()),
+                UiText::new("ai_inference_failed"),
+            ));
+        }
+
+        if self.state.viewer_path.as_deref() == Some(path) {
+            self.state.viewer_saved_translation = Some(kogaview_protocol::SavedTranslation {
+                path: path.to_owned(),
+                blocks,
+            });
+        }
+        Ok(None)
+    }
+
+    /// Delete `<dir>/.kogaview/translation/<file>.json` and clear saved state.
+    pub(super) fn viewer_delete_translation(
+        &mut self,
+        path: &str,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(sidecar) = translation_sidecar_path(Path::new(path)) else {
+            return Err(ProtocolError::with_line(
+                "invalid_path",
+                format!("cannot resolve translation sidecar path for '{path}'"),
+                UiText::new("no_existing_paths"),
+            ));
+        };
+        remove_sidecar_and_prune(&sidecar).map_err(|msg| {
+            ProtocolError::with_line("io_error", msg, UiText::new("ai_inference_failed"))
+        })?;
+        if self.state.viewer_path.as_deref() == Some(path) {
+            self.state.viewer_saved_translation = None;
+        }
+        Ok(Some(UiText::new("ai_translation_deleted")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_translation_roundtrips_and_deletes_cleanly() {
+        let dir = std::env::temp_dir().join(format!(
+            "kogaview-translation-sidecar-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let img = dir.join("page01.png");
+        fs::write(&img, b"fake").unwrap();
+        let img_str = img.to_string_lossy().into_owned();
+
+        let sidecar = translation_sidecar_path(&img).unwrap();
+        assert_eq!(sidecar, dir.join(".kogaview/translation/page01.png.json"));
+        assert!(load_saved_translation(&img_str).is_none());
+
+        fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        let payload = TranslationSidecarFile {
+            version: 1,
+            image: "page01.png".to_owned(),
+            blocks: vec![kogaview_protocol::TranslationBlock {
+                x: 10,
+                y: 20,
+                w: 100,
+                h: 50,
+                original: "こんにちは".to_owned(),
+                translated: "Xin chào".to_owned(),
+            }],
+        };
+        fs::write(&sidecar, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
+
+        let loaded = load_saved_translation(&img_str).expect("should load saved sidecar");
+        assert_eq!(loaded.path, img_str);
+        assert_eq!(loaded.blocks.len(), 1);
+        assert_eq!(loaded.blocks[0].translated, "Xin chào");
+
+        remove_sidecar_and_prune(&sidecar).unwrap();
+        assert!(!sidecar.exists());
+        assert!(!dir.join(".kogaview").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn backup_paths_append_tilde_and_increment_number() {

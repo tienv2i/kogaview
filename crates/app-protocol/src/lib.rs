@@ -641,6 +641,15 @@ pub struct TranslationResult {
     pub blocks: Vec<TranslationBlock>,
 }
 
+/// Persisted translation overlay loaded from `<dir>/.kogaview/translation/<file>.json`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTranslation {
+    pub path: String,
+    #[serde(default)]
+    pub blocks: Vec<TranslationBlock>,
+}
+
 /// Active or most-recent AI background job (model download or inference).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1231,6 +1240,16 @@ pub enum Command {
         #[serde(default)]
         ocr_engine: String,
     },
+    /// Persist Viewer translation bubbles to `<dir>/.kogaview/translation/<file>.json`.
+    ViewerSaveTranslation {
+        path: String,
+        #[serde(default)]
+        blocks: Vec<TranslationBlock>,
+    },
+    /// Delete the persisted `<dir>/.kogaview/translation/<file>.json` sidecar file.
+    ViewerDeleteTranslation {
+        path: String,
+    },
     CancelOperation,
 }
 
@@ -1311,6 +1330,8 @@ impl Command {
             Self::EditorAiRemoveBackground { .. } => "editor_ai_remove_background",
             Self::QuickActionRun { .. } => "quick_action_run",
             Self::ViewerTranslate { .. } => "viewer_translate",
+            Self::ViewerSaveTranslation { .. } => "viewer_save_translation",
+            Self::ViewerDeleteTranslation { .. } => "viewer_delete_translation",
         }
     }
 }

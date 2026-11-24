@@ -24,8 +24,11 @@ Item {
     property real offsetX: 0
     property real offsetY: 0
     property var aiTask: null
+    property var savedTranslation: null
 
     signal translateRequested(string sourceLang, string targetLang, var region, string ocrEngine)
+    signal saveTranslationRequested(var blocks)
+    signal deleteTranslationRequested()
     signal copyTextRequested(string text)
     signal cancelRequested()
     signal closeRequested()
@@ -39,6 +42,10 @@ Item {
     property bool panMode: false
     property bool spacePanning: false
     readonly property bool effectivePanMode: overlay.panMode || overlay.spacePanning
+    readonly property bool hasSavedFile: !!(overlay.savedTranslation
+                                            && overlay.savedTranslation.path === overlay.imagePath
+                                            && overlay.savedTranslation.blocks
+                                            && overlay.savedTranslation.blocks.length > 0)
     property var bubblesByPath: ({})
     property var currentBubbles: []
     property var latestResult: null
@@ -76,6 +83,16 @@ Item {
 
     function syncBubblesForPath() {
         var list = overlay.bubblesByPath[overlay.imagePath]
+        if ((!list || list.length === 0)
+                && overlay.savedTranslation
+                && overlay.savedTranslation.path === overlay.imagePath
+                && overlay.savedTranslation.blocks
+                && overlay.savedTranslation.blocks.length > 0) {
+            list = overlay.savedTranslation.blocks.slice()
+            var map = overlay.bubblesByPath
+            map[overlay.imagePath] = list
+            overlay.bubblesByPath = map
+        }
         overlay.currentBubbles = list ? list.slice() : []
         overlay.cardVisible = false
     }
@@ -90,6 +107,11 @@ Item {
         overlay.cardVisible = false
     }
 
+    function deleteSavedTranslation() {
+        overlay.clearPageBubbles()
+        overlay.deleteTranslationRequested()
+    }
+
     function removeBubble(idx) {
         var list = overlay.currentBubbles.slice()
         if (idx < 0 || idx >= list.length) return
@@ -98,6 +120,7 @@ Item {
         map[overlay.imagePath] = list
         overlay.bubblesByPath = map
         overlay.currentBubbles = list
+        overlay.saveTranslationRequested(list)
     }
 
     function moveBubble(idx, newImgX, newImgY) {
@@ -116,9 +139,18 @@ Item {
         map[overlay.imagePath] = list
         overlay.bubblesByPath = map
         overlay.currentBubbles = list
+        overlay.saveTranslationRequested(list)
     }
 
     onImagePathChanged: overlay.syncBubblesForPath()
+    onSavedTranslationChanged: {
+        if (overlay.savedTranslation && overlay.savedTranslation.path === overlay.imagePath) {
+            var existing = overlay.bubblesByPath[overlay.imagePath]
+            if (!existing || existing.length === 0) {
+                overlay.syncBubblesForPath()
+            }
+        }
+    }
 
     onAiTaskChanged: {
         var task = overlay.aiTask
@@ -140,6 +172,7 @@ Item {
         overlay.currentBubbles = existing
         overlay.latestResult = tr
         overlay.cardVisible = true
+        overlay.saveTranslationRequested(existing)
     }
 
     // --------------------------------------------------- Drag-to-select region
@@ -615,6 +648,15 @@ Item {
                     text: qsTr("Clear")
                     visible: overlay.currentBubbles.length > 0
                     onClicked: overlay.clearPageBubbles()
+                }
+
+                PanelAction {
+                    objectName: "translateDeleteSavedButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Delete saved")
+                    visible: overlay.hasSavedFile
+                    onClicked: overlay.deleteSavedTranslation()
                 }
 
                 PanelAction {

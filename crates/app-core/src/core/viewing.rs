@@ -51,6 +51,11 @@ impl Core {
         self.state.viewer_path = path;
         self.state.viewer_modified = identity.0;
         self.state.viewer_size = identity.1;
+        self.state.viewer_saved_translation = self
+            .state
+            .viewer_path
+            .as_deref()
+            .and_then(super::ai::load_saved_translation);
     }
 
     pub(super) fn ensure_viewer_selection(&mut self) {

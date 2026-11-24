@@ -579,6 +579,10 @@ impl Core {
                 region,
                 ocr_engine,
             } => self.viewer_translate(&path, &source_lang, &target_lang, region, &ocr_engine),
+            Command::ViewerSaveTranslation { path, blocks } => {
+                self.viewer_save_translation(&path, blocks)
+            }
+            Command::ViewerDeleteTranslation { path } => self.viewer_delete_translation(&path),
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {

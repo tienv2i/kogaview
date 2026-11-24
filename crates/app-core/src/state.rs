@@ -5,7 +5,7 @@
 
 use kogaview_protocol::{
     AiModelStatus, AiPluginStatus, AiQuickAction, AiSettings, AiTaskState, Language, LayoutState,
-    Theme, Workspace,
+    SavedTranslation, Theme, Workspace,
 };
 use serde::Serialize;
 
@@ -198,6 +198,8 @@ pub struct UiState {
     pub quick_actions: Vec<AiQuickAction>,
     /// Active or most-recent AI background task (download or inference).
     pub ai_task: Option<AiTaskState>,
+    /// Persisted translation bubbles loaded from `<dir>/.kogaview/translation/<file>.json`.
+    pub viewer_saved_translation: Option<SavedTranslation>,
     pub busy: bool,
     /// What the status bar says, as a translatable line.
     pub status: UiText,
@@ -251,6 +253,7 @@ impl UiState {
             ai_models: Vec::new(),
             quick_actions: Vec::new(),
             ai_task: None,
+            viewer_saved_translation: None,
             busy: false,
             status: UiText::new("ready"),
             config_path,
@@ -302,6 +305,7 @@ impl UiState {
             ai_models: &self.ai_models,
             quick_actions: &self.quick_actions,
             ai_task: &self.ai_task,
+            viewer_saved_translation: &self.viewer_saved_translation,
             busy: self.busy,
             status: &self.status,
             config_path: &self.config_path,
@@ -361,6 +365,7 @@ pub struct StateMeta<'a> {
     pub ai_models: &'a [AiModelStatus],
     pub quick_actions: &'a [AiQuickAction],
     pub ai_task: &'a Option<AiTaskState>,
+    pub viewer_saved_translation: &'a Option<SavedTranslation>,
     pub busy: bool,
     pub status: &'a UiText,
     pub config_path: &'a str,
