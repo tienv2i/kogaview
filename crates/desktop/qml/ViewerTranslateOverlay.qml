@@ -36,6 +36,7 @@ Item {
 
     property bool showOverlayBoxes: true
     property bool translucentBubbles: false
+    property bool panMode: false
     property var bubblesByPath: ({})
     property var currentBubbles: []
     property var latestResult: null
@@ -157,7 +158,8 @@ Item {
         acceptedButtons: Qt.LeftButton
         cursorShape: Qt.CrossCursor
         preventStealing: true
-        enabled: overlay.active && !overlay.busy
+        visible: enabled
+        enabled: overlay.active && !overlay.busy && !overlay.panMode
 
         onPressed: function(mouse) {
             overlay.dragging = true
@@ -219,6 +221,9 @@ Item {
                 var _ox = overlay.offsetX
                 var _oy = overlay.offsetY
                 if (!overlay.canvasItem) return { x: 0, y: 0, w: 0, h: 0 }
+                var _cx = overlay.canvasItem.x
+                var _cy = overlay.canvasItem.y
+                var _cs = overlay.canvasItem.scale
                 var tl = overlay.canvasItem.mapToItem(overlay, modelData.x, modelData.y)
                 var br = overlay.canvasItem.mapToItem(overlay, modelData.x + modelData.w, modelData.y + modelData.h)
                 return {
@@ -438,7 +443,7 @@ Item {
                 }
             }
 
-            // Group 1: Mode switcher (Translate vs Offline OCR)
+            // Group 1: Mode switcher (Translate vs Offline OCR + Pan toggle)
             Row {
                 spacing: 4
                 height: 30
@@ -447,16 +452,30 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
                     text: qsTr("Translate")
-                    primary: !overlay.isOcrMode
-                    onClicked: overlay.overlayMode = "translate"
+                    primary: !overlay.isOcrMode && !overlay.panMode
+                    onClicked: {
+                        overlay.overlayMode = "translate"
+                        overlay.panMode = false
+                    }
                 }
                 PanelAction {
                     objectName: "ocrModeBtn"
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
                     text: qsTr("OCR only")
-                    primary: overlay.isOcrMode
-                    onClicked: overlay.overlayMode = "ocr"
+                    primary: overlay.isOcrMode && !overlay.panMode
+                    onClicked: {
+                        overlay.overlayMode = "ocr"
+                        overlay.panMode = false
+                    }
+                }
+                PanelAction {
+                    objectName: "translatePanBtn"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Pan")
+                    primary: overlay.panMode
+                    onClicked: overlay.panMode = !overlay.panMode
                 }
             }
 

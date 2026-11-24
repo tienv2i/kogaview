@@ -571,13 +571,13 @@ Item {
                 clampOnZoom: false
                 // Free pan in Viewer (always behaves like Hand tool without a separate mode).
                 panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
-                inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || view.translateMode
+                inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
                 rotationAngle: view.rotationAngle
                 flipH: view.flipH
                 flipV: view.flipV
-                allowLeftPan: true
+                allowLeftPan: !view.translateMode || translateOverlay.panMode
                 allowMiddlePan: true
-                allowDoubleTapZoom: true
+                allowDoubleTapZoom: !view.translateMode || translateOverlay.panMode
 
                 Checkerboard {
                     objectName: "viewerViewportCheckerboard"
@@ -750,7 +750,7 @@ Item {
                         brightness: viewerAdjustPanel.brightness
                         contrast: viewerAdjustPanel.contrast
                         saturation: viewerAdjustPanel.saturation
-                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || view.translateMode
+                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || (view.translateMode && !translateOverlay.panMode)
                         onPageCentered: function(idx) {
                             view.openImageAt(idx)
                         }
