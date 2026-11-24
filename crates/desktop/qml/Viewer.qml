@@ -757,12 +757,24 @@ Item {
                     imageIndex: view.imageIndex
                     imageName: view.currentInfo ? view.currentInfo.name : ""
                     colorAdjustActive: viewerAdjustPanel.changed
-                    keepOpen: viewerModePopup.visible || viewerColorPopover.visible
+                    flipH: view.flipH
+                    flipV: view.flipV
+                    uiModeModified: view.uiMode !== "standard" || view.displayMode !== "single"
+                    canvasBgUseTheme: view.canvasBgUseTheme
+                    canvasBgChecker: view.canvasBgChecker
+                    canvasBgColor: view.canvasBgColor
+                    keepOpen: viewerModePopup.visible || viewerColorPopover.visible || viewerBgPopup.visible
                     onPreviousRequested: view.stepImage(-1)
                     onNextRequested: view.stepImage(1)
                     onZoomOutRequested: view.zoomOut()
                     onFitRequested: view.fit()
                     onZoomInRequested: view.zoomIn()
+                    onActualSizeRequested: view.actualSize()
+                    onRotateLeftRequested: view.rotateLeft()
+                    onRotateRightRequested: view.rotateRight()
+                    onFlipHRequested: view.toggleFlipH()
+                    onFlipVRequested: view.toggleFlipV()
+                    onResetViewRequested: view.resetView()
                     onColorToggleRequested: function(anchor, edge) {
                         viewerColorPopover.toggleNear(anchor, edge)
                     }
@@ -770,6 +782,11 @@ Item {
                         viewerModePopup.toggleNear(anchor, edge)
                     }
                     onFullscreenToggleRequested: view.toggleFullscreen()
+                    onBgToggleRequested: function(anchor) {
+                        viewerBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
+                        viewerBgPopup.colour = view.canvasBgColor
+                        viewerBgPopup.showBelow(anchor || view)
+                    }
                     onBrowserRequested: view.backToBrowser()
                     onEditorRequested: {
                         if (view.currentPath) view.editInEditor(view.currentPath)

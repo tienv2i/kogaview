@@ -20,6 +20,12 @@ Item {
     property string imageName: ""
     /// True while view-only Color & Light adjustments are active (non-zero).
     property bool colorAdjustActive: false
+    property bool flipH: false
+    property bool flipV: false
+    property bool uiModeModified: false
+    property bool canvasBgUseTheme: true
+    property bool canvasBgChecker: false
+    property color canvasBgColor: "#ffffff"
     /// True while an anchored popover (Mode or Color) is open; pauses auto-hide.
     property bool keepOpen: false
     /// Docked edge: `"top"` | `"bottom"` | `"left"` | `"right"`.
@@ -28,15 +34,58 @@ Item {
     property bool pinned: false
 
     readonly property bool vertical: hud.edge === "left" || hud.edge === "right"
+    readonly property real availableSpan:
+        Math.max(0, (hud.vertical ? hud.height : hud.width) - 38)
+    readonly property int baseButtonCount: hud.fullscreen ? 15 : 17
+    readonly property int baseSepCount: hud.fullscreen ? 3 : 4
+    readonly property real counterSpan: hud.vertical ? 20 : 48
+    readonly property real fullNoCounterSpan:
+        20 + hud.baseButtonCount * 36 + hud.baseSepCount * 5 + 26
+    readonly property bool counterHidden:
+        hud.imageCount <= 0 || hud.availableSpan < (hud.fullNoCounterSpan + hud.counterSpan)
+    readonly property int foldCount: {
+        if (hud.availableSpan >= hud.fullNoCounterSpan) return 0
+        var slot = 36
+        var sep = 5
+        var needed = hud.fullNoCounterSpan + slot
+        var widths = [
+            26,         // 1: Canvas background
+            slot,       // 2: Viewer mode & layout
+            slot,       // 3: Color & light
+            slot + sep, // 4: Fullscreen + sep 3
+            slot,       // 5: Reset view
+            slot,       // 6: Flip vertical
+            slot,       // 7: Flip horizontal
+            slot,       // 8: Rotate right
+            slot + sep, // 9: Rotate left + sep 2
+            slot,       // 10: Actual size 100%
+            slot,       // 11: Zoom in
+            slot + sep  // 12: Zoom out + sep 1
+        ]
+        var folded = 0
+        for (var i = 0; i < widths.length; ++i) {
+            needed -= widths[i]
+            folded = i + 1
+            if (needed <= hud.availableSpan) break
+        }
+        return folded
+    }
 
     signal previousRequested()
     signal nextRequested()
     signal zoomOutRequested()
     signal fitRequested()
     signal zoomInRequested()
+    signal actualSizeRequested()
+    signal rotateLeftRequested()
+    signal rotateRightRequested()
+    signal flipHRequested()
+    signal flipVRequested()
+    signal resetViewRequested()
     signal colorToggleRequested(Item anchor, string edge)
     signal modeToggleRequested(Item anchor, string edge)
     signal fullscreenToggleRequested()
+    signal bgToggleRequested(Item anchor)
     signal browserRequested()
     signal editorRequested()
 
@@ -100,7 +149,7 @@ Item {
         interval: 2000
         repeat: false
         onTriggered: {
-            if (!hud.pinned && !hud.keepOpen && !hud.dragging
+            if (!hud.pinned && !hud.keepOpen && !hud.dragging && !hudOverflowMenu.visible
                     && !pillHover.hovered && !edgeHover.hovered) {
                 hud.revealed = false
             }
@@ -171,7 +220,7 @@ Item {
         color: Qt.rgba(hud.theme.surface.r, hud.theme.surface.g, hud.theme.surface.b, 0.92)
         border.width: 1
         border.color: hud.dragging ? hud.theme.accent : hud.theme.border
-        opacity: (hud.revealed || hud.pinned || hud.keepOpen || hud.dragging) ? 1.0 : 0.0
+        opacity: (hud.revealed || hud.pinned || hud.keepOpen || hud.dragging || hudOverflowMenu.visible) ? 1.0 : 0.0
         visible: opacity > 0.01
 
         Behavior on opacity {
@@ -339,7 +388,7 @@ Item {
             }
 
             Label {
-                visible: hud.imageCount > 0
+                visible: !hud.counterHidden
                 Layout.alignment: Qt.AlignCenter
                 text: (hud.imageIndex + 1) + "/" + hud.imageCount
                 color: hud.theme.textMuted
@@ -362,6 +411,7 @@ Item {
             }
 
             Rectangle {
+                visible: hud.foldCount < 12
                 Layout.alignment: Qt.AlignCenter
                 implicitWidth: hud.vertical ? 20 : 1
                 implicitHeight: hud.vertical ? 1 : 20
@@ -370,12 +420,13 @@ Item {
 
             ToolbarButton {
                 objectName: "compactHudZoomOut"
+                visible: hud.foldCount < 12
                 theme: hud.theme
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: hud.hasImage
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom out")
+                ToolTip.text: qsTr("Zoom out (- or scroll wheel)")
                 onClicked: hud.zoomOutRequested()
             }
 
@@ -392,16 +443,30 @@ Item {
 
             ToolbarButton {
                 objectName: "compactHudZoomIn"
+                visible: hud.foldCount < 11
                 theme: hud.theme
                 icon.name: "zoom-in-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: hud.hasImage
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom in")
+                ToolTip.text: qsTr("Zoom in (+ or scroll wheel)")
                 onClicked: hud.zoomInRequested()
             }
 
+            ToolbarButton {
+                objectName: "compactHudActualSize"
+                visible: hud.foldCount < 10
+                theme: hud.theme
+                icon.name: "zoom-original-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: hud.hasImage
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Actual size at 100% (0/1)")
+                onClicked: hud.actualSizeRequested()
+            }
+
             Rectangle {
+                visible: hud.foldCount < 9
                 Layout.alignment: Qt.AlignCenter
                 implicitWidth: hud.vertical ? 20 : 1
                 implicitHeight: hud.vertical ? 1 : 20
@@ -409,8 +474,91 @@ Item {
             }
 
             ToolbarButton {
+                objectName: "compactHudRotateLeft"
+                visible: hud.foldCount < 9
+                theme: hud.theme
+                icon.source: "icons/rotate-left.svg"
+                display: AbstractButton.IconOnly
+                enabled: hud.hasImage
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Rotate left (Shift+R)")
+                onClicked: hud.rotateLeftRequested()
+            }
+
+            ToolbarButton {
+                objectName: "compactHudRotateRight"
+                visible: hud.foldCount < 8
+                theme: hud.theme
+                icon.source: "icons/rotate-right.svg"
+                display: AbstractButton.IconOnly
+                enabled: hud.hasImage
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Rotate right (R)")
+                onClicked: hud.rotateRightRequested()
+            }
+
+            ToolbarButton {
+                objectName: "compactHudFlipH"
+                visible: hud.foldCount < 7
+                theme: hud.theme
+                checked: hud.flipH
+                icon.source: "icons/flip-horizontal.svg"
+                display: AbstractButton.IconOnly
+                enabled: hud.hasImage
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Flip horizontal (H)")
+                onClicked: hud.flipHRequested()
+            }
+
+            ToolbarButton {
+                objectName: "compactHudFlipV"
+                visible: hud.foldCount < 6
+                theme: hud.theme
+                checked: hud.flipV
+                icon.source: "icons/flip-vertical.svg"
+                display: AbstractButton.IconOnly
+                enabled: hud.hasImage
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Flip vertical (V)")
+                onClicked: hud.flipVRequested()
+            }
+
+            ToolbarButton {
+                objectName: "compactHudResetView"
+                visible: hud.foldCount < 5
+                theme: hud.theme
+                icon.name: "view-refresh-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: hud.hasImage
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Reset view")
+                onClicked: hud.resetViewRequested()
+            }
+
+            Rectangle {
+                visible: hud.foldCount < 4
+                Layout.alignment: Qt.AlignCenter
+                implicitWidth: hud.vertical ? 20 : 1
+                implicitHeight: hud.vertical ? 1 : 20
+                color: hud.theme.border
+            }
+
+            ToolbarButton {
+                objectName: "compactHudFullscreen"
+                visible: hud.foldCount < 4
+                theme: hud.theme
+                checked: hud.fullscreen
+                icon.source: hud.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: hud.fullscreen ? qsTr("Exit fullscreen (F11)") : qsTr("Fullscreen (F11)")
+                onClicked: hud.fullscreenToggleRequested()
+            }
+
+            ToolbarButton {
                 id: compactColorBtn
                 objectName: "compactHudColor"
+                visible: hud.foldCount < 3
                 theme: hud.theme
                 checked: hud.colorAdjustActive
                 icon.source: "icons/adjust.svg"
@@ -423,7 +571,9 @@ Item {
             ToolbarButton {
                 id: compactModeBtn
                 objectName: "compactHudMode"
+                visible: hud.foldCount < 2
                 theme: hud.theme
+                checked: hud.uiModeModified
                 icon.source: "icons/viewer-mode.svg"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
@@ -431,15 +581,170 @@ Item {
                 onClicked: hud.modeToggleRequested(compactModeBtn, hud.edge)
             }
 
+            Rectangle {
+                id: compactBgSwatch
+                objectName: "compactHudBgSwatch"
+                visible: hud.foldCount < 1
+                Layout.alignment: Qt.AlignCenter
+                implicitWidth: 24
+                implicitHeight: 24
+                radius: hud.theme.radius
+                color: (!hud.canvasBgUseTheme && hud.canvasBgChecker)
+                       ? "transparent"
+                       : (hud.canvasBgUseTheme ? hud.theme.background : hud.canvasBgColor)
+                border.width: 1
+                border.color: compactBgHover.hovered ? hud.theme.accent : hud.theme.border
+                clip: true
+
+                Checkerboard {
+                    anchors.fill: parent
+                    visible: !hud.canvasBgUseTheme && hud.canvasBgChecker
+                }
+                HoverHandler { id: compactBgHover; cursorShape: Qt.PointingHandCursor }
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: qsTr("Canvas background")
+                    onClicked: hud.bgToggleRequested(compactBgSwatch)
+                }
+            }
+
             ToolbarButton {
-                objectName: "compactHudFullscreen"
+                id: compactOverflowBtn
+                objectName: "compactHudOverflow"
+                visible: hud.foldCount > 0
                 theme: hud.theme
-                icon.source: hud.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
+                icon.name: "view-more-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
-                ToolTip.text: hud.fullscreen ? qsTr("Exit fullscreen (F11)") : qsTr("Fullscreen (F11)")
-                onClicked: hud.fullscreenToggleRequested()
+                ToolTip.text: qsTr("More viewer actions")
+                onClicked: hudOverflowMenu.toggleFrom(compactOverflowBtn)
             }
+        }
+    }
+
+    AppMenu {
+        id: hudOverflowMenu
+        objectName: "compactHudOverflowMenu"
+        theme: hud.theme
+        onClosed: {
+            if (hud.active && !hud.pinned && !hud.keepOpen) hideTimer.restart()
+        }
+
+        MenuItem {
+            visible: hud.foldCount >= 11
+            height: visible ? implicitHeight : 0
+            text: qsTr("Zoom in")
+            icon.name: "zoom-in-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.zoomInRequested()
+            MenuShortcut { text: "+" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 12
+            height: visible ? implicitHeight : 0
+            text: qsTr("Zoom out")
+            icon.name: "zoom-out-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.zoomOutRequested()
+            MenuShortcut { text: "-" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 10
+            height: visible ? implicitHeight : 0
+            text: qsTr("Actual size")
+            icon.name: "zoom-original-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.actualSizeRequested()
+            MenuShortcut { text: "0/1" }
+        }
+        MenuSeparator {
+            visible: hud.foldCount >= 10
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            visible: hud.foldCount >= 9
+            height: visible ? implicitHeight : 0
+            text: qsTr("Rotate left")
+            icon.name: "object-rotate-left-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.rotateLeftRequested()
+            MenuShortcut { text: "Shift+R" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 8
+            height: visible ? implicitHeight : 0
+            text: qsTr("Rotate right")
+            icon.name: "object-rotate-right-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.rotateRightRequested()
+            MenuShortcut { text: "R" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 7
+            height: visible ? implicitHeight : 0
+            text: qsTr("Flip horizontal")
+            icon.name: "object-flip-horizontal-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.flipHRequested()
+            MenuShortcut { text: "H" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 6
+            height: visible ? implicitHeight : 0
+            text: qsTr("Flip vertical")
+            icon.name: "object-flip-vertical-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.flipVRequested()
+            MenuShortcut { text: "V" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 5
+            height: visible ? implicitHeight : 0
+            text: qsTr("Reset view")
+            icon.name: "view-refresh-symbolic"
+            enabled: hud.hasImage
+            onTriggered: hud.resetViewRequested()
+        }
+        MenuSeparator {
+            visible: hud.foldCount >= 5
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            visible: hud.foldCount >= 4
+            height: visible ? implicitHeight : 0
+            text: qsTr("Fullscreen")
+            icon.source: hud.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
+            checkable: true
+            checked: hud.fullscreen
+            onTriggered: hud.fullscreenToggleRequested()
+            MenuShortcut { text: "F11" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 3
+            height: visible ? implicitHeight : 0
+            text: qsTr("Color & light")
+            icon.source: "icons/adjust.svg"
+            checkable: true
+            checked: hud.colorAdjustActive
+            onTriggered: hud.colorToggleRequested(compactOverflowBtn, hud.edge)
+        }
+        MenuItem {
+            visible: hud.foldCount >= 2
+            height: visible ? implicitHeight : 0
+            text: qsTr("Viewer mode & layout")
+            icon.source: "icons/viewer-mode.svg"
+            onTriggered: hud.modeToggleRequested(compactOverflowBtn, hud.edge)
+            MenuShortcut { text: "M" }
+        }
+        MenuItem {
+            visible: hud.foldCount >= 1
+            height: visible ? implicitHeight : 0
+            text: qsTr("Canvas background")
+            onTriggered: hud.bgToggleRequested(compactOverflowBtn)
         }
     }
 
