@@ -37,6 +37,8 @@ Item {
     property bool showOverlayBoxes: true
     property bool translucentBubbles: false
     property bool panMode: false
+    property bool spacePanning: false
+    readonly property bool effectivePanMode: overlay.panMode || overlay.spacePanning
     property var bubblesByPath: ({})
     property var currentBubbles: []
     property var latestResult: null
@@ -159,7 +161,7 @@ Item {
         cursorShape: Qt.CrossCursor
         preventStealing: true
         visible: enabled
-        enabled: overlay.active && !overlay.busy && !overlay.panMode
+        enabled: overlay.active && !overlay.busy && !overlay.effectivePanMode
 
         onPressed: function(mouse) {
             overlay.dragging = true
@@ -452,7 +454,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
                     text: qsTr("Translate")
-                    primary: !overlay.isOcrMode && !overlay.panMode
+                    primary: !overlay.isOcrMode && !overlay.effectivePanMode
                     onClicked: {
                         overlay.overlayMode = "translate"
                         overlay.panMode = false
@@ -463,7 +465,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
                     text: qsTr("OCR only")
-                    primary: overlay.isOcrMode && !overlay.panMode
+                    primary: overlay.isOcrMode && !overlay.effectivePanMode
                     onClicked: {
                         overlay.overlayMode = "ocr"
                         overlay.panMode = false
@@ -474,7 +476,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
                     text: qsTr("Pan")
-                    primary: overlay.panMode
+                    primary: overlay.effectivePanMode
                     onClicked: overlay.panMode = !overlay.panMode
                 }
             }

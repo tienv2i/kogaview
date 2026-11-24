@@ -416,6 +416,15 @@ Item {
             event.accepted = true;
             break;
         case Qt.Key_Space:
+            // In Read & Translate / OCR mode, holding Space temporarily switches
+            // to hand-pan (Photoshop/Krita style) instead of advancing the page.
+            if (view.translateMode) {
+                if (!event.isAutoRepeat) {
+                    view.spacePanning = true;
+                }
+                event.accepted = true;
+                break;
+            }
             // Shift+Space walks backwards, the convention in every viewer that
             // offers Space as "next".
             view.stepImage(shift ? -1 : 1);
@@ -530,6 +539,19 @@ Item {
         }
     }
 
+    property bool spacePanning: false
+    onTranslateModeChanged: if (!translateMode) spacePanning = false
+    onActiveFocusChanged: if (!activeFocus) spacePanning = false
+
+    Keys.onReleased: function(event) {
+        if (event.key === Qt.Key_Space && !event.isAutoRepeat) {
+            if (view.spacePanning) {
+                view.spacePanning = false;
+                event.accepted = true;
+            }
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -575,9 +597,9 @@ Item {
                 rotationAngle: view.rotationAngle
                 flipH: view.flipH
                 flipV: view.flipV
-                allowLeftPan: !view.translateMode || translateOverlay.panMode
+                allowLeftPan: !view.translateMode || translateOverlay.effectivePanMode
                 allowMiddlePan: true
-                allowDoubleTapZoom: !view.translateMode || translateOverlay.panMode
+                allowDoubleTapZoom: !view.translateMode || translateOverlay.effectivePanMode
 
                 Checkerboard {
                     objectName: "viewerViewportCheckerboard"
@@ -750,7 +772,7 @@ Item {
                         brightness: viewerAdjustPanel.brightness
                         contrast: viewerAdjustPanel.contrast
                         saturation: viewerAdjustPanel.saturation
-                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || (view.translateMode && !translateOverlay.panMode)
+                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || (view.translateMode && !translateOverlay.effectivePanMode)
                         onPageCentered: function(idx) {
                             view.openImageAt(idx)
                         }
@@ -766,6 +788,7 @@ Item {
                     id: translateOverlay
                     theme: view.theme
                     active: view.translateMode && !!view.currentPath
+                    spacePanning: view.spacePanning
                     imagePath: view.currentPath
                     canvasItem: canvas
                     zoom: view.zoom
