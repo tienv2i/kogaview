@@ -1,45 +1,83 @@
-# KogaView — Fast Native Photo Manager, Viewer & Non-Destructive Editor
+# KogaView — Fast Native Photo Manager, Manga/Webtoon Reader, Non-Destructive Editor & AI Plugin Suite
 
-**KogaView** is a fast, native desktop photo manager, viewer, and non-destructive image editor built with **Rust** and **Qt 6 / QML** via **CXX-Qt**. Designed for Linux desktops (GNOME, KDE Plasma, Wayland/X11) with first-class **XDG Desktop Portal** and **Flatpak** readiness, every domain action flows through a single typed command gateway in Rust Core with revisioned state, structured logs, and a command journal.
+**KogaView** (`v2.0.0`) is a fast, native desktop photo manager, manga/webtoon reader, non-destructive image editor, and extensible out-of-process AI/OCR plugin platform built with **Rust** and **Qt 6 / QML** via **CXX-Qt**. Designed for Linux desktops (GNOME, KDE Plasma, Wayland/X11) with first-class **XDG Desktop Portal** and **Flatpak** readiness, every domain action flows through a single typed command gateway in Rust Core with revisioned state, structured logs, and a command journal.
+
+![KogaView Browser Workspace](docs/screenshots/browser.png)
 
 ---
 
-## Highlights (v1.1.0)
+## Highlights (v2.0.0)
+
+### Out-of-Process Plugin Ecosystem (Zero Startup Cost)
+- **Strict isolation**: Plugins run as standalone out-of-process binaries (`jsonl-stdio` protocol, [ADR 0024](docs/adr/0024-ai-plugin-architecture.md)) under `$XDG_DATA_HOME/kogaview/plugins/`. **Zero plugins or AI models are loaded at startup**; workers spawn on demand and exit automatically after each job to free RAM/VRAM.
+- **6 Official Standalone Plugins** (see full reference in [**`docs/PLUGINS.md`**](docs/PLUGINS.md)):
+
+| Plugin | Type | Capabilities & Highlights | Build Command |
+|---|---|---|---|
+| **Remove Background** (`kogaview-plugin-rembg`) | AI ONNX | 8 on-demand models (`isnet-general`, `isnet-anime`, `u2net`, `silueta`, `birefnet-general-lite`, `birefnet-portrait`, `u2net_human_seg`) · Editor tool + Quick Actions | `just build-plugin-rembg` |
+| **AI Upscale** (`kogaview-plugin-upscale`) | AI ONNX | 2× / 4× Super-Resolution (Real-ESRGAN General & Anime 4×, Swin2SR 2×/4×) with tiled inference & alpha preservation | `just build-plugin-upscale` |
+| **Image Utilities** (`kogaview-plugin-utils`) | Non-AI | Strip EXIF / GPS privacy metadata · Lossless/smart file-size optimization | `just build-plugin-utils` |
+| **Offline OCR** (`kogaview-plugin-ocr`) | Tesseract | 100% offline text extraction in **5 languages** (`EN`, `JA` / `JA Vertical`, `VI`, `ZH`, `KO`) · Full-image clipboard Quick Actions + interactive region OCR + Tier-1 manga preprocessing | `just build-plugin-ocr` |
+| **Read & Translate** (`kogaview-plugin-translate`) | OCR + Translate | Interactive speech-bubble & full-page translation via Tesseract + Google Translate (with auto-retry) | `just build-plugin-translate` |
+| **AI OCR — Manga-OCR & RapidOCR** (`kogaview-plugin-ai-ocr`) | AI ONNX | **Manga-OCR** (ViT + BERT ONNX for Japanese manga, vertical text, furigana & screentones) + **RapidOCR** (PP-OCRv4 DBNet + SVTR for complex colored backgrounds & manhwa/manhua) | `just build-plugin-ai-ocr` |
+
+- **Safe Quick Actions**: Right-click any image in Browser or Viewer → **Quick actions**. File-modifying actions automatically create numbered backups (`<file>~`, `<file>.2~`, `<file>.3~`) before atomically overwriting and refreshing the image.
+- **Unified Settings → Plugins**: Filterable model & language pack manager (`All` · `Background` · `Upscale` · `OCR languages`) with progress bars, cancellation, delete, and local custom `.onnx` overrides.
+
+---
+
+### Interactive Read & Translate / Manga OCR Mode (`L`)
+- **3 OCR Engines on one bar**: Switch live between **Tesseract** (lightweight, 5 languages), **Manga-OCR** (AI ONNX for Japanese manga), and **RapidOCR** (AI ONNX PP-OCRv4 for complex artwork/backgrounds).
+- **2 Modes (`Translate` / `OCR only`)** + **5 Languages**: Explicit Input (`English`, `Japanese`, `Japanese (Vertical)`, `Vietnamese`, `Chinese`, `Korean`) & Output (`Vietnamese`, `English`, `Japanese`, `Chinese`, `Korean`) selectors with quick swap (`⇄`).
+- **Multi-bubble workflow built for manga/comics**:
+  - Drag to select multiple speech bubbles on the same page, or click **Translate page / Scan page**.
+  - **Draggable bubbles & popups**: Move any bubble, the top bar, or the bottom result card freely (double-click headers to reset).
+  - **Selectable text & single-language toggle**: Select and copy text directly inside every bubble and result card (`Ctrl+C`), flip each bubble between **Original** and **Translation** (1 language shown at a time), and click any bubble to inspect/retry it in the result card.
+  - **Per-bubble & card Retry (`↻`)**: Re-run OCR & translation in-place whenever a network glitch occurs.
+  - **Font & Size controls (`Aa`)**: Choose any system font family, switch **Auto** (60%–220% bubble-scaled) vs **Fixed** (`9–36 px`), step `A−` / `A+`, or Reset — accessible even while reading.
+  - **Pan & Zoom while translating**: Scroll wheel zooms, **middle-mouse drag** or **hold `Space` + left-drag** pans smoothly in Single, Dual, and Webtoon modes (auto-hiding the floating popups while panning), with bubbles glued to exact image pixels.
+  - **Review reading mode (`Review`)**: Hides both floating popups and bubble headers so you can read translated pages distraction-free with normal left-drag pan and `Space` page stepping.
+  - **Auto-saved per-image sidecars**: Translations are automatically saved to `<folder>/.kogaview/translation/<filename>.json`, auto-loaded on reopen, and removable with one click (**Delete saved**).
+
+---
+
+### Viewer Workspace & Manga / Webtoon Reader
+
+![KogaView Viewer Workspace](docs/screenshots/viewer.png)
+
+- **Three UI chrome modes (`M`)**: **Simple** (toolbar only, dynamic auto-fit), **Compact** (image-only with a translucent **4-edge dockable Floating HUD** with pin & magnetic snap), and **Standard** (full workspace with right Info/Color dock, filmstrip, and status bar).
+- **Three image display modes**:
+  - **Single**: Smooth scroll-to-zoom at cursor, double-click Fit / 100%, free pan, direct Rotate/Flip/Reset controls (`Shift+R`, `R`, `H`, `V`), and canvas background selector.
+  - **Dual page (book / manga)**: Smart two-page spread pairing via fast header-only dimensions — automatic solo spreads for covers and wide landscapes, **LTR → / RTL ←** order, configurable page gap (`0 / 8 / 16 px`).
+  - **Webtoon (vertical manga)**: Virtualized continuous vertical reader (`ListView` with `reuseItems` & bounded VRAM cache), 2D mouse drag-to-scroll, fast wheel scrolling (`460 px`/notch, `Shift+Wheel` turbo `900 px`), direct next/previous page jumping (`Right`/`PageDown`/`Space`), **Smart Auto-Fit** (`Auto` / `Width` / `Height` / `100%`), and full **OCR / Translate region mapping** across pages.
+- **Fullscreen (`F11`)** & **View-only Light & Color adjustments** (60 fps GPU preview, never written to disk).
+
+---
 
 ### Browser Workspace
-- **Async background folder scanning & disk-cached thumbnails**: Bounded worker pool (`ThumbnailCache`) with instant synchronous cache hits, warm view-mode delegates, LRU disk eviction, and EXIF orientation support.
-- **Three view modes & 5 thumbnail sizes**: Switch smoothly between **Thumbnails**, **Icons**, and **Details** views with 5 size presets (`XS`, `S`, `M`, `L`, `XL`).
-- **Sorting & navigation**: Sort by Name, Date Modified, File Size, or Type (ascending/descending), breadcrumb navigation, Quick Access favorites, Explorer folder tree, and live Preview / Info / Batch sidebar.
-- **Batch processing**: Batch **Resize**, **Crop** (with 3×3 anchor grid, `px`/`%` units, and aspect ratios), and **Convert** over selected images or folders with progress tracking, cancellation, and safe non-overwriting defaults.
+- **Async background folder scanning & disk-cached thumbnails**: Bounded worker pool (`ThumbnailCache`) with instant synchronous cache hits, LRU disk eviction, and EXIF orientation support.
+- **Three view modes & 5 thumbnail sizes**: **Thumbnails**, **Icons**, and **Details** views (`XS`, `S`, `M`, `L`, `XL`).
+- **Sorting, Quick Access & Batch processing**: Batch **Resize**, **Crop** (3×3 anchor grid, `px`/`%`, aspect ratios), and **Convert** with progress, cancellation, and safe non-overwriting defaults.
 
-### Viewer Workspace
-- **Three UI chrome modes (`M`)**: Switch seamlessly between **Simple** (toolbar only — default when opening images, with exact dynamic window auto-fit), **Compact** (image-only with a translucent **4-edge dockable Floating HUD** featuring magnetic drag-to-snap and right-click edge/pin controls), and **Standard** (full workspace with right Info/Color dock, filmstrip, and status bar).
-- **Three image display modes**:
-  - **Single**: Smooth scroll-to-zoom at cursor, double-click Fit / 100%, free pan at any zoom level, grouped **Rotate & flip** menu (`Shift+R`, `R`, `H`, `V`, Reset view), and canvas background selector.
-  - **Dual page (book / manga)**: Smart two-page spread pairing using fast header-only image dimensions — automatic solo spreads for cover pages and panoramic landscape artwork, **LTR → / RTL ←** reading order, configurable page gap (`0 / 8 / 16 px`), and 60 fps zoom/pan inside the shared `ImageCanvas`.
-  - **Webtoon (vertical)**: Virtualized continuous vertical reader (`ListView` with `reuseItems` and bounded VRAM cache), header-only pre-layout (zero layout shift), and **Smart Auto-Fit** (`Auto` / `Width` / `Height` / `100%`) plus smooth `Ctrl+Wheel` column-width zoom with debounced decode caps.
-- **Fullscreen (`F11`)**: Distraction-free full-screen viewing reusing the 4-edge Floating HUD; `F11` or `Esc` restores prior window geometry and mode.
-- **View-only Light & Color adjustments**: Live 60 fps GPU preview (Brightness, Contrast, Saturation) accessible from both the toolbar/RightDock in Standard/Simple mode and a non-dimming floating popover in Compact/Fullscreen mode, synchronized bidirectionally and never written to disk.
-- **Configurable defaults in Settings**: Choose default Viewer open layout (`Simple` / `Standard` / `Compact`) and display mode (`Single` / `Dual` / `Webtoon`) in `Settings → Viewer`.
+---
 
 ### Editor Workspace (Non-Destructive)
-- **Live 60 fps GPU previews**: Never overwrites originals until explicitly saved (with automatic backup on overwrite) and supports full **Undo / Redo / Reset** history.
-- **Vertical right panel rail**: One-click switching for `Tool options`, `Info`, `History`, `Original`, plus a bottom **Hide all panels** button.
-- **Tools**:
-  - **Pointer & Hand (`H` / `Space` + Drag)** with Krita-style free canvas panning.
-  - **Resize** sidebar panel with `px` / `%` units, aspect-ratio lock, scale presets, Stretch / Cover / Pad fit modes, resampling filters (`Lanczos3`, `Catmull-Rom`, `Nearest`), and live canvas preview.
-  - **Canvas Size** sidebar panel with `px` / `%` units, 3×3 anchor grid, shared background fill, and live expansion/crop preview.
-  - **Crop** with interactive handles, `a:b` / `a/b` / decimal ratio input, independent Width / Height / Ratio locks, Grow-canvas mode, and anchor placement.
-  - **Transform** (Free Transform & Scale Canvas) with modifier keys (`Shift` ratio, `Alt` center, `Ctrl` snap) and live GPU preview.
-  - **Rotate by angle** (`-180° .. +180°`) with live bounding-box expansion preview.
-  - **Color & Light** adjustments (Brightness, Contrast, Saturation) with 60 fps GPU preview and exact pixel commit in Rust Core.
-- **App-themed Color Picker**: 2D Saturation–Value spectrum, vertical Hue bar, RGB steppers, Hex input, quick swatches, and **Screen Eyedropper** via XDG Desktop Portal (`org.freedesktop.portal.Screenshot.PickColor`).
-- **Export & Save As**: Native XDG Desktop Portal file dialogs, format conversion (PNG, JPEG, WebP, TIFF, GIF, BMP, TGA, QOI), quality control, and metadata options.
 
-### Desktop & UX
-- **Light & Dark themes** with synchronized Qt palette and custom Fusion styling.
+![KogaView Editor Workspace](docs/screenshots/editor.png)
+
+- **Non-destructive pipeline**: Originals are never overwritten until explicitly saved (with automatic backup on overwrite), full **Undo / Redo / Reset** history, **Close editor** button, and safe unsaved-changes Save/Discard guards when switching images or workspaces.
+- **Tools**: Pointer & Hand (`H` / `Space` + Drag), **Resize**, **Canvas Size**, **Crop**, **Transform**, **Rotate by angle**, **Color & Light**, and **AI Remove Background** (when `kogaview-plugin-rembg` is installed).
+- **App-themed Color Picker** with XDG Desktop Portal **Screen Eyedropper** (`org.freedesktop.portal.Screenshot.PickColor`) and native Portal **Export / Save As** dialogs (PNG, JPEG, WebP, TIFF, GIF, BMP, TGA, QOI).
+
+---
+
+### Desktop, Settings & Localization
+
+![KogaView Settings Dialog](docs/screenshots/settings.png)
+
+- **Compact 5-tab Settings dialog** (`General`, `Browser`, `Editor`, `Viewer`, `Plugins`) responsive down to narrow windows.
+- **Light & Dark themes** with synchronized Qt Fusion palette.
 - **Bilingual UI**: English (`en`) and Vietnamese (`vi`), switchable live in Settings.
-- **Consistent dialogs**: Shared `DialogFrame` with auto-fit height, interactive edge/corner resizing, and smart scrollbars.
 
 ---
 
@@ -50,21 +88,34 @@
 - **CMake** ≥ 3.24 & **Ninja** (or Make)
 - **Qt 6** (`Core`, `Gui`, `Qml`, `Quick`, `QuickControls2`, `QuickEffects`, `DBus`, `LinguistTools`)
 - **just** (`justfile` task runner) and **Python 3**
+- Optional for OCR/Translate plugins: `tesseract` and `curl`
 
-### Build, Test & Run
+### Build, Test, Install & Build Plugins
 
 ```sh
-just setup         # verify toolchain and Qt 6 dependencies
-just build         # configure + build dev binary (build/dev/bin/kogaview)
-just run           # build and launch the dev app
-just test          # run Rust workspace, translation, packaging, and QML suites
-just install       # build optimized release and install to /usr/local
-just install-dev   # build optimized dev-prod with dev hooks and install
-just uninstall     # remove installed binary and desktop integration
-just doctor        # inspect versions, app identity, and environment
+just setup           # verify toolchain and Qt 6 dependencies
+just build           # configure + build dev binary (build/dev/bin/kogaview)
+just run             # build and launch the dev app
+just test            # run Rust workspace, translation, packaging, and QML suites
+just install         # build optimized release and install to /usr/local
+just install-dev     # build optimized dev-prod with dev hooks and install
+just build-plugins   # build & install all 6 optional plugins to ~/.local/share/kogaview/plugins/
+just uninstall       # remove installed binary and desktop integration
+just doctor          # inspect versions, app identity, and environment
 ```
 
-CLI arguments are forwarded directly:
+Or build individual plugins as needed:
+
+```sh
+just build-plugin-rembg
+just build-plugin-upscale
+just build-plugin-utils
+just build-plugin-ocr
+just build-plugin-translate
+just build-plugin-ai-ocr
+```
+
+CLI usage:
 
 ```sh
 kogaview open /path/to/photo.jpg
@@ -76,8 +127,9 @@ kogaview --version
 
 ## Architecture
 
-- **Core (`crates/app-core`, `crates/app-editor`, `crates/app-protocol`)**: Qt-independent Rust modular monolith owning domain state, typed `Envelope` command gateway, non-destructive image pipeline, batch jobs, config persistence, structured tracing logs, and command journal.
-- **Desktop Adapter & UI (`crates/desktop`, `cpp/`)**: CXX-Qt bridge, C++ `ThumbnailCache` & `PlatformHelper` (XDG Desktop Portal FileChooser, Screenshot.PickColor, OpenURI), and Qt 6 / QML views (`BrowserView`, `Viewer`, `EditorView`).
+- **Core (`crates/app-core`, `crates/app-editor`, `crates/app-protocol`)**: Qt-independent Rust modular monolith owning domain state, typed `Envelope` command gateway, non-destructive image pipeline, batch jobs, plugin host & on-demand model manager, translation sidecars, config persistence, structured tracing logs, and command journal.
+- **Desktop Adapter & UI (`crates/desktop`, `cpp/`)**: CXX-Qt bridge, C++ `ThumbnailCache` & `PlatformHelper` (XDG Desktop Portal FileChooser, Screenshot.PickColor, OpenURI), and Qt 6 / QML views (`BrowserView`, `Viewer`, `ViewerWebtoonView`, `ViewerTranslateOverlay`, `EditorView`).
+- **Plugins (`plugins/*`)**: Independent Rust workspaces speaking `jsonl-stdio`, installed under `$XDG_DATA_HOME/kogaview[-dev]/plugins/`.
 
 ### Runtime Identity
 
@@ -86,20 +138,23 @@ kogaview --version
 | Name | KogaView (Dev) | KogaView |
 | App ID | `io.github.tienv2i.KogaView.Dev` | `io.github.tienv2i.KogaView` |
 | Config | `~/.config/kogaview-dev/config.json` | `~/.config/kogaview/config.json` |
-| State | `~/.local/state/kogaview-dev/` | `~/.local/state/kogaview/` |
+| Data & Plugins | `~/.local/share/kogaview-dev/` | `~/.local/share/kogaview/` |
+| State & Logs | `~/.local/state/kogaview-dev/` | `~/.local/state/kogaview/` |
 | Cache | `~/.cache/kogaview-dev/` | `~/.cache/kogaview/` |
 
 ---
 
 ## Documentation
 
-- [`docs/PRD.md`](docs/PRD.md) — product requirements
+- [**`docs/PLUGINS.md`**](docs/PLUGINS.md) — Complete guide to all 6 plugins, models, OCR/Translate workflow & plugin authoring
+- [`docs/PRD.md`](docs/PRD.md) — Product requirements
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Core/UI split, command bus, persistence
+- [`docs/UI-DESIGN-SYSTEM.md`](docs/UI-DESIGN-SYSTEM.md) — UI/UX design system & Qt 6 QML engineering rules
 - [`docs/WORKSPACES.md`](docs/WORKSPACES.md) — Browser, Viewer, and Editor routing
-- [`docs/BUILD.md`](docs/BUILD.md) — build, run, and install contract
+- [`docs/BUILD.md`](docs/BUILD.md) — Build, run, and install contract
 - [`docs/CLI.md`](docs/CLI.md) — CLI launch surface
-- [`docs/FLATPAK.md`](docs/FLATPAK.md) — sandbox and portal constraints
-- [`docs/adr/`](docs/adr/) — Architecture Decision Records
+- [`docs/FLATPAK.md`](docs/FLATPAK.md) — Sandbox and portal constraints
+- [`docs/adr/`](docs/adr/) — Architecture Decision Records (including [ADR 0024: AI Plugin Architecture](docs/adr/0024-ai-plugin-architecture.md))
 
 ## License
 
