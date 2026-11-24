@@ -475,6 +475,58 @@ Item {
     /// one `editor_paint_stroke` command, sent on release, so one undo removes
     /// it.
     property string paintMode: "brush"
+    /// Krita-inspired brush preset & dynamics parameters.
+    property string brushPresetId: "basic_round"
+    property string brushTip: "round"
+    property int brushHardness: 85
+    property int brushFlow: 100
+    property int brushSpacing: 15
+    property int brushAngle: 35
+    property int brushScatter: 0
+    property string liquifyMode: "push" // "push" | "bloat" | "pucker" | "twirl_cw" | "twirl_ccw"
+    property int liquifyRadius: 60
+    property int liquifyStrength: 55
+    property bool brushDynamicsExpanded: false
+    readonly property var kritaBrushPresets: [
+        { id: "basic_round",   label: qsTr("Basic Round"),   tip: "round", hardness: 85,  flow: 100, spacing: 12, angle: 0,   scatter: 0,   opacity: 100 },
+        { id: "soft_round",    label: qsTr("Soft Round"),    tip: "round", hardness: 25,  flow: 75,  spacing: 10, angle: 0,   scatter: 0,   opacity: 90  },
+        { id: "airbrush",      label: qsTr("Airbrush"),      tip: "round", hardness: 5,   flow: 30,  spacing: 8,  angle: 0,   scatter: 0,   opacity: 70  },
+        { id: "hard_round",    label: qsTr("Hard Round"),    tip: "round", hardness: 100, flow: 100, spacing: 10, angle: 0,   scatter: 0,   opacity: 100 },
+        { id: "ink_pen",       label: qsTr("Ink Pen"),       tip: "round", hardness: 100, flow: 100, spacing: 6,  angle: 0,   scatter: 0,   opacity: 100 },
+        { id: "watercolor",    label: qsTr("Watercolor"),    tip: "round", hardness: 15,  flow: 22,  spacing: 12, angle: 0,   scatter: 0,   opacity: 55  },
+        { id: "calligraphy",   label: qsTr("Calligraphy"),   tip: "flat",  hardness: 95,  flow: 100, spacing: 8,  angle: 35,  scatter: 0,   opacity: 100 },
+        { id: "marker",        label: qsTr("Marker"),        tip: "flat",  hardness: 90,  flow: 65,  spacing: 8,  angle: 20,  scatter: 0,   opacity: 70  },
+        { id: "highlighter",   label: qsTr("Highlighter"),   tip: "flat",  hardness: 95,  flow: 35,  spacing: 6,  angle: 0,   scatter: 0,   opacity: 45  },
+        { id: "flat_oil",      label: qsTr("Flat Oil"),      tip: "flat",  hardness: 65,  flow: 90,  spacing: 12, angle: -20, scatter: 0,   opacity: 95  },
+        { id: "pencil",        label: qsTr("Sketch Pencil"), tip: "chalk", hardness: 60,  flow: 55,  spacing: 14, angle: 0,   scatter: 6,   opacity: 85  },
+        { id: "charcoal",      label: qsTr("Charcoal"),      tip: "chalk", hardness: 30,  flow: 85,  spacing: 18, angle: 0,   scatter: 18,  opacity: 95  },
+        { id: "pastel",        label: qsTr("Pastel"),        tip: "chalk", hardness: 45,  flow: 75,  spacing: 16, angle: 0,   scatter: 12,  opacity: 90  },
+        { id: "chalk",         label: qsTr("Chalk"),         tip: "chalk", hardness: 35,  flow: 80,  spacing: 22, angle: 0,   scatter: 15,  opacity: 95  },
+        { id: "dry_brush",     label: qsTr("Dry Brush"),     tip: "chalk", hardness: 70,  flow: 45,  spacing: 28, angle: 0,   scatter: 10,  opacity: 80  },
+        { id: "spray",         label: qsTr("Spray Paint"),   tip: "spray", hardness: 55,  flow: 55,  spacing: 30, angle: 0,   scatter: 110, opacity: 80  },
+        { id: "splatter",      label: qsTr("Splatter"),      tip: "spray", hardness: 85,  flow: 85,  spacing: 45, angle: 0,   scatter: 160, opacity: 95  },
+        { id: "pixel_art",     label: qsTr("Pixel Art"),     tip: "pixel", hardness: 100, flow: 100, spacing: 15, angle: 0,   scatter: 0,   opacity: 100 }
+    ]
+    function applyBrushPreset(preset) {
+        view.brushPresetId = preset.id
+        view.brushTip = preset.tip
+        view.brushHardness = preset.hardness
+        view.brushFlow = preset.flow
+        view.brushSpacing = preset.spacing
+        view.brushAngle = preset.angle
+        view.brushScatter = preset.scatter
+        view.paintOpacity = preset.opacity
+    }
+    readonly property bool editingActiveLayerMask: {
+        var ed = view.editor
+        if (!ed || !ed.layers) return false
+        for (var i = 0; i < ed.layers.length; ++i) {
+            if (ed.layers[i].id === ed.activeLayerId) {
+                return !!(ed.layers[i].hasMask && ed.layers[i].editingMask)
+            }
+        }
+        return false
+    }
 
     // ------------------------------------------------- foreground/background
     // One pair for the whole Editor, not the brush's private colours. The two
@@ -505,6 +557,173 @@ Item {
     /// canvas draws it while the button is down and the command is sent on
     /// release, so a half-drawn stroke can still be abandoned.
     property var paintStroke: []
+    /// Active Krita-style drawing sub-tool when `tool === "draw"`:
+    /// `"line"`, `"polyline"`, `"bezier"`, `"rect"`, `"ellipse"`, `"polygon"`, or `"star"`.
+    property string drawShape: "line"
+    property bool drawStarIsPolygon: false // Inkscape Star vs Regular Polygon toggle
+    property int drawStarCorners: 5        // 3..24 points/sides
+    property real drawStarSpokeRatio: 0.45 // 0.10..0.95 inner/outer radius ratio for stars
+    property string drawOutlineMode: "foreground"
+    property string drawFillMode: "none"
+    property int drawStrokeWidth: 4
+    property int drawStrokeOpacity: 100
+    property int drawFillOpacity: 100
+    property bool drawBezierClosed: false
+
+    /// Krita-style Fill (Paint Bucket) tool options.
+    property string fillSource: "foreground" // "foreground" | "background"
+    property int fillTolerance: 24
+    property int fillGrow: 0
+    property int fillOpacity: 100
+    property bool fillContiguous: true
+    property bool fillSampleAllLayers: false
+
+    /// Krita-style Gradient tool options.
+    property string gradientShape: "linear" // "linear" | "bilinear" | "radial" | "square" | "conical" | "spiral"
+    property string gradientColorMode: "fg_to_bg" // "fg_to_bg" | "fg_to_transparent" | "custom"
+    property string gradientPresetId: "fg_to_bg"
+    property var gradientStops: [] // [{ pos: 0..1, hex: "#rrggbb", alpha: 0..1 }]
+    property int gradientSelectedStop: 0
+    property string gradientRepeat: "none" // "none" | "forwards" | "alternating"
+    property bool gradientReverse: false
+    property bool gradientDither: true
+    property string gradientBlendMode: "normal"
+    property bool gradientInteractive: true
+    property int gradientOpacity: 100
+    /// Left-rail Zoom tool mode (`"in"` or `"out"`).
+    property string zoomToolMode: "in"
+
+    readonly property var gradientPresets: [
+        { id: "fg_to_bg",          label: qsTr("FG → BG"),     mode: "fg_to_bg",          stops: [] },
+        { id: "fg_to_transparent", label: qsTr("FG → Clear"),  mode: "fg_to_transparent", stops: [] },
+        { id: "rainbow",           label: qsTr("Rainbow"),     mode: "custom", stops: [
+            { pos: 0.0,  hex: "#ff2a2a", alpha: 1.0 },
+            { pos: 0.2,  hex: "#ffaa00", alpha: 1.0 },
+            { pos: 0.4,  hex: "#ffee00", alpha: 1.0 },
+            { pos: 0.6,  hex: "#22cc44", alpha: 1.0 },
+            { pos: 0.8,  hex: "#2288ff", alpha: 1.0 },
+            { pos: 1.0,  hex: "#aa33ff", alpha: 1.0 }
+        ]},
+        { id: "sunset",            label: qsTr("Sunset"),      mode: "custom", stops: [
+            { pos: 0.0,  hex: "#2b1055", alpha: 1.0 },
+            { pos: 0.45, hex: "#b5179e", alpha: 1.0 },
+            { pos: 0.78, hex: "#f77f00", alpha: 1.0 },
+            { pos: 1.0,  hex: "#fcbf49", alpha: 1.0 }
+        ]},
+        { id: "ocean",             label: qsTr("Ocean"),       mode: "custom", stops: [
+            { pos: 0.0,  hex: "#03045e", alpha: 1.0 },
+            { pos: 0.5,  hex: "#0077b6", alpha: 1.0 },
+            { pos: 1.0,  hex: "#90e0ef", alpha: 1.0 }
+        ]},
+        { id: "fire",              label: qsTr("Fire"),        mode: "custom", stops: [
+            { pos: 0.0,  hex: "#140404", alpha: 1.0 },
+            { pos: 0.35, hex: "#c1121f", alpha: 1.0 },
+            { pos: 0.7,  hex: "#ff9f1c", alpha: 1.0 },
+            { pos: 1.0,  hex: "#fff8d6", alpha: 1.0 }
+        ]},
+        { id: "chrome",            label: qsTr("Chrome"),      mode: "custom", stops: [
+            { pos: 0.0,  hex: "#243040", alpha: 1.0 },
+            { pos: 0.45, hex: "#e6eef8", alpha: 1.0 },
+            { pos: 0.5,  hex: "#3a2e25", alpha: 1.0 },
+            { pos: 0.75, hex: "#d4c3a3", alpha: 1.0 },
+            { pos: 1.0,  hex: "#ffffff", alpha: 1.0 }
+        ]},
+        { id: "vignette",          label: qsTr("Vignette"),    mode: "custom", stops: [
+            { pos: 0.0,  hex: "#000000", alpha: 0.0 },
+            { pos: 0.65, hex: "#000000", alpha: 0.15 },
+            { pos: 1.0,  hex: "#000000", alpha: 0.85 }
+        ]}
+    ]
+
+    function applyGradientPreset(preset) {
+        view.gradientPresetId = preset.id
+        view.gradientColorMode = preset.mode
+        var copy = []
+        for (var i = 0; i < preset.stops.length; ++i) {
+            var s = preset.stops[i]
+            copy.push({ pos: s.pos, hex: s.hex, alpha: s.alpha })
+        }
+        view.gradientStops = copy
+        view.gradientSelectedStop = 0
+        if (typeof gradientOverlay !== "undefined") gradientOverlay.repaintPreview()
+    }
+
+    function rawGradientStops() {
+        var list = []
+        if (view.gradientColorMode === "custom" && view.gradientStops.length >= 2) {
+            for (var i = 0; i < view.gradientStops.length; ++i) {
+                var s = view.gradientStops[i]
+                list.push({ pos: s.pos, hex: s.hex, alpha: s.alpha })
+            }
+        } else if (view.gradientColorMode === "fg_to_transparent") {
+            list.push({ pos: 0.0, hex: view.foregroundColor, alpha: 1.0 })
+            list.push({ pos: 1.0, hex: view.foregroundColor, alpha: 0.0 })
+        } else {
+            list.push({ pos: 0.0, hex: view.foregroundColor, alpha: 1.0 })
+            list.push({ pos: 1.0, hex: view.backgroundColor, alpha: 1.0 })
+        }
+        return list
+    }
+
+    function resolvedGradientStops() {
+        var list = view.rawGradientStops()
+        list.sort(function(a, b) { return a.pos - b.pos })
+        return list
+    }
+
+    function ensureCustomGradientStops() {
+        if (view.gradientColorMode !== "custom" || view.gradientStops.length < 2) {
+            view.gradientStops = view.resolvedGradientStops()
+            view.gradientColorMode = "custom"
+            view.gradientPresetId = "custom"
+        }
+    }
+
+    function updateGradientStop(index, patch) {
+        view.ensureCustomGradientStops()
+        if (index < 0 || index >= view.gradientStops.length) return
+        var next = view.gradientStops.slice()
+        var cur = next[index]
+        next[index] = {
+            pos: patch.pos !== undefined ? Math.max(0, Math.min(1, patch.pos)) : cur.pos,
+            hex: patch.hex !== undefined ? patch.hex : cur.hex,
+            alpha: patch.alpha !== undefined ? Math.max(0, Math.min(1, patch.alpha)) : cur.alpha
+        }
+        view.gradientStops = next
+        if (typeof gradientOverlay !== "undefined") gradientOverlay.repaintPreview()
+    }
+
+    function addGradientStopAt(pos) {
+        view.ensureCustomGradientStops()
+        var clamped = Math.max(0, Math.min(1, pos))
+        var next = view.gradientStops.slice()
+        next.push({ pos: clamped, hex: view.foregroundColor, alpha: 1.0 })
+        view.gradientStops = next
+        view.gradientSelectedStop = next.length - 1
+        if (typeof gradientOverlay !== "undefined") gradientOverlay.repaintPreview()
+    }
+
+    function removeSelectedGradientStop() {
+        if (view.gradientColorMode !== "custom" || view.gradientStops.length <= 2) return
+        var idx = view.gradientSelectedStop
+        if (idx < 0 || idx >= view.gradientStops.length) return
+        var next = view.gradientStops.slice()
+        next.splice(idx, 1)
+        view.gradientStops = next
+        view.gradientSelectedStop = Math.min(idx, next.length - 1)
+        if (typeof gradientOverlay !== "undefined") gradientOverlay.repaintPreview()
+    }
+
+    function drawColorForMode(mode) {
+        if (mode === "foreground") return view.colorBytes(view.foregroundColor)
+        if (mode === "background") return view.backgroundTransparent ? null : view.colorBytes(view.backgroundColor)
+        return null
+    }
+    function drawHexForMode(mode) {
+        if (mode === "foreground") return view.foregroundColor
+        if (mode === "background") return view.backgroundTransparent ? "" : view.backgroundColor
+        return ""
+    }
     property bool paintStroking: false
     /// Held Space pans on the left button, as in Krita; while it is held the
     /// brush does not paint.
@@ -724,7 +943,45 @@ Item {
             return
         view.paintStroking = true
         view.paintStroke = [[x, y]]
-        strokePreview.requestPaint()
+        view._livePaintPending = []
+        if (view.editor && (view.editor.ramCanvasRevision || 0) > 0) {
+            view._livePaintActive = true
+            view.command({
+                type: "editor_live_stroke_begin",
+                kind: "paint",
+                x: x,
+                y: y,
+                color: view.foregroundBytes(),
+                radius: Math.max(0.5, view.paintSize / 2),
+                opacity: Math.max(0.01, view.paintOpacity / 100),
+                erase: view.paintMode === "eraser",
+                tip: view.brushTip,
+                hardness: view.brushHardness / 100.0,
+                flow: Math.max(0.05, view.brushFlow / 100.0),
+                spacing: Math.max(0.05, view.brushSpacing / 100.0),
+                angle: view.brushAngle,
+                scatter: view.brushScatter / 100.0
+            })
+            livePaintFlushTimer.start()
+        } else {
+            view._livePaintActive = false
+            strokePreview.requestPaint()
+        }
+    }
+
+    property bool _livePaintActive: false
+    property var _livePaintPending: []
+
+    Timer {
+        id: livePaintFlushTimer
+        interval: 24
+        repeat: true
+        onTriggered: {
+            if (!view._livePaintActive || view._livePaintPending.length === 0) return
+            var batch = view._livePaintPending.slice()
+            view._livePaintPending = []
+            view.command({ type: "editor_live_stroke_step", points: batch })
+        }
     }
 
     /// Add a point to the open stroke. Consecutive points closer than half a
@@ -740,15 +997,30 @@ Item {
         if (last && Math.hypot(x - last[0], y - last[1]) < 0.5) return
         points.push([x, y])
         view.paintStroke = points
-        strokePreview.requestPaint()
+        if (view._livePaintActive) {
+            view._livePaintPending.push([x, y])
+        } else {
+            strokePreview.requestPaint()
+        }
     }
 
-    /// End the stroke and send it as one command.
+    /// End the stroke and commit it as one Undo step.
     function finishPaintStroke() {
         if (!view.paintStroking) return
         view.paintStroking = false
         var points = view.paintStroke
         view.paintStroke = []
+        if (view._livePaintActive) {
+            livePaintFlushTimer.stop()
+            if (view._livePaintPending.length > 0) {
+                var batch = view._livePaintPending.slice()
+                view._livePaintPending = []
+                view.command({ type: "editor_live_stroke_step", points: batch })
+            }
+            view._livePaintActive = false
+            view.command({ type: "editor_live_stroke_end", commit: true })
+            return
+        }
         strokePreview.requestPaint()
         if (points.length === 0) return
         view.command({
@@ -757,7 +1029,13 @@ Item {
             color: view.foregroundBytes(),
             radius: Math.max(0.5, view.paintSize / 2),
             opacity: Math.max(0.01, view.paintOpacity / 100),
-            erase: view.paintMode === "eraser"
+            erase: view.paintMode === "eraser",
+            tip: view.brushTip,
+            hardness: view.brushHardness / 100.0,
+            flow: Math.max(0.05, view.brushFlow / 100.0),
+            spacing: Math.max(0.05, view.brushSpacing / 100.0),
+            angle: view.brushAngle,
+            scatter: view.brushScatter / 100.0
         })
     }
 
@@ -765,6 +1043,13 @@ Item {
         if (!view.paintStroking) return
         view.paintStroking = false
         view.paintStroke = []
+        if (view._livePaintActive) {
+            livePaintFlushTimer.stop()
+            view._livePaintPending = []
+            view._livePaintActive = false
+            view.command({ type: "editor_live_stroke_end", commit: false })
+            return
+        }
         strokePreview.requestPaint()
     }
 
@@ -972,19 +1257,22 @@ Item {
             }
         }
         if (view.tool === "select" && view.documentReady) {
-            if (selectOverlay.polyPoints.length > 0) {
+            if (selectOverlay.polyPoints.length > 0 || selectOverlay.bezierNodes.length > 0) {
                 if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    selectOverlay.finishPolygon()
+                    if (selectOverlay.bezierNodes.length > 0) selectOverlay.finishBezier()
+                    else selectOverlay.finishPolygon()
                     event.accepted = true
                     return
                 }
-                if (event.key === Qt.Key_Backspace) {
-                    selectOverlay.popPolygonPoint()
+                if (event.key === Qt.Key_Backspace || (!control && shift && event.key === Qt.Key_Z)) {
+                    if (selectOverlay.bezierNodes.length > 0) selectOverlay.popBezierNode()
+                    else selectOverlay.popPolygonPoint()
                     event.accepted = true
                     return
                 }
                 if (event.key === Qt.Key_Escape) {
-                    selectOverlay.cancelPolygon()
+                    if (selectOverlay.bezierNodes.length > 0) selectOverlay.cancelBezier()
+                    else selectOverlay.cancelPolygon()
                     event.accepted = true
                     return
                 }
@@ -1001,6 +1289,47 @@ Item {
             }
             if (event.key === Qt.Key_S) {
                 view.selectMode = "subtract"
+                event.accepted = true
+                return
+            }
+        }
+        if (view.tool === "gradient" && view.documentReady && gradientOverlay.hasDraft) {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                gradientOverlay.applyDraft()
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Escape) {
+                gradientOverlay.cancelDraft()
+                event.accepted = true
+                return
+            }
+        }
+        if (view.tool === "draw" && view.documentReady) {
+            if (drawOverlay.hasDraftPath) {
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    drawOverlay.finishPath()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_Backspace || (!control && shift && event.key === Qt.Key_Z)) {
+                    drawOverlay.popLastPoint()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_Escape) {
+                    drawOverlay.cancelDraft()
+                    event.accepted = true
+                    return
+                }
+            }
+            if (event.key === Qt.Key_BracketLeft) {
+                view.drawStrokeWidth = Math.max(1, view.drawStrokeWidth - (view.drawStrokeWidth > 20 ? 4 : 1))
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_BracketRight) {
+                view.drawStrokeWidth = Math.min(120, view.drawStrokeWidth + (view.drawStrokeWidth >= 20 ? 4 : 1))
                 event.accepted = true
                 return
             }
@@ -1026,6 +1355,36 @@ Item {
             }
         }
         switch (event.key) {
+        case Qt.Key_U:
+            if (view.documentReady) {
+                if (view.tool === "draw" && shift) {
+                    var modes = ["line", "polyline", "bezier", "rect", "ellipse", "polygon"]
+                    var nextIdx = (modes.indexOf(view.drawShape) + 1) % modes.length
+                    view.drawShape = modes[nextIdx]
+                } else {
+                    view.tool = view.tool === "draw" ? "pointer" : "draw"
+                }
+                event.accepted = true
+            }
+            break
+        case Qt.Key_G:
+            if (view.documentReady) {
+                view.tool = view.tool === "gradient" ? "pointer" : "gradient"
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Q:
+            if (view.documentReady) {
+                view.tool = view.tool === "liquify" ? "pointer" : "liquify"
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Z:
+            if (!control && !shift && view.documentReady) {
+                view.tool = view.tool === "zoom" ? "pointer" : "zoom"
+                event.accepted = true
+            }
+            break
         case Qt.Key_M:
             if (view.documentReady) {
                 if (view.tool === "select") {
@@ -1090,15 +1449,23 @@ Item {
             break
         case Qt.Key_BracketLeft:
             if (view.documentReady) {
-                var dec = shift ? 10 : (view.paintSize > 40 ? 5 : (view.paintSize > 12 ? 2 : 1))
-                view.stepPaintSize(-dec)
+                if (view.tool === "liquify") {
+                    view.liquifyRadius = Math.max(10, view.liquifyRadius - (shift ? 20 : 8))
+                } else {
+                    var dec = shift ? 10 : (view.paintSize > 40 ? 5 : (view.paintSize > 12 ? 2 : 1))
+                    view.stepPaintSize(-dec)
+                }
                 event.accepted = true
             }
             break
         case Qt.Key_BracketRight:
             if (view.documentReady) {
-                var inc = shift ? 10 : (view.paintSize >= 40 ? 5 : (view.paintSize >= 12 ? 2 : 1))
-                view.stepPaintSize(inc)
+                if (view.tool === "liquify") {
+                    view.liquifyRadius = Math.min(300, view.liquifyRadius + (shift ? 20 : 8))
+                } else {
+                    var inc = shift ? 10 : (view.paintSize >= 40 ? 5 : (view.paintSize >= 12 ? 2 : 1))
+                    view.stepPaintSize(inc)
+                }
                 event.accepted = true
             }
             break
@@ -2380,6 +2747,18 @@ Item {
         view.clearCropFields()
         view.releaseCropLocks()
         view.syncCropRatioField()
+        // When a selection is active, seed the crop frame directly from the
+        // selection's bounding box so the user doesn't have to redraw it.
+        if (view.documentReady && view.hasSelection
+                && view.editor && view.editor.selectionBounds
+                && view.editor.selectionBounds.length === 4) {
+            var sb = view.editor.selectionBounds
+            if (sb[2] > 0 && sb[3] > 0) {
+                view.cropHeightAuto = false
+                view.cropWidthAuto = false
+                view.setCropRect(sb[0], sb[1], sb[2], sb[3])
+            }
+        }
     }
 
     /// A new rectangle is a new answer, not an edit of the old one, so drawing
@@ -3216,34 +3595,36 @@ Item {
             opacity: view.filterDialogOpen ? 0.55 : 1.0
 
             ToolbarButton {
-                objectName: "editorNewButton"
+                id: fileToolbarBtn
+                objectName: "editorFileMenuButton"
                 theme: view.theme
-                icon.name: "document-new-symbolic"
-                display: AbstractButton.IconOnly
+                text: qsTr("File") + " ▾"
+                display: AbstractButton.TextOnly
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("New image… (Ctrl+N)")
-                onClicked: view.requestNewImage()
+                ToolTip.text: qsTr("File actions (New, Open, Save, Export, Reset, Close)")
+                onClicked: editorFileMenu.popup(fileToolbarBtn, 0, fileToolbarBtn.height)
             }
             ToolbarButton {
-                objectName: "editorOpenButton"
+                id: editToolbarBtn
+                objectName: "editorEditMenuButton"
                 theme: view.theme
-                icon.name: "document-open-symbolic"
-                display: AbstractButton.IconOnly
+                text: qsTr("Edit") + " ▾"
+                display: AbstractButton.TextOnly
+                enabled: view.documentReady
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Open an image for editing")
-                onClicked: view.requestOpen()
+                ToolTip.text: qsTr("Edit actions (Undo, Redo, Cut, Copy, Paste, Delete, Fill)")
+                onClicked: editorEditMenu.popup(editToolbarBtn, 0, editToolbarBtn.height)
             }
             ToolbarButton {
-                objectName: "editorPasteButton"
+                id: selectToolbarBtn
+                objectName: "editorSelectMenuButton"
                 theme: view.theme
-                icon.name: "edit-paste-symbolic"
-                display: AbstractButton.IconOnly
+                text: qsTr("Select") + " ▾"
+                display: AbstractButton.TextOnly
+                enabled: view.documentReady
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Paste image as new layer (Ctrl+V)")
-                onClicked: view.requestPasteImage()
-            }
-            ToolbarSeparator {
-                theme: view.theme
+                ToolTip.text: qsTr("Selection actions (All, Clear, Invert, Grow, Shrink, Border, Smooth, Fill, Crop…)")
+                onClicked: editorSelectMenu.popup(selectToolbarBtn, 0, selectToolbarBtn.height)
             }
             ToolbarButton {
                 id: filterToolbarBtn
@@ -3256,67 +3637,21 @@ Item {
                 ToolTip.text: qsTr("Image filters & color adjustments")
                 onClicked: filterMenu.popup(filterToolbarBtn, 0, filterToolbarBtn.height)
             }
-            ToolbarSeparator {
-                theme: view.theme
-                visible: !view.miniToolbar
-            }
             ToolbarButton {
-                objectName: "editorZoomOut"
+                id: pluginsToolbarBtn
+                objectName: "editorPluginsMenuButton"
                 theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "zoom-out-symbolic"
-                display: AbstractButton.IconOnly
+                text: qsTr("Plugins") + " ▾"
+                display: AbstractButton.TextOnly
                 enabled: view.documentReady
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom out")
-                onClicked: view.zoomOut()
-            }
-            Label {
-                objectName: "editorZoomLabel"
-                visible: view.hasDocument && !view.miniToolbar
-                horizontalAlignment: Text.AlignHCenter
-                Layout.preferredWidth: 48
-                text: view.zoomPercent + " %"
-                color: view.theme.text
-                font.pixelSize: 12
-            }
-            ToolbarButton {
-                objectName: "editorZoomIn"
-                theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "zoom-in-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.documentReady
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Zoom in")
-                onClicked: view.zoomIn()
-            }
-            ToolbarButton {
-                objectName: "editorFit"
-                theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "zoom-fit-best-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.documentReady
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Fit to window")
-                onClicked: view.fit()
-            }
-            ToolbarButton {
-                objectName: "editorActualSize"
-                theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "zoom-original-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.documentReady
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Actual size (100%)")
-                onClicked: view.actualSize()
+                ToolTip.text: qsTr("AI & utility plugins (Remove BG, Watermark, Caption)")
+                onClicked: editorPluginsMenu.popup(pluginsToolbarBtn, 0, pluginsToolbarBtn.height)
             }
             ToolbarSeparator {
                 theme: view.theme
-                visible: !view.miniToolbar
             }
+            // Essential Quick Actions only: Save, Export, Undo, Redo + compact zoom readout
             ToolbarButton {
                 objectName: "editorToolbarSave"
                 theme: view.theme
@@ -3326,17 +3661,6 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Save (Ctrl+S)")
                 onClicked: view.requestSave()
-            }
-            ToolbarButton {
-                objectName: "editorToolbarSaveAs"
-                theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "document-save-as-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.documentReady && !view.saving
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Save as… (Ctrl+Shift+S)")
-                onClicked: view.requestSaveAs()
             }
             ToolbarButton {
                 objectName: "editorToolbarExport"
@@ -3351,7 +3675,6 @@ Item {
             }
             ToolbarSeparator {
                 theme: view.theme
-                visible: !view.miniToolbar
             }
             ToolbarButton {
                 objectName: "undoButton"
@@ -3360,7 +3683,7 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!(view.editor && view.editor.canUndo)
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Undo")
+                ToolTip.text: qsTr("Undo (Ctrl+Z)")
                 onClicked: view.command({ type: "editor_undo" })
             }
             ToolbarButton {
@@ -3370,30 +3693,21 @@ Item {
                 display: AbstractButton.IconOnly
                 enabled: !!(view.editor && view.editor.canRedo)
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Redo")
+                ToolTip.text: qsTr("Redo (Ctrl+Shift+Z)")
                 onClicked: view.command({ type: "editor_redo" })
             }
             ToolbarButton {
-                objectName: "resetButton"
+                objectName: "editorZoomBadge"
                 theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "document-revert-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.modified
+                visible: view.hasDocument && !view.miniToolbar
+                text: view.zoomPercent + "%"
+                display: AbstractButton.TextOnly
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Reset to original")
-                onClicked: view.command({ type: "editor_reset" })
-            }
-            ToolbarButton {
-                objectName: "editorToolbarClose"
-                theme: view.theme
-                visible: !view.miniToolbar
-                icon.name: "window-close-symbolic"
-                display: AbstractButton.IconOnly
-                enabled: view.hasDocument && !view.saving
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Close editor")
-                onClicked: view.requestClose()
+                ToolTip.text: qsTr("Zoom tool (Z) — click to open Zoom options")
+                onClicked: {
+                    view.tool = "zoom"
+                    view.forceActiveFocus()
+                }
             }
             ToolbarButton {
                 objectName: "editorOverflowButton"
@@ -3405,6 +3719,203 @@ Item {
                 ToolTip.text: qsTr("More editor actions")
                 onClicked: editorOverflow.toggleFrom(this)
             }
+        }
+    }
+
+    AppMenu {
+        id: editorEditMenu
+        objectName: "editorEditMenu"
+        theme: view.theme
+        implicitWidth: 230
+        MenuItem {
+            text: qsTr("Undo (Ctrl+Z)")
+            icon.name: "edit-undo-symbolic"
+            enabled: !!(view.editor && view.editor.canUndo)
+            onTriggered: view.command({ type: "editor_undo" })
+        }
+        MenuItem {
+            text: qsTr("Redo (Ctrl+Shift+Z)")
+            icon.name: "edit-redo-symbolic"
+            enabled: !!(view.editor && view.editor.canRedo)
+            onTriggered: view.command({ type: "editor_redo" })
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Cut (Ctrl+X)")
+            icon.name: "edit-cut-symbolic"
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: view.command({ type: "editor_selection_copy", cut: true })
+        }
+        MenuItem {
+            text: qsTr("Copy (Ctrl+C)")
+            icon.name: "edit-copy-symbolic"
+            enabled: view.documentReady
+            onTriggered: view.command({ type: "editor_selection_copy", cut: false })
+        }
+        MenuItem {
+            text: qsTr("Paste as new layer (Ctrl+V)")
+            icon.name: "edit-paste-symbolic"
+            onTriggered: view.requestPasteImage()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Delete (Del)")
+            icon.name: "edit-delete-symbolic"
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: view.command({ type: "editor_selection_delete" })
+        }
+        MenuItem {
+            text: qsTr("Fill selection…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectionFillDialog.openDialog()
+        }
+        MenuItem {
+            text: qsTr("Stroke selection…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectionStrokeDialog.openDialog()
+        }
+        MenuItem {
+            text: qsTr("Duplicate selection to layer")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: view.command({ type: "editor_selection_duplicate_layer" })
+        }
+    }
+
+    AppMenu {
+        id: editorSelectMenu
+        objectName: "editorSelectMenu"
+        theme: view.theme
+        MenuItem {
+            text: qsTr("Select all (Ctrl+A)")
+            enabled: view.documentReady
+            onTriggered: view.command({ type: "editor_select_all" })
+        }
+        MenuItem {
+            text: qsTr("Deselect (Ctrl+D)")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: view.command({ type: "editor_select_clear" })
+        }
+        MenuItem {
+            text: qsTr("Invert selection (Ctrl+Shift+I)")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: view.command({ type: "editor_select_invert" })
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Grow…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectModifyDialog.openFor("grow", qsTr("Grow Selection"), qsTr("Expand by"))
+        }
+        MenuItem {
+            text: qsTr("Shrink…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectModifyDialog.openFor("shrink", qsTr("Shrink Selection"), qsTr("Contract by"))
+        }
+        MenuItem {
+            text: qsTr("Border…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectModifyDialog.openFor("border", qsTr("Border Selection"), qsTr("Border width"))
+        }
+        MenuItem {
+            text: qsTr("Feather…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectModifyDialog.openFor("feather", qsTr("Feather Selection"), qsTr("Feather radius"))
+        }
+        MenuItem {
+            text: qsTr("Smooth…")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: selectModifyDialog.openFor("smooth", qsTr("Smooth Selection"), qsTr("Smooth radius"))
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Crop to selection")
+            enabled: view.documentReady && view.hasSelection
+            onTriggered: view.command({ type: "editor_selection_crop" })
+        }
+    }
+
+    AppMenu {
+        id: editorPluginsMenu
+        objectName: "editorPluginsMenu"
+        theme: view.theme
+        implicitWidth: 230
+
+        MenuItem {
+            text: qsTr("Remove background (AI)")
+            icon.source: "icons/ai-rembg.svg"
+            enabled: view.documentReady
+            onTriggered: {
+                view.tool = "removeBg"
+                view.forceActiveFocus()
+            }
+        }
+        MenuItem {
+            text: qsTr("Remove watermark (Gemini / Region)")
+            icon.source: "icons/eraser.svg"
+            enabled: view.documentReady
+            onTriggered: {
+                view.tool = "watermark"
+                view.forceActiveFocus()
+            }
+        }
+        MenuItem {
+            text: qsTr("Caption && tags (.txt)")
+            icon.source: "icons/info.svg"
+            enabled: view.documentReady
+            onTriggered: {
+                view.tool = "caption"
+                view.forceActiveFocus()
+            }
+        }
+    }
+
+    AppMenu {
+        id: editorFileMenu
+        objectName: "editorFileMenu"
+        theme: view.theme
+        implicitWidth: 220
+
+        MenuItem {
+            text: qsTr("New image… (Ctrl+N)")
+            icon.name: "document-new-symbolic"
+            onTriggered: view.requestNewImage()
+        }
+        MenuItem {
+            text: qsTr("Open image…")
+            icon.name: "document-open-symbolic"
+            onTriggered: view.requestOpen()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Save (Ctrl+S)")
+            icon.name: "document-save-symbolic"
+            enabled: view.documentReady && !view.saved && !view.saving
+            onTriggered: view.requestSave()
+        }
+        MenuItem {
+            text: qsTr("Save as… (Ctrl+Shift+S)")
+            icon.name: "document-save-as-symbolic"
+            enabled: view.documentReady && !view.saving
+            onTriggered: view.requestSaveAs()
+        }
+        MenuItem {
+            text: qsTr("Export a copy…")
+            icon.name: "document-send-symbolic"
+            enabled: view.documentReady && !view.saving
+            onTriggered: view.openExportDialog()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Reset to original")
+            icon.name: "document-revert-symbolic"
+            enabled: view.modified
+            onTriggered: view.command({ type: "editor_reset" })
+        }
+        MenuItem {
+            text: qsTr("Close editor")
+            icon.name: "window-close-symbolic"
+            enabled: view.hasDocument && !view.saving
+            onTriggered: view.requestClose()
         }
     }
 
@@ -3487,6 +3998,18 @@ Item {
                         }
                     }
                     ToolRailButton {
+                        objectName: "toolZoom"
+                        theme: view.theme
+                        iconSource: "icons/zoom.svg"
+                        tooltip: qsTr("Zoom (Z)")
+                        active: view.tool === "zoom"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "zoom" ? "pointer" : "zoom"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
                         objectName: "toolBrush"
                         theme: view.theme
                         iconSource: "icons/brush.svg"
@@ -3509,6 +4032,54 @@ Item {
                         onClicked: {
                             view.tool = "paint"
                             view.selectPaintMode("eraser")
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolDraw"
+                        theme: view.theme
+                        iconSource: "icons/draw-shapes.svg"
+                        tooltip: qsTr("Shapes & Curves (U)")
+                        active: view.tool === "draw"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "draw" ? "pointer" : "draw"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolFill"
+                        theme: view.theme
+                        iconSource: "icons/fill.svg"
+                        tooltip: qsTr("Fill / Paint Bucket")
+                        active: view.tool === "fill"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "fill" ? "pointer" : "fill"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolGradient"
+                        theme: view.theme
+                        iconSource: "icons/gradient.svg"
+                        tooltip: qsTr("Gradient (G)")
+                        active: view.tool === "gradient"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "gradient" ? "pointer" : "gradient"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolLiquify"
+                        theme: view.theme
+                        iconSource: "icons/liquify.svg"
+                        tooltip: qsTr("Liquify (Q)")
+                        active: view.tool === "liquify"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "liquify" ? "pointer" : "liquify"
                             view.forceActiveFocus()
                         }
                     }
@@ -3566,42 +4137,6 @@ Item {
                         enabled: view.documentReady
                         onClicked: {
                             view.tool = view.tool === "transform" ? "pointer" : "transform"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolRemoveBg"
-                        theme: view.theme
-                        iconSource: "icons/ai-rembg.svg"
-                        tooltip: qsTr("Remove background (AI)")
-                        active: view.tool === "removeBg"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "removeBg" ? "pointer" : "removeBg"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolWatermark"
-                        theme: view.theme
-                        iconSource: "icons/eraser.svg"
-                        tooltip: qsTr("Remove watermark (Gemini / Region)")
-                        active: view.tool === "watermark"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "watermark" ? "pointer" : "watermark"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolCaption"
-                        theme: view.theme
-                        iconSource: "icons/info.svg"
-                        tooltip: qsTr("Caption & tags (.txt)")
-                        active: view.tool === "caption"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "caption" ? "pointer" : "caption"
                             view.forceActiveFocus()
                         }
                     }
@@ -5437,13 +5972,14 @@ Item {
                     }
                     MenuSeparator {}
                     MenuItem {
-                        text: qsTr("Fill")
+                        text: qsTr("Fill…")
                         enabled: view.documentReady && view.hasSelection
-                        onTriggered: view.command({
-                            type: "editor_selection_fill",
-                            color: view.foregroundBytes(),
-                            opacity: Math.max(0.01, view.paintOpacity / 100)
-                        })
+                        onTriggered: selectionFillDialog.openDialog()
+                    }
+                    MenuItem {
+                        text: qsTr("Stroke…")
+                        enabled: view.documentReady && view.hasSelection
+                        onTriggered: selectionStrokeDialog.openDialog()
                     }
                     MenuItem {
                         text: qsTr("Delete")
@@ -5514,17 +6050,57 @@ Item {
                     property real curDocY: 0
                     property var lassoPoints: []
                     property var polyPoints: []
+                    property var bezierNodes: []
+                    property bool bezierDraggingHandle: false
                     property real polyHoverDocX: 0
                     property real polyHoverDocY: 0
                     property bool polyHoveringClose: false
                     property string polyDragMode: "replace"
 
-                    onVisibleChanged: if (!visible && polyPoints.length > 0) cancelPolygon()
+                    onVisibleChanged: {
+                        if (!visible && polyPoints.length > 0) cancelPolygon()
+                        if (!visible && bezierNodes.length > 0) cancelBezier()
+                    }
                     Connections {
                         target: view
                         function onSelectShapeChanged() {
                             if (selectOverlay.polyPoints.length > 0) selectOverlay.cancelPolygon()
+                            if (selectOverlay.bezierNodes.length > 0) selectOverlay.cancelBezier()
                         }
+                    }
+
+                    function finishBezier() {
+                        var nodes = selectOverlay.bezierNodes
+                        selectOverlay.bezierNodes = []
+                        selectOverlay.bezierDraggingHandle = false
+                        selectOverlay.polyHoveringClose = false
+                        selectDragCanvas.requestPaint()
+                        if (nodes.length >= 3) {
+                            var pts = drawOverlay.tessellateBezier(nodes, true)
+                            if (pts.length >= 3) {
+                                view.command({
+                                    type: "editor_select_lasso",
+                                    points: pts,
+                                    mode: selectOverlay.polyDragMode,
+                                    feather: view.selectFeather
+                                })
+                            }
+                        }
+                    }
+
+                    function cancelBezier() {
+                        selectOverlay.bezierNodes = []
+                        selectOverlay.bezierDraggingHandle = false
+                        selectOverlay.polyHoveringClose = false
+                        selectDragCanvas.requestPaint()
+                    }
+
+                    function popBezierNode() {
+                        if (selectOverlay.bezierNodes.length === 0) return
+                        selectOverlay.bezierNodes = selectOverlay.bezierNodes.slice(0, selectOverlay.bezierNodes.length - 1)
+                        selectOverlay.bezierDraggingHandle = false
+                        selectOverlay.polyHoveringClose = false
+                        selectDragCanvas.requestPaint()
                     }
 
                     function finishPolygon() {
@@ -5569,6 +6145,69 @@ Item {
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
+                            if (view.selectShape === "bezier" && selectOverlay.bezierNodes.length > 0) {
+                                var bnodes = selectOverlay.bezierNodes
+                                var bn = bnodes.length
+                                ctx.save()
+                                ctx.lineWidth = 1.5
+                                ctx.beginPath()
+                                ctx.moveTo(view.docToHostX(bnodes[0].x), view.docToHostY(bnodes[0].y))
+                                for (var bi = 1; bi < bn; ++bi) {
+                                    var ba = bnodes[bi - 1]
+                                    var bb = bnodes[bi]
+                                    ctx.bezierCurveTo(
+                                        view.docToHostX(ba.outX), view.docToHostY(ba.outY),
+                                        view.docToHostX(bb.inX), view.docToHostY(bb.inY),
+                                        view.docToHostX(bb.x), view.docToHostY(bb.y))
+                                }
+                                if (bn >= 3 && selectOverlay.polyHoveringClose) {
+                                    var bl = bnodes[bn - 1]
+                                    var bf = bnodes[0]
+                                    ctx.bezierCurveTo(
+                                        view.docToHostX(bl.outX), view.docToHostY(bl.outY),
+                                        view.docToHostX(bf.inX), view.docToHostY(bf.inY),
+                                        view.docToHostX(bf.x), view.docToHostY(bf.y))
+                                    ctx.closePath()
+                                } else if (!selectOverlay.bezierDraggingHandle) {
+                                    var bt = bnodes[bn - 1]
+                                    ctx.bezierCurveTo(
+                                        view.docToHostX(bt.outX), view.docToHostY(bt.outY),
+                                        view.docToHostX(selectOverlay.polyHoverDocX), view.docToHostY(selectOverlay.polyHoverDocY),
+                                        view.docToHostX(selectOverlay.polyHoverDocX), view.docToHostY(selectOverlay.polyHoverDocY))
+                                }
+                                ctx.strokeStyle = "#d0000000"
+                                ctx.stroke()
+                                ctx.setLineDash([5, 5])
+                                ctx.strokeStyle = "#f0ffffff"
+                                ctx.stroke()
+                                ctx.setLineDash([])
+                                for (var bni = 0; bni < bn; ++bni) {
+                                    var bnd = bnodes[bni]
+                                    var bax = view.docToHostX(bnd.x)
+                                    var bay = view.docToHostY(bnd.y)
+                                    var binX = view.docToHostX(bnd.inX)
+                                    var binY = view.docToHostY(bnd.inY)
+                                    var boutX = view.docToHostX(bnd.outX)
+                                    var boutY = view.docToHostY(bnd.outY)
+                                    ctx.strokeStyle = "#4a9eff"
+                                    ctx.lineWidth = 1.2
+                                    if (Math.hypot(binX - bax, binY - bay) > 1.5) {
+                                        ctx.beginPath(); ctx.moveTo(bax, bay); ctx.lineTo(binX, binY); ctx.stroke()
+                                        ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(binX, binY, 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+                                    }
+                                    if (Math.hypot(boutX - bax, boutY - bay) > 1.5) {
+                                        ctx.beginPath(); ctx.moveTo(bax, bay); ctx.lineTo(boutX, boutY); ctx.stroke()
+                                        ctx.fillStyle = "#ffffff"; ctx.beginPath(); ctx.arc(boutX, boutY, 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+                                    }
+                                    var bFirstClose = bni === 0 && bn >= 3 && selectOverlay.polyHoveringClose
+                                    ctx.fillStyle = bFirstClose ? view.theme.accent : "#ffffff"
+                                    ctx.strokeStyle = "#111111"
+                                    ctx.fillRect(bax - 3.5, bay - 3.5, 7, 7)
+                                    ctx.strokeRect(bax - 3.5, bay - 3.5, 7, 7)
+                                }
+                                ctx.restore()
+                                return
+                            }
                             if (view.selectShape === "polygon" && selectOverlay.polyPoints.length > 0) {
                                 var ppts = selectOverlay.polyPoints
                                 ctx.save()
@@ -5666,7 +6305,7 @@ Item {
                                      : (alt
                                         ? "subtract"
                                         : ((shift && view.hasSelection) ? "add" : view.selectMode))
-                            if (view.selectShape === "wand") {
+                            if (view.selectShape === "wand" || view.selectShape === "similar") {
                                 if (rawDx < 0 || rawDy < 0 || rawDx >= view.documentWidth || rawDy >= view.documentHeight) {
                                     if (view.hasSelection) view.command({ type: "editor_select_clear" })
                                     return
@@ -5676,11 +6315,32 @@ Item {
                                     x: Math.floor(dx),
                                     y: Math.floor(dy),
                                     tolerance: view.wandTolerance,
-                                    contiguous: view.wandContiguous,
+                                    contiguous: view.selectShape === "similar" ? false : view.wandContiguous,
                                     sample_all_layers: view.wandSampleAllLayers,
                                     mode: mode,
                                     feather: view.selectFeather
                                 })
+                                return
+                            }
+                            if (view.selectShape === "bezier") {
+                                if (selectOverlay.bezierNodes.length === 0) {
+                                    selectOverlay.polyDragMode = mode
+                                }
+                                var bnodes = selectOverlay.bezierNodes.slice()
+                                if (bnodes.length >= 3) {
+                                    var bfx = view.docToHostX(bnodes[0].x)
+                                    var bfy = view.docToHostY(bnodes[0].y)
+                                    if (Math.hypot(mouse.x - bfx, mouse.y - bfy) <= 10) {
+                                        selectOverlay.finishBezier()
+                                        return
+                                    }
+                                }
+                                bnodes.push({ x: dx, y: dy, inX: dx, inY: dy, outX: dx, outY: dy })
+                                selectOverlay.bezierNodes = bnodes
+                                selectOverlay.bezierDraggingHandle = true
+                                selectOverlay.polyHoverDocX = dx
+                                selectOverlay.polyHoverDocY = dy
+                                selectDragCanvas.requestPaint()
                                 return
                             }
                             if (view.selectShape === "polygon") {
@@ -5730,11 +6390,40 @@ Item {
                         onDoubleClicked: function(mouse) {
                             if (view.selectShape === "polygon" && selectOverlay.polyPoints.length >= 3) {
                                 selectOverlay.finishPolygon()
+                            } else if (view.selectShape === "bezier" && selectOverlay.bezierNodes.length >= 3) {
+                                if (selectOverlay.bezierNodes.length > 3) {
+                                    selectOverlay.bezierNodes = selectOverlay.bezierNodes.slice(0, selectOverlay.bezierNodes.length - 1)
+                                }
+                                selectOverlay.finishBezier()
                             }
                         }
                         onPositionChanged: function(mouse) {
                             var rawDx = view.hostToDocX(mouse.x)
                             var rawDy = view.hostToDocY(mouse.y)
+                            if (view.selectShape === "bezier" && selectOverlay.bezierNodes.length > 0) {
+                                var cdx = Math.max(0, Math.min(view.documentWidth, rawDx))
+                                var cdy = Math.max(0, Math.min(view.documentHeight, rawDy))
+                                selectOverlay.polyHoverDocX = cdx
+                                selectOverlay.polyHoverDocY = cdy
+                                if (selectOverlay.bezierDraggingHandle) {
+                                    var bnodes = selectOverlay.bezierNodes.slice()
+                                    var last = bnodes[bnodes.length - 1]
+                                    var breakSym = (mouse.modifiers & Qt.AltModifier) !== 0
+                                    bnodes[bnodes.length - 1] = {
+                                        x: last.x, y: last.y,
+                                        inX: breakSym ? last.inX : (last.x - (cdx - last.x)),
+                                        inY: breakSym ? last.inY : (last.y - (cdy - last.y)),
+                                        outX: cdx, outY: cdy
+                                    }
+                                    selectOverlay.bezierNodes = bnodes
+                                } else if (selectOverlay.bezierNodes.length >= 3) {
+                                    var b0 = selectOverlay.bezierNodes[0]
+                                    selectOverlay.polyHoveringClose =
+                                        Math.hypot(mouse.x - view.docToHostX(b0.x), mouse.y - view.docToHostY(b0.y)) <= 10
+                                }
+                                selectDragCanvas.requestPaint()
+                                return
+                            }
                             if (view.selectShape === "polygon" && selectOverlay.polyPoints.length > 0) {
                                 selectOverlay.polyHoverDocX = Math.max(0, Math.min(view.documentWidth, rawDx))
                                 selectOverlay.polyHoverDocY = Math.max(0, Math.min(view.documentHeight, rawDy))
@@ -5784,6 +6473,11 @@ Item {
                             selectDragCanvas.requestPaint()
                         }
                         onReleased: function(mouse) {
+                            if (view.selectShape === "bezier" && selectOverlay.bezierDraggingHandle) {
+                                selectOverlay.bezierDraggingHandle = false
+                                selectDragCanvas.requestPaint()
+                                return
+                            }
                             if (selectOverlay.movingSelection) {
                                 selectOverlay.movingSelection = false
                                 var mdx = Math.round(selectOverlay.moveDx)
@@ -5847,6 +6541,1060 @@ Item {
                     }
                 }
 
+                // ------------------------------------------ Liquify warp tool (live RAM warp)
+                Item {
+                    id: liquifyOverlay
+                    objectName: "liquifyOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "liquify" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    property var pendingPts: []
+                    property var lastDocPt: null
+                    property bool dragging: false
+                    property real cursorX: -1000
+                    property real cursorY: -1000
+                    property bool cursorInside: false
+
+                    Timer {
+                        id: liquifyFlushTimer
+                        interval: 24
+                        repeat: true
+                        onTriggered: {
+                            if (!liquifyOverlay.dragging) return
+                            if (liquifyOverlay.pendingPts.length > 0) {
+                                var batch = liquifyOverlay.pendingPts.slice()
+                                liquifyOverlay.pendingPts = []
+                                view.command({ type: "editor_live_stroke_step", points: batch })
+                            } else if (view.liquifyMode !== "push" && liquifyOverlay.lastDocPt) {
+                                // Continuous Bloat / Pucker / Twirl while holding mouse stationary
+                                view.command({ type: "editor_live_stroke_step", points: [liquifyOverlay.lastDocPt] })
+                            }
+                        }
+                    }
+
+                    // Circular Liquify brush cursor
+                    Rectangle {
+                        visible: liquifyOverlay.cursorInside
+                        readonly property real d: Math.max(8, view.liquifyRadius * 2 * view.zoom)
+                        width: d
+                        height: d
+                        radius: d / 2
+                        x: liquifyOverlay.cursorX - d / 2
+                        y: liquifyOverlay.cursorY - d / 2
+                        color: "transparent"
+                        border.width: 1.5
+                        border.color: "#ffffff"
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            radius: width / 2
+                            color: "transparent"
+                            border.width: 1
+                            border.color: Qt.rgba(0, 0, 0, 0.65)
+                        }
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 4; height: 4; radius: 2
+                            color: view.theme.accent
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.BlankCursor
+                        onEntered: liquifyOverlay.cursorInside = true
+                        onExited: liquifyOverlay.cursorInside = false
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            liquifyOverlay.cursorX = mouse.x
+                            liquifyOverlay.cursorY = mouse.y
+                            var dx = view.hostToDocX(mouse.x)
+                            var dy = view.hostToDocY(mouse.y)
+                            liquifyOverlay.lastDocPt = [dx, dy]
+                            liquifyOverlay.pendingPts = []
+                            liquifyOverlay.dragging = true
+                            view.command({
+                                type: "editor_live_stroke_begin",
+                                kind: "liquify",
+                                mode: view.liquifyMode,
+                                radius: view.liquifyRadius,
+                                strength: view.liquifyStrength / 100.0,
+                                x: dx,
+                                y: dy
+                            })
+                            liquifyFlushTimer.start()
+                        }
+                        onPositionChanged: function(mouse) {
+                            liquifyOverlay.cursorX = mouse.x
+                            liquifyOverlay.cursorY = mouse.y
+                            liquifyOverlay.cursorInside = true
+                            if (!liquifyOverlay.dragging) return
+                            var dx = view.hostToDocX(mouse.x)
+                            var dy = view.hostToDocY(mouse.y)
+                            var last = liquifyOverlay.lastDocPt
+                            if (!last || Math.hypot(dx - last[0], dy - last[1]) >= 2.0) {
+                                liquifyOverlay.lastDocPt = [dx, dy]
+                                liquifyOverlay.pendingPts.push([dx, dy])
+                            }
+                        }
+                        onReleased: {
+                            if (!liquifyOverlay.dragging) return
+                            liquifyFlushTimer.stop()
+                            liquifyOverlay.dragging = false
+                            if (liquifyOverlay.pendingPts.length > 0) {
+                                var batch = liquifyOverlay.pendingPts.slice()
+                                liquifyOverlay.pendingPts = []
+                                view.command({ type: "editor_live_stroke_step", points: batch })
+                            }
+                            liquifyOverlay.lastDocPt = null
+                            view.command({ type: "editor_live_stroke_end", commit: true })
+                        }
+                        onCanceled: {
+                            if (!liquifyOverlay.dragging) return
+                            liquifyFlushTimer.stop()
+                            liquifyOverlay.dragging = false
+                            liquifyOverlay.pendingPts = []
+                            liquifyOverlay.lastDocPt = null
+                            view.command({ type: "editor_live_stroke_end", commit: false })
+                        }
+                    }
+                }
+
+                // ------------------------------------------ Zoom tool (click & scrubby drag)
+                Item {
+                    id: zoomOverlay
+                    objectName: "zoomOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "zoom" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        cursorShape: Qt.CrossCursor
+                        property real pressX: 0
+                        property real pressY: 0
+                        property real lastX: 0
+                        property bool scrubbed: false
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            pressX = mouse.x
+                            pressY = mouse.y
+                            lastX = mouse.x
+                            scrubbed = false
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed || mouse.button === Qt.RightButton) return
+                            var dx = mouse.x - lastX
+                            if (!scrubbed && Math.abs(mouse.x - pressX) < 5) return
+                            scrubbed = true
+                            lastX = mouse.x
+                            if (Math.abs(dx) >= 1) {
+                                var factor = Math.pow(1.01, dx)
+                                view.zoomAt(factor, pressX, pressY)
+                            }
+                        }
+                        onReleased: function(mouse) {
+                            if (scrubbed) return
+                            var alt = (mouse.modifiers & Qt.AltModifier) !== 0
+                            var zoomOut = (mouse.button === Qt.RightButton)
+                                          || (view.zoomToolMode === "out" ? !alt : alt)
+                            view.zoomAt(zoomOut ? (1 / 1.25) : 1.25, mouse.x, mouse.y)
+                        }
+                    }
+                }
+
+                // ------------------------------------------ Krita Fill (Paint Bucket)
+                Item {
+                    id: fillOverlay
+                    objectName: "fillOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "fill" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        cursorShape: Qt.CrossCursor
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            var docX = Math.floor(view.hostToDocX(mouse.x))
+                            var docY = Math.floor(view.hostToDocY(mouse.y))
+                            if (docX < 0 || docY < 0 || docX >= view.documentWidth || docY >= view.documentHeight) return
+                            var col = view.fillSource === "background"
+                                      ? view.backgroundBytes()
+                                      : view.foregroundBytes()
+                            view.command({
+                                type: "editor_flood_fill",
+                                x: docX,
+                                y: docY,
+                                color: col,
+                                opacity: Math.max(0.01, view.fillOpacity / 100.0),
+                                tolerance: view.fillTolerance,
+                                grow: view.fillGrow,
+                                contiguous: view.fillContiguous,
+                                sample_all_layers: view.fillSampleAllLayers
+                            })
+                        }
+                    }
+                }
+
+                // ------------------------------------------ Krita Gradient tool
+                Item {
+                    id: gradientOverlay
+                    objectName: "gradientOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "gradient" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    property bool dragging: false
+                    property string dragTarget: "new" // "new" | "start" | "end"
+                    property bool hasDraft: false
+                    property real startDocX: 0
+                    property real startDocY: 0
+                    property real endDocX: 0
+                    property real endDocY: 0
+                    property bool shiftHeld: false
+
+                    onVisibleChanged: if (!visible && hasDraft) cancelDraft()
+                    Connections {
+                        target: view
+                        function onGradientShapeChanged() { gradientOverlay.repaintPreview() }
+                        function onGradientColorModeChanged() { gradientOverlay.repaintPreview() }
+                        function onGradientStopsChanged() { gradientOverlay.repaintPreview() }
+                        function onGradientReverseChanged() { gradientOverlay.repaintPreview() }
+                        function onGradientOpacityChanged() { gradientOverlay.repaintPreview() }
+                        function onForegroundColorChanged() { gradientOverlay.repaintPreview() }
+                        function onBackgroundColorChanged() { gradientOverlay.repaintPreview() }
+                        function onZoomChanged() { gradientOverlay.repaintPreview() }
+                        function onOffsetXChanged() { gradientOverlay.repaintPreview() }
+                        function onOffsetYChanged() { gradientOverlay.repaintPreview() }
+                    }
+
+                    function repaintPreview() {
+                        if (gradientOverlay.visible) gradientPreviewCanvas.requestPaint()
+                    }
+
+                    function cancelDraft() {
+                        gradientOverlay.dragging = false
+                        gradientOverlay.hasDraft = false
+                        gradientPreviewCanvas.requestPaint()
+                    }
+
+                    function applyDraft() {
+                        if (!gradientOverlay.hasDraft) return
+                        var sx = gradientOverlay.startDocX
+                        var sy = gradientOverlay.startDocY
+                        var ex = gradientOverlay.endDocX
+                        var ey = gradientOverlay.endDocY
+                        gradientOverlay.hasDraft = false
+                        gradientOverlay.dragging = false
+                        gradientPreviewCanvas.requestPaint()
+                        if (Math.hypot(ex - sx, ey - sy) < 1.0) return
+                        var resolved = view.resolvedGradientStops()
+                        var wireStops = []
+                        for (var i = 0; i < resolved.length; ++i) {
+                            wireStops.push({
+                                pos: resolved[i].pos,
+                                color: view.colorBytes(resolved[i].hex),
+                                alpha: resolved[i].alpha
+                            })
+                        }
+                        var first = wireStops[0]
+                        var last = wireStops[wireStops.length - 1]
+                        view.command({
+                            type: "editor_gradient",
+                            start: [sx, sy],
+                            end: [ex, ey],
+                            start_color: first.color,
+                            start_alpha: first.alpha,
+                            end_color: last.color,
+                            end_alpha: last.alpha,
+                            stops: wireStops,
+                            opacity: Math.max(0.01, view.gradientOpacity / 100.0),
+                            shape: view.gradientShape,
+                            repeat: view.gradientRepeat,
+                            reverse: view.gradientReverse,
+                            dither: view.gradientDither,
+                            blend_mode: view.gradientBlendMode
+                        })
+                    }
+
+                    Canvas {
+                        id: gradientPreviewCanvas
+                        anchors.fill: parent
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            if (!gradientOverlay.dragging && !gradientOverlay.hasDraft) return
+
+                            var x0 = view.docToHostX(gradientOverlay.startDocX)
+                            var y0 = view.docToHostY(gradientOverlay.startDocY)
+                            var x1 = view.docToHostX(gradientOverlay.endDocX)
+                            var y1 = view.docToHostY(gradientOverlay.endDocY)
+                            var imgL = view.docToHostX(0)
+                            var imgT = view.docToHostY(0)
+                            var imgW = view.docToHostX(view.displayedWidth) - imgL
+                            var imgH = view.docToHostY(view.displayedHeight) - imgT
+
+                            function rgbaCss(hex, alpha) {
+                                var b = view.colorBytes(hex)
+                                return "rgba(" + b[0] + "," + b[1] + "," + b[2] + "," + alpha.toFixed(3) + ")"
+                            }
+
+                            var stops = view.resolvedGradientStops()
+                            if (view.gradientReverse) {
+                                var rev = []
+                                for (var ri = stops.length - 1; ri >= 0; --ri) {
+                                    rev.push({ pos: 1.0 - stops[ri].pos, hex: stops[ri].hex, alpha: stops[ri].alpha })
+                                }
+                                stops = rev
+                            }
+
+                            // 1. Live clipped gradient preview over document frame
+                            if (Math.hypot(x1 - x0, y1 - y0) >= 2 && imgW > 1 && imgH > 1) {
+                                ctx.save()
+                                ctx.beginPath()
+                                ctx.rect(imgL, imgT, imgW, imgH)
+                                ctx.clip()
+                                ctx.globalAlpha = Math.max(0.05, view.gradientOpacity / 100.0)
+                                var grad = null
+                                if (view.gradientShape === "radial") {
+                                    var rad = Math.hypot(x1 - x0, y1 - y0)
+                                    grad = ctx.createRadialGradient(x0, y0, 0, x0, y0, Math.max(1, rad))
+                                    for (var si = 0; si < stops.length; ++si) {
+                                        grad.addColorStop(stops[si].pos, rgbaCss(stops[si].hex, stops[si].alpha))
+                                    }
+                                } else if (view.gradientShape === "bilinear") {
+                                    var bx0 = x0 - (x1 - x0)
+                                    var by0 = y0 - (y1 - y0)
+                                    grad = ctx.createLinearGradient(bx0, by0, x1, y1)
+                                    for (var bi = stops.length - 1; bi >= 0; --bi) {
+                                        grad.addColorStop(0.5 - stops[bi].pos * 0.5, rgbaCss(stops[bi].hex, stops[bi].alpha))
+                                    }
+                                    for (var bi2 = 0; bi2 < stops.length; ++bi2) {
+                                        grad.addColorStop(0.5 + stops[bi2].pos * 0.5, rgbaCss(stops[bi2].hex, stops[bi2].alpha))
+                                    }
+                                } else {
+                                    grad = ctx.createLinearGradient(x0, y0, x1, y1)
+                                    for (var li = 0; li < stops.length; ++li) {
+                                        grad.addColorStop(stops[li].pos, rgbaCss(stops[li].hex, stops[li].alpha))
+                                    }
+                                }
+                                if (grad) {
+                                    ctx.fillStyle = grad
+                                    ctx.fillRect(imgL, imgT, imgW, imgH)
+                                }
+                                ctx.restore()
+                            }
+
+                            // 2. Guide vector & draggable Start/End handles
+                            ctx.save()
+                            ctx.beginPath()
+                            ctx.moveTo(x0, y0)
+                            ctx.lineTo(x1, y1)
+                            ctx.strokeStyle = "#cc000000"
+                            ctx.lineWidth = 2.5
+                            ctx.stroke()
+                            ctx.strokeStyle = "#ffffff"
+                            ctx.lineWidth = 1.2
+                            ctx.setLineDash([4, 4])
+                            ctx.stroke()
+                            ctx.setLineDash([])
+
+                            function drawKnob(kx, ky, stop, isStart) {
+                                ctx.beginPath()
+                                ctx.arc(kx, ky, 7, 0, Math.PI * 2)
+                                ctx.fillStyle = rgbaCss(stop.hex, Math.max(0.25, stop.alpha))
+                                ctx.fill()
+                                ctx.strokeStyle = "#111111"
+                                ctx.lineWidth = 2.2
+                                ctx.stroke()
+                                ctx.strokeStyle = isStart ? "#4a9eff" : "#ffffff"
+                                ctx.lineWidth = 1.3
+                                ctx.stroke()
+                            }
+                            if (stops.length >= 2) {
+                                drawKnob(x0, y0, stops[0], true)
+                                drawKnob(x1, y1, stops[stops.length - 1], false)
+                            }
+                            ctx.restore()
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        hoverEnabled: true
+                        cursorShape: Qt.CrossCursor
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            var dx = view.hostToDocX(mouse.x)
+                            var dy = view.hostToDocY(mouse.y)
+                            gradientOverlay.shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                            // Allow grabbing existing Start or End handle when interactive draft is active
+                            if (gradientOverlay.hasDraft) {
+                                var sx = view.docToHostX(gradientOverlay.startDocX)
+                                var sy = view.docToHostY(gradientOverlay.startDocY)
+                                var ex = view.docToHostX(gradientOverlay.endDocX)
+                                var ey = view.docToHostY(gradientOverlay.endDocY)
+                                if (Math.hypot(mouse.x - sx, mouse.y - sy) <= 12) {
+                                    gradientOverlay.dragTarget = "start"
+                                    gradientOverlay.dragging = true
+                                    return
+                                }
+                                if (Math.hypot(mouse.x - ex, mouse.y - ey) <= 12) {
+                                    gradientOverlay.dragTarget = "end"
+                                    gradientOverlay.dragging = true
+                                    return
+                                }
+                            }
+                            gradientOverlay.dragTarget = "new"
+                            gradientOverlay.dragging = true
+                            gradientOverlay.hasDraft = true
+                            gradientOverlay.startDocX = dx
+                            gradientOverlay.startDocY = dy
+                            gradientOverlay.endDocX = dx
+                            gradientOverlay.endDocY = dy
+                            gradientPreviewCanvas.requestPaint()
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!gradientOverlay.dragging) return
+                            var dx = view.hostToDocX(mouse.x)
+                            var dy = view.hostToDocY(mouse.y)
+                            var shift = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                            gradientOverlay.shiftHeld = shift
+                            if (gradientOverlay.dragTarget === "start") {
+                                var sp = shift
+                                         ? drawOverlay.snapAngle(gradientOverlay.endDocX, gradientOverlay.endDocY, dx, dy)
+                                         : [dx, dy]
+                                gradientOverlay.startDocX = sp[0]
+                                gradientOverlay.startDocY = sp[1]
+                            } else {
+                                var ep = shift
+                                         ? drawOverlay.snapAngle(gradientOverlay.startDocX, gradientOverlay.startDocY, dx, dy)
+                                         : [dx, dy]
+                                gradientOverlay.endDocX = ep[0]
+                                gradientOverlay.endDocY = ep[1]
+                            }
+                            gradientPreviewCanvas.requestPaint()
+                        }
+                        onReleased: function(mouse) {
+                            if (!gradientOverlay.dragging) return
+                            gradientOverlay.dragging = false
+                            if (Math.hypot(gradientOverlay.endDocX - gradientOverlay.startDocX,
+                                           gradientOverlay.endDocY - gradientOverlay.startDocY) < 1.0) {
+                                gradientOverlay.hasDraft = false
+                                gradientPreviewCanvas.requestPaint()
+                                return
+                            }
+                            if (!view.gradientInteractive) {
+                                gradientOverlay.applyDraft()
+                            } else {
+                                gradientPreviewCanvas.requestPaint()
+                            }
+                        }
+                        onDoubleClicked: function(mouse) {
+                            if (gradientOverlay.hasDraft) gradientOverlay.applyDraft()
+                        }
+                    }
+                }
+
+                // ------------------------------------------ Krita shapes & curves
+                // Interactive vector/shape preview overlay for Line, Polyline,
+                // Bezier Curve, Rectangle, Ellipse, and Polygon tools. Commits
+                // one `editor_draw_shape` command to Core so active layer offset
+                // and active selection masking are applied atomically.
+                Item {
+                    id: drawOverlay
+                    objectName: "drawOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "draw" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    property bool dragging: false
+                    property real startDocX: 0
+                    property real startDocY: 0
+                    property real curDocX: 0
+                    property real curDocY: 0
+                    property bool shiftHeld: false
+                    property bool altHeld: false
+                    // Multi-point vertices for Polyline / Polygon: [[x, y], ...]
+                    property var pathPoints: []
+                    // Cubic Bezier anchors: [{ x, y, inX, inY, outX, outY }, ...]
+                    property var bezierNodes: []
+                    property bool bezierDraggingHandle: false
+                    property real hoverDocX: 0
+                    property real hoverDocY: 0
+                    property bool hoverInside: false
+                    property bool hoveringClose: false
+                    readonly property bool hasDraftPath: pathPoints.length > 0 || bezierNodes.length > 0
+
+                    onVisibleChanged: if (!visible && hasDraftPath) cancelDraft()
+                    Connections {
+                        target: view
+                        function onDrawShapeChanged() {
+                            if (drawOverlay.hasDraftPath) drawOverlay.cancelDraft()
+                        }
+                        function onZoomChanged() { if (drawOverlay.visible) drawPreviewCanvas.requestPaint() }
+                        function onOffsetXChanged() { if (drawOverlay.visible) drawPreviewCanvas.requestPaint() }
+                        function onOffsetYChanged() { if (drawOverlay.visible) drawPreviewCanvas.requestPaint() }
+                    }
+
+                    function snapAngle(ax, ay, bx, by) {
+                        var dx = bx - ax
+                        var dy = by - ay
+                        var len = Math.sqrt(dx * dx + dy * dy)
+                        if (len < 1e-4) return [bx, by]
+                        var step = Math.PI / 12 // 15 deg
+                        var angle = Math.round(Math.atan2(dy, dx) / step) * step
+                        return [ax + Math.cos(angle) * len, ay + Math.sin(angle) * len]
+                    }
+
+                    function computeBoxEndpoints(ax, ay, bx, by, square, fromCenter) {
+                        var dx = bx - ax
+                        var dy = by - ay
+                        if (square) {
+                            var side = Math.max(Math.abs(dx), Math.abs(dy))
+                            dx = dx >= 0 ? side : -side
+                            dy = dy >= 0 ? side : -side
+                        }
+                        if (fromCenter) {
+                            return [[ax - dx, ay - dy], [ax + dx, ay + dy]]
+                        }
+                        return [[ax, ay], [ax + dx, ay + dy]]
+                    }
+
+                    /// Inkscape-style Regular Polygon / Star vertex generator centered at (cx, cy).
+                    function computeStarPolygonPoints(cx, cy, ex, ey, snap) {
+                        var endPt = snap ? drawOverlay.snapAngle(cx, cy, ex, ey) : [ex, ey]
+                        var outerR = Math.hypot(endPt[0] - cx, endPt[1] - cy)
+                        if (outerR < 0.5) return []
+                        var baseAngle = Math.atan2(endPt[1] - cy, endPt[0] - cx)
+                        var n = Math.max(3, Math.min(24, view.drawStarCorners))
+                        var pts = []
+                        if (view.drawStarIsPolygon) {
+                            for (var i = 0; i < n; ++i) {
+                                var a = baseAngle + (Math.PI * 2 * i) / n
+                                pts.push([cx + Math.cos(a) * outerR, cy + Math.sin(a) * outerR])
+                            }
+                        } else {
+                            var innerR = outerR * Math.max(0.1, Math.min(0.95, view.drawStarSpokeRatio))
+                            var total = n * 2
+                            for (var j = 0; j < total; ++j) {
+                                var ang = baseAngle + (Math.PI * 2 * j) / total
+                                var r = (j % 2 === 0) ? outerR : innerR
+                                pts.push([cx + Math.cos(ang) * r, cy + Math.sin(ang) * r])
+                            }
+                        }
+                        return pts
+                    }
+
+                    function tessellateBezier(nodes, closed) {
+                        var pts = []
+                        var n = nodes.length
+                        if (n === 0) return pts
+                        if (n === 1) return [[nodes[0].x, nodes[0].y]]
+                        var segCount = closed ? n : (n - 1)
+                        for (var i = 0; i < segCount; ++i) {
+                            var a = nodes[i]
+                            var b = nodes[(i + 1) % n]
+                            var p0x = a.x, p0y = a.y
+                            var p1x = a.outX, p1y = a.outY
+                            var p2x = b.inX, p2y = b.inY
+                            var p3x = b.x, p3y = b.y
+                            var chord = Math.hypot(p3x - p0x, p3y - p0y)
+                            var ctrl = Math.hypot(p1x - p0x, p1y - p0y)
+                                     + Math.hypot(p2x - p1x, p2y - p1y)
+                                     + Math.hypot(p3x - p2x, p3y - p2y)
+                            var approxLen = 0.5 * (chord + ctrl)
+                            var steps = Math.max(8, Math.min(96, Math.ceil(approxLen / 2.0)))
+                            var startJ = (i === 0) ? 0 : 1
+                            for (var j = startJ; j <= steps; ++j) {
+                                var t = j / steps
+                                var u = 1 - t
+                                var u2 = u * u
+                                var t2 = t * t
+                                var x = u2 * u * p0x + 3 * u2 * t * p1x + 3 * u * t2 * p2x + t2 * t * p3x
+                                var y = u2 * u * p0y + 3 * u2 * t * p1y + 3 * u * t2 * p2y + t2 * t * p3y
+                                pts.push([x, y])
+                            }
+                        }
+                        return pts
+                    }
+
+                    function commitShape(kind, points, closed) {
+                        var strokeColor = view.drawColorForMode(view.drawOutlineMode)
+                        var fillAllowed = (kind === "rect" || kind === "ellipse" || kind === "polygon"
+                                           || (kind === "bezier" && closed))
+                        var fillColor = fillAllowed ? view.drawColorForMode(view.drawFillMode) : null
+                        if (!strokeColor && !fillColor) return
+                        var cmd = {
+                            type: "editor_draw_shape",
+                            kind: kind,
+                            points: points,
+                            closed: !!closed,
+                            stroke_width: view.drawStrokeWidth,
+                            stroke_opacity: view.drawStrokeOpacity / 100.0,
+                            fill_opacity: view.drawFillOpacity / 100.0
+                        }
+                        if (strokeColor) cmd.stroke_color = strokeColor
+                        if (fillColor) cmd.fill_color = fillColor
+                        view.command(cmd)
+                    }
+
+                    function finishPath(forceClose) {
+                        if (view.drawShape === "polyline") {
+                            var pts = drawOverlay.pathPoints
+                            drawOverlay.pathPoints = []
+                            drawOverlay.hoveringClose = false
+                            drawPreviewCanvas.requestPaint()
+                            if (pts.length >= 2) {
+                                drawOverlay.commitShape("polyline", pts, false)
+                            }
+                        } else if (view.drawShape === "polygon") {
+                            var ppts = drawOverlay.pathPoints
+                            drawOverlay.pathPoints = []
+                            drawOverlay.hoveringClose = false
+                            drawPreviewCanvas.requestPaint()
+                            if (ppts.length >= 3) {
+                                drawOverlay.commitShape("polygon", ppts, true)
+                            }
+                        } else if (view.drawShape === "bezier") {
+                            var nodes = drawOverlay.bezierNodes
+                            drawOverlay.bezierNodes = []
+                            drawOverlay.bezierDraggingHandle = false
+                            drawOverlay.hoveringClose = false
+                            drawPreviewCanvas.requestPaint()
+                            if (nodes.length >= 2) {
+                                var closed = !!forceClose || view.drawBezierClosed
+                                var sampled = drawOverlay.tessellateBezier(nodes, closed)
+                                drawOverlay.commitShape("bezier", sampled, closed)
+                            }
+                        }
+                    }
+
+                    function popLastPoint() {
+                        if (drawOverlay.pathPoints.length > 0) {
+                            drawOverlay.pathPoints = drawOverlay.pathPoints.slice(0, drawOverlay.pathPoints.length - 1)
+                            drawOverlay.hoveringClose = false
+                            drawPreviewCanvas.requestPaint()
+                        } else if (drawOverlay.bezierNodes.length > 0) {
+                            drawOverlay.bezierNodes = drawOverlay.bezierNodes.slice(0, drawOverlay.bezierNodes.length - 1)
+                            drawOverlay.bezierDraggingHandle = false
+                            drawOverlay.hoveringClose = false
+                            drawPreviewCanvas.requestPaint()
+                        }
+                    }
+
+                    function cancelDraft() {
+                        drawOverlay.dragging = false
+                        drawOverlay.pathPoints = []
+                        drawOverlay.bezierNodes = []
+                        drawOverlay.bezierDraggingHandle = false
+                        drawOverlay.hoveringClose = false
+                        drawPreviewCanvas.requestPaint()
+                    }
+
+                    Canvas {
+                        id: drawPreviewCanvas
+                        anchors.fill: parent
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var strokeHex = view.drawHexForMode(view.drawOutlineMode)
+                            var fillHex = view.drawHexForMode(view.drawFillMode)
+                            var strokeW = Math.max(1, view.drawStrokeWidth * view.zoom)
+                            var strokeOp = view.drawStrokeOpacity / 100.0
+                            var fillOp = view.drawFillOpacity / 100.0
+
+                            // Helper to draw filled + stroked current path
+                            function paintPath(allowFill) {
+                                if (allowFill && fillHex) {
+                                    ctx.save()
+                                    ctx.globalAlpha = fillOp
+                                    ctx.fillStyle = fillHex
+                                    ctx.fill()
+                                    ctx.restore()
+                                }
+                                if (strokeHex) {
+                                    ctx.save()
+                                    ctx.globalAlpha = strokeOp
+                                    ctx.strokeStyle = strokeHex
+                                    ctx.lineWidth = strokeW
+                                    ctx.lineCap = "round"
+                                    ctx.lineJoin = "round"
+                                    ctx.stroke()
+                                    ctx.restore()
+                                } else {
+                                    // Guide outline when outline is disabled so user sees shape
+                                    ctx.save()
+                                    ctx.strokeStyle = "#4a9eff"
+                                    ctx.lineWidth = 1.25
+                                    ctx.setLineDash([4, 4])
+                                    ctx.stroke()
+                                    ctx.restore()
+                                }
+                            }
+
+                            // 1. Drag shapes: Line / Rect / Ellipse
+                            if (drawOverlay.dragging) {
+                                if (view.drawShape === "line") {
+                                    var endPt = drawOverlay.shiftHeld
+                                                ? drawOverlay.snapAngle(drawOverlay.startDocX, drawOverlay.startDocY,
+                                                                        drawOverlay.curDocX, drawOverlay.curDocY)
+                                                : [drawOverlay.curDocX, drawOverlay.curDocY]
+                                    ctx.beginPath()
+                                    ctx.moveTo(view.docToHostX(drawOverlay.startDocX), view.docToHostY(drawOverlay.startDocY))
+                                    ctx.lineTo(view.docToHostX(endPt[0]), view.docToHostY(endPt[1]))
+                                    paintPath(false)
+                                } else if (view.drawShape === "rect" || view.drawShape === "ellipse") {
+                                    var box = drawOverlay.computeBoxEndpoints(
+                                        drawOverlay.startDocX, drawOverlay.startDocY,
+                                        drawOverlay.curDocX, drawOverlay.curDocY,
+                                        drawOverlay.shiftHeld, drawOverlay.altHeld)
+                                    var hx0 = view.docToHostX(Math.min(box[0][0], box[1][0]))
+                                    var hy0 = view.docToHostY(Math.min(box[0][1], box[1][1]))
+                                    var hx1 = view.docToHostX(Math.max(box[0][0], box[1][0]))
+                                    var hy1 = view.docToHostY(Math.max(box[0][1], box[1][1]))
+                                    ctx.beginPath()
+                                    if (view.drawShape === "rect") {
+                                        ctx.rect(hx0, hy0, hx1 - hx0, hy1 - hy0)
+                                    } else {
+                                        var cx = (hx0 + hx1) * 0.5
+                                        var cy = (hy0 + hy1) * 0.5
+                                        var rx = Math.max(0.5, (hx1 - hx0) * 0.5)
+                                        var ry = Math.max(0.5, (hy1 - hy0) * 0.5)
+                                        ctx.save()
+                                        ctx.translate(cx, cy)
+                                        ctx.scale(rx, ry)
+                                        ctx.arc(0, 0, 1, 0, Math.PI * 2)
+                                        ctx.restore()
+                                    }
+                                    paintPath(true)
+                                } else if (view.drawShape === "star") {
+                                    var spts = drawOverlay.computeStarPolygonPoints(
+                                        drawOverlay.startDocX, drawOverlay.startDocY,
+                                        drawOverlay.curDocX, drawOverlay.curDocY,
+                                        drawOverlay.shiftHeld)
+                                    if (spts.length >= 3) {
+                                        ctx.beginPath()
+                                        ctx.moveTo(view.docToHostX(spts[0][0]), view.docToHostY(spts[0][1]))
+                                        for (var si = 1; si < spts.length; ++si) {
+                                            ctx.lineTo(view.docToHostX(spts[si][0]), view.docToHostY(spts[si][1]))
+                                        }
+                                        ctx.closePath()
+                                        paintPath(true)
+                                    }
+                                }
+                                return
+                            }
+
+                            // 2. Polyline / Polygon
+                            if ((view.drawShape === "polyline" || view.drawShape === "polygon")
+                                    && drawOverlay.pathPoints.length > 0) {
+                                var pts = drawOverlay.pathPoints
+                                var isPoly = view.drawShape === "polygon"
+                                ctx.beginPath()
+                                ctx.moveTo(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]))
+                                for (var i = 1; i < pts.length; ++i) {
+                                    ctx.lineTo(view.docToHostX(pts[i][0]), view.docToHostY(pts[i][1]))
+                                }
+                                if (drawOverlay.hoverInside) {
+                                    var lastP = pts[pts.length - 1]
+                                    var hp = drawOverlay.shiftHeld
+                                             ? drawOverlay.snapAngle(lastP[0], lastP[1], drawOverlay.hoverDocX, drawOverlay.hoverDocY)
+                                             : [drawOverlay.hoverDocX, drawOverlay.hoverDocY]
+                                    ctx.lineTo(view.docToHostX(hp[0]), view.docToHostY(hp[1]))
+                                }
+                                if (isPoly && pts.length >= 2) {
+                                    ctx.closePath()
+                                }
+                                paintPath(isPoly && pts.length >= 3)
+
+                                // Draw vertices
+                                for (var vi = 0; vi < pts.length; ++vi) {
+                                    var vx = view.docToHostX(pts[vi][0])
+                                    var vy = view.docToHostY(pts[vi][1])
+                                    ctx.fillStyle = (vi === 0 && drawOverlay.hoveringClose) ? "#4a9eff" : "#ffffff"
+                                    ctx.strokeStyle = "#111111"
+                                    ctx.lineWidth = 1.5
+                                    ctx.fillRect(vx - 3.5, vy - 3.5, 7, 7)
+                                    ctx.strokeRect(vx - 3.5, vy - 3.5, 7, 7)
+                                }
+                                return
+                            }
+
+                            // 3. Krita Bezier Curve
+                            if (view.drawShape === "bezier" && drawOverlay.bezierNodes.length > 0) {
+                                var nodes = drawOverlay.bezierNodes
+                                var n = nodes.length
+                                ctx.beginPath()
+                                ctx.moveTo(view.docToHostX(nodes[0].x), view.docToHostY(nodes[0].y))
+                                for (var bi = 1; bi < n; ++bi) {
+                                    var a = nodes[bi - 1]
+                                    var b = nodes[bi]
+                                    ctx.bezierCurveTo(
+                                        view.docToHostX(a.outX), view.docToHostY(a.outY),
+                                        view.docToHostX(b.inX), view.docToHostY(b.inY),
+                                        view.docToHostX(b.x), view.docToHostY(b.y))
+                                }
+                                var closePreview = (view.drawBezierClosed || drawOverlay.hoveringClose) && n >= 3
+                                if (closePreview) {
+                                    var lastN = nodes[n - 1]
+                                    var firstN = nodes[0]
+                                    ctx.bezierCurveTo(
+                                        view.docToHostX(lastN.outX), view.docToHostY(lastN.outY),
+                                        view.docToHostX(firstN.inX), view.docToHostY(firstN.inY),
+                                        view.docToHostX(firstN.x), view.docToHostY(firstN.y))
+                                    ctx.closePath()
+                                }
+                                paintPath(closePreview)
+
+                                // Live rubber-band curve to hover point when not dragging handle
+                                if (!drawOverlay.bezierDraggingHandle && drawOverlay.hoverInside && !drawOverlay.hoveringClose) {
+                                    var tail = nodes[n - 1]
+                                    ctx.save()
+                                    ctx.beginPath()
+                                    ctx.moveTo(view.docToHostX(tail.x), view.docToHostY(tail.y))
+                                    ctx.bezierCurveTo(
+                                        view.docToHostX(tail.outX), view.docToHostY(tail.outY),
+                                        view.docToHostX(drawOverlay.hoverDocX), view.docToHostY(drawOverlay.hoverDocY),
+                                        view.docToHostX(drawOverlay.hoverDocX), view.docToHostY(drawOverlay.hoverDocY))
+                                    ctx.strokeStyle = "#4a9eff"
+                                    ctx.lineWidth = 1.25
+                                    ctx.setLineDash([4, 4])
+                                    ctx.stroke()
+                                    ctx.restore()
+                                }
+
+                                // Draw Bezier tangent handles and anchor squares
+                                for (var ni = 0; ni < n; ++ni) {
+                                    var nd = nodes[ni]
+                                    var ax = view.docToHostX(nd.x)
+                                    var ay = view.docToHostY(nd.y)
+                                    var inX = view.docToHostX(nd.inX)
+                                    var inY = view.docToHostY(nd.inY)
+                                    var outX = view.docToHostX(nd.outX)
+                                    var outY = view.docToHostY(nd.outY)
+
+                                    ctx.strokeStyle = "#4a9eff"
+                                    ctx.lineWidth = 1.2
+                                    if (Math.hypot(inX - ax, inY - ay) > 1.5) {
+                                        ctx.beginPath()
+                                        ctx.moveTo(ax, ay)
+                                        ctx.lineTo(inX, inY)
+                                        ctx.stroke()
+                                        ctx.fillStyle = "#ffffff"
+                                        ctx.beginPath()
+                                        ctx.arc(inX, inY, 3.2, 0, Math.PI * 2)
+                                        ctx.fill()
+                                        ctx.stroke()
+                                    }
+                                    if (Math.hypot(outX - ax, outY - ay) > 1.5) {
+                                        ctx.beginPath()
+                                        ctx.moveTo(ax, ay)
+                                        ctx.lineTo(outX, outY)
+                                        ctx.stroke()
+                                        ctx.fillStyle = "#ffffff"
+                                        ctx.beginPath()
+                                        ctx.arc(outX, outY, 3.2, 0, Math.PI * 2)
+                                        ctx.fill()
+                                        ctx.stroke()
+                                    }
+                                    ctx.fillStyle = (ni === 0 && drawOverlay.hoveringClose) ? "#4a9eff" : "#ffffff"
+                                    ctx.strokeStyle = "#111111"
+                                    ctx.lineWidth = 1.5
+                                    ctx.fillRect(ax - 3.5, ay - 3.5, 7, 7)
+                                    ctx.strokeRect(ax - 3.5, ay - 3.5, 7, 7)
+                                }
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: drawMouseArea
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        hoverEnabled: true
+                        cursorShape: Qt.CrossCursor
+
+                        onExited: {
+                            drawOverlay.hoverInside = false
+                            drawPreviewCanvas.requestPaint()
+                        }
+
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            var docX = view.hostToDocX(mouse.x)
+                            var docY = view.hostToDocY(mouse.y)
+                            drawOverlay.shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                            drawOverlay.altHeld = (mouse.modifiers & Qt.AltModifier) !== 0
+
+                            if (view.drawShape === "line" || view.drawShape === "rect"
+                                    || view.drawShape === "ellipse" || view.drawShape === "star") {
+                                drawOverlay.dragging = true
+                                drawOverlay.startDocX = docX
+                                drawOverlay.startDocY = docY
+                                drawOverlay.curDocX = docX
+                                drawOverlay.curDocY = docY
+                                drawPreviewCanvas.requestPaint()
+                                return
+                            }
+
+                            if (view.drawShape === "polyline" || view.drawShape === "polygon") {
+                                var pts = drawOverlay.pathPoints.slice()
+                                if (view.drawShape === "polygon" && pts.length >= 3) {
+                                    var fx = view.docToHostX(pts[0][0])
+                                    var fy = view.docToHostY(pts[0][1])
+                                    if (Math.hypot(mouse.x - fx, mouse.y - fy) <= 10) {
+                                        drawOverlay.finishPath(true)
+                                        return
+                                    }
+                                }
+                                var pt = [docX, docY]
+                                if (drawOverlay.shiftHeld && pts.length > 0) {
+                                    var prev = pts[pts.length - 1]
+                                    pt = drawOverlay.snapAngle(prev[0], prev[1], docX, docY)
+                                }
+                                pts.push(pt)
+                                drawOverlay.pathPoints = pts
+                                drawPreviewCanvas.requestPaint()
+                                return
+                            }
+
+                            if (view.drawShape === "bezier") {
+                                var nodes = drawOverlay.bezierNodes.slice()
+                                if (nodes.length >= 3) {
+                                    var bfx = view.docToHostX(nodes[0].x)
+                                    var bfy = view.docToHostY(nodes[0].y)
+                                    if (Math.hypot(mouse.x - bfx, mouse.y - bfy) <= 10) {
+                                        drawOverlay.finishPath(true)
+                                        return
+                                    }
+                                }
+                                nodes.push({
+                                    x: docX, y: docY,
+                                    inX: docX, inY: docY,
+                                    outX: docX, outY: docY
+                                })
+                                drawOverlay.bezierNodes = nodes
+                                drawOverlay.bezierDraggingHandle = true
+                                drawPreviewCanvas.requestPaint()
+                            }
+                        }
+
+                        onPositionChanged: function(mouse) {
+                            var docX = view.hostToDocX(mouse.x)
+                            var docY = view.hostToDocY(mouse.y)
+                            drawOverlay.hoverInside = true
+                            drawOverlay.hoverDocX = docX
+                            drawOverlay.hoverDocY = docY
+                            drawOverlay.shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                            drawOverlay.altHeld = (mouse.modifiers & Qt.AltModifier) !== 0
+
+                            if (drawOverlay.dragging) {
+                                drawOverlay.curDocX = docX
+                                drawOverlay.curDocY = docY
+                                drawPreviewCanvas.requestPaint()
+                                return
+                            }
+
+                            if (view.drawShape === "bezier" && drawOverlay.bezierDraggingHandle
+                                    && drawOverlay.bezierNodes.length > 0) {
+                                var nodes = drawOverlay.bezierNodes.slice()
+                                var last = nodes[nodes.length - 1]
+                                var dx = docX - last.x
+                                var dy = docY - last.y
+                                var updated = {
+                                    x: last.x,
+                                    y: last.y,
+                                    inX: drawOverlay.altHeld ? last.inX : (last.x - dx),
+                                    inY: drawOverlay.altHeld ? last.inY : (last.y - dy),
+                                    outX: docX,
+                                    outY: docY
+                                }
+                                nodes[nodes.length - 1] = updated
+                                drawOverlay.bezierNodes = nodes
+                                drawPreviewCanvas.requestPaint()
+                                return
+                            }
+
+                            if (view.drawShape === "polygon" && drawOverlay.pathPoints.length >= 3) {
+                                var p0 = drawOverlay.pathPoints[0]
+                                drawOverlay.hoveringClose =
+                                    Math.hypot(mouse.x - view.docToHostX(p0[0]), mouse.y - view.docToHostY(p0[1])) <= 10
+                                drawPreviewCanvas.requestPaint()
+                            } else if (view.drawShape === "polyline" && drawOverlay.pathPoints.length > 0) {
+                                drawPreviewCanvas.requestPaint()
+                            } else if (view.drawShape === "bezier" && drawOverlay.bezierNodes.length > 0) {
+                                if (drawOverlay.bezierNodes.length >= 3) {
+                                    var b0 = drawOverlay.bezierNodes[0]
+                                    drawOverlay.hoveringClose =
+                                        Math.hypot(mouse.x - view.docToHostX(b0.x), mouse.y - view.docToHostY(b0.y)) <= 10
+                                } else {
+                                    drawOverlay.hoveringClose = false
+                                }
+                                drawPreviewCanvas.requestPaint()
+                            }
+                        }
+
+                        onReleased: function(mouse) {
+                            drawOverlay.shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                            drawOverlay.altHeld = (mouse.modifiers & Qt.AltModifier) !== 0
+                            if (drawOverlay.dragging) {
+                                drawOverlay.dragging = false
+                                var endX = view.hostToDocX(mouse.x)
+                                var endY = view.hostToDocY(mouse.y)
+                                drawPreviewCanvas.requestPaint()
+                                if (Math.hypot(endX - drawOverlay.startDocX, endY - drawOverlay.startDocY) < 0.5) {
+                                    return
+                                }
+                                if (view.drawShape === "line") {
+                                    var endPt = drawOverlay.shiftHeld
+                                                ? drawOverlay.snapAngle(drawOverlay.startDocX, drawOverlay.startDocY, endX, endY)
+                                                : [endX, endY]
+                                    drawOverlay.commitShape("line", [[drawOverlay.startDocX, drawOverlay.startDocY], endPt], false)
+                                } else if (view.drawShape === "rect" || view.drawShape === "ellipse") {
+                                    var box = drawOverlay.computeBoxEndpoints(
+                                        drawOverlay.startDocX, drawOverlay.startDocY,
+                                        endX, endY, drawOverlay.shiftHeld, drawOverlay.altHeld)
+                                    drawOverlay.commitShape(view.drawShape, box, true)
+                                } else if (view.drawShape === "star") {
+                                    var starPts = drawOverlay.computeStarPolygonPoints(
+                                        drawOverlay.startDocX, drawOverlay.startDocY,
+                                        endX, endY, drawOverlay.shiftHeld)
+                                    if (starPts.length >= 3) {
+                                        drawOverlay.commitShape("polygon", starPts, true)
+                                    }
+                                }
+                                return
+                            }
+                            if (view.drawShape === "bezier" && drawOverlay.bezierDraggingHandle) {
+                                drawOverlay.bezierDraggingHandle = false
+                                drawPreviewCanvas.requestPaint()
+                            }
+                        }
+
+                        onDoubleClicked: function(mouse) {
+                            if (view.drawShape === "polyline" || view.drawShape === "polygon") {
+                                // Double-click fired a duplicate point on the 2nd press: drop it before committing.
+                                if (drawOverlay.pathPoints.length > 2) {
+                                    drawOverlay.pathPoints = drawOverlay.pathPoints.slice(0, drawOverlay.pathPoints.length - 1)
+                                }
+                                drawOverlay.finishPath(false)
+                            } else if (view.drawShape === "bezier") {
+                                if (drawOverlay.bezierNodes.length > 2) {
+                                    drawOverlay.bezierNodes = drawOverlay.bezierNodes.slice(0, drawOverlay.bezierNodes.length - 1)
+                                }
+                                drawOverlay.finishPath(false)
+                            }
+                        }
+                    }
+                }
+
                 // ------------------------------------------------ paint stroke
                 // The stroke is drawn here while the button is down, in the
                 // same host coordinates the picture uses, and the real pixels
@@ -5878,7 +7626,7 @@ Item {
                     Item {
                         id: strokeClipBox
                         objectName: "strokeClipBox"
-                        visible: paintOverlay.imgVisible
+                        visible: paintOverlay.imgVisible && !view._livePaintActive
                         x: paintOverlay.clipX
                         y: paintOverlay.clipY
                         width: paintOverlay.clipW
@@ -6446,6 +8194,9 @@ Item {
                     floatingLayersDialog.close()
                 }
             }
+            /// Whether each docked zone is currently occupying space in the sidebar.
+            readonly property bool topZoneActive: view.toolOptionsVisible && !inspector.topDetached
+            readonly property bool bottomZoneActive: view.shownReferenceCount > 0 && !inspector.bottomDetached
             /// Action buttons (Apply / Reset / Clear) now live inside the
             /// options ScrollView right below each tool's fields, so no extra
             /// pinned footer height needs to be subtracted from `optionsCap`.
@@ -6455,11 +8206,14 @@ Item {
                 Math.max(minExpandedBottom, height - minExpandedTop - rowGap - 8)
             /// Effective height of Row 2 (Layers or Reference):
             /// - Collapsed -> title bar only (`collapsedRowHeight`), Row 1 expands to max.
-            /// - Row 1 collapsed -> Row 2 expands to fill the rest of the sidebar.
+            /// - Row 1 hidden, detached, or collapsed -> Row 2 expands to fill the sidebar.
             /// - Both expanded -> user-dragged height (or 42% default), clamped so neither covers the other.
             readonly property real referenceShownHeight: {
                 if (view.shownReferenceCount <= 0) return 0
                 if (inspector.bottomCollapsed) return inspector.collapsedRowHeight
+                if (!inspector.topZoneActive) {
+                    return Math.max(inspector.minExpandedBottom, inspector.height)
+                }
                 if (inspector.topCollapsed) {
                     return Math.max(inspector.minExpandedBottom,
                                     inspector.height - inspector.collapsedRowHeight - inspector.rowGap - 8)
@@ -6488,7 +8242,9 @@ Item {
                 ? qsTr("Pointer")
                 : (view.tool === "hand"
                    ? qsTr("Hand")
-                   : (view.tool === "crop"
+                   : (view.tool === "zoom"
+                      ? qsTr("Zoom")
+                      : (view.tool === "crop"
                       ? qsTr("Crop")
                       : (view.tool === "transform"
                          ? qsTr("Transform")
@@ -6496,25 +8252,33 @@ Item {
                             ? qsTr("Rotate")
                             : (view.tool === "paint"
                                ? (view.paintMode === "eraser" ? qsTr("Eraser") : qsTr("Brush"))
-                               : (view.tool === "canvasSize"
-                                  ? qsTr("Canvas size")
-                                  : (view.tool === "adjust"
-                                     ? qsTr("Color & light")
-                                     : (view.tool === "hsv"
-                                        ? qsTr("HSV Adjustment")
-                                        : (view.tool === "curves"
-                                           ? qsTr("Curves")
-                                           : (view.tool === "colorBalance"
-                                              ? qsTr("Color balance")
-                                              : (view.tool === "removeBg"
-                                                 ? qsTr("Remove background")
-                                                 : (view.tool === "watermark"
-                                                    ? qsTr("Remove watermark")
-                                                    : (view.tool === "caption"
-                                                       ? qsTr("Caption & tags")
-                                                       : (view.tool === "select"
-                                                          ? qsTr("Selection")
-                                                          : qsTr("Image size")))))))))))))))
+                               : (view.tool === "draw"
+                                  ? qsTr("Shapes & Curves")
+                                  : (view.tool === "fill"
+                                     ? qsTr("Fill")
+                                     : (view.tool === "gradient"
+                                        ? qsTr("Gradient")
+                                        : (view.tool === "liquify"
+                                           ? qsTr("Liquify")
+                                           : (view.tool === "canvasSize"
+                                     ? qsTr("Canvas size")
+                                     : (view.tool === "adjust"
+                                        ? qsTr("Brightness / Contrast")
+                                        : (view.tool === "hsv"
+                                           ? qsTr("HSV Adjustment")
+                                           : (view.tool === "curves"
+                                              ? qsTr("Curves")
+                                              : (view.tool === "colorBalance"
+                                                 ? qsTr("Color balance")
+                                                 : (view.tool === "removeBg"
+                                                    ? qsTr("Remove background")
+                                                    : (view.tool === "watermark"
+                                                       ? qsTr("Remove watermark")
+                                                       : (view.tool === "caption"
+                                                          ? qsTr("Caption & tags")
+                                                          : (view.tool === "select"
+                                                             ? qsTr("Selection")
+                                                             : qsTr("Image size"))))))))))))))))))))
             /// Under this width the tab labels no longer fit in two languages;
             /// the icons and their tooltips carry the tab instead.
             readonly property bool tabsCompact: width < 240
@@ -6632,11 +8396,13 @@ Item {
                         history: view.history
                         redoHistory: view.editor ? (view.editor.redoHistory || []) : []
                         hasDocument: view.hasDocument
+                        historyTrimmed: !!(view.editor && view.editor.historyTrimmed)
                         language: view.state.language || ""
                         listObjectName: "topHistoryList"
                         onJumpRequested: function(targetIndex) {
                             view.command({ type: "editor_history_jump", target_index: targetIndex })
                         }
+                        onResetRequested: view.command({ type: "editor_reset" })
                     }
 
                     // The pointer is a tool with nothing to configure. Saying
@@ -6685,6 +8451,850 @@ Item {
                                 width: toolOptionsScroll.availableWidth
                                 spacing: 10
 
+                            // ------------------------------- liquify options
+                            ColumnLayout {
+                                objectName: "liquifyOptionsPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "liquify"
+                                spacing: 6
+
+                                Label { text: qsTr("Warp mode"); color: view.theme.textMuted; font.pixelSize: 11 }
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 4
+                                    rowSpacing: 4
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Push");      primary: view.liquifyMode === "push";      onClicked: view.liquifyMode = "push" }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Bloat");     primary: view.liquifyMode === "bloat";     onClicked: view.liquifyMode = "bloat" }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Pucker");    primary: view.liquifyMode === "pucker";    onClicked: view.liquifyMode = "pucker" }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Twirl CW");  primary: view.liquifyMode === "twirl_cw";  onClicked: view.liquifyMode = "twirl_cw" }
+                                    PanelAction { Layout.fillWidth: true; Layout.columnSpan: 2; theme: view.theme; text: qsTr("Twirl CCW"); primary: view.liquifyMode === "twirl_ccw"; onClicked: view.liquifyMode = "twirl_ccw" }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Label { text: qsTr("Radius"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        from: 10; to: 300; stepSize: 1
+                                        value: view.liquifyRadius
+                                        onMoved: view.liquifyRadius = Math.round(value)
+                                    }
+                                    Label { text: view.liquifyRadius + " px"; color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Label { text: qsTr("Strength"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        from: 5; to: 100; stepSize: 1
+                                        value: view.liquifyStrength
+                                        onMoved: view.liquifyStrength = Math.round(value)
+                                    }
+                                    Label { text: view.liquifyStrength + "%"; color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 10
+                                    text: qsTr("Drag to warp pixels · [ ] adjust radius · Respects active selection")
+                                }
+                            }
+
+                            // ------------------------------- zoom tool options
+                            ColumnLayout {
+                                objectName: "zoomOptionsPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "zoom"
+                                spacing: 8
+
+                                Label { text: qsTr("Click mode"); color: view.theme.textMuted; font.pixelSize: 12 }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true; theme: view.theme
+                                        text: qsTr("Zoom In (+)")
+                                        primary: view.zoomToolMode === "in"
+                                        onClicked: view.zoomToolMode = "in"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true; theme: view.theme
+                                        text: qsTr("Zoom Out (−)")
+                                        primary: view.zoomToolMode === "out"
+                                        onClicked: view.zoomToolMode = "out"
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("Zoom"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: view.zoomPercent + "%"; color: view.theme.text; font.pixelSize: 12; font.bold: true }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                    from: 10; to: 800; stepSize: 5
+                                    value: Math.max(10, Math.min(800, view.zoomPercent))
+                                    onMoved: view.setZoom(Math.round(value) / 100.0)
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2; columnSpacing: 4; rowSpacing: 4
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Zoom In");  onClicked: view.zoomIn() }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Zoom Out"); onClicked: view.zoomOut() }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Fit (F)");  onClicked: view.fit() }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("100% (1)"); onClicked: view.actualSize() }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: "50%";  onClicked: view.setZoom(0.5) }
+                                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: "200%"; onClicked: view.setZoom(2.0) }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    color: view.theme.textMuted; font.pixelSize: 11
+                                    text: qsTr("Click to zoom at cursor · Alt+click or right-click reverses · Drag left/right for scrubby zoom")
+                                }
+                            }
+
+                            // ------------------------------- fill (paint bucket) options
+                            ColumnLayout {
+                                objectName: "fillOptionsPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "fill"
+                                spacing: 8
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    visible: view.editingActiveLayerMask
+                                    implicitHeight: fillMaskHint.implicitHeight + 10
+                                    radius: view.theme.radius
+                                    color: view.theme.surfaceAlt
+                                    border.width: 1
+                                    border.color: view.theme.accent
+                                    Label {
+                                        id: fillMaskHint
+                                        anchors.fill: parent
+                                        anchors.margins: 5
+                                        text: qsTr("Filling Layer Mask · White reveals, Black hides")
+                                        color: view.theme.accent
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                Label { text: qsTr("Fill color"); color: view.theme.textMuted; font.pixelSize: 12 }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true; theme: view.theme
+                                        text: qsTr("Foreground")
+                                        primary: view.fillSource === "foreground"
+                                        onClicked: view.fillSource = "foreground"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true; theme: view.theme
+                                        text: qsTr("Background")
+                                        primary: view.fillSource === "background"
+                                        onClicked: view.fillSource = "background"
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("Tolerance"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: String(view.fillTolerance); color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                    from: 0; to: 255; stepSize: 1
+                                    value: view.fillTolerance
+                                    onMoved: view.fillTolerance = Math.round(value)
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("Grow fill"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: view.fillGrow + " px"; color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                    from: 0; to: 8; stepSize: 1
+                                    value: view.fillGrow
+                                    onMoved: view.fillGrow = Math.round(value)
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("Opacity"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: view.fillOpacity + "%"; color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                    from: 1; to: 100; stepSize: 1
+                                    value: view.fillOpacity
+                                    onMoved: view.fillOpacity = Math.round(value)
+                                }
+
+                                CheckBox {
+                                    text: qsTr("Contiguous")
+                                    focusPolicy: Qt.NoFocus
+                                    checked: view.fillContiguous
+                                    onToggled: view.fillContiguous = checked
+                                }
+                                CheckBox {
+                                    text: qsTr("Sample all layers")
+                                    focusPolicy: Qt.NoFocus
+                                    checked: view.fillSampleAllLayers
+                                    onToggled: view.fillSampleAllLayers = checked
+                                }
+                            }
+
+                            // ------------------------------- gradient options
+                            ColumnLayout {
+                                objectName: "gradientOptionsPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "gradient"
+                                spacing: 6
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    visible: view.editingActiveLayerMask
+                                    implicitHeight: gradMaskHint.implicitHeight + 8
+                                    radius: view.theme.radius
+                                    color: view.theme.surfaceAlt
+                                    border.width: 1
+                                    border.color: view.theme.accent
+                                    Label {
+                                        id: gradMaskHint
+                                        anchors.fill: parent
+                                        anchors.margins: 4
+                                        text: qsTr("Gradient on Layer Mask · Smooth fade")
+                                        color: view.theme.accent
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                // Preset selector + Reverse toggle on one compact row
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    ComboBox {
+                                        id: gradPresetCombo
+                                        objectName: "gradientPresetCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        model: view.gradientPresets.map(function(p) { return p.label })
+                                        currentIndex: {
+                                            for (var i = 0; i < view.gradientPresets.length; ++i) {
+                                                if (view.gradientPresets[i].id === view.gradientPresetId) return i
+                                            }
+                                            return 0
+                                        }
+                                        onActivated: function(idx) {
+                                            if (idx >= 0 && idx < view.gradientPresets.length) {
+                                                view.applyGradientPreset(view.gradientPresets[idx])
+                                            }
+                                        }
+                                    }
+                                    PanelAction {
+                                        Layout.preferredWidth: 32
+                                        theme: view.theme
+                                        text: "⇄"
+                                        primary: view.gradientReverse
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Reverse gradient")
+                                        onClicked: view.gradientReverse = !view.gradientReverse
+                                    }
+                                }
+
+                                // Live interactive multi-stop gradient bar (click to add stop)
+                                Item {
+                                    id: gradBarHost
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 34
+
+                                    Rectangle {
+                                        id: gradBarRect
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        height: 20
+                                        radius: 4
+                                        border.width: 1
+                                        border.color: view.theme.border
+                                        clip: true
+
+                                        Checkerboard { anchors.fill: parent; square: 5 }
+
+                                        Canvas {
+                                            id: gradBarCanvas
+                                            anchors.fill: parent
+                                            Connections {
+                                                target: view
+                                                function onGradientStopsChanged() { gradBarCanvas.requestPaint() }
+                                                function onGradientColorModeChanged() { gradBarCanvas.requestPaint() }
+                                                function onGradientReverseChanged() { gradBarCanvas.requestPaint() }
+                                                function onForegroundColorChanged() { gradBarCanvas.requestPaint() }
+                                                function onBackgroundColorChanged() { gradBarCanvas.requestPaint() }
+                                            }
+                                            onWidthChanged: requestPaint()
+                                            onPaint: {
+                                                var ctx = getContext("2d")
+                                                ctx.clearRect(0, 0, width, height)
+                                                var stops = view.resolvedGradientStops()
+                                                if (stops.length < 2) return
+                                                var g = ctx.createLinearGradient(0, 0, width, 0)
+                                                for (var i = 0; i < stops.length; ++i) {
+                                                    var s = stops[i]
+                                                    var p = view.gradientReverse ? (1.0 - s.pos) : s.pos
+                                                    var b = view.colorBytes(s.hex)
+                                                    g.addColorStop(Math.max(0, Math.min(1, p)),
+                                                                   "rgba(" + b[0] + "," + b[1] + "," + b[2] + "," + s.alpha.toFixed(3) + ")")
+                                                }
+                                                ctx.fillStyle = g
+                                                ctx.fillRect(0, 0, width, height)
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: gradBarMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            ToolTip.visible: containsMouse
+                                            ToolTip.text: qsTr("Click to add stop · Drag markers below to move")
+                                            onClicked: function(mouse) {
+                                                if (width > 1) view.addGradientStopAt(mouse.x / width)
+                                            }
+                                        }
+                                    }
+
+                                    // Draggable stop markers below the bar.
+                                    // Uses integer count as `model` so updating a stop's `pos`
+                                    // never destroys and recreates the active MouseArea mid-drag.
+                                    Repeater {
+                                        model: view.rawGradientStops().length
+                                        Rectangle {
+                                            required property int index
+                                            readonly property var stopData: {
+                                                var arr = view.rawGradientStops()
+                                                return (index >= 0 && index < arr.length) ? arr[index] : null
+                                            }
+                                            readonly property bool selected: view.gradientSelectedStop === index
+                                            width: 12; height: 12; radius: 6
+                                            x: stopData ? Math.max(0, Math.min(gradBarHost.width - width, stopData.pos * (gradBarHost.width - width))) : 0
+                                            y: 22
+                                            z: selected ? 2 : 1
+                                            color: stopData ? stopData.hex : "#ffffff"
+                                            border.width: selected ? 2 : 1
+                                            border.color: selected ? view.theme.accent : view.theme.border
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                anchors.margins: -3
+                                                cursorShape: Qt.SizeHorCursor
+                                                preventStealing: true
+                                                onPressed: {
+                                                    view.ensureCustomGradientStops()
+                                                    view.gradientSelectedStop = index
+                                                }
+                                                onDoubleClicked: {
+                                                    view.ensureCustomGradientStops()
+                                                    view.gradientSelectedStop = index
+                                                    var arr = view.rawGradientStops()
+                                                    var cur = (index >= 0 && index < arr.length) ? arr[index] : null
+                                                    gradientStopColorDialog.selectedColor = cur ? cur.hex : view.foregroundColor
+                                                    gradientStopColorDialog.open()
+                                                }
+                                                onPositionChanged: function(mouse) {
+                                                    if (!pressed) return
+                                                    var pt = mapToItem(gradBarHost, mouse.x, 0)
+                                                    var pos = Math.max(0, Math.min(1, pt.x / Math.max(1, gradBarHost.width)))
+                                                    view.updateGradientStop(index, { pos: pos })
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Selected stop color picker & quick controls (always accessible)
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    // Clickable stop color swatch -> opens ColorPickerDialog
+                                    Rectangle {
+                                        id: gradStopColorBtn
+                                        objectName: "gradientStopColorBtn"
+                                        Layout.preferredWidth: 34
+                                        Layout.preferredHeight: 26
+                                        radius: view.theme.radius
+                                        border.width: 1
+                                        border.color: gradStopSwatchHover.containsMouse ? view.theme.accent : view.theme.border
+                                        clip: true
+
+                                        readonly property var curStop: {
+                                            var arr = view.rawGradientStops()
+                                            var idx = Math.max(0, Math.min(arr.length - 1, view.gradientSelectedStop))
+                                            return arr.length > 0 ? arr[idx] : null
+                                        }
+
+                                        Checkerboard { anchors.fill: parent; square: 4 }
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            color: gradStopColorBtn.curStop ? gradStopColorBtn.curStop.hex : view.foregroundColor
+                                            opacity: gradStopColorBtn.curStop ? gradStopColorBtn.curStop.alpha : 1.0
+                                        }
+                                        MouseArea {
+                                            id: gradStopSwatchHover
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            ToolTip.visible: containsMouse
+                                            ToolTip.text: qsTr("Pick color for selected stop (or double-click stop)")
+                                            onClicked: {
+                                                view.ensureCustomGradientStops()
+                                                var cur = gradStopColorBtn.curStop
+                                                gradientStopColorDialog.selectedColor = cur ? cur.hex : view.foregroundColor
+                                                gradientStopColorDialog.open()
+                                            }
+                                        }
+                                    }
+
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: {
+                                            var cur = gradStopColorBtn.curStop
+                                            return cur && cur.alpha < 0.5 ? qsTr("α: 0%") : qsTr("α: 100%")
+                                        }
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Toggle stop opacity (100% / 0%)")
+                                        onClicked: {
+                                            view.ensureCustomGradientStops()
+                                            var cur = view.gradientStops[view.gradientSelectedStop]
+                                            var nextA = cur && cur.alpha > 0.5 ? 0.0 : 1.0
+                                            view.updateGradientStop(view.gradientSelectedStop, { alpha: nextA })
+                                        }
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("= FG")
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Set selected stop to foreground color")
+                                        onClicked: view.updateGradientStop(view.gradientSelectedStop, { hex: view.foregroundColor })
+                                    }
+                                    PanelAction {
+                                        Layout.preferredWidth: 30
+                                        theme: view.theme
+                                        text: "✕"
+                                        enabled: view.gradientColorMode === "custom" && view.gradientStops.length > 2
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Delete selected stop")
+                                        onClicked: view.removeSelectedGradientStop()
+                                    }
+                                }
+
+                                // Shape + Repeat side by side
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 6
+                                    rowSpacing: 4
+
+                                    Label { text: qsTr("Shape"); color: view.theme.textMuted; font.pixelSize: 11 }
+                                    Label { text: qsTr("Repeat"); color: view.theme.textMuted; font.pixelSize: 11 }
+
+                                    ComboBox {
+                                        objectName: "gradientShapeCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["linear", "bilinear", "radial", "square", "conical", "spiral"]
+                                        model: [qsTr("Linear"), qsTr("Bi-Linear"), qsTr("Radial"), qsTr("Square"), qsTr("Conical"), qsTr("Spiral")]
+                                        currentIndex: Math.max(0, keys.indexOf(view.gradientShape))
+                                        onActivated: function(idx) { view.gradientShape = keys[idx] || "linear" }
+                                    }
+
+                                    ComboBox {
+                                        objectName: "gradientRepeatCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["none", "forwards", "alternating"]
+                                        model: [qsTr("None"), qsTr("Forwards"), qsTr("Alternating")]
+                                        currentIndex: Math.max(0, keys.indexOf(view.gradientRepeat))
+                                        onActivated: function(idx) { view.gradientRepeat = keys[idx] || "none" }
+                                    }
+                                }
+
+                                // Blend mode inline
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Label { text: qsTr("Blend"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 44 }
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference"]
+                                        model: [qsTr("Normal"), qsTr("Multiply"), qsTr("Screen"), qsTr("Overlay"), qsTr("Darken"), qsTr("Lighten"), qsTr("Difference")]
+                                        currentIndex: Math.max(0, keys.indexOf(view.gradientBlendMode))
+                                        onActivated: function(idx) { view.gradientBlendMode = keys[idx] || "normal" }
+                                    }
+                                }
+
+                                // Opacity inline
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Label { text: qsTr("Opacity"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 44 }
+                                    Slider {
+                                        Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                        from: 1; to: 100; stepSize: 1
+                                        value: view.gradientOpacity
+                                        onMoved: view.gradientOpacity = Math.round(value)
+                                    }
+                                    Label { text: view.gradientOpacity + "%"; color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 32; horizontalAlignment: Text.AlignRight }
+                                }
+
+                                // Dither + Interactive handles on one row
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    CheckBox {
+                                        text: qsTr("Dither")
+                                        focusPolicy: Qt.NoFocus
+                                        checked: view.gradientDither
+                                        onToggled: view.gradientDither = checked
+                                    }
+                                    CheckBox {
+                                        text: qsTr("Interactive")
+                                        focusPolicy: Qt.NoFocus
+                                        checked: view.gradientInteractive
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: qsTr("Drag handles on canvas · Enter apply · Esc cancel")
+                                        onToggled: view.gradientInteractive = checked
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: gradientOverlay.hasDraft
+                                    spacing: 6
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        primary: true
+                                        text: qsTr("Apply")
+                                        onClicked: gradientOverlay.applyDraft()
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Cancel")
+                                        onClicked: gradientOverlay.cancelDraft()
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    color: view.theme.textMuted; font.pixelSize: 10
+                                    text: qsTr("Drag canvas · Shift 15° · Enter apply · Esc cancel")
+                                }
+                            }
+
+                            // ------------------------------- draw shapes & curves options
+                            ColumnLayout {
+                                objectName: "drawOptionsPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "draw"
+                                spacing: 8
+
+                                Label {
+                                    text: qsTr("Tool")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 4
+                                    rowSpacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Line")
+                                        primary: view.drawShape === "line"
+                                        onClicked: view.drawShape = "line"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Polyline")
+                                        primary: view.drawShape === "polyline"
+                                        onClicked: view.drawShape = "polyline"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Bezier")
+                                        primary: view.drawShape === "bezier"
+                                        onClicked: view.drawShape = "bezier"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Rect")
+                                        primary: view.drawShape === "rect"
+                                        onClicked: view.drawShape = "rect"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Ellipse")
+                                        primary: view.drawShape === "ellipse"
+                                        onClicked: view.drawShape = "ellipse"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Polygon")
+                                        primary: view.drawShape === "polygon"
+                                        onClicked: view.drawShape = "polygon"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        Layout.columnSpan: 2
+                                        theme: view.theme
+                                        text: qsTr("Star / Regular Poly")
+                                        primary: view.drawShape === "star"
+                                        onClicked: view.drawShape = "star"
+                                    }
+                                }
+
+                                // Inkscape-style Star / Regular Polygon controls
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.drawShape === "star"
+                                    spacing: 6
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        PanelAction {
+                                            Layout.fillWidth: true; theme: view.theme
+                                            text: qsTr("Star ★")
+                                            primary: !view.drawStarIsPolygon
+                                            onClicked: view.drawStarIsPolygon = false
+                                        }
+                                        PanelAction {
+                                            Layout.fillWidth: true; theme: view.theme
+                                            text: qsTr("Regular Poly ⬡")
+                                            primary: view.drawStarIsPolygon
+                                            onClicked: view.drawStarIsPolygon = true
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { text: qsTr("Corners"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: String(view.drawStarCorners); color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                        from: 3; to: 24; stepSize: 1
+                                        value: view.drawStarCorners
+                                        onMoved: view.drawStarCorners = Math.round(value)
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: !view.drawStarIsPolygon
+                                        Label { text: qsTr("Spoke ratio"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: Math.round(view.drawStarSpokeRatio * 100) + "%"; color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        Layout.fillWidth: true; focusPolicy: Qt.NoFocus
+                                        visible: !view.drawStarIsPolygon
+                                        from: 10; to: 95; stepSize: 1
+                                        value: Math.round(view.drawStarSpokeRatio * 100)
+                                        onMoved: view.drawStarSpokeRatio = Math.round(value) / 100.0
+                                    }
+                                }
+
+                                Label {
+                                    text: qsTr("Outline")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("FG")
+                                        primary: view.drawOutlineMode === "foreground"
+                                        onClicked: view.drawOutlineMode = "foreground"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("BG")
+                                        primary: view.drawOutlineMode === "background"
+                                        onClicked: view.drawOutlineMode = "background"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("None")
+                                        primary: view.drawOutlineMode === "none"
+                                        onClicked: view.drawOutlineMode = "none"
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.drawOutlineMode !== "none"
+                                    spacing: 4
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { text: qsTr("Width"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: view.drawStrokeWidth + " px"; color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        from: 1
+                                        to: 120
+                                        stepSize: 1
+                                        value: view.drawStrokeWidth
+                                        onMoved: view.drawStrokeWidth = Math.round(value)
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { text: qsTr("Outline opacity"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: view.drawStrokeOpacity + "%"; color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        from: 1
+                                        to: 100
+                                        stepSize: 1
+                                        value: view.drawStrokeOpacity
+                                        onMoved: view.drawStrokeOpacity = Math.round(value)
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.drawShape === "rect" || view.drawShape === "ellipse"
+                                             || view.drawShape === "polygon" || view.drawShape === "star"
+                                             || view.drawShape === "bezier"
+                                    spacing: 6
+
+                                    CheckBox {
+                                        visible: view.drawShape === "bezier"
+                                        text: qsTr("Close curve")
+                                        checked: view.drawBezierClosed
+                                        onToggled: view.drawBezierClosed = checked
+                                    }
+
+                                    Label {
+                                        text: qsTr("Fill")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: qsTr("None")
+                                            primary: view.drawFillMode === "none"
+                                            onClicked: view.drawFillMode = "none"
+                                        }
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: qsTr("BG")
+                                            primary: view.drawFillMode === "background"
+                                            onClicked: view.drawFillMode = "background"
+                                        }
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: qsTr("FG")
+                                            primary: view.drawFillMode === "foreground"
+                                            onClicked: view.drawFillMode = "foreground"
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: view.drawFillMode !== "none"
+                                        Label { text: qsTr("Fill opacity"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: view.drawFillOpacity + "%"; color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        visible: view.drawFillMode !== "none"
+                                        from: 1
+                                        to: 100
+                                        stepSize: 1
+                                        value: view.drawFillOpacity
+                                        onMoved: view.drawFillOpacity = Math.round(value)
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: drawOverlay.hasDraftPath
+                                    spacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        primary: true
+                                        text: qsTr("Finish")
+                                        onClicked: drawOverlay.finishPath(false)
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Undo pt")
+                                        onClicked: drawOverlay.popLastPoint()
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Cancel")
+                                        onClicked: drawOverlay.cancelDraft()
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    text: view.drawShape === "bezier"
+                                          ? qsTr("Click for corner · Drag for curve · Alt+Drag breaks handle · Shift+Z undo point · Enter finish · Esc cancel")
+                                          : (view.drawShape === "polyline" || view.drawShape === "polygon"
+                                             ? qsTr("Click to add points · Shift snaps 15° · Shift+Z undo point · Enter/double-click finish · Esc cancel")
+                                             : (view.drawShape === "line"
+                                                ? qsTr("Drag to draw · Hold Shift to snap 15°")
+                                                : qsTr("Drag to draw · Shift = 1:1 · Alt = from center")))
+                                }
+                            }
+
                             // ------------------------------- selection options
                             ColumnLayout {
                                 objectName: "selectOptionsPanel"
@@ -6732,17 +9342,31 @@ Item {
                                     }
                                     PanelAction {
                                         Layout.fillWidth: true
-                                        Layout.columnSpan: 2
+                                        theme: view.theme
+                                        text: qsTr("Bezier")
+                                        primary: view.selectShape === "bezier"
+                                        onClicked: view.selectShape = "bezier"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
                                         theme: view.theme
                                         text: qsTr("Magic Wand")
                                         primary: view.selectShape === "wand"
                                         onClicked: view.selectShape = "wand"
                                     }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        Layout.columnSpan: 2
+                                        theme: view.theme
+                                        text: qsTr("Similar Color")
+                                        primary: view.selectShape === "similar"
+                                        onClicked: view.selectShape = "similar"
+                                    }
                                 }
 
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    visible: view.selectShape === "wand"
+                                    visible: view.selectShape === "wand" || view.selectShape === "similar"
                                     spacing: 4
                                     RowLayout {
                                         Layout.fillWidth: true
@@ -6757,6 +9381,7 @@ Item {
                                         onMoved: view.wandTolerance = Math.round(value)
                                     }
                                     CheckBox {
+                                        visible: view.selectShape === "wand"
                                         text: qsTr("Contiguous")
                                         focusPolicy: Qt.NoFocus
                                         checked: view.wandContiguous
@@ -6831,12 +9456,9 @@ Item {
                                     onMoved: view.selectFeather = Math.round(value)
                                 }
 
-                                GridLayout {
+                                RowLayout {
                                     Layout.fillWidth: true
-                                    columns: 2
-                                    columnSpacing: 6
-                                    rowSpacing: 6
-
+                                    spacing: 6
                                     Button {
                                         Layout.fillWidth: true
                                         focusPolicy: Qt.NoFocus
@@ -6851,52 +9473,6 @@ Item {
                                         enabled: view.documentReady && view.hasSelection
                                         onClicked: view.command({ type: "editor_select_clear" })
                                     }
-                                    Button {
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        text: qsTr("Fill")
-                                        enabled: view.documentReady && view.hasSelection
-                                        onClicked: view.command({
-                                            type: "editor_selection_fill",
-                                            color: view.foregroundBytes(),
-                                            opacity: Math.max(0.01, view.paintOpacity / 100)
-                                        })
-                                    }
-                                    Button {
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        text: qsTr("Delete")
-                                        enabled: view.documentReady && view.hasSelection
-                                        onClicked: view.command({ type: "editor_selection_delete" })
-                                    }
-                                    Button {
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        text: qsTr("To new layer")
-                                        enabled: view.documentReady && view.hasSelection
-                                        onClicked: view.command({ type: "editor_selection_duplicate_layer" })
-                                    }
-                                    Button {
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        text: qsTr("Crop")
-                                        enabled: view.documentReady && view.hasSelection
-                                        onClicked: view.command({ type: "editor_selection_crop" })
-                                    }
-                                    Button {
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        text: qsTr("Copy")
-                                        enabled: view.documentReady
-                                        onClicked: view.command({ type: "editor_selection_copy", cut: false })
-                                    }
-                                    Button {
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        text: qsTr("Cut")
-                                        enabled: view.documentReady && view.hasSelection
-                                        onClicked: view.command({ type: "editor_selection_copy", cut: true })
-                                    }
                                 }
                             }
 
@@ -6908,11 +9484,12 @@ Item {
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 visible: view.tool === "paint"
-                                spacing: 10
+                                spacing: 6
 
+                                // Mode: Brush / Eraser
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 6
+                                    spacing: 4
 
                                     Button {
                                         objectName: "paintBrushMode"
@@ -6942,18 +9519,61 @@ Item {
                                     }
                                 }
 
-                                // The pair itself lives in the rail; with the
-                                // rail showing, this row is the field that
-                                // edits the foreground's exact value — a
-                                // chooser cannot say `#2f81f7`. With the rail
-                                // hidden (Settings › Appearance can put it
-                                // away) the compact pair is drawn here too, from
-                                // the same component and the same two
-                                // properties, so the colours are never
-                                // unreachable.
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    visible: view.editingActiveLayerMask
+                                    implicitHeight: maskHintLbl.implicitHeight + 8
+                                    radius: view.theme.radius
+                                    color: view.theme.surfaceAlt
+                                    border.width: 1
+                                    border.color: view.theme.accent
+                                    Label {
+                                        id: maskHintLbl
+                                        anchors.fill: parent
+                                        anchors.margins: 4
+                                        text: qsTr("Editing Layer Mask · White reveals, Black hides")
+                                        color: view.theme.accent
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                // Preset (18 Krita-style brushes) + Tip selector on one row
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 8
+                                    spacing: 4
+                                    ComboBox {
+                                        objectName: "brushPresetCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        model: view.kritaBrushPresets.map(function(p) { return p.label })
+                                        currentIndex: {
+                                            for (var i = 0; i < view.kritaBrushPresets.length; ++i) {
+                                                if (view.kritaBrushPresets[i].id === view.brushPresetId) return i
+                                            }
+                                            return 0
+                                        }
+                                        onActivated: function(idx) {
+                                            if (idx >= 0 && idx < view.kritaBrushPresets.length) {
+                                                view.applyBrushPreset(view.kritaBrushPresets[idx])
+                                            }
+                                        }
+                                    }
+                                    ComboBox {
+                                        objectName: "brushTipCombo"
+                                        Layout.preferredWidth: 82
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["round", "flat", "chalk", "spray", "pixel"]
+                                        model: [qsTr("Round"), qsTr("Flat"), qsTr("Chalk"), qsTr("Spray"), qsTr("Pixel")]
+                                        currentIndex: Math.max(0, keys.indexOf(view.brushTip))
+                                        onActivated: function(idx) { view.brushTip = keys[idx] || "round" }
+                                    }
+                                }
+
+                                // Compact FG hex + optional ColourPair (when rail hidden)
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
 
                                     ColourPair {
                                         id: optionsColourPair
@@ -6977,43 +9597,30 @@ Item {
                                         }
                                     }
 
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 2
+                                    Label {
+                                        text: qsTr("Color")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                    }
 
-                                        Label {
-                                            text: qsTr("Foreground")
-                                            color: view.theme.textMuted
-                                            font.pixelSize: 11
-                                        }
-
-                                        // The field is the pair's value, not a
-                                        // spacer: the hex text is seven
-                                        // characters, so it keeps a field's
-                                        // width instead of stretching across the
-                                        // panel as a white bar.
-                                        TextField {
-                                            id: foregroundColorField
-                                            objectName: "foregroundColorField"
-                                            Layout.preferredWidth: 118
-                                            Layout.maximumWidth: 118
-                                            font.pixelSize: 12
-                                            text: view.foregroundColor
-                                            placeholderText: qsTr("#rrggbb")
-                                            onEditingFinished: {
-                                                view.setForegroundColor(text)
-                                                text = view.foregroundColor
-                                                // Enter belongs to the field; the next key
-                                                // should reach the canvas keys again.
-                                                view.forceActiveFocus()
-                                            }
+                                    TextField {
+                                        id: foregroundColorField
+                                        objectName: "foregroundColorField"
+                                        Layout.preferredWidth: 94
+                                        Layout.maximumWidth: 94
+                                        font.pixelSize: 11
+                                        text: view.foregroundColor
+                                        placeholderText: qsTr("#rrggbb")
+                                        onEditingFinished: {
+                                            view.setForegroundColor(text)
+                                            text = view.foregroundColor
+                                            view.forceActiveFocus()
                                         }
                                     }
+
+                                    Item { Layout.fillWidth: true }
                                 }
 
-                                // The field and the swatch follow X and D even after
-                                // the field has been typed into, which breaks its
-                                // initial binding.
                                 Connections {
                                     target: view
                                     function onForegroundColorChanged() {
@@ -7022,11 +9629,12 @@ Item {
                                     }
                                 }
 
+                                // Compact swatch grid
                                 GridLayout {
                                     Layout.fillWidth: true
                                     columns: 8
-                                    columnSpacing: 4
-                                    rowSpacing: 4
+                                    columnSpacing: 3
+                                    rowSpacing: 3
 
                                     Repeater {
                                         model: view.paintSwatches
@@ -7034,8 +9642,8 @@ Item {
                                         Rectangle {
                                             required property string modelData
                                             objectName: "paintSwatch_" + modelData.substring(1)
-                                            Layout.preferredWidth: 22
-                                            Layout.preferredHeight: 22
+                                            Layout.preferredWidth: 19
+                                            Layout.preferredHeight: 19
                                             radius: 3
                                             color: modelData
                                             border.width: view.foregroundColor === modelData ? 2 : 1
@@ -7054,14 +9662,11 @@ Item {
                                     }
                                 }
 
+                                // Primary sliders: Size, Opacity, Hardness
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 8
-
-                                    Label {
-                                        text: qsTr("Brush size")
-                                        color: view.theme.textMuted
-                                    }
+                                    spacing: 6
+                                    Label { text: qsTr("Size"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
                                     Slider {
                                         id: paintSizeSlider
                                         objectName: "paintSize"
@@ -7077,19 +9682,16 @@ Item {
                                         objectName: "paintSizeValue"
                                         text: qsTr("%1 px").arg(Math.round(view.paintSize))
                                         color: view.theme.text
-                                        font.pixelSize: 12
-                                        Layout.preferredWidth: 52
+                                        font.pixelSize: 11
+                                        Layout.preferredWidth: 44
+                                        horizontalAlignment: Text.AlignRight
                                     }
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 8
-
-                                    Label {
-                                        text: qsTr("Opacity")
-                                        color: view.theme.textMuted
-                                    }
+                                    spacing: 6
+                                    Label { text: qsTr("Opacity"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
                                     Slider {
                                         id: paintOpacitySlider
                                         objectName: "paintOpacity"
@@ -7105,16 +9707,136 @@ Item {
                                         objectName: "paintOpacityValue"
                                         text: qsTr("%1 %").arg(Math.round(view.paintOpacity))
                                         color: view.theme.text
-                                        font.pixelSize: 12
-                                        Layout.preferredWidth: 52
+                                        font.pixelSize: 11
+                                        Layout.preferredWidth: 44
+                                        horizontalAlignment: Text.AlignRight
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Label { text: qsTr("Hardness"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        from: 0; to: 100; stepSize: 1
+                                        value: view.brushHardness
+                                        enabled: view.documentReady
+                                        onMoved: view.brushHardness = Math.round(value)
+                                    }
+                                    Label {
+                                        text: qsTr("%1 %").arg(view.brushHardness)
+                                        color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight
+                                    }
+                                }
+
+                                // Collapsible Dynamics (Flow, Spacing, Angle, Scatter)
+                                ToolButton {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 24
+                                    padding: 0
+                                    focusPolicy: Qt.NoFocus
+                                    onClicked: view.brushDynamicsExpanded = !view.brushDynamicsExpanded
+                                    contentItem: RowLayout {
+                                        spacing: 4
+                                        Label {
+                                            text: (view.brushDynamicsExpanded ? "▾ " : "▸ ") + qsTr("Dynamics")
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 11
+                                            font.bold: true
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: qsTr("Flow %1% · Space %2%").arg(view.brushFlow).arg(view.brushSpacing)
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 10
+                                            elide: Text.ElideRight
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.brushDynamicsExpanded
+                                    spacing: 4
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Label { text: qsTr("Flow"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                        Slider {
+                                            Layout.fillWidth: true
+                                            from: 5; to: 100; stepSize: 1
+                                            value: view.brushFlow
+                                            enabled: view.documentReady
+                                            onMoved: view.brushFlow = Math.round(value)
+                                        }
+                                        Label {
+                                            text: qsTr("%1 %").arg(view.brushFlow)
+                                            color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Label { text: qsTr("Spacing"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                        Slider {
+                                            Layout.fillWidth: true
+                                            from: 5; to: 100; stepSize: 1
+                                            value: view.brushSpacing
+                                            enabled: view.documentReady
+                                            onMoved: view.brushSpacing = Math.round(value)
+                                        }
+                                        Label {
+                                            text: qsTr("%1 %").arg(view.brushSpacing)
+                                            color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: view.brushTip === "flat"
+                                        spacing: 6
+                                        Label { text: qsTr("Angle"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                        Slider {
+                                            Layout.fillWidth: true
+                                            from: -90; to: 90; stepSize: 1
+                                            value: view.brushAngle
+                                            enabled: view.documentReady
+                                            onMoved: view.brushAngle = Math.round(value)
+                                        }
+                                        Label {
+                                            text: view.brushAngle + "°"
+                                            color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: view.brushTip === "chalk" || view.brushTip === "spray"
+                                        spacing: 6
+                                        Label { text: qsTr("Scatter"); color: view.theme.textMuted; font.pixelSize: 11; Layout.preferredWidth: 52 }
+                                        Slider {
+                                            Layout.fillWidth: true
+                                            from: 0; to: 200; stepSize: 1
+                                            value: view.brushScatter
+                                            enabled: view.documentReady
+                                            onMoved: view.brushScatter = Math.round(value)
+                                        }
+                                        Label {
+                                            text: qsTr("%1 %").arg(view.brushScatter)
+                                            color: view.theme.text; font.pixelSize: 11; Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight
+                                        }
                                     }
                                 }
 
                                 Label {
                                     Layout.fillWidth: true
-                                    text: qsTr("Drag on the picture to paint. [ and ] change the size, X swaps colours, D resets them, Space pans.")
+                                    text: qsTr("[ ] size · X swap · D reset · Space pan")
                                     color: view.theme.textMuted
-                                    font.pixelSize: 11
+                                    font.pixelSize: 10
                                     wrapMode: Text.WordWrap
                                 }
                             }
@@ -9105,11 +11827,11 @@ Item {
                 Item {
                     id: bottomDockSlot
                     Layout.fillWidth: true
-                    Layout.fillHeight: (inspector.topCollapsed || inspector.topDetached) && !inspector.bottomCollapsed
+                    Layout.fillHeight: (!inspector.topZoneActive || inspector.topCollapsed) && !inspector.bottomCollapsed
                     Layout.alignment: inspector.bottomCollapsed ? Qt.AlignTop : Qt.AlignBottom
                     Layout.preferredHeight: inspector.referenceShownHeight
                     Layout.minimumHeight: inspector.bottomCollapsed ? inspector.collapsedRowHeight : inspector.minExpandedBottom
-                    Layout.maximumHeight: ((inspector.topCollapsed || inspector.topDetached) && !inspector.bottomCollapsed) ? 100000 : inspector.referenceShownHeight
+                    Layout.maximumHeight: ((!inspector.topZoneActive || inspector.topCollapsed) && !inspector.bottomCollapsed) ? 100000 : inspector.referenceShownHeight
                     Layout.leftMargin: 10
                     Layout.rightMargin: 10
                     Layout.topMargin: 4
@@ -9123,6 +11845,8 @@ Item {
                     parent: inspector.bottomDetached ? floatingLayersHost : bottomDockSlot
                     anchors.fill: parent
                     clip: true
+                    hasSelection: view.hasSelection
+                    thumbRevision: (view.editor && view.editor.ramCanvasRevision) || 0
                     visible: view.shownReferenceCount > 0 && (inspector.bottomDetached || inspector.bottomPanel === "layers")
                     collapsed: !inspector.bottomDetached && inspector.bottomCollapsed
                     detached: inspector.bottomDetached
@@ -9149,12 +11873,11 @@ Item {
                     id: referenceDock
                     objectName: "editorReferenceDock"
                     Layout.fillWidth: true
-                    // Not `fillHeight`: the dock asks for the page's own height
-                    // and the tool frame above absorbs the rest.
-                    Layout.fillHeight: false
-                    Layout.alignment: Qt.AlignBottom
+                    Layout.fillHeight: (!inspector.topZoneActive || inspector.topCollapsed) && !inspector.bottomCollapsed
+                    Layout.alignment: inspector.bottomCollapsed ? Qt.AlignTop : Qt.AlignBottom
                     Layout.preferredHeight: inspector.referenceShownHeight
-                    Layout.minimumHeight: Math.min(140, inspector.referenceShownHeight)
+                    Layout.minimumHeight: inspector.bottomCollapsed ? inspector.collapsedRowHeight : Math.min(140, inspector.referenceShownHeight)
+                    Layout.maximumHeight: ((!inspector.topZoneActive || inspector.topCollapsed) && !inspector.bottomCollapsed) ? 100000 : inspector.referenceShownHeight
                     visible: view.shownReferenceCount > 0 && inspector.bottomPanel === "reference"
                     theme: view.theme
                     backgroundColor: "transparent"
@@ -9204,10 +11927,12 @@ Item {
                             history: view.history
                             redoHistory: view.editor ? (view.editor.redoHistory || []) : []
                             hasDocument: view.hasDocument
+                            historyTrimmed: !!(view.editor && view.editor.historyTrimmed)
                             language: view.state.language || ""
                             onJumpRequested: function(targetIndex) {
                                 view.command({ type: "editor_history_jump", target_index: targetIndex })
                             }
+                            onResetRequested: view.command({ type: "editor_reset" })
                         }
                     }
 
@@ -9245,11 +11970,14 @@ Item {
                     }
                 }
 
-                // When both rows are collapsed, push both title bars consecutively
-                // to the top instead of letting ColumnLayout spread them vertically.
+                // Whenever all visible docked zones are collapsed, push their
+                // title bars cleanly to the top instead of letting ColumnLayout
+                // spread them across empty vertical space.
                 Item {
                     objectName: "inspectorCollapsedSpacer"
-                    visible: inspector.topCollapsed && inspector.bottomCollapsed
+                    visible: (!inspector.topZoneActive || inspector.topCollapsed)
+                             && (!inspector.bottomZoneActive || inspector.bottomCollapsed)
+                             && (inspector.topZoneActive || inspector.bottomZoneActive)
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                 }
@@ -9265,74 +11993,78 @@ Item {
                        || view.historyVisible || view.originalVisible
             entries: [
                 { key: "options", label: qsTr("Tool options"), icon: "icons/preferences.svg",
-                  active: view.toolOptionsVisible && inspector.topTab === "options" },
+                  active: view.toolOptionsVisible && !inspector.topCollapsed && inspector.topTab === "options" },
                 { key: "history", label: qsTr("History"), icon: "icons/history.svg",
-                  active: view.toolOptionsVisible && inspector.topTab === "history" },
+                  active: view.toolOptionsVisible && !inspector.topCollapsed && inspector.topTab === "history" },
                 { key: "layers", label: qsTr("Layers"), icon: "icons/view-details.svg",
                   separatorBefore: true,
-                  active: view.shownReferenceCount > 0 && inspector.bottomPanel === "layers" },
+                  active: view.shownReferenceCount > 0 && !inspector.bottomCollapsed && inspector.bottomPanel === "layers" },
                 { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
-                  separatorBefore: true,
-                  active: view.shownReferenceCount > 0 && inspector.bottomPanel === "reference" && view.rightTabIndex === 0 },
+                  active: view.shownReferenceCount > 0 && !inspector.bottomCollapsed && inspector.bottomPanel === "reference" && view.rightTabIndex === 0 },
                 { key: "original", label: qsTr("Original"), icon: "icons/original.svg",
-                  active: view.shownReferenceCount > 0 && inspector.bottomPanel === "reference" && view.rightTabIndex === 2 }
+                  active: view.shownReferenceCount > 0 && !inspector.bottomCollapsed && inspector.bottomPanel === "reference" && view.rightTabIndex === 2 }
             ]
             onToggled: function(key) {
+                // Group 1 (Top zone): Tool options / History
                 if (key === "options" || key === "history") {
-                    if (!view.toolOptionsVisible) {
-                        inspector.topTab = key
-                        view.setPanelVisible("options", true)
-                    } else if (inspector.topTab !== key) {
-                        inspector.topTab = key
-                    } else {
+                    var topAlreadyActive = view.toolOptionsVisible
+                                           && !inspector.topCollapsed
+                                           && inspector.topTab === key
+                    if (topAlreadyActive) {
+                        if (inspector.topDetached) inspector.setTopDetached(false)
                         view.setPanelVisible("options", false)
-                    }
-                    return
-                }
-                if (key === "layers") {
-                    if (view.shownReferenceCount === 0) {
-                        inspector.bottomPanel = "layers"
-                        view.layoutRequested({
-                            panels: {
-                                "editor.info": true,
-                                "editor.history": true,
-                                "editor.original": true
-                            }
-                        })
-                    } else if (inspector.bottomPanel !== "layers") {
-                        inspector.bottomPanel = "layers"
                     } else {
-                        view.layoutRequested({
-                            panels: {
-                                "editor.info": false,
-                                "editor.history": false,
-                                "editor.original": false
-                            }
-                        })
+                        inspector.topTab = key
+                        inspector.topCollapsed = false
+                        if (!view.toolOptionsVisible) view.setPanelVisible("options", true)
                     }
                     return
                 }
-                // Secondary reference panels (Info / Original)
-                var isCurrentRef = inspector.bottomPanel === "reference"
-                    && ((key === "info" && view.rightTabIndex === 0)
-                        || (key === "original" && view.rightTabIndex === 2))
-                if (isCurrentRef && view.shownReferenceCount > 0) {
-                    inspector.bottomPanel = "layers"
-                } else {
-                    inspector.bottomPanel = "reference"
-                    var panels = {}
-                    panels["editor." + key] = true
-                    view.layoutRequested({ panels: panels, editorReferenceTab: key })
+                // Group 2 (Bottom zone): Layers / Info / Original
+                var isLayers = (key === "layers")
+                var bottomAlreadyActive = view.shownReferenceCount > 0
+                    && !inspector.bottomCollapsed
+                    && (isLayers
+                        ? (inspector.bottomPanel === "layers")
+                        : (inspector.bottomPanel === "reference"
+                           && ((key === "info" && view.rightTabIndex === 0)
+                               || (key === "original" && view.rightTabIndex === 2))))
+                if (bottomAlreadyActive) {
+                    if (inspector.bottomDetached) inspector.setBottomDetached(false)
+                    view.layoutRequested({
+                        panels: {
+                            "editor.info": false,
+                            "editor.history": false,
+                            "editor.original": false
+                        }
+                    })
+                    return
                 }
+                if (!isLayers && inspector.bottomDetached) inspector.setBottomDetached(false)
+                inspector.bottomCollapsed = false
+                inspector.bottomPanel = isLayers ? "layers" : "reference"
+                var req = {
+                    panels: {
+                        "editor.info": true,
+                        "editor.history": true,
+                        "editor.original": true
+                    }
+                }
+                if (!isLayers) req.editorReferenceTab = key
+                view.layoutRequested(req)
             }
-            onHideAll: view.layoutRequested({
-                panels: {
-                    "editor.options": false,
-                    "editor.info": false,
-                    "editor.history": false,
-                    "editor.original": false
-                }
-            })
+            onHideAll: {
+                if (inspector.topDetached) inspector.setTopDetached(false)
+                if (inspector.bottomDetached) inspector.setBottomDetached(false)
+                view.layoutRequested({
+                    panels: {
+                        "editor.options": false,
+                        "editor.info": false,
+                        "editor.history": false,
+                        "editor.original": false
+                    }
+                })
+            }
         }
     }
 
@@ -9667,7 +12399,7 @@ Item {
 
         MenuItem {
             objectName: "filterColorLightItem"
-            text: qsTr("Color & light…")
+            text: qsTr("Brightness / Contrast…")
             enabled: view.documentReady
             onTriggered: view.activateFilterTool("adjust")
         }
@@ -9881,6 +12613,399 @@ Item {
                 color: view.colorBytes(view.colorText(selectedColor))
             })
             view.forceActiveFocus()
+        }
+    }
+
+    ColorPickerDialog {
+        id: gradientStopColorDialog
+        objectName: "gradientStopColorDialog"
+        theme: view.theme
+        title: qsTr("Gradient stop color")
+        selectedColor: "#ffffff"
+        onAccepted: {
+            view.updateGradientStop(view.gradientSelectedStop, { hex: view.colorText(selectedColor) })
+            view.forceActiveFocus()
+        }
+    }
+
+    DialogFrame {
+        id: selectModifyDialog
+        objectName: "selectModifyDialog"
+        namePrefix: "selectModify"
+        theme: view.theme
+        preferredWidth: 340
+        resizable: false
+
+        property string opKey: "grow"
+        property string fieldLabel: qsTr("Amount")
+        property int amountVal: 4
+        property var lastValues: ({ grow: 4, shrink: 4, border: 4, feather: 8, smooth: 2 })
+
+        function openFor(op, dialogTitle, label) {
+            opKey = op
+            title = dialogTitle
+            fieldLabel = label
+            amountVal = lastValues[op] || 4
+            selectModifyField.text = String(amountVal)
+            open()
+            selectModifyField.forceActiveFocus()
+            selectModifyField.selectAll()
+        }
+
+        function apply() {
+            var n = Math.max(1, Math.min(200, parseInt(selectModifyField.text) || amountVal || 1))
+            amountVal = n
+            var next = Object.assign({}, lastValues)
+            next[opKey] = n
+            lastValues = next
+            close()
+            view.command({ type: "editor_select_modify", op: opKey, amount: n })
+            view.forceActiveFocus()
+        }
+
+        onCloseRequested: close()
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    text: selectModifyDialog.fieldLabel
+                    color: view.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                TextField {
+                    id: selectModifyField
+                    objectName: "selectModifyAmountField"
+                    Layout.preferredWidth: 74
+                    text: String(selectModifyDialog.amountVal)
+                    validator: IntValidator { bottom: 1; top: 200 }
+                    onTextEdited: {
+                        var v = parseInt(text)
+                        if (!isNaN(v)) selectModifyDialog.amountVal = Math.max(1, Math.min(200, v))
+                    }
+                    onAccepted: selectModifyDialog.apply()
+                }
+
+                Label {
+                    text: qsTr("px")
+                    color: view.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                Slider {
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    from: 1; to: 100; stepSize: 1
+                    value: Math.min(100, selectModifyDialog.amountVal)
+                    onMoved: {
+                        selectModifyDialog.amountVal = Math.round(value)
+                        selectModifyField.text = String(selectModifyDialog.amountVal)
+                    }
+                }
+            }
+        }
+
+        footer: DialogFooter {
+            namePrefix: "selectModify"
+            theme: view.theme
+            height: selectModifyDialog.footerHeight
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                theme: view.theme
+                text: qsTr("Cancel")
+                implicitWidth: 80
+                onClicked: selectModifyDialog.close()
+            }
+            PanelAction {
+                objectName: "selectModifyApplyBtn"
+                theme: view.theme
+                text: qsTr("Apply")
+                primary: true
+                implicitWidth: 80
+                onClicked: selectModifyDialog.apply()
+            }
+        }
+    }
+
+    ColorPickerDialog {
+        id: selActionColorDialog
+        objectName: "selActionColorDialog"
+        theme: view.theme
+        title: qsTr("Choose color")
+        property string targetDialog: "fill"
+        selectedColor: "#000000"
+        onAccepted: {
+            var hex = view.colorText(selectedColor)
+            if (targetDialog === "stroke") {
+                selectionStrokeDialog.customHex = hex
+                selectionStrokeDialog.colorSource = "custom"
+            } else {
+                selectionFillDialog.customHex = hex
+                selectionFillDialog.colorSource = "custom"
+            }
+        }
+    }
+
+    DialogFrame {
+        id: selectionFillDialog
+        objectName: "selectionFillDialog"
+        namePrefix: "selectionFill"
+        theme: view.theme
+        title: qsTr("Fill Selection")
+        preferredWidth: 350
+        resizable: false
+
+        property string colorSource: "fg" // "fg" | "bg" | "custom"
+        property string customHex: "#2f81f7"
+        property int fillOpacity: 100
+
+        function effectiveHex() {
+            if (colorSource === "bg") return view.backgroundColor
+            if (colorSource === "custom") return customHex
+            return view.foregroundColor
+        }
+
+        function openDialog() {
+            open()
+        }
+
+        function apply() {
+            close()
+            view.command({
+                type: "editor_selection_fill",
+                color: view.colorBytes(effectiveHex()),
+                opacity: Math.max(0.01, fillOpacity / 100.0)
+            })
+            view.forceActiveFocus()
+        }
+
+        onCloseRequested: close()
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Color"); color: view.theme.textMuted; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                ComboBox {
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    readonly property var keys: ["fg", "bg", "custom"]
+                    model: [qsTr("Foreground"), qsTr("Background"), qsTr("Custom color…")]
+                    currentIndex: Math.max(0, keys.indexOf(selectionFillDialog.colorSource))
+                    onActivated: function(idx) {
+                        var k = keys[idx] || "fg"
+                        selectionFillDialog.colorSource = k
+                        if (k === "custom") {
+                            selActionColorDialog.targetDialog = "fill"
+                            selActionColorDialog.selectedColor = selectionFillDialog.customHex
+                            selActionColorDialog.open()
+                        }
+                    }
+                }
+                Rectangle {
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 26
+                    radius: view.theme.radius
+                    color: selectionFillDialog.effectiveHex()
+                    border.width: 1
+                    border.color: view.theme.border
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            selActionColorDialog.targetDialog = "fill"
+                            selActionColorDialog.selectedColor = selectionFillDialog.effectiveHex()
+                            selActionColorDialog.open()
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Opacity"); color: view.theme.textMuted; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                Slider {
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    from: 1; to: 100; stepSize: 1
+                    value: selectionFillDialog.fillOpacity
+                    onMoved: selectionFillDialog.fillOpacity = Math.round(value)
+                }
+                Label { text: selectionFillDialog.fillOpacity + "%"; color: view.theme.text; font.pixelSize: 12; Layout.preferredWidth: 38; horizontalAlignment: Text.AlignRight }
+            }
+        }
+
+        footer: DialogFooter {
+            namePrefix: "selectionFill"
+            theme: view.theme
+            height: selectionFillDialog.footerHeight
+            Item { Layout.fillWidth: true }
+            PanelAction { theme: view.theme; text: qsTr("Cancel"); implicitWidth: 80; onClicked: selectionFillDialog.close() }
+            PanelAction { objectName: "selectionFillApplyBtn"; theme: view.theme; text: qsTr("Fill"); primary: true; implicitWidth: 80; onClicked: selectionFillDialog.apply() }
+        }
+    }
+
+    DialogFrame {
+        id: selectionStrokeDialog
+        objectName: "selectionStrokeDialog"
+        namePrefix: "selectionStroke"
+        theme: view.theme
+        title: qsTr("Stroke Selection")
+        preferredWidth: 360
+        resizable: false
+
+        property int strokeWidth: 4
+        property string strokePos: "center" // "inside" | "center" | "outside"
+        property string colorSource: "fg"   // "fg" | "bg" | "custom"
+        property string customHex: "#000000"
+        property int strokeOpacity: 100
+
+        function effectiveHex() {
+            if (colorSource === "bg") return view.backgroundColor
+            if (colorSource === "custom") return customHex
+            return view.foregroundColor
+        }
+
+        function openDialog() {
+            strokeWidthField.text = String(strokeWidth)
+            open()
+            strokeWidthField.forceActiveFocus()
+            strokeWidthField.selectAll()
+        }
+
+        function apply() {
+            var w = Math.max(1, Math.min(200, parseInt(strokeWidthField.text) || strokeWidth || 1))
+            strokeWidth = w
+            close()
+            view.command({
+                type: "editor_selection_stroke",
+                color: view.colorBytes(effectiveHex()),
+                width: w,
+                position: strokePos,
+                opacity: Math.max(0.01, strokeOpacity / 100.0)
+            })
+            view.forceActiveFocus()
+        }
+
+        onCloseRequested: close()
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Width"); color: view.theme.textMuted; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                TextField {
+                    id: strokeWidthField
+                    objectName: "selectionStrokeWidthField"
+                    Layout.preferredWidth: 64
+                    text: String(selectionStrokeDialog.strokeWidth)
+                    validator: IntValidator { bottom: 1; top: 200 }
+                    onTextEdited: {
+                        var v = parseInt(text)
+                        if (!isNaN(v)) selectionStrokeDialog.strokeWidth = Math.max(1, Math.min(200, v))
+                    }
+                    onAccepted: selectionStrokeDialog.apply()
+                }
+                Label { text: qsTr("px"); color: view.theme.textMuted; font.pixelSize: 12 }
+                Slider {
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    from: 1; to: 100; stepSize: 1
+                    value: Math.min(100, selectionStrokeDialog.strokeWidth)
+                    onMoved: {
+                        selectionStrokeDialog.strokeWidth = Math.round(value)
+                        strokeWidthField.text = String(selectionStrokeDialog.strokeWidth)
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Position"); color: view.theme.textMuted; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Inside");  primary: selectionStrokeDialog.strokePos === "inside";  onClicked: selectionStrokeDialog.strokePos = "inside" }
+                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Center");  primary: selectionStrokeDialog.strokePos === "center";  onClicked: selectionStrokeDialog.strokePos = "center" }
+                    PanelAction { Layout.fillWidth: true; theme: view.theme; text: qsTr("Outside"); primary: selectionStrokeDialog.strokePos === "outside"; onClicked: selectionStrokeDialog.strokePos = "outside" }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Color"); color: view.theme.textMuted; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                ComboBox {
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    readonly property var keys: ["fg", "bg", "custom"]
+                    model: [qsTr("Foreground"), qsTr("Background"), qsTr("Custom color…")]
+                    currentIndex: Math.max(0, keys.indexOf(selectionStrokeDialog.colorSource))
+                    onActivated: function(idx) {
+                        var k = keys[idx] || "fg"
+                        selectionStrokeDialog.colorSource = k
+                        if (k === "custom") {
+                            selActionColorDialog.targetDialog = "stroke"
+                            selActionColorDialog.selectedColor = selectionStrokeDialog.customHex
+                            selActionColorDialog.open()
+                        }
+                    }
+                }
+                Rectangle {
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 26
+                    radius: view.theme.radius
+                    color: selectionStrokeDialog.effectiveHex()
+                    border.width: 1
+                    border.color: view.theme.border
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            selActionColorDialog.targetDialog = "stroke"
+                            selActionColorDialog.selectedColor = selectionStrokeDialog.effectiveHex()
+                            selActionColorDialog.open()
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label { text: qsTr("Opacity"); color: view.theme.textMuted; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                Slider {
+                    Layout.fillWidth: true
+                    focusPolicy: Qt.NoFocus
+                    from: 1; to: 100; stepSize: 1
+                    value: selectionStrokeDialog.strokeOpacity
+                    onMoved: selectionStrokeDialog.strokeOpacity = Math.round(value)
+                }
+                Label { text: selectionStrokeDialog.strokeOpacity + "%"; color: view.theme.text; font.pixelSize: 12; Layout.preferredWidth: 38; horizontalAlignment: Text.AlignRight }
+            }
+        }
+
+        footer: DialogFooter {
+            namePrefix: "selectionStroke"
+            theme: view.theme
+            height: selectionStrokeDialog.footerHeight
+            Item { Layout.fillWidth: true }
+            PanelAction { theme: view.theme; text: qsTr("Cancel"); implicitWidth: 80; onClicked: selectionStrokeDialog.close() }
+            PanelAction { objectName: "selectionStrokeApplyBtn"; theme: view.theme; text: qsTr("Stroke"); primary: true; implicitWidth: 80; onClicked: selectionStrokeDialog.apply() }
         }
     }
 

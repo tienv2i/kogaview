@@ -26,6 +26,11 @@
     <file alias="icons/transform-free.svg">qml/icons/transform-free.svg</file>
     <file alias="icons/transform-scale.svg">qml/icons/transform-scale.svg</file>
     <file alias="icons/brush.svg">qml/icons/brush.svg</file>
+    <file alias="icons/draw-shapes.svg">qml/icons/draw-shapes.svg</file>
+    <file alias="icons/fill.svg">qml/icons/fill.svg</file>
+    <file alias="icons/gradient.svg">qml/icons/gradient.svg</file>
+    <file alias="icons/liquify.svg">qml/icons/liquify.svg</file>
+    <file alias="icons/zoom.svg">qml/icons/zoom.svg</file>
     <file alias="icons/eyedropper.svg">qml/icons/eyedropper.svg</file>
     <file alias="icons/select.svg">qml/icons/select.svg</file>
     <file alias="icons/eraser.svg">qml/icons/eraser.svg</file>

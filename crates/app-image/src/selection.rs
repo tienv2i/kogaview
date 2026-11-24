@@ -266,6 +266,73 @@ impl SelectionMask {
         }
     }
 
+    /// Separable morphological dilation (`dilate = true`, Grow) or erosion
+    /// (`dilate = false`, Shrink) by `radius` pixels (clamped to `64`).
+    pub fn morph(&mut self, radius: u32, dilate: bool) {
+        let r = radius.min(64) as i32;
+        if r <= 0 || self.width == 0 || self.height == 0 {
+            return;
+        }
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let mut tmp = vec![0u8; w * h];
+        // Horizontal pass
+        for y in 0..h {
+            let row = y * w;
+            for x in 0..w {
+                let x0 = (x as i32 - r).max(0) as usize;
+                let x1 = (x as i32 + r).min(w as i32 - 1) as usize;
+                let mut acc = if dilate { 0u8 } else { 255u8 };
+                for sx in x0..=x1 {
+                    let v = self.alpha[row + sx];
+                    acc = if dilate { acc.max(v) } else { acc.min(v) };
+                }
+                tmp[row + x] = acc;
+            }
+        }
+        // Vertical pass
+        for x in 0..w {
+            for y in 0..h {
+                let y0 = (y as i32 - r).max(0) as usize;
+                let y1 = (y as i32 + r).min(h as i32 - 1) as usize;
+                let mut acc = if dilate { 0u8 } else { 255u8 };
+                for sy in y0..=y1 {
+                    let v = tmp[sy * w + x];
+                    acc = if dilate { acc.max(v) } else { acc.min(v) };
+                }
+                self.alpha[y * w + x] = acc;
+            }
+        }
+    }
+
+    /// Turn the active selection into a border ring of `width` pixels.
+    pub fn border(&mut self, width: u32) {
+        let r = (width.clamp(1, 64) + 1) / 2;
+        let mut outer = self.clone();
+        let mut inner = self.clone();
+        outer.morph(r, true);
+        inner.morph(r, false);
+        for ((dst, &o), &i) in self
+            .alpha
+            .iter_mut()
+            .zip(outer.alpha.iter())
+            .zip(inner.alpha.iter())
+        {
+            *dst = o.saturating_sub(i);
+        }
+    }
+
+    /// Smooth jagged selection edges by blurring with `radius` and re-contrasting.
+    pub fn smooth(&mut self, radius: u32) {
+        let r = radius.clamp(1, 32);
+        self.feather(r);
+        for a in &mut self.alpha {
+            // S-curve re-contrast around 128 to keep edges crisp yet smooth.
+            let v = *a as i32;
+            *a = ((v - 128) * 3 + 128).clamp(0, 255) as u8;
+        }
+    }
+
     /// Fast 2-pass separable box blur approximating a Gaussian feather.
     pub fn feather(&mut self, radius: u32) {
         let r = radius.min(64) as i32;

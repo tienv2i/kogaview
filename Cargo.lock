@@ -823,21 +823,33 @@ checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "kogaview-core"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "image",
  "kogaview-editor",
+ "kogaview-plugins",
  "kogaview-protocol",
+ "kogaview-storage",
  "serde",
  "serde_json",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]
 name = "kogaview-editor"
-version = "2.1.0"
+version = "2.2.0"
+dependencies = [
+ "image",
+ "kogaview-image",
+ "kogaview-protocol",
+ "serde",
+ "tracing",
+ "zip",
+]
+
+[[package]]
+name = "kogaview-image"
+version = "2.2.0"
 dependencies = [
  "image",
  "jpeg-decoder",
@@ -848,16 +860,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "kogaview-plugins"
+version = "2.2.0"
+dependencies = [
+ "kogaview-protocol",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "kogaview-protocol"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
 [[package]]
+name = "kogaview-storage"
+version = "2.2.0"
+dependencies = [
+ "kogaview-protocol",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kogaview_desktop"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "cxx",
  "cxx-qt",

@@ -1,0 +1,1793 @@
+//! The arithmetic an edit is made of: resampling, covering, padding, the
+//! perspective warp and one brush stroke. Nothing here knows about a document,
+//! a history or a file — it takes a buffer and returns one.
+
+use image::imageops::{self, FilterType};
+use image::RgbaImage;
+use kogaview_protocol::{
+    BrushSettings, BrushTip, DrawShapeKind, GradientRepeat, GradientShape, GradientStop,
+    ResizeFilter,
+};
+
+/// A crop whose canvas grows past the picture: start from the fill colour and
+/// copy the part of the picture the rectangle keeps onto it. The rectangle is
+/// in the new canvas' coordinates, so a negative origin means the picture
+/// starts inside the canvas rather than at its top-left corner.
+pub fn grow_crop(
+    image: &RgbaImage,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let mut canvas = RgbaImage::from_pixel(
+        width,
+        height,
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha]),
+    );
+    let (doc_w, doc_h) = image.dimensions();
+    // The part of the picture the rectangle keeps, in picture coordinates.
+    let source_left = x.max(0).min(doc_w as i32);
+    let source_top = y.max(0).min(doc_h as i32);
+    let source_right = (i64::from(x) + i64::from(width))
+        .min(i64::from(doc_w))
+        .max(0) as i32;
+    let source_bottom = (i64::from(y) + i64::from(height))
+        .min(i64::from(doc_h))
+        .max(0) as i32;
+    if source_right > source_left && source_bottom > source_top {
+        let cropped = imageops::crop_imm(
+            image,
+            source_left as u32,
+            source_top as u32,
+            (source_right - source_left) as u32,
+            (source_bottom - source_top) as u32,
+        )
+        .to_image();
+        imageops::replace(
+            &mut canvas,
+            &cropped,
+            i64::from(source_left - x),
+            i64::from(source_top - y),
+        );
+    }
+    canvas
+}
+
+/// Paint one stroke as a union of round-capped capsules.
+///
+/// The coverage of a pixel is the *maximum* over every segment that reaches it,
+/// not a sum: a stroke that crosses itself or doubles back would otherwise get
+/// darker at the join, which is the classic overlap artefact of painting dabs.
+/// Each segment is feathered over one pixel at its edge so a diagonal is not a
+/// staircase. A brush blends `color` source-over the pixels; an eraser only
+/// lowers their alpha, so it works on a transparent document too.
+pub fn paint_stroke(
+    image: &RgbaImage,
+    points: &[[f64; 2]],
+    color: [u8; 3],
+    radius: f64,
+    opacity: f64,
+    erase: bool,
+) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let mut result = image.clone();
+
+    // The stroke's bounds plus a pixel of feather, clipped to the frame.
+    let feather = radius + 1.0;
+    let first = points[0];
+    let mut min_x = first[0];
+    let mut min_y = first[1];
+    let mut max_x = first[0];
+    let mut max_y = first[1];
+    for [x, y] in points {
+        min_x = min_x.min(*x);
+        min_y = min_y.min(*y);
+        max_x = max_x.max(*x);
+        max_y = max_y.max(*y);
+    }
+    let left = (min_x - feather).floor().max(0.0) as u32;
+    let top = (min_y - feather).floor().max(0.0) as u32;
+    let right = ((max_x + feather).ceil().max(0.0) as u32).min(width);
+    let bottom = ((max_y + feather).ceil().max(0.0) as u32).min(height);
+    if left >= right || top >= bottom {
+        return result;
+    }
+
+    let box_w = (right - left) as usize;
+    let box_h = (bottom - top) as usize;
+    let mut coverage = vec![0.0f32; box_w * box_h];
+
+    // A single point is a dot: a zero-length segment whose caps make a disk.
+    let segments: Vec<([f64; 2], [f64; 2])> = if points.len() == 1 {
+        vec![(points[0], points[0])]
+    } else {
+        points.windows(2).map(|pair| (pair[0], pair[1])).collect()
+    };
+
+    for (a, b) in &segments {
+        let seg_left = (a[0].min(b[0]) - feather).floor().max(left as f64) as usize;
+        let seg_top = (a[1].min(b[1]) - feather).floor().max(top as f64) as usize;
+        let seg_right = ((a[0].max(b[0]) + feather).ceil().max(0.0) as usize).min(right as usize);
+        let seg_bottom = ((a[1].max(b[1]) + feather).ceil().max(0.0) as usize).min(bottom as usize);
+        if seg_left >= seg_right || seg_top >= seg_bottom {
+            continue;
+        }
+        let delta = [b[0] - a[0], b[1] - a[1]];
+        let length_squared = delta[0] * delta[0] + delta[1] * delta[1];
+        for y in seg_top..seg_bottom {
+            let py = y as f64 + 0.5;
+            for x in seg_left..seg_right {
+                let px = x as f64 + 0.5;
+                let t = if length_squared > 0.0 {
+                    (((px - a[0]) * delta[0] + (py - a[1]) * delta[1]) / length_squared)
+                        .clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let cx = a[0] + delta[0] * t;
+                let cy = a[1] + delta[1] * t;
+                let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+                let value = (radius + 0.5 - distance).clamp(0.0, 1.0) as f32;
+                let index = (y - top as usize) * box_w + (x - left as usize);
+                if value > coverage[index] {
+                    coverage[index] = value;
+                }
+            }
+        }
+    }
+
+    let alpha_scale = opacity as f32;
+    for y in top..bottom {
+        for x in left..right {
+            let amount = coverage[((y - top) as usize) * box_w + (x as usize - left as usize)];
+            if amount <= 0.0 {
+                continue;
+            }
+            let alpha = (amount * alpha_scale).clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let pixel = result.get_pixel_mut(x, y);
+            let destination = pixel.0;
+            let destination_alpha = f32::from(destination[3]) / 255.0;
+            if erase {
+                let out_alpha = destination_alpha * (1.0 - alpha);
+                pixel.0 = [
+                    destination[0],
+                    destination[1],
+                    destination[2],
+                    (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+                ];
+            } else {
+                let out_alpha = alpha + destination_alpha * (1.0 - alpha);
+                if out_alpha <= 0.0 {
+                    pixel.0 = [0, 0, 0, 0];
+                    continue;
+                }
+                let blend = |source: u8, under: u8| -> u8 {
+                    let source = f32::from(source) / 255.0;
+                    let under = f32::from(under) / 255.0;
+                    (((source * alpha + under * destination_alpha * (1.0 - alpha)) / out_alpha)
+                        * 255.0)
+                        .round()
+                        .clamp(0.0, 255.0) as u8
+                };
+                pixel.0 = [
+                    blend(color[0], destination[0]),
+                    blend(color[1], destination[1]),
+                    blend(color[2], destination[2]),
+                    (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+                ];
+            }
+        }
+    }
+    result
+}
+
+#[inline]
+fn hash_u32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x
+}
+
+#[inline]
+fn hash_f32(a: i32, b: i32, seed: u32) -> f32 {
+    let h = hash_u32(
+        (a as u32)
+            .wrapping_mul(374_761_393)
+            .wrapping_add((b as u32).wrapping_mul(668_265_263))
+            .wrapping_add(seed.wrapping_mul(1_442_695_041)),
+    );
+    (h as f32) / (u32::MAX as f32)
+}
+
+/// Krita-style brush stroke rasterizer supporting Round (variable hardness),
+/// Flat (calligraphy chisel), Chalk (textured dry media), Spray (splatter),
+/// and Pixel (crisp pixel-art) tips with flow, spacing, angle, and scatter.
+pub fn paint_stroke_with_brush(
+    image: &RgbaImage,
+    points: &[[f64; 2]],
+    color: [u8; 3],
+    radius: f64,
+    opacity: f64,
+    erase: bool,
+    brush: BrushSettings,
+) -> RgbaImage {
+    let hardness = brush.hardness.clamp(0.0, 1.0);
+    let flow = brush.flow.clamp(0.05, 1.0) as f32;
+    let spacing = brush.spacing.clamp(0.05, 2.0);
+    let scatter = brush.scatter.clamp(0.0, 2.5);
+
+    // Fast path for the default smooth hard round brush.
+    if brush.tip == BrushTip::Round && hardness >= 0.84 && flow >= 0.99 && scatter <= 0.001 {
+        return paint_stroke(image, points, color, radius, opacity, erase);
+    }
+
+    let (width, height) = image.dimensions();
+    let mut result = image.clone();
+    if width == 0 || height == 0 || points.is_empty() {
+        return result;
+    }
+
+    let scatter_pad = radius * scatter * 1.5;
+    let feather = radius + scatter_pad + 2.0;
+    let mut min_x = points[0][0];
+    let mut min_y = points[0][1];
+    let mut max_x = points[0][0];
+    let mut max_y = points[0][1];
+    for [x, y] in points {
+        min_x = min_x.min(*x);
+        min_y = min_y.min(*y);
+        max_x = max_x.max(*x);
+        max_y = max_y.max(*y);
+    }
+    let left = (min_x - feather).floor().max(0.0) as u32;
+    let top = (min_y - feather).floor().max(0.0) as u32;
+    let right = ((max_x + feather).ceil().max(0.0) as u32).min(width);
+    let bottom = ((max_y + feather).ceil().max(0.0) as u32).min(height);
+    if left >= right || top >= bottom {
+        return result;
+    }
+
+    let box_w = (right - left) as usize;
+    let box_h = (bottom - top) as usize;
+    let mut coverage = vec![0.0f32; box_w * box_h];
+
+    // Generate dab centers along the stroke according to `spacing`.
+    let step = (radius * 2.0 * spacing).max(0.75);
+    let mut dabs: Vec<[f64; 2]> = Vec::with_capacity(points.len() * 2);
+    dabs.push(points[0]);
+    let mut carry = 0.0f64;
+    for pair in points.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let len = dx.hypot(dy);
+        if len < 1e-6 {
+            continue;
+        }
+        let mut dist = step - carry;
+        while dist <= len {
+            let t = dist / len;
+            dabs.push([a[0] + dx * t, a[1] + dy * t]);
+            dist += step;
+        }
+        carry = len - (dist - step);
+    }
+
+    let angle_rad = brush.angle.to_radians();
+    let cos_a = angle_rad.cos();
+    let sin_a = angle_rad.sin();
+    let r = radius.max(0.5);
+
+    let stamp_dab = |coverage: &mut [f32], cx: f64, cy: f64, dab_r: f64, dab_flow: f32, seed: u32| {
+        let pad = dab_r + 1.5;
+        let x0 = (cx - pad).floor().max(left as f64) as usize;
+        let y0 = (cy - pad).floor().max(top as f64) as usize;
+        let x1 = ((cx + pad).ceil().max(0.0) as usize).min(right as usize);
+        let y1 = ((cy + pad).ceil().max(0.0) as usize).min(bottom as usize);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let inner = dab_r * hardness;
+        let falloff = (dab_r - inner).max(0.5);
+        for py in y0..y1 {
+            let fy = py as f64 + 0.5 - cy;
+            let row = (py - top as usize) * box_w;
+            for px in x0..x1 {
+                let fx = px as f64 + 0.5 - cx;
+                let mask = match brush.tip {
+                    BrushTip::Round => {
+                        let d = fx.hypot(fy);
+                        if d <= inner {
+                            1.0f32
+                        } else if d < dab_r + 0.5 {
+                            let t = ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32;
+                            // Smooth cubic Hermite falloff for natural Krita airbrush feel.
+                            t * t * (3.0 - 2.0 * t)
+                        } else {
+                            0.0
+                        }
+                    }
+                    BrushTip::Flat => {
+                        let rx = fx * cos_a + fy * sin_a;
+                        let ry = (-fx * sin_a + fy * cos_a) * 3.2;
+                        let d = rx.hypot(ry);
+                        if d <= inner {
+                            1.0f32
+                        } else if d < dab_r + 0.5 {
+                            let t = ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32;
+                            t * t * (3.0 - 2.0 * t)
+                        } else {
+                            0.0
+                        }
+                    }
+                    BrushTip::Chalk => {
+                        let d = fx.hypot(fy);
+                        if d >= dab_r + 0.5 {
+                            0.0
+                        } else {
+                            let base = if d <= inner {
+                                1.0f32
+                            } else {
+                                ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32
+                            };
+                            // Spatial paper grain + coarse bristle texture.
+                            let g1 = hash_f32(px as i32, py as i32, 17);
+                            let g2 = hash_f32((px as i32) >> 1, (py as i32) >> 1, 53);
+                            let grain = (g1 * 0.55 + g2 * 0.45 - 0.18).clamp(0.0, 1.0);
+                            (base * grain * 1.35).clamp(0.0, 1.0)
+                        }
+                    }
+                    BrushTip::Pixel => {
+                        if fx.abs() <= dab_r && fy.abs() <= dab_r {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    BrushTip::Spray => {
+                        let d = fx.hypot(fy);
+                        if d <= dab_r {
+                            let t = (1.0 - d / (dab_r + 0.5)).clamp(0.0, 1.0) as f32;
+                            let n = hash_f32(px as i32, py as i32, seed);
+                            if n > 0.35 { t } else { 0.0 }
+                        } else {
+                            0.0
+                        }
+                    }
+                };
+                if mask > 0.0 {
+                    let idx = row + (px - left as usize);
+                    let add = (mask * dab_flow).clamp(0.0, 1.0);
+                    coverage[idx] = 1.0 - (1.0 - coverage[idx]) * (1.0 - add);
+                }
+            }
+        }
+    };
+
+    for (idx, &[dx, dy]) in dabs.iter().enumerate() {
+        let seed = (idx as u32).wrapping_add(1);
+        if brush.tip == BrushTip::Spray {
+            let droplets = 9u32;
+            let spread = r * (1.0 + scatter);
+            for d in 0..droplets {
+                let s = seed.wrapping_mul(31).wrapping_add(d * 7 + 3);
+                let ang = hash_f32(idx as i32, d as i32, s) as f64 * std::f64::consts::TAU;
+                let dist = (hash_f32(d as i32, idx as i32, s ^ 0x55aa) as f64).sqrt() * spread;
+                let drop_r = (r * 0.16 * (0.5 + hash_f32(idx as i32, d as i32, s ^ 0x1234) as f64)).max(0.8);
+                stamp_dab(
+                    &mut coverage,
+                    dx + ang.cos() * dist,
+                    dy + ang.sin() * dist,
+                    drop_r,
+                    flow,
+                    s,
+                );
+            }
+        } else {
+            let (jx, jy) = if scatter > 0.0 {
+                let ang = hash_f32(idx as i32, 1, seed) as f64 * std::f64::consts::TAU;
+                let mag = hash_f32(idx as i32, 2, seed) as f64 * r * scatter;
+                (ang.cos() * mag, ang.sin() * mag)
+            } else {
+                (0.0, 0.0)
+            };
+            stamp_dab(&mut coverage, dx + jx, dy + jy, r, flow, seed);
+        }
+    }
+
+    let alpha_scale = opacity.clamp(0.0, 1.0) as f32;
+    for y in top..bottom {
+        for x in left..right {
+            let amount = coverage[((y - top) as usize) * box_w + (x as usize - left as usize)];
+            if amount <= 0.0 {
+                continue;
+            }
+            let alpha = (amount * alpha_scale).clamp(0.0, 1.0);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let pixel = result.get_pixel_mut(x, y);
+            if erase {
+                let da = f32::from(pixel.0[3]) / 255.0;
+                let out_alpha = da * (1.0 - alpha);
+                pixel.0[3] = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+                if pixel.0[3] == 0 {
+                    pixel.0 = [0, 0, 0, 0];
+                }
+            } else {
+                blend_source_over_pixel(pixel, color, alpha);
+            }
+        }
+    }
+    result
+}
+
+/// The homography that maps the unit square onto `corners`.
+///
+/// The unit square's (0, 0), (1, 0), (1, 1), (0, 1) land on the quad's TL, TR,
+/// BR, BL. The classic square-to-quad decomposition is used rather than an
+/// 8 × 8 solve: it is the same answer with the degenerate case (a parallelogram)
+/// written out instead of divided by zero.
+pub fn square_to_quad(corners: &[[f64; 2]; 4]) -> [[f64; 3]; 3] {
+    let [p0, p1, p2, p3] = *corners;
+    let sx = p0[0] - p1[0] + p2[0] - p3[0];
+    let sy = p0[1] - p1[1] + p2[1] - p3[1];
+    if sx.abs() < 1e-12 && sy.abs() < 1e-12 {
+        return [
+            [p1[0] - p0[0], p3[0] - p0[0], p0[0]],
+            [p1[1] - p0[1], p3[1] - p0[1], p0[1]],
+            [0.0, 0.0, 1.0],
+        ];
+    }
+    let dx1 = p1[0] - p2[0];
+    let dx2 = p3[0] - p2[0];
+    let dy1 = p1[1] - p2[1];
+    let dy2 = p3[1] - p2[1];
+    let denominator = dx1 * dy2 - dx2 * dy1;
+    let g = (sx * dy2 - dx2 * sy) / denominator;
+    let h = (dx1 * sy - sx * dy1) / denominator;
+    [
+        [p1[0] - p0[0] + g * p1[0], p3[0] - p0[0] + h * p3[0], p0[0]],
+        [p1[1] - p0[1] + g * p1[1], p3[1] - p0[1] + h * p3[1], p0[1]],
+        [g, h, 1.0],
+    ]
+}
+
+/// Warp `image` so the quad becomes the whole frame, keeping the frame's size.
+///
+/// Each destination pixel centre is a point in the unit square; the homography
+/// takes it to the quad's own point in the source, which is sampled bilinearly.
+/// The quad is inside the frame by validation, so every sample lands inside the
+/// picture; the clamp is there for float rounding at the very edge, not as a
+/// crop.
+pub fn warp_quad(image: &RgbaImage, corners: &[[f64; 2]; 4]) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let [[a, b, c], [d, e, f], [g, h, _]] = square_to_quad(corners);
+    let mut output = RgbaImage::new(width, height);
+    let width_f = f64::from(width);
+    let height_f = f64::from(height);
+    for y in 0..height {
+        // The unit square's v for this row is constant: hoist it out of the
+        // inner loop, which is most of the cost on a large document.
+        let v = (f64::from(y) + 0.5) / height_f;
+        for x in 0..width {
+            let u = (f64::from(x) + 0.5) / width_f;
+            let w = g * u + h * v + 1.0;
+            if w.abs() < 1e-12 {
+                continue;
+            }
+            let source_x = (a * u + b * v + c) / w;
+            let source_y = (d * u + e * v + f) / w;
+            // The homography answers in *frame* coordinates — where the
+            // document's outer edge is 0 and `width`, not the centre of its
+            // first pixel. Shift to pixel centres so an identity quad samples
+            // pixel (x, y) for destination pixel (x, y) instead of halfway
+            // between two.
+            output.put_pixel(x, y, sample_bilinear(image, source_x - 0.5, source_y - 0.5));
+        }
+    }
+    output
+}
+
+/// Resample `image` to `width × height` and place it at `(x, y)` on a new
+/// canvas of `image`'s original dimensions, filling uncovered pixels with
+/// `fill` / `fill_alpha`. Pixels placed outside the canvas are clipped.
+pub fn free_transform(
+    image: &RgbaImage,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    rotation: f64,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let (doc_w, doc_h) = image.dimensions();
+    let background = if fill_alpha == 0 {
+        image::Rgba([0, 0, 0, 0])
+    } else {
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha])
+    };
+    let mut output = RgbaImage::from_pixel(doc_w, doc_h, background);
+    let scaled = resample(image, width, height, ResizeFilter::Auto);
+    let norm = rotation.rem_euclid(360.0);
+    if norm < 1e-4 || (360.0 - norm) < 1e-4 {
+        let doc_w_i = i64::from(doc_w);
+        let doc_h_i = i64::from(doc_h);
+        for sy in 0..height {
+            let dy = i64::from(y) + i64::from(sy);
+            if dy < 0 || dy >= doc_h_i {
+                continue;
+            }
+            for sx in 0..width {
+                let dx = i64::from(x) + i64::from(sx);
+                if dx < 0 || dx >= doc_w_i {
+                    continue;
+                }
+                let src = *scaled.get_pixel(sx, sy);
+                let dst = *output.get_pixel(dx as u32, dy as u32);
+                output.put_pixel(dx as u32, dy as u32, blend_over(dst, src));
+            }
+        }
+        return output;
+    }
+
+    let rad = rotation.to_radians();
+    let cos = rad.cos();
+    let sin = rad.sin();
+    let wf = f64::from(width);
+    let hf = f64::from(height);
+    let box_cx = f64::from(x) + wf / 2.0;
+    let box_cy = f64::from(y) + hf / 2.0;
+    for dy_u in 0..doc_h {
+        let dy = (f64::from(dy_u) + 0.5) - box_cy;
+        for dx_u in 0..doc_w {
+            let dx = (f64::from(dx_u) + 0.5) - box_cx;
+            let sx = dx * cos + dy * sin + wf / 2.0;
+            let sy = -dx * sin + dy * cos + hf / 2.0;
+            if sx >= 0.0 && sx <= wf && sy >= 0.0 && sy <= hf {
+                let sampled = sample_bilinear(&scaled, sx - 0.5, sy - 0.5);
+                output.put_pixel(dx_u, dy_u, blend_over(background, sampled));
+            }
+        }
+    }
+    output
+}
+
+/// Resize the canvas without scaling the source pixels.
+///
+/// The source image is placed at the requested 3×3 anchor inside the new
+/// `width × height` frame: growing adds a border filled with `fill` /
+/// `fill_alpha`, shrinking crops around the anchor.
+pub fn canvas_size(
+    image: &RgbaImage,
+    width: u32,
+    height: u32,
+    anchor: &str,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let (doc_w, doc_h) = image.dimensions();
+    let background = if fill_alpha == 0 {
+        image::Rgba([0, 0, 0, 0])
+    } else {
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha])
+    };
+    let mut output = RgbaImage::from_pixel(width, height, background);
+    let col = match anchor {
+        "top_left" | "left" | "bottom_left" => 0,
+        "top_right" | "right" | "bottom_right" => 2,
+        _ => 1,
+    };
+    let row = match anchor {
+        "top_left" | "top" | "top_right" => 0,
+        "bottom_left" | "bottom" | "bottom_right" => 2,
+        _ => 1,
+    };
+    let dx: i64 = match col {
+        0 => 0,
+        1 => (i64::from(width) - i64::from(doc_w)) / 2,
+        _ => i64::from(width) - i64::from(doc_w),
+    };
+    let dy: i64 = match row {
+        0 => 0,
+        1 => (i64::from(height) - i64::from(doc_h)) / 2,
+        _ => i64::from(height) - i64::from(doc_h),
+    };
+    let out_w_i = i64::from(width);
+    let out_h_i = i64::from(height);
+    for sy in 0..doc_h {
+        let ty = i64::from(sy) + dy;
+        if ty < 0 || ty >= out_h_i {
+            continue;
+        }
+        for sx in 0..doc_w {
+            let tx = i64::from(sx) + dx;
+            if tx < 0 || tx >= out_w_i {
+                continue;
+            }
+            let src = *image.get_pixel(sx, sy);
+            let dst = *output.get_pixel(tx as u32, ty as u32);
+            output.put_pixel(tx as u32, ty as u32, blend_over(dst, src));
+        }
+    }
+    output
+}
+
+/// Rotate `image` clockwise by an arbitrary angle (in degrees), expanding the
+/// canvas to hold the rotated bounding box and filling uncovered corners with
+/// `fill` / `fill_alpha`.
+pub fn rotate_angle(
+    image: &RgbaImage,
+    degrees: f64,
+    fill: [u8; 3],
+    fill_alpha: u8,
+) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let wf = f64::from(w);
+    let hf = f64::from(h);
+    let rad = degrees.to_radians();
+    let cos = rad.cos();
+    let sin = rad.sin();
+    let new_w = ((wf * cos.abs() + hf * sin.abs()).ceil() as u32).clamp(1, 16384);
+    let new_h = ((wf * sin.abs() + hf * cos.abs()).ceil() as u32).clamp(1, 16384);
+    let background = if fill_alpha == 0 {
+        image::Rgba([0, 0, 0, 0])
+    } else {
+        image::Rgba([fill[0], fill[1], fill[2], fill_alpha])
+    };
+    let mut output = RgbaImage::from_pixel(new_w, new_h, background);
+    let dst_cx = f64::from(new_w) / 2.0;
+    let dst_cy = f64::from(new_h) / 2.0;
+    let src_cx = wf / 2.0;
+    let src_cy = hf / 2.0;
+
+    for y in 0..new_h {
+        let dy = (f64::from(y) + 0.5) - dst_cy;
+        for x in 0..new_w {
+            let dx = (f64::from(x) + 0.5) - dst_cx;
+            // Inverse clockwise rotation (-rad) maps destination pixel centre
+            // back into source frame coordinates.
+            let sx = dx * cos + dy * sin + src_cx;
+            let sy = -dx * sin + dy * cos + src_cy;
+            if sx >= 0.0 && sx <= wf && sy >= 0.0 && sy <= hf {
+                let sampled = sample_bilinear(image, sx - 0.5, sy - 0.5);
+                output.put_pixel(x, y, blend_over(background, sampled));
+            }
+        }
+    }
+    output
+}
+
+fn blend_over(dst: image::Rgba<u8>, src: image::Rgba<u8>) -> image::Rgba<u8> {
+    let sa = f32::from(src[3]) / 255.0;
+    if sa >= 1.0 {
+        return src;
+    }
+    if sa <= 0.0 {
+        return dst;
+    }
+    let da = f32::from(dst[3]) / 255.0;
+    let out_a = sa + da * (1.0 - sa);
+    if out_a <= 0.0 {
+        return image::Rgba([0, 0, 0, 0]);
+    }
+    let mix = |s: u8, d: u8| -> u8 {
+        let v = (f32::from(s) * sa + f32::from(d) * da * (1.0 - sa)) / out_a;
+        v.round().clamp(0.0, 255.0) as u8
+    };
+    image::Rgba([
+        mix(src[0], dst[0]),
+        mix(src[1], dst[1]),
+        mix(src[2], dst[2]),
+        (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
+    ])
+}
+
+/// Bilinear sample with the sample point clamped to the image's own bounds.
+pub fn sample_bilinear(image: &RgbaImage, x: f64, y: f64) -> image::Rgba<u8> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return image::Rgba([0, 0, 0, 255]);
+    }
+    let x = x.clamp(0.0, f64::from(width - 1));
+    let y = y.clamp(0.0, f64::from(height - 1));
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(width - 1);
+    let y1 = (y0 + 1).min(height - 1);
+    let fx = x - f64::from(x0);
+    let fy = y - f64::from(y0);
+    let top_left = image.get_pixel(x0, y0);
+    let top_right = image.get_pixel(x1, y0);
+    let bottom_left = image.get_pixel(x0, y1);
+    let bottom_right = image.get_pixel(x1, y1);
+    let mut out = [0u8; 4];
+    for channel in 0..4 {
+        let top = f64::from(top_left[channel]) * (1.0 - fx) + f64::from(top_right[channel]) * fx;
+        let bottom =
+            f64::from(bottom_left[channel]) * (1.0 - fx) + f64::from(bottom_right[channel]) * fx;
+        let value = top * (1.0 - fy) + bottom * fy;
+        out[channel] = value.round().clamp(0.0, 255.0) as u8;
+    }
+    image::Rgba(out)
+}
+
+/// Resample one image with the filter the form asked for.
+///
+/// `Auto` is a box average for a downscale — fast and right for shrinking a
+/// photo to a delivery size — and Lanczos3 when the target is larger, where a
+/// box average would leave a hard-edged enlargement. The named choices map to
+/// the `image` crate's kernels: `Bilinear` to its triangle, `Bicubic` to
+/// Catmull-Rom, `Bspline` to its Gaussian approximation.
+pub fn resample(
+    image: &RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    filter: ResizeFilter,
+) -> RgbaImage {
+    match filter {
+        ResizeFilter::Nearest => {
+            imageops::resize(image, target_width, target_height, FilterType::Nearest)
+        }
+        ResizeFilter::Bilinear => {
+            imageops::resize(image, target_width, target_height, FilterType::Triangle)
+        }
+        ResizeFilter::Bicubic => {
+            imageops::resize(image, target_width, target_height, FilterType::CatmullRom)
+        }
+        ResizeFilter::Bspline => {
+            imageops::resize(image, target_width, target_height, FilterType::Gaussian)
+        }
+        ResizeFilter::Lanczos3 => {
+            imageops::resize(image, target_width, target_height, FilterType::Lanczos3)
+        }
+        ResizeFilter::Auto => {
+            let (width, height) = image.dimensions();
+            if target_width < width && target_height < height {
+                imageops::thumbnail(image, target_width, target_height)
+            } else {
+                imageops::resize(image, target_width, target_height, FilterType::Lanczos3)
+            }
+        }
+    }
+}
+
+/// Scale the whole source down (or up) to the largest box of the source's own
+/// shape that fits inside `target_width` × `target_height`, then centre it on a
+/// target-sized canvas of `color`. Nothing is stretched and nothing is cut: the
+/// target shape is the frame, the source shape is what fills it, and the
+/// leftover is the pad. The pad is a letterbox or a pillarbox — only a square
+/// when the target itself is square.
+pub fn fit_with_padding(
+    image: &RgbaImage,
+    target_width: u32,
+    target_height: u32,
+    color: [u8; 3],
+    alpha: u8,
+    filter: ResizeFilter,
+) -> RgbaImage {
+    let (source_width, source_height) = image.dimensions();
+    let source_width_64 = u64::from(source_width);
+    let source_height_64 = u64::from(source_height);
+    let target_width_64 = u64::from(target_width);
+    let target_height_64 = u64::from(target_height);
+
+    // The target is the tighter constraint on width when its aspect is narrower
+    // than the source's; otherwise height is. Rounded to the nearest pixel and
+    // clamped so integer rounding can never spill outside the frame.
+    let (content_width, content_height) = if target_width_64 * source_height_64
+        <= target_height_64 * source_width_64
+    {
+        let height = (source_height_64 * target_width_64 + source_width_64 / 2) / source_width_64;
+        (target_width, height.clamp(1, target_height_64) as u32)
+    } else {
+        let width = (source_width_64 * target_height_64 + source_height_64 / 2) / source_height_64;
+        (width.clamp(1, target_width_64) as u32, target_height)
+    };
+
+    let content = resample(image, content_width, content_height, filter);
+    let mut canvas = RgbaImage::from_pixel(
+        target_width,
+        target_height,
+        image::Rgba([color[0], color[1], color[2], alpha]),
+    );
+    let x = (target_width - content_width) / 2;
+    let y = (target_height - content_height) / 2;
+    imageops::overlay(&mut canvas, &content, i64::from(x), i64::from(y));
+    canvas
+}
+
+/// The centred source rectangle that covers the target aspect without
+/// stretching. A wider source loses columns, a taller source loses rows; equal
+/// aspects keep the whole image.
+pub fn cover_rect(
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> (u32, u32, u32, u32) {
+    let sw = u64::from(source_width);
+    let sh = u64::from(source_height);
+    let tw = u64::from(target_width);
+    let th = u64::from(target_height);
+    let (crop_width, crop_height) = if sw * th > tw * sh {
+        // Source is wider: keep full height, take a centred width.
+        let width = ((sh * tw + th / 2) / th).clamp(1, sw) as u32;
+        (width, source_height)
+    } else if sw * th < tw * sh {
+        // Source is taller: keep full width, take a centred height.
+        let height = ((sw * th + tw / 2) / tw).clamp(1, sh) as u32;
+        (source_width, height)
+    } else {
+        (source_width, source_height)
+    };
+    // A locked ratio produces integer sides that miss the shape by a fraction
+    // of a pixel. Cropping a single row or column for that difference is the
+    // "resize shaved 1–2 px" defect: when the rectangle would lose at most one
+    // pixel on one axis, keep the whole picture and let the resample absorb the
+    // rounding instead.
+    if source_width.saturating_sub(crop_width) <= 1
+        && source_height.saturating_sub(crop_height) <= 1
+    {
+        return (0, 0, source_width, source_height);
+    }
+    (
+        (source_width - crop_width) / 2,
+        (source_height - crop_height) / 2,
+        crop_width,
+        crop_height,
+    )
+}
+
+/// Adjust brightness, contrast, and saturation (`-1.0..=1.0`, `0.0` = identity)
+/// matching Qt 6 `MultiEffect` order (contrast -> brightness -> saturation) while
+/// preserving alpha untouched.
+pub fn adjust_color(
+    image: &RgbaImage,
+    brightness: f64,
+    contrast: f64,
+    saturation: f64,
+) -> RgbaImage {
+    let b = brightness.clamp(-1.0, 1.0);
+    let c = contrast.clamp(-1.0, 1.0);
+    let s = saturation.clamp(-1.0, 1.0);
+    let contrast_factor = if c >= 0.0 {
+        1.0 / (1.0 - c * 0.999)
+    } else {
+        1.0 + c
+    };
+    let sat_factor = 1.0 + s;
+
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        let mut r = f64::from(px[0]) / 255.0;
+        let mut g = f64::from(px[1]) / 255.0;
+        let mut bl = f64::from(px[2]) / 255.0;
+
+        // Contrast around mid-grey (0.5)
+        r = (r - 0.5) * contrast_factor + 0.5;
+        g = (g - 0.5) * contrast_factor + 0.5;
+        bl = (bl - 0.5) * contrast_factor + 0.5;
+
+        // Brightness (linear additive, matching Qt Quick MultiEffect)
+        r += b;
+        g += b;
+        bl += b;
+
+        // Saturation around Rec.709 luma
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+        r = luma + (r - luma) * sat_factor;
+        g = luma + (g - luma) * sat_factor;
+        bl = luma + (bl - luma) * sat_factor;
+
+        px[0] = (r.clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[1] = (g.clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[2] = (bl.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    out
+}
+
+/// Build a 256-entry lookup table from normalized control points `[[x, y], ...]`
+/// in `0.0..=1.0` using Fritsch–Carlson monotone cubic Hermite interpolation
+/// (smooth Krita/Photoshop-style curves with zero overshoot).
+pub fn build_curve_lut(points: &[[f64; 2]]) -> [u8; 256] {
+    let mut identity = [0u8; 256];
+    for (i, slot) in identity.iter_mut().enumerate() {
+        *slot = i as u8;
+    }
+    if points.len() < 2 {
+        return identity;
+    }
+    let mut pts: Vec<(f64, f64)> = points
+        .iter()
+        .filter(|p| p[0].is_finite() && p[1].is_finite())
+        .map(|p| (p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)))
+        .collect();
+    if pts.len() < 2 {
+        return identity;
+    }
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Deduplicate points with nearly identical X so secant slopes stay finite.
+    let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for (x, y) in pts {
+        if let Some(last) = dedup.last_mut() {
+            if (x - last.0).abs() < 1e-4 {
+                last.1 = y;
+                continue;
+            }
+        }
+        dedup.push((x, y));
+    }
+    let n = dedup.len();
+    if n < 2 {
+        return identity;
+    }
+
+    // Secant slopes and intervals
+    let mut h = vec![0.0; n - 1];
+    let mut d = vec![0.0; n - 1];
+    for i in 0..(n - 1) {
+        h[i] = dedup[i + 1].0 - dedup[i].0;
+        d[i] = (dedup[i + 1].1 - dedup[i].1) / h[i].max(1e-6);
+    }
+
+    // Tangents via Fritsch–Carlson monotone cubic method
+    let mut m = vec![0.0; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..(n - 1) {
+        if d[i - 1] * d[i] <= 0.0 {
+            m[i] = 0.0;
+        } else {
+            let w1 = 2.0 * h[i] + h[i - 1];
+            let w2 = h[i] + 2.0 * h[i - 1];
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+        }
+    }
+    for i in 0..(n - 1) {
+        if d[i].abs() < 1e-9 {
+            m[i] = 0.0;
+            m[i + 1] = 0.0;
+        } else {
+            let alpha = m[i] / d[i];
+            let beta = m[i + 1] / d[i];
+            let s = alpha * alpha + beta * beta;
+            if s > 9.0 {
+                let tau = 3.0 / s.sqrt();
+                m[i] = tau * alpha * d[i];
+                m[i + 1] = tau * beta * d[i];
+            }
+        }
+    }
+
+    let mut lut = [0u8; 256];
+    let mut seg = 0usize;
+    for (i, slot) in lut.iter_mut().enumerate() {
+        let x = i as f64 / 255.0;
+        let y = if x <= dedup[0].0 {
+            dedup[0].1
+        } else if x >= dedup[n - 1].0 {
+            dedup[n - 1].1
+        } else {
+            while seg + 1 < n - 1 && x > dedup[seg + 1].0 {
+                seg += 1;
+            }
+            let hi = h[seg].max(1e-6);
+            let t = ((x - dedup[seg].0) / hi).clamp(0.0, 1.0);
+            let t2 = t * t;
+            let t3 = t2 * t;
+            let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            let h10 = t3 - 2.0 * t2 + t;
+            let h01 = -2.0 * t3 + 3.0 * t2;
+            let h11 = t3 - t2;
+            h00 * dedup[seg].1 + h10 * hi * m[seg] + h01 * dedup[seg + 1].1 + h11 * hi * m[seg + 1]
+        };
+        *slot = (y.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    lut
+}
+
+pub fn is_identity_lut(lut: &[u8; 256]) -> bool {
+    lut.iter().enumerate().all(|(i, &v)| v == i as u8)
+}
+
+/// Apply per-channel RGB + Master curves via O(N) 256-entry LUT lookups, preserving alpha.
+pub fn adjust_curves(
+    image: &RgbaImage,
+    rgb: &[[f64; 2]],
+    red: &[[f64; 2]],
+    green: &[[f64; 2]],
+    blue: &[[f64; 2]],
+) -> RgbaImage {
+    let lut_rgb = build_curve_lut(rgb);
+    let lut_r = build_curve_lut(red);
+    let lut_g = build_curve_lut(green);
+    let lut_b = build_curve_lut(blue);
+
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        px[0] = lut_rgb[usize::from(lut_r[usize::from(px[0])])];
+        px[1] = lut_rgb[usize::from(lut_g[usize::from(px[1])])];
+        px[2] = lut_rgb[usize::from(lut_b[usize::from(px[2])])];
+    }
+    out
+}
+
+/// Krita-style HSV adjustment (`hue_deg` in `-180..=180`, `saturation` & `value`
+/// in `-1.0..=1.0`, `0.0` = unchanged), preserving alpha untouched.
+pub fn adjust_hsv(
+    image: &RgbaImage,
+    hue_deg: f64,
+    saturation: f64,
+    value: f64,
+) -> RgbaImage {
+    let dh = hue_deg.clamp(-180.0, 180.0);
+    let ds = saturation.clamp(-1.0, 1.0);
+    let dv = value.clamp(-1.0, 1.0);
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        let r = f64::from(px[0]) / 255.0;
+        let g = f64::from(px[1]) / 255.0;
+        let b = f64::from(px[2]) / 255.0;
+
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+
+        let mut h = if delta < 1e-6 {
+            0.0
+        } else if (max - r).abs() < 1e-6 {
+            60.0 * (((g - b) / delta) % 6.0)
+        } else if (max - g).abs() < 1e-6 {
+            60.0 * (((b - r) / delta) + 2.0)
+        } else {
+            60.0 * (((r - g) / delta) + 4.0)
+        };
+        if h < 0.0 {
+            h += 360.0;
+        }
+        let mut s = if max < 1e-6 { 0.0 } else { delta / max };
+        let mut v = max;
+
+        h = (h + dh).rem_euclid(360.0);
+        s = if ds >= 0.0 {
+            (s + (1.0 - s) * ds).clamp(0.0, 1.0)
+        } else {
+            (s * (1.0 + ds)).clamp(0.0, 1.0)
+        };
+        v = if dv >= 0.0 {
+            (v + (1.0 - v) * dv).clamp(0.0, 1.0)
+        } else {
+            (v * (1.0 + dv)).clamp(0.0, 1.0)
+        };
+
+        let c = v * s;
+        let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+        let m = v - c;
+        let (nr, ng, nb) = if h < 60.0 {
+            (c, x, 0.0)
+        } else if h < 120.0 {
+            (x, c, 0.0)
+        } else if h < 180.0 {
+            (0.0, c, x)
+        } else if h < 240.0 {
+            (0.0, x, c)
+        } else if h < 300.0 {
+            (x, 0.0, c)
+        } else {
+            (c, 0.0, x)
+        };
+        px[0] = ((nr + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[1] = ((ng + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[2] = ((nb + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    out
+}
+
+/// Krita/Photoshop-style Color Balance across Shadows, Midtones, and Highlights
+/// (`[cyan_red, magenta_green, yellow_blue]` each in `-1.0..=1.0`), optionally
+/// preserving Rec.709 perceived luminosity.
+pub fn color_balance(
+    image: &RgbaImage,
+    shadows: [f64; 3],
+    midtones: [f64; 3],
+    highlights: [f64; 3],
+    preserve_luminosity: bool,
+) -> RgbaImage {
+    let clamp3 = |v: [f64; 3]| {
+        [
+            v[0].clamp(-1.0, 1.0),
+            v[1].clamp(-1.0, 1.0),
+            v[2].clamp(-1.0, 1.0),
+        ]
+    };
+    let sh = clamp3(shadows);
+    let md = clamp3(midtones);
+    let hi = clamp3(highlights);
+
+    // Precompute smooth tonal weights for all 256 intensity levels (GIMP/Krita style).
+    let mut w_sh = [0.0f64; 256];
+    let mut w_md = [0.0f64; 256];
+    let mut w_hi = [0.0f64; 256];
+    for i in 0..256 {
+        let t = i as f64 / 255.0;
+        let a = 0.25;
+        let b = 0.333;
+        let scale = 0.7;
+        w_sh[i] = ((t - b) / -a + 0.5).clamp(0.0, 1.0) * scale;
+        w_md[i] = ((t - b) / a + 0.5).clamp(0.0, 1.0)
+            * ((t + b - 1.0) / -a + 0.5).clamp(0.0, 1.0)
+            * scale;
+        w_hi[i] = ((t + b - 1.0) / a + 0.5).clamp(0.0, 1.0) * scale;
+    }
+
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        let r0 = f64::from(px[0]) / 255.0;
+        let g0 = f64::from(px[1]) / 255.0;
+        let b0 = f64::from(px[2]) / 255.0;
+
+        // Weight Shadows / Midtones / Highlights by pixel Rec.709 luminance (Krita/Photoshop standard).
+        let lum = (0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0).clamp(0.0, 1.0);
+        let li = (lum * 255.0).round() as usize;
+        let ws = w_sh[li];
+        let wm = w_md[li];
+        let wh = w_hi[li];
+
+        let mut r = (r0 + sh[0] * ws + md[0] * wm + hi[0] * wh).clamp(0.0, 1.0);
+        let mut g = (g0 + sh[1] * ws + md[1] * wm + hi[1] * wh).clamp(0.0, 1.0);
+        let mut b = (b0 + sh[2] * ws + md[2] * wm + hi[2] * wh).clamp(0.0, 1.0);
+
+        if preserve_luminosity {
+            let l0 = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+            let l1 = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let diff = l0 - l1;
+            r = (r + diff).clamp(0.0, 1.0);
+            g = (g + diff).clamp(0.0, 1.0);
+            b = (b + diff).clamp(0.0, 1.0);
+        }
+
+        px[0] = (r * 255.0).round() as u8;
+        px[1] = (g * 255.0).round() as u8;
+        px[2] = (b * 255.0).round() as u8;
+    }
+    out
+}
+
+#[inline]
+fn blend_source_over_pixel(pixel: &mut image::Rgba<u8>, color: [u8; 3], src_alpha: f32) {
+    if src_alpha <= 0.0 {
+        return;
+    }
+    let sa = src_alpha.clamp(0.0, 1.0);
+    let dst = pixel.0;
+    let da = f32::from(dst[3]) / 255.0;
+    let out_a = sa + da * (1.0 - sa);
+    if out_a <= 0.0 {
+        pixel.0 = [0, 0, 0, 0];
+        return;
+    }
+    let blend = |sc: u8, dc: u8| -> u8 {
+        let num = f32::from(sc) * sa + f32::from(dc) * da * (1.0 - sa);
+        (num / out_a).round().clamp(0.0, 255.0) as u8
+    };
+    pixel.0 = [
+        blend(color[0], dst[0]),
+        blend(color[1], dst[1]),
+        blend(color[2], dst[2]),
+        (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
+    ];
+}
+
+/// Fill a closed polygon using 4×4 supersampled scanline even-odd rasterization.
+fn fill_polygon_aa(image: &mut RgbaImage, points: &[[f64; 2]], color: [u8; 3], opacity: f64) {
+    let (width, height) = image.dimensions();
+    if points.len() < 3 || width == 0 || height == 0 || opacity <= 0.0 {
+        return;
+    }
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for p in points {
+        min_y = min_y.min(p[1]);
+        max_y = max_y.max(p[1]);
+    }
+    let y0 = (min_y.floor() as i32).clamp(0, height as i32) as u32;
+    let y1 = (max_y.ceil() as i32).clamp(0, height as i32) as u32;
+    if y0 >= y1 {
+        return;
+    }
+
+    const SUB: usize = 4;
+    const INV_SUB: f64 = 1.0 / (SUB as f64);
+    const WEIGHT: f32 = 1.0 / ((SUB * SUB) as f32);
+    let w_usize = width as usize;
+    let mut row_cov = vec![0u8; w_usize];
+    let mut xs: Vec<f64> = Vec::with_capacity(32);
+    let n = points.len();
+    let op = opacity.clamp(0.0, 1.0) as f32;
+
+    for py in y0..y1 {
+        row_cov.fill(0);
+        let mut row_min_x = w_usize;
+        let mut row_max_x = 0usize;
+        for sy in 0..SUB {
+            let scan_y = py as f64 + (sy as f64 + 0.5) * INV_SUB;
+            xs.clear();
+            for i in 0..n {
+                let a = points[i];
+                let b = points[(i + 1) % n];
+                if (a[1] <= scan_y && b[1] > scan_y) || (b[1] <= scan_y && a[1] > scan_y) {
+                    let t = (scan_y - a[1]) / (b[1] - a[1]);
+                    xs.push(a[0] + t * (b[0] - a[0]));
+                }
+            }
+            if xs.len() < 2 {
+                continue;
+            }
+            xs.sort_by(|u, v| u.total_cmp(v));
+            for pair in xs.chunks_exact(2) {
+                let x_start_f = pair[0].max(0.0);
+                let x_end_f = pair[1].min(width as f64);
+                if x_start_f >= x_end_f {
+                    continue;
+                }
+                let px0 = x_start_f.floor() as usize;
+                let px1 = (x_end_f.ceil() as usize).min(w_usize);
+                if px0 < row_min_x {
+                    row_min_x = px0;
+                }
+                if px1 > row_max_x {
+                    row_max_x = px1;
+                }
+                for px in px0..px1 {
+                    let base_x = px as f64;
+                    let mut hits = 0u8;
+                    for sx in 0..SUB {
+                        let sample_x = base_x + (sx as f64 + 0.5) * INV_SUB;
+                        if sample_x >= x_start_f && sample_x < x_end_f {
+                            hits += 1;
+                        }
+                    }
+                    row_cov[px] = row_cov[px].saturating_add(hits);
+                }
+            }
+        }
+        if row_min_x < row_max_x {
+            for px in row_min_x..row_max_x {
+                let cov = row_cov[px];
+                if cov > 0 {
+                    let alpha = (cov as f32) * WEIGHT * op;
+                    blend_source_over_pixel(image.get_pixel_mut(px as u32, py), color, alpha);
+                }
+            }
+        }
+    }
+}
+
+/// Rasterize a geometric shape or path (optional fill + optional stroke) onto `image`.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_shape(
+    image: &RgbaImage,
+    kind: DrawShapeKind,
+    points: &[[f64; 2]],
+    closed: bool,
+    stroke_color: Option<[u8; 3]>,
+    stroke_width: f64,
+    stroke_opacity: f64,
+    fill_color: Option<[u8; 3]>,
+    fill_opacity: f64,
+) -> RgbaImage {
+    let mut result = image.clone();
+    let (width, height) = result.dimensions();
+    if width == 0 || height == 0 || points.is_empty() {
+        return result;
+    }
+
+    // 1. Optional Fill pass
+    if let Some(fc) = fill_color {
+        let fop = fill_opacity.clamp(0.0, 1.0);
+        if fop > 0.0 {
+            match kind {
+                DrawShapeKind::Rect if points.len() >= 2 => {
+                    let x0 = points[0][0].min(points[1][0]);
+                    let y0 = points[0][1].min(points[1][1]);
+                    let x1 = points[0][0].max(points[1][0]);
+                    let y1 = points[0][1].max(points[1][1]);
+                    let ix0 = (x0.floor() as i32).clamp(0, width as i32) as u32;
+                    let iy0 = (y0.floor() as i32).clamp(0, height as i32) as u32;
+                    let ix1 = (x1.ceil() as i32).clamp(0, width as i32) as u32;
+                    let iy1 = (y1.ceil() as i32).clamp(0, height as i32) as u32;
+                    for py in iy0..iy1 {
+                        let cy = ((py as f64 + 1.0).min(y1) - (py as f64).max(y0)).clamp(0.0, 1.0);
+                        if cy <= 0.0 {
+                            continue;
+                        }
+                        for px in ix0..ix1 {
+                            let cx =
+                                ((px as f64 + 1.0).min(x1) - (px as f64).max(x0)).clamp(0.0, 1.0);
+                            if cx > 0.0 {
+                                blend_source_over_pixel(
+                                    result.get_pixel_mut(px, py),
+                                    fc,
+                                    (cx * cy * fop) as f32,
+                                );
+                            }
+                        }
+                    }
+                }
+                DrawShapeKind::Ellipse if points.len() >= 2 => {
+                    let x0 = points[0][0].min(points[1][0]);
+                    let y0 = points[0][1].min(points[1][1]);
+                    let x1 = points[0][0].max(points[1][0]);
+                    let y1 = points[0][1].max(points[1][1]);
+                    let rx = (x1 - x0) * 0.5;
+                    let ry = (y1 - y0) * 0.5;
+                    if rx > 0.0 && ry > 0.0 {
+                        let cx = x0 + rx;
+                        let cy = y0 + ry;
+                        let ix0 = ((x0 - 1.0).floor() as i32).clamp(0, width as i32) as u32;
+                        let iy0 = ((y0 - 1.0).floor() as i32).clamp(0, height as i32) as u32;
+                        let ix1 = ((x1 + 1.0).ceil() as i32).clamp(0, width as i32) as u32;
+                        let iy1 = ((y1 + 1.0).ceil() as i32).clamp(0, height as i32) as u32;
+                        let aa = 1.0 / rx.min(ry).max(1.0);
+                        for py in iy0..iy1 {
+                            let dy = (py as f64 + 0.5 - cy) / ry;
+                            for px in ix0..ix1 {
+                                let dx = (px as f64 + 0.5 - cx) / rx;
+                                let dist = (dx * dx + dy * dy).sqrt();
+                                let cov = if dist <= 1.0 - aa * 0.5 {
+                                    1.0
+                                } else if dist < 1.0 + aa * 0.5 {
+                                    ((1.0 + aa * 0.5 - dist) / aa).clamp(0.0, 1.0)
+                                } else {
+                                    0.0
+                                };
+                                if cov > 0.0 {
+                                    blend_source_over_pixel(
+                                        result.get_pixel_mut(px, py),
+                                        fc,
+                                        (cov * fop) as f32,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                DrawShapeKind::Polygon => {
+                    fill_polygon_aa(&mut result, points, fc, fop);
+                }
+                DrawShapeKind::Bezier | DrawShapeKind::Polyline if closed && points.len() >= 3 => {
+                    fill_polygon_aa(&mut result, points, fc, fop);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 2. Optional Stroke pass
+    if let Some(sc) = stroke_color {
+        let sop = stroke_opacity.clamp(0.0, 1.0);
+        if stroke_width > 0.0 && sop > 0.0 {
+            let radius = (stroke_width * 0.5).max(0.5);
+            let stroke_pts: Vec<[f64; 2]> = match kind {
+                DrawShapeKind::Rect if points.len() >= 2 => {
+                    let x0 = points[0][0].min(points[1][0]);
+                    let y0 = points[0][1].min(points[1][1]);
+                    let x1 = points[0][0].max(points[1][0]);
+                    let y1 = points[0][1].max(points[1][1]);
+                    vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
+                }
+                DrawShapeKind::Ellipse if points.len() >= 2 => {
+                    let x0 = points[0][0].min(points[1][0]);
+                    let y0 = points[0][1].min(points[1][1]);
+                    let x1 = points[0][0].max(points[1][0]);
+                    let y1 = points[0][1].max(points[1][1]);
+                    let rx = (x1 - x0) * 0.5;
+                    let ry = (y1 - y0) * 0.5;
+                    let cx = x0 + rx;
+                    let cy = y0 + ry;
+                    if rx <= 0.0 && ry <= 0.0 {
+                        vec![[cx, cy]]
+                    } else {
+                        let perim = std::f64::consts::TAU * rx.hypot(ry);
+                        let steps = (perim / 1.5).ceil().clamp(64.0, 512.0) as usize;
+                        let mut pts = Vec::with_capacity(steps + 1);
+                        for i in 0..=steps {
+                            let theta = std::f64::consts::TAU * (i as f64) / (steps as f64);
+                            pts.push([cx + rx * theta.cos(), cy + ry * theta.sin()]);
+                        }
+                        pts
+                    }
+                }
+                DrawShapeKind::Polygon => {
+                    let mut pts = points.to_vec();
+                    if pts.len() >= 2 {
+                        pts.push(pts[0]);
+                    }
+                    pts
+                }
+                DrawShapeKind::Line | DrawShapeKind::Polyline | DrawShapeKind::Bezier => {
+                    let mut pts = points.to_vec();
+                    if closed && pts.len() >= 3 {
+                        pts.push(pts[0]);
+                    }
+                    pts
+                }
+                _ => Vec::new(),
+            };
+            if !stroke_pts.is_empty() {
+                result = paint_stroke(&result, &stroke_pts, sc, radius, sop, false);
+            }
+        }
+    }
+
+    result
+}
+
+
+/// Krita-style flood fill using a reference image (either the active layer or
+/// the composited stack when `sample_all_layers` is true), with optional
+/// morphological `grow` to eliminate 1px anti-aliased halos on lineart.
+#[allow(clippy::too_many_arguments)]
+pub fn flood_fill(
+    target: &RgbaImage,
+    reference: &RgbaImage,
+    ref_offset_x: i32,
+    ref_offset_y: i32,
+    seed_x: i32,
+    seed_y: i32,
+    color: [u8; 3],
+    opacity: f64,
+    tolerance: u8,
+    grow: u32,
+    contiguous: bool,
+) -> RgbaImage {
+    let mut result = target.clone();
+    let (tw, th) = result.dimensions();
+    let op = opacity.clamp(0.0, 1.0) as f32;
+    if tw == 0 || th == 0 || op <= 0.0 {
+        return result;
+    }
+    let mut mask = crate::selection::SelectionMask::magic_wand(
+        reference,
+        seed_x,
+        seed_y,
+        tolerance,
+        contiguous,
+    );
+    if mask.is_empty() {
+        return result;
+    }
+    if grow > 0 {
+        mask.morph(grow.min(16), true);
+    }
+    for y in 0..th {
+        for x in 0..tw {
+            let m = mask.alpha_at(x as i32 + ref_offset_x, y as i32 + ref_offset_y);
+            if m > 0 {
+                let a = (f32::from(m) / 255.0) * op;
+                blend_source_over_pixel(result.get_pixel_mut(x, y), color, a);
+            }
+        }
+    }
+    result
+}
+
+/// Krita-style multi-stop gradient fill (Linear, Bi-Linear, Radial, Square,
+/// Conical, Spiral) with repeat policy (`None`, `Forwards`, `Alternating`),
+/// 4×4 Bayer ordered dithering to eliminate 8-bit banding, and blend modes.
+#[allow(clippy::too_many_arguments)]
+pub fn render_gradient(
+    image: &RgbaImage,
+    start: [f64; 2],
+    end: [f64; 2],
+    start_color: [u8; 3],
+    start_alpha: f64,
+    end_color: [u8; 3],
+    end_alpha: f64,
+    stops: &[GradientStop],
+    opacity: f64,
+    shape: GradientShape,
+    repeat: GradientRepeat,
+    reverse: bool,
+    dither: bool,
+    blend_mode: &str,
+) -> RgbaImage {
+    let mut result = image.clone();
+    let (w, h) = result.dimensions();
+    let op = opacity.clamp(0.0, 1.0) as f32;
+    if w == 0 || h == 0 || op <= 0.0 {
+        return result;
+    }
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    let len_sq = dx * dx + dy * dy;
+    let len = len_sq.sqrt();
+    if len < 1e-4 {
+        return result;
+    }
+    let base_angle = dy.atan2(dx);
+    let ux = dx / len;
+    let uy = dy / len;
+
+    // Build sorted stop ramp (falling back to start -> end when `stops` is empty).
+    let mut ramp: Vec<(f32, [u8; 3], f32)> = if stops.len() >= 2 {
+        stops
+            .iter()
+            .map(|s| (s.pos.clamp(0.0, 1.0) as f32, s.color, s.alpha.clamp(0.0, 1.0) as f32))
+            .collect()
+    } else {
+        vec![
+            (0.0, start_color, start_alpha.clamp(0.0, 1.0) as f32),
+            (1.0, end_color, end_alpha.clamp(0.0, 1.0) as f32),
+        ]
+    };
+    ramp.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    // 4×4 Bayer ordered dithering matrix in [-0.5, +0.5] LSB units.
+    const BAYER4: [[f32; 4]; 4] = [
+        [-0.46875, 0.03125, -0.34375, 0.15625],
+        [0.28125, -0.21875, 0.40625, -0.09375],
+        [-0.28125, 0.21875, -0.40625, 0.09375],
+        [0.46875, -0.03125, 0.34375, -0.15625],
+    ];
+
+    let mode = crate::layer::BlendMode::from_key(blend_mode);
+
+    let sample_ramp = |t_in: f32| -> ([f32; 3], f32) {
+        let t = if reverse { 1.0 - t_in } else { t_in }.clamp(0.0, 1.0);
+        if t <= ramp[0].0 {
+            let c = ramp[0].1;
+            return ([f32::from(c[0]), f32::from(c[1]), f32::from(c[2])], ramp[0].2);
+        }
+        let last = ramp.len() - 1;
+        if t >= ramp[last].0 {
+            let c = ramp[last].1;
+            return ([f32::from(c[0]), f32::from(c[1]), f32::from(c[2])], ramp[last].2);
+        }
+        for i in 0..last {
+            let (p0, c0, a0) = ramp[i];
+            let (p1, c1, a1) = ramp[i + 1];
+            if t >= p0 && t <= p1 {
+                let span = (p1 - p0).max(1e-6);
+                let f = ((t - p0) / span).clamp(0.0, 1.0);
+                let inv = 1.0 - f;
+                let a = a0 * inv + a1 * f;
+                let denom = a.max(1e-5);
+                let r = (f32::from(c0[0]) * a0 * inv + f32::from(c1[0]) * a1 * f) / denom;
+                let g = (f32::from(c0[1]) * a0 * inv + f32::from(c1[1]) * a1 * f) / denom;
+                let b = (f32::from(c0[2]) * a0 * inv + f32::from(c1[2]) * a1 * f) / denom;
+                return ([r, g, b], a);
+            }
+        }
+        let c = ramp[last].1;
+        ([f32::from(c[0]), f32::from(c[1]), f32::from(c[2])], ramp[last].2)
+    };
+
+    for y in 0..h {
+        let py = y as f64 + 0.5 - start[1];
+        let by = (y as usize) & 3;
+        for x in 0..w {
+            let px = x as f64 + 0.5 - start[0];
+            let raw_t = match shape {
+                GradientShape::Linear => (px * dx + py * dy) / len_sq,
+                GradientShape::Bilinear => ((px * dx + py * dy) / len_sq).abs(),
+                GradientShape::Radial => px.hypot(py) / len,
+                GradientShape::Square => {
+                    let rx = (px * ux + py * uy).abs();
+                    let ry = (-px * uy + py * ux).abs();
+                    rx.max(ry) / len
+                }
+                GradientShape::Conical => {
+                    let a = (py.atan2(px) - base_angle).rem_euclid(std::f64::consts::TAU);
+                    a / std::f64::consts::TAU
+                }
+                GradientShape::Spiral => {
+                    let dist = px.hypot(py) / len;
+                    let a = (py.atan2(px) - base_angle).rem_euclid(std::f64::consts::TAU)
+                        / std::f64::consts::TAU;
+                    (dist + a).rem_euclid(1.0)
+                }
+            };
+            let t = match repeat {
+                GradientRepeat::None => raw_t.clamp(0.0, 1.0),
+                GradientRepeat::Forwards => raw_t.rem_euclid(1.0),
+                GradientRepeat::Alternating => {
+                    let m = raw_t.rem_euclid(2.0);
+                    if m <= 1.0 { m } else { 2.0 - m }
+                }
+            } as f32;
+
+            let ([rf, gf, bf], ramp_a) = sample_ramp(t);
+            let sa = (ramp_a * op).clamp(0.0, 1.0);
+            if sa <= 1e-5 {
+                continue;
+            }
+            let d = if dither { BAYER4[by][(x as usize) & 3] } else { 0.0 };
+            let sr = (rf + d).round().clamp(0.0, 255.0) as u8;
+            let sg = (gf + d).round().clamp(0.0, 255.0) as u8;
+            let sb = (bf + d).round().clamp(0.0, 255.0) as u8;
+
+            if mode == crate::layer::BlendMode::Normal {
+                blend_source_over_pixel(result.get_pixel_mut(x, y), [sr, sg, sb], sa);
+            } else {
+                let pixel = result.get_pixel_mut(x, y);
+                let dst = pixel.0;
+                let da = f32::from(dst[3]) / 255.0;
+                let out_a = sa + da * (1.0 - sa);
+                if out_a <= 1e-5 {
+                    pixel.0 = [0, 0, 0, 0];
+                    continue;
+                }
+                let blend_ch = |sc_u: u8, dc_u: u8| -> u8 {
+                    let sc = f32::from(sc_u) / 255.0;
+                    let dc = f32::from(dc_u) / 255.0;
+                    let b = match mode {
+                        crate::layer::BlendMode::Normal => sc,
+                        crate::layer::BlendMode::Multiply => dc * sc,
+                        crate::layer::BlendMode::Screen => 1.0 - (1.0 - dc) * (1.0 - sc),
+                        crate::layer::BlendMode::Overlay => {
+                            if dc < 0.5 { 2.0 * dc * sc } else { 1.0 - 2.0 * (1.0 - dc) * (1.0 - sc) }
+                        }
+                        crate::layer::BlendMode::Darken => dc.min(sc),
+                        crate::layer::BlendMode::Lighten => dc.max(sc),
+                        crate::layer::BlendMode::Difference => (dc - sc).abs(),
+                    };
+                    let eff = (1.0 - da) * sc + da * b;
+                    ((sa * eff + (1.0 - sa) * da * dc) / out_a * 255.0)
+                        .round()
+                        .clamp(0.0, 255.0) as u8
+                };
+                pixel.0 = [
+                    blend_ch(sr, dst[0]),
+                    blend_ch(sg, dst[1]),
+                    blend_ch(sb, dst[2]),
+                    (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
+                ];
+            }
+        }
+    }
+    result
+}
+
+/// Apply a Liquify warp stroke (`Push`, `Bloat`, `Pucker`, `TwirlCw`, `TwirlCcw`)
+/// to `image` using smooth cubic falloff and bilinear sampling.
+/// Only pixels within the local brush bounding box of each dab are touched.
+pub fn liquify_stroke(
+    image: &RgbaImage,
+    points: &[[f64; 2]],
+    mode: kogaview_protocol::LiquifyMode,
+    radius: f32,
+    strength: f32,
+    selection: Option<&crate::selection::SelectionMask>,
+    layer_offset: (i32, i32),
+) -> RgbaImage {
+    let mut result = image.clone();
+    if points.is_empty() {
+        return result;
+    }
+    let w = result.width() as i32;
+    let h = result.height() as i32;
+    if w <= 0 || h <= 0 {
+        return result;
+    }
+    let radius = radius.clamp(4.0, 400.0);
+    let strength = strength.clamp(0.05, 1.0);
+    let r2 = radius * radius;
+    let step_dist = (radius * 0.22).max(2.0);
+    let (ox, oy) = layer_offset;
+
+    let apply_dab = |img: &mut RgbaImage, cx: f32, cy: f32, dx: f32, dy: f32| {
+        let x_min = ((cx - radius).floor() as i32).max(0);
+        let y_min = ((cy - radius).floor() as i32).max(0);
+        let x_max = ((cx + radius).ceil() as i32).min(w - 1);
+        let y_max = ((cy + radius).ceil() as i32).min(h - 1);
+        if x_min > x_max || y_min > y_max {
+            return;
+        }
+        let bw = (x_max - x_min + 1) as usize;
+        let bh = (y_max - y_min + 1) as usize;
+        let mut patch = vec![[0u8; 4]; bw * bh];
+
+        for py in y_min..=y_max {
+            for px in x_min..=x_max {
+                let rx = px as f32 - cx;
+                let ry = py as f32 - cy;
+                let d2 = rx * rx + ry * ry;
+                let idx = ((py - y_min) as usize) * bw + ((px - x_min) as usize);
+                if d2 >= r2 {
+                    patch[idx] = img.get_pixel(px as u32, py as u32).0;
+                    continue;
+                }
+                let sel_factor = match selection {
+                    Some(sel) => sel.alpha_at(px + ox, py + oy) as f32 / 255.0,
+                    None => 1.0,
+                };
+                if sel_factor <= 1e-4 {
+                    patch[idx] = img.get_pixel(px as u32, py as u32).0;
+                    continue;
+                }
+                let t = 1.0 - d2 / r2;
+                let falloff = t * t * strength * sel_factor;
+                let (sx, sy) = match mode {
+                    kogaview_protocol::LiquifyMode::Push => {
+                        (px as f32 - dx * falloff, py as f32 - dy * falloff)
+                    }
+                    kogaview_protocol::LiquifyMode::Bloat => {
+                        let scale = 1.0 - 0.35 * falloff;
+                        (cx + rx * scale, cy + ry * scale)
+                    }
+                    kogaview_protocol::LiquifyMode::Pucker => {
+                        let scale = 1.0 + 0.35 * falloff;
+                        (cx + rx * scale, cy + ry * scale)
+                    }
+                    kogaview_protocol::LiquifyMode::TwirlCw => {
+                        let angle = -0.45 * falloff;
+                        let (sa, ca) = angle.sin_cos();
+                        (cx + rx * ca - ry * sa, cy + rx * sa + ry * ca)
+                    }
+                    kogaview_protocol::LiquifyMode::TwirlCcw => {
+                        let angle = 0.45 * falloff;
+                        let (sa, ca) = angle.sin_cos();
+                        (cx + rx * ca - ry * sa, cy + rx * sa + ry * ca)
+                    }
+                };
+                patch[idx] = sample_bilinear(img, sx as f64, sy as f64).0;
+            }
+        }
+        for py in y_min..=y_max {
+            for px in x_min..=x_max {
+                let idx = ((py - y_min) as usize) * bw + ((px - x_min) as usize);
+                img.put_pixel(px as u32, py as u32, image::Rgba(patch[idx]));
+            }
+        }
+    };
+
+    if points.len() == 1 {
+        let p = points[0];
+        if !matches!(mode, kogaview_protocol::LiquifyMode::Push) {
+            apply_dab(&mut result, p[0] as f32 - ox as f32, p[1] as f32 - oy as f32, 0.0, 0.0);
+        }
+        return result;
+    }
+
+    for seg in points.windows(2) {
+        let p0 = seg[0];
+        let p1 = seg[1];
+        let x0 = p0[0] as f32 - ox as f32;
+        let y0 = p0[1] as f32 - oy as f32;
+        let x1 = p1[0] as f32 - ox as f32;
+        let y1 = p1[1] as f32 - oy as f32;
+        let vx = x1 - x0;
+        let vy = y1 - y0;
+        let dist = (vx * vx + vy * vy).sqrt();
+        if dist < 0.25 {
+            if !matches!(mode, kogaview_protocol::LiquifyMode::Push) {
+                apply_dab(&mut result, x1, y1, 0.0, 0.0);
+            }
+            continue;
+        }
+        let steps = ((dist / step_dist).ceil() as usize).max(1);
+        let ddx = vx / steps as f32;
+        let ddy = vy / steps as f32;
+        for s in 1..=steps {
+            let frac = s as f32 / steps as f32;
+            let cx = x0 + vx * frac;
+            let cy = y0 + vy * frac;
+            apply_dab(&mut result, cx, cy, ddx, ddy);
+        }
+    }
+
+    result
+}

@@ -112,6 +112,7 @@ impl Core {
             history: Vec::new(),
             redo_history: Vec::new(),
             redo_count: 0,
+            history_trimmed: false,
             layers: Vec::new(),
             active_layer_id: 0,
             canvas_background: None,
@@ -694,6 +695,22 @@ impl Core {
         Ok(None)
     }
 
+    pub(super) fn editor_select_modify(
+        &mut self,
+        op: kogaview_protocol::SelectionModifyOp,
+        amount: u32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        if !document.modify_selection(op, amount) {
+            return Ok(None);
+        }
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
     pub(super) fn editor_selection_delete(&mut self) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &mut self.editor else {
             return Err(no_editor_document());
@@ -726,6 +743,110 @@ impl Core {
         self.schedule_editor_preview();
         self.refresh_editor_status();
         Ok(Some(UiText::new("selection_fill")))
+    }
+
+    pub(super) fn editor_selection_stroke(
+        &mut self,
+        color: [u8; 3],
+        width: u32,
+        position: kogaview_protocol::StrokePosition,
+        opacity: f32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document
+            .selection_stroke(color, width, position, opacity)
+            .map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("selection_stroke")))
+    }
+
+    pub(super) fn editor_liquify_stroke(
+        &mut self,
+        points: &[[f64; 2]],
+        mode: kogaview_protocol::LiquifyMode,
+        radius: f32,
+        strength: f32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document
+            .liquify_stroke(points, mode, radius, strength)
+            .map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("liquify")))
+    }
+
+    /// Ultra-fast RAM-only canvas push for interactive live strokes (zero disk PNG,
+    /// zero thumbnail regeneration, zero split-layer recompute).
+    fn publish_live_ram_canvas(&mut self) {
+        let Some(document) = &self.editor else {
+            return;
+        };
+        let pixels = document.pixels();
+        crate::ram_preview::set_canvas(pixels);
+        self.editor_ram_canvas_revision += 1;
+        if let Some(editor_state) = &mut self.state.editor {
+            editor_state.ram_canvas_revision = self.editor_ram_canvas_revision;
+        }
+    }
+
+    pub(super) fn editor_live_stroke_begin(
+        &mut self,
+        stroke: kogaview_protocol::LiveStrokeKind,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        document
+            .live_stroke_begin(stroke, x, y)
+            .map_err(invalid_edit)?;
+        self.publish_live_ram_canvas();
+        Ok(None)
+    }
+
+    pub(super) fn editor_live_stroke_step(
+        &mut self,
+        points: &[[f64; 2]],
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        if document.live_stroke_step(points).map_err(invalid_edit)? {
+            self.publish_live_ram_canvas();
+        }
+        Ok(None)
+    }
+
+    pub(super) fn editor_live_stroke_end(
+        &mut self,
+        commit: bool,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document.live_stroke_end(commit).map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(None)
     }
 
     pub(super) fn editor_selection_duplicate_layer(
@@ -1313,6 +1434,7 @@ impl Core {
         // last wrote, and a save to the same path changes these two numbers
         // without changing the path.
         let (file_modified, file_size) = file_identity(Path::new(&save_path));
+        crate::ram_preview::set_layer_thumbnails(document.layers());
         let layers: Vec<LayerSummary> = document
             .layers()
             .iter()
@@ -1327,7 +1449,16 @@ impl Core {
                 offset_y: l.offset_y,
                 width: l.pixels.width(),
                 height: l.pixels.height(),
-                kind: "raster".to_owned(),
+                kind: if l.adjustment.is_some() {
+                    "adjustment".to_owned()
+                } else {
+                    "raster".to_owned()
+                },
+                has_mask: l.mask.is_some(),
+                mask_enabled: l.mask_enabled,
+                editing_mask: l.editing_mask,
+                mask_linked: l.mask_linked,
+                adjustment: l.adjustment.clone(),
             })
             .collect();
         let active_layer_id = document.active_layer_id();
@@ -1341,10 +1472,11 @@ impl Core {
             height,
             can_undo: document.can_undo(),
             can_redo: document.can_redo(),
-            modified: document.can_undo(),
+            modified: document.is_modified_from_original(),
             history: document.history(),
             redo_history: document.redo_history(),
             redo_count: document.redo_count(),
+            history_trimmed: document.history_trimmed(),
             layers,
             active_layer_id,
             canvas_background,
@@ -1440,6 +1572,7 @@ impl Core {
             history: Vec::new(),
             redo_history: Vec::new(),
             redo_count: 0,
+            history_trimmed: false,
             layers: Vec::new(),
             active_layer_id: 0,
             canvas_background: None,

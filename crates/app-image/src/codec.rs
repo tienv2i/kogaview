@@ -200,7 +200,7 @@ pub fn encode_with(
 /// Write `bytes` to `path` through a temporary file in the same directory and
 /// an atomic rename, so a failed save never leaves a half-written image where
 /// the user's photo was.
-pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
@@ -306,7 +306,7 @@ pub fn save_pixels_with(
 /// never upscales). `None` means "encode the pixels as they are"; rounding can
 /// never put a side at zero, and the other side is always `<= max_edge` because
 /// the longer side maps exactly onto the limit.
-pub(crate) fn export_dimensions(
+pub fn export_dimensions(
     source_width: u32,
     source_height: u32,
     max_edge: u32,
@@ -378,7 +378,7 @@ pub fn export_pixels(
 /// APP1 holds EXIF and XMP, APP2 the ICC profile, APP13 IPTC/Photoshop data;
 /// APP0 is skipped because it describes the JFIF encoding the new file already
 /// has. Anything unparsable ends the scan instead of being copied.
-pub(crate) fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<(u8, &[u8])> {
+pub fn jpeg_metadata_segments(bytes: &[u8]) -> Vec<(u8, &[u8])> {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return Vec::new();
     }
@@ -431,7 +431,7 @@ pub fn splice_jpeg_metadata(original: &[u8], encoded: Vec<u8>) -> Vec<u8> {
 /// thumbnail, so carrying them onto a smaller export states a size the file no
 /// longer has. The ICC profile (APP2) and IPTC data (APP13) are still copied,
 /// because dropping them would change the colours and the credit.
-pub(crate) fn splice_jpeg_metadata_segments(
+pub fn splice_jpeg_metadata_segments(
     original: &[u8],
     encoded: Vec<u8>,
     keep_exif: bool,
@@ -454,14 +454,14 @@ pub(crate) fn splice_jpeg_metadata_segments(
 }
 
 /// Size and modification time of a file, or `None` when it cannot be read.
-pub(crate) fn file_stamp(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+pub fn file_stamp(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     let metadata = std::fs::metadata(path).ok()?;
     Some((metadata.len(), metadata.modified().ok()))
 }
 
 /// `<name>.<ext>.bak` beside `path`, so `photo.jpg` becomes
 /// `photo.jpg.bak` and is never mistaken for an image the app lists.
-pub(crate) fn backup_path(path: &Path) -> PathBuf {
+pub fn backup_path(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -517,16 +517,6 @@ pub fn decode_rgba(path: &Path) -> Result<RgbaImage, String> {
         .to_rgba8())
 }
 
-/// Decode an image file into a working document. Runs on a worker thread.
-pub fn open_document(path: &Path) -> Result<EditorDocument, String> {
-    if ora::is_ora_path(path) {
-        let stack = ora::read_ora(path)?;
-        return Ok(EditorDocument::from_stack(path.to_path_buf(), stack));
-    }
-    let image = decode_rgba(path)?;
-    Ok(EditorDocument::from_image(path.to_path_buf(), image))
-}
-
 /// The size a preview of `width` × `height` is rendered at.
 pub fn preview_dimensions(width: u32, height: u32) -> (u32, u32) {
     let longest = width.max(height);
@@ -555,7 +545,7 @@ pub fn render_preview(image: &RgbaImage, path: &Path) -> Result<(), String> {
 /// where a Lanczos lobe should fall. `imageops::thumbnail` averages the source
 /// block behind each target pixel — the right filter for a downscale this
 /// large, and the cheap one.
-pub(crate) fn preview_pixels(image: &RgbaImage) -> RgbaImage {
+pub fn preview_pixels(image: &RgbaImage) -> RgbaImage {
     let (width, height) = image.dimensions();
     if width.max(height) > PREVIEW_LONG_EDGE {
         let (target_w, target_h) = preview_dimensions(width, height);
@@ -572,7 +562,7 @@ pub(crate) fn preview_pixels(image: &RgbaImage) -> RgbaImage {
 /// The result is only ever used for the *first* preview: the document still
 /// decodes at full resolution, and every later preview is rendered from those
 /// pixels. A file that fails here is simply decoded the ordinary way.
-pub(crate) fn scaled_jpeg_preview(path: &Path) -> Result<Option<(RgbaImage, u32, u32)>, String> {
+pub fn scaled_jpeg_preview(path: &Path) -> Result<Option<(RgbaImage, u32, u32)>, String> {
     let reader = ImageReader::open(path)
         .map_err(|error| error.to_string())?
         .with_guessed_format()
@@ -619,7 +609,7 @@ pub(crate) fn scaled_jpeg_preview(path: &Path) -> Result<Option<(RgbaImage, u32,
     Ok(Some((image, width, height)))
 }
 
-pub(crate) fn rgb_to_rgba(pixels: &[u8]) -> Vec<u8> {
+pub fn rgb_to_rgba(pixels: &[u8]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(pixels.len() / 3 * 4);
     for chunk in pixels.chunks_exact(3) {
         rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);

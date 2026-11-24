@@ -75,9 +75,43 @@ Popup {
         radius: 6
     }
 
-    /// Toggle under `anchor` — a swatch in the rail, in the Crop panel or in the
-    /// Resize form — clamped to the space its parent has. Clicking the same
-    /// swatch a second time closes the popup cleanly without reopening.
+    function _positionFor(anchor) {
+        if (!anchor || !popup.parent) return
+        var space = popup.parent
+        var origin = anchor.mapToItem(space, 0, 0)
+        var margin = 6
+        var popW = Math.max(popup.width, 196)
+        var popH = Math.max(popup.height, contentColumn.implicitHeight + 2 * popup.padding, 190)
+
+        var targetX = Math.round(origin.x)
+        if (targetX + popW > space.width - margin)
+            targetX = Math.max(margin, Math.round(space.width - popW - margin))
+        if (targetX < margin) targetX = margin
+
+        var belowY = Math.round(origin.y + anchor.height + margin)
+        var aboveY = Math.round(origin.y - popH - margin)
+        var targetY
+        if (belowY + popH <= space.height - margin) {
+            targetY = belowY
+        } else if (aboveY >= margin) {
+            targetY = aboveY
+        } else {
+            targetY = Math.max(margin, Math.round(space.height - popH - margin))
+        }
+
+        popup.x = targetX
+        popup.y = targetY
+    }
+
+    onHeightChanged: {
+        if (popup.visible && popup._toggleAnchor) {
+            popup._positionFor(popup._toggleAnchor)
+        }
+    }
+
+    /// Toggle near `anchor` — below when there is room, flipping cleanly above
+    /// when near the bottom edge (e.g. the Canvas background row in Layers).
+    /// Clicking the same anchor a second time closes the popup cleanly.
     function showBelow(anchor) {
         if (!anchor) return
         if (popup.visible && popup._toggleAnchor === anchor) {
@@ -94,16 +128,7 @@ Popup {
         }
         popup._dismissedAtMs = 0
         popup._toggleAnchor = anchor
-        var space = popup.parent
-        var origin = anchor.mapToItem(space, 0, 0)
-        popup.x = Math.round(origin.x)
-        popup.y = Math.round(origin.y + anchor.height + 6)
-        if (space) {
-            if (popup.x + popup.width > space.width)
-                popup.x = Math.max(0, Math.round(space.width - popup.width))
-            if (popup.y + popup.height > space.height)
-                popup.y = Math.max(0, Math.round(space.height - popup.height))
-        }
+        popup._positionFor(anchor)
         popup.open()
     }
 

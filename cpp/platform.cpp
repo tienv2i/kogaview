@@ -184,10 +184,6 @@ void registerPortalFilters()
 PlatformHelper::PlatformHelper(QObject* parent)
   : QObject(parent)
 {
-  m_portalAvailable =
-    QDBusConnection::sessionBus().interface() != nullptr &&
-    QDBusConnection::sessionBus().interface()->isServiceRegistered(kPortalService);
-
   m_timeout = new QTimer(this);
   m_timeout->setSingleShot(true);
   m_timeout->setInterval(kDialogTimeoutMs);
@@ -201,8 +197,19 @@ PlatformHelper::PlatformHelper(QObject* parent)
     }
     finishWithError(tr("The file dialog did not receive an answer in time."));
   });
+}
 
-  qInfo() << "KogaView platform: XDG portal" << (m_portalAvailable ? "available" : "unavailable");
+bool PlatformHelper::portalAvailable() const
+{
+  if (!m_portalChecked) {
+    m_portalChecked = true;
+    m_portalAvailable =
+      QDBusConnection::sessionBus().interface() != nullptr &&
+      QDBusConnection::sessionBus().interface()->isServiceRegistered(kPortalService);
+    qInfo() << "KogaView platform: XDG portal"
+            << (m_portalAvailable ? "available" : "unavailable");
+  }
+  return m_portalAvailable;
 }
 
 PlatformHelper::~PlatformHelper()
@@ -390,7 +397,7 @@ bool PlatformHelper::requestSaveFile(const QString& title, const QString& curren
 
 bool PlatformHelper::requestPickColor()
 {
-  if (!m_portalAvailable) {
+  if (!portalAvailable()) {
     return false;
   }
   if (m_requestActive) {
@@ -448,7 +455,7 @@ bool PlatformHelper::requestPickColor()
 
 bool PlatformHelper::request(const QString& method, const QString& title, const QVariantMap& options)
 {
-  if (!m_portalAvailable) {
+  if (!portalAvailable()) {
     return false;
   }
   if (m_requestActive) {
@@ -847,7 +854,7 @@ QVariantList PlatformHelper::languages() const
 
 bool PlatformHelper::openUriWithPortal(const QUrl& url, bool directory)
 {
-  if (!m_portalAvailable || !url.isLocalFile()) {
+  if (!portalAvailable() || !url.isLocalFile()) {
     return false;
   }
 
@@ -891,7 +898,7 @@ void PlatformHelper::openExternally(const QString& path)
 
 bool PlatformHelper::openFileWithChooser(const QUrl& url)
 {
-  if (!m_portalAvailable || !url.isLocalFile()) {
+  if (!portalAvailable() || !url.isLocalFile()) {
     return false;
   }
   // `ask` is the portal's own "which application?" switch. It only exists from

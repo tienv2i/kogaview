@@ -4,19 +4,14 @@
 //! one ordered gateway. Core owns state, revisions, the journal and all I/O.
 
 pub mod batch;
-pub mod build_info;
-pub mod config;
 pub mod core;
-// The Editor is a crate of its own now (`crates/app-editor`); Core re-exports it
-// under the name the rest of this crate has always used, so `crate::editor::…`
-// is unchanged for every handler and for the batch worker.
+// The Editor, Storage, and Plugins are crates of their own now; Core re-exports
+// them under the names the rest of this crate has always used, so every handler
+// and external caller stays unchanged.
 pub use kogaview_editor as editor;
-pub mod identity;
-pub mod journal;
-pub mod logging;
+pub use kogaview_plugins as plugins;
+pub use kogaview_storage::{build_info, config, identity, journal, logging, paths};
 pub mod ops;
-pub mod paths;
-pub mod plugins;
 pub mod ram_preview;
 pub mod state;
 

@@ -6,10 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# The Editor's pixels. Format support is the feature list here, and it is the
-# same list `app-core` used to carry for this file: `avif` is the pure-Rust
-# ravif **encoder**; decoding AVIF needs `avif-native`, which links the system
-# `libdav1d` (ADR 0005 revision).
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
@@ -28,15 +24,10 @@ image = { version = "0.25", default-features = false, features = [
     "qoi",
     "tga",
 ] }
-# The Editor's first preview is decoded straight to a reduced DCT scale, which
-# `image` does not expose: this decoder reads 1/2, 1/4 or 1/8 of a JPEG without
-# touching the pixels it throws away. Pure Rust and no threads (`rayon` off), so
-# a Flatpak build carries it like the rest.
-jpeg-decoder = { version = "0.3", default-features = false }
+kogaview-image = { path = "../app-image" }
 kogaview-protocol = { path = "../app-protocol" }
 serde.workspace = true
-# Pure-Rust ZIP reader/writer for OpenRaster (.ora) and Krita (.kra) previews.
-zip = { version = "2", default-features = false, features = ["deflate"] }
-# A failed preview write is logged where it happens rather than only returned:
-# the edit itself still succeeded.
 tracing.workspace = true
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }

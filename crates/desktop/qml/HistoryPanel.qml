@@ -14,11 +14,13 @@ Item {
     property var history: []
     property var redoHistory: []
     property bool hasDocument: false
+    property bool historyTrimmed: false
     /// The interface language, so a row is re-worded when Settings changes it.
     property string language: ""
     property string listObjectName: "historyList"
 
     signal jumpRequested(int targetIndex)
+    signal resetRequested()
 
     readonly property var combinedRows: {
         var rows = []
@@ -28,7 +30,7 @@ Item {
         if (applied.length === 0 && redo.length === 0) return rows
         rows.push({
             targetIndex: 0,
-            label: qsTr("Original"),
+            label: panel.historyTrimmed ? qsTr("History start (trimmed)") : qsTr("Original"),
             isCurrent: applied.length === 0,
             isRedo: false,
             rawLine: null
@@ -126,6 +128,17 @@ Item {
             text: panel.hasDocument ? qsTr("No edits yet") : qsTr("No image open")
             color: panel.theme.textMuted
             font.pixelSize: 11
+        }
+
+        PanelAction {
+            objectName: "historyResetOriginalBtn"
+            Layout.fillWidth: true
+            visible: panel.hasDocument && (panel.combinedRows.length > 0 || panel.historyTrimmed)
+            theme: panel.theme
+            text: qsTr("Reset to original")
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr("Discard all edits and restore the original opened image")
+            onClicked: panel.resetRequested()
         }
     }
 }

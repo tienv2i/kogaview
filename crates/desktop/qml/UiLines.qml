@@ -209,6 +209,14 @@ QtObject {
         case "invalid_color_adjustment": return qsTr("Invalid color adjustment values");
         case "brush_stroke": return qsTr("Brush stroke");
         case "eraser_stroke": return qsTr("Eraser stroke");
+        case "draw_line": return qsTr("Draw line");
+        case "draw_rect": return qsTr("Draw rectangle");
+        case "draw_ellipse": return qsTr("Draw ellipse");
+        case "draw_polygon": return qsTr("Draw polygon");
+        case "draw_polyline": return qsTr("Draw polyline");
+        case "draw_bezier": return qsTr("Draw Bezier curve");
+        case "flood_fill": return qsTr("Flood fill");
+        case "draw_gradient": return qsTr("Gradient fill");
         case "remove_background": return qsTr("Remove background (%1)").arg(args[0] || "AI");
 
         // --- AI plugin & model manager -----------------------------------
@@ -240,6 +248,15 @@ QtObject {
         case "layer_props": return qsTr("Update layer");
         case "layer_merge_down": return qsTr("Merge layer down");
         case "layer_flatten": return qsTr("Flatten layers");
+        case "layer_mask_add": return qsTr("Add layer mask");
+        case "layer_mask_delete": return qsTr("Delete layer mask");
+        case "layer_mask_apply": return qsTr("Apply layer mask");
+        case "layer_mask_invert": return qsTr("Invert layer mask");
+        case "layer_mask_toggle": return qsTr("Toggle layer mask");
+        case "layer_mask_edit": return qsTr("Switch mask editing");
+        case "layer_mask_link": return qsTr("Toggle layer/mask link");
+        case "layer_adjustment_add": return qsTr("Add adjustment layer");
+        case "layer_adjustment_update": return qsTr("Update adjustment layer");
         case "canvas_background": return qsTr("Canvas background");
         case "layer_locked": return qsTr("Active layer is locked");
         case "layer_hidden": return qsTr("Active layer is hidden");
@@ -251,6 +268,8 @@ QtObject {
         case "invalid_dimensions": return qsTr("Invalid canvas dimensions: %1 × %2").arg(args[0]).arg(args[1]);
         case "selection_delete": return qsTr("Cleared selection");
         case "selection_fill": return qsTr("Filled selection");
+        case "selection_stroke": return qsTr("Stroked selection");
+        case "liquify": return qsTr("Liquify");
         case "selection_duplicated": return qsTr("Duplicated selection to new layer");
         case "selection_copied": return qsTr("Copied selection to clipboard");
         case "selection_cut": return qsTr("Cut selection to clipboard");

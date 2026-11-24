@@ -10,9 +10,26 @@ use kogaview_protocol::{FlipAxis, UiText};
 
 use crate::*;
 
-/// Keep the undo stack shallow and the pixel snapshots it holds bounded.
-pub(crate) const MAX_HISTORY_STEPS: usize = 12;
-pub(crate) const MAX_SNAPSHOT_BYTES: u64 = 160 * 1024 * 1024;
+/// Keep the undo stack bounded while preserving enough history for long sessions.
+pub(crate) const MAX_HISTORY_STEPS: usize = 30;
+pub(crate) const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
+
+struct LiveStrokeSession {
+    before_stack: LayerStack,
+    stroke: kogaview_protocol::LiveStrokeKind,
+    last_point: [f64; 2],
+    editing_mask: bool,
+}
+
+/// Decode an image file into a working document. Runs on a worker thread.
+pub fn open_document(path: &Path) -> Result<EditorDocument, String> {
+    if ora::is_ora_path(path) {
+        let stack = ora::read_ora(path)?;
+        return Ok(EditorDocument::from_stack(path.to_path_buf(), stack));
+    }
+    let image = decode_rgba(path)?;
+    Ok(EditorDocument::from_image(path.to_path_buf(), image))
+}
 
 /// How a step is undone. `Invert` re-applies a losslessly invertible operation
 /// on a single-layer document; `Stack` restores the pre-edit [`LayerStack`]
@@ -57,6 +74,10 @@ pub struct EditorDocument {
     saved: bool,
     /// Optional active raster selection mask (`None` = no selection, 0 bytes).
     selection: Option<SelectionMask>,
+    /// True once oldest undo steps have been evicted by `trim_history`.
+    history_trimmed: bool,
+    /// Active interactive live stroke (Brush/Eraser/Liquify) while mouse is held.
+    live_stroke: Option<LiveStrokeSession>,
 }
 
 impl EditorDocument {
@@ -85,7 +106,17 @@ impl EditorDocument {
             snapshot_bytes: 0,
             saved: true,
             selection: None,
+            history_trimmed: false,
+            live_stroke: None,
         }
+    }
+
+    pub fn history_trimmed(&self) -> bool {
+        self.history_trimmed
+    }
+
+    pub fn is_modified_from_original(&self) -> bool {
+        self.can_undo() || self.history_trimmed || !Arc::ptr_eq(&self.working, &self.original)
     }
 
     pub fn selection(&self) -> Option<&SelectionMask> {
@@ -180,6 +211,28 @@ impl EditorDocument {
         }
     }
 
+    pub fn modify_selection(
+        &mut self,
+        op: kogaview_protocol::SelectionModifyOp,
+        amount: u32,
+    ) -> bool {
+        let Some(sel) = &mut self.selection else {
+            return false;
+        };
+        let amt = amount.clamp(1, 64);
+        match op {
+            kogaview_protocol::SelectionModifyOp::Grow => sel.morph(amt, true),
+            kogaview_protocol::SelectionModifyOp::Shrink => sel.morph(amt, false),
+            kogaview_protocol::SelectionModifyOp::Border => sel.border(amt),
+            kogaview_protocol::SelectionModifyOp::Feather => sel.feather(amt),
+            kogaview_protocol::SelectionModifyOp::Smooth => sel.smooth(amt),
+        }
+        if sel.is_empty() {
+            self.selection = None;
+        }
+        true
+    }
+
     /// Clear pixels inside the active selection on the active layer (undoable).
     pub fn selection_delete(&mut self) -> Result<bool, UiText> {
         let Some(sel) = self.selection.clone() else {
@@ -231,6 +284,7 @@ impl EditorDocument {
         Ok(true)
     }
 
+
     /// Clear all pixels on the active layer to transparent (used by Cut when
     /// no selection is active on a single-layer document).
     pub fn clear_active_layer(&mut self) -> Result<bool, UiText> {
@@ -254,6 +308,7 @@ impl EditorDocument {
         self.saved = false;
         Ok(true)
     }
+
 
     /// Fill the active selection on the active layer with `color` at `opacity` (undoable).
     pub fn selection_fill(&mut self, color: [u8; 3], opacity: f32) -> Result<bool, UiText> {
@@ -319,6 +374,366 @@ impl EditorDocument {
         self.working = composite_stack(&self.stack);
         self.saved = false;
         Ok(true)
+    }
+
+
+    /// Stroke the boundary of the active selection on the active layer (undoable).
+    pub fn selection_stroke(
+        &mut self,
+        color: [u8; 3],
+        width: u32,
+        position: kogaview_protocol::StrokePosition,
+        opacity: f32,
+    ) -> Result<bool, UiText> {
+        let Some(sel) = self.selection.clone() else {
+            return Ok(false);
+        };
+        let active = self.stack.active_layer();
+        if active.locked {
+            return Err(UiText::new("layer_locked"));
+        }
+        if !active.visible {
+            return Err(UiText::new("layer_hidden"));
+        }
+        let width = width.clamp(1, 200);
+        let opacity = opacity.clamp(0.01, 1.0);
+        let (outer, inner) = match position {
+            kogaview_protocol::StrokePosition::Inside => {
+                let mut inn = sel.clone();
+                inn.morph(width, false);
+                (sel.clone(), inn)
+            }
+            kogaview_protocol::StrokePosition::Outside => {
+                let mut out = sel.clone();
+                out.morph(width, true);
+                (out, sel.clone())
+            }
+            kogaview_protocol::StrokePosition::Center => {
+                let half_out = (width + 1) / 2;
+                let half_in = width / 2;
+                let mut out = sel.clone();
+                if half_out > 0 {
+                    out.morph(half_out, true);
+                }
+                let mut inn = sel.clone();
+                if half_in > 0 {
+                    inn.morph(half_in, false);
+                }
+                (out, inn)
+            }
+        };
+        let before = self.stack.clone();
+        let ox = active.offset_x;
+        let oy = active.offset_y;
+        let mut next = (*active.pixels).clone();
+        let (lw, lh) = next.dimensions();
+        let mut touched = false;
+        for y in 0..lh {
+            for x in 0..lw {
+                let dx = x as i32 + ox;
+                let dy = y as i32 + oy;
+                let m = outer.alpha_at(dx, dy).saturating_sub(inner.alpha_at(dx, dy));
+                if m == 0 {
+                    continue;
+                }
+                let sa = (m as f32 / 255.0) * opacity;
+                let dst = next.get_pixel(x, y).0;
+                let da = dst[3] as f32 / 255.0;
+                let out_a = sa + da * (1.0 - sa);
+                if out_a <= 1e-6 {
+                    continue;
+                }
+                let blend = |sc: u8, dc: u8| -> u8 {
+                    let v = (sc as f32 * sa + dc as f32 * da * (1.0 - sa)) / out_a;
+                    v.round().clamp(0.0, 255.0) as u8
+                };
+                next.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        blend(color[0], dst[0]),
+                        blend(color[1], dst[1]),
+                        blend(color[2], dst[2]),
+                        (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
+                    ]),
+                );
+                touched = true;
+            }
+        }
+        if !touched {
+            return Ok(false);
+        }
+        let op = EditOperation::AiResult {
+            label: UiText::new("selection_stroke"),
+            pixels: Arc::new(next),
+        };
+        self.stack.active_layer_mut().pixels = match &op {
+            EditOperation::AiResult { pixels, .. } => Arc::clone(pixels),
+            _ => unreachable!(),
+        };
+        self.push(op, ApplyTarget::ActiveLayer, before);
+        self.working = composite_stack(&self.stack);
+        self.saved = false;
+        Ok(true)
+    }
+
+
+    /// Apply a Liquify warp stroke on the active layer (undoable).
+    pub fn liquify_stroke(
+        &mut self,
+        points: &[[f64; 2]],
+        mode: kogaview_protocol::LiquifyMode,
+        radius: f32,
+        strength: f32,
+    ) -> Result<bool, UiText> {
+        if points.is_empty() {
+            return Ok(false);
+        }
+        let active = self.stack.active_layer();
+        if active.locked {
+            return Err(UiText::new("layer_locked"));
+        }
+        if !active.visible {
+            return Err(UiText::new("layer_hidden"));
+        }
+        let before = self.stack.clone();
+        let next = crate::pixels::liquify_stroke(
+            &active.pixels,
+            points,
+            mode,
+            radius,
+            strength,
+            self.selection.as_ref(),
+            (active.offset_x, active.offset_y),
+        );
+        let op = EditOperation::AiResult {
+            label: UiText::new("liquify"),
+            pixels: Arc::new(next),
+        };
+        self.stack.active_layer_mut().pixels = match &op {
+            EditOperation::AiResult { pixels, .. } => Arc::clone(pixels),
+            _ => unreachable!(),
+        };
+        self.push(op, ApplyTarget::ActiveLayer, before);
+        self.working = composite_stack(&self.stack);
+        self.saved = false;
+        Ok(true)
+    }
+
+    /// Begin an interactive live stroke session (Brush/Eraser/Liquify).
+    pub fn live_stroke_begin(
+        &mut self,
+        stroke: kogaview_protocol::LiveStrokeKind,
+        x: f64,
+        y: f64,
+    ) -> Result<bool, UiText> {
+        if self.live_stroke.is_some() {
+            let _ = self.live_stroke_end(true);
+        }
+        let active = self.stack.active_layer();
+        if active.locked {
+            return Err(UiText::new("layer_locked"));
+        }
+        if !active.visible {
+            return Err(UiText::new("layer_hidden"));
+        }
+        let editing_mask = active.editing_mask && active.mask.is_some();
+        let before_stack = self.stack.clone();
+        self.live_stroke = Some(LiveStrokeSession {
+            before_stack,
+            stroke,
+            last_point: [x, y],
+            editing_mask,
+        });
+        self.apply_live_segment(&[[x, y]]);
+        self.working = composite_stack(&self.stack);
+        Ok(true)
+    }
+
+    /// Apply incremental pointer samples to the active live stroke session.
+    pub fn live_stroke_step(&mut self, points: &[[f64; 2]]) -> Result<bool, UiText> {
+        if points.is_empty() {
+            return Ok(false);
+        }
+        let Some(last) = self.live_stroke.as_ref().map(|s| s.last_point) else {
+            return Ok(false);
+        };
+        let mut seg = Vec::with_capacity(points.len() + 1);
+        seg.push(last);
+        seg.extend_from_slice(points);
+        if let Some(session) = self.live_stroke.as_mut() {
+            if let Some(&tail) = points.last() {
+                session.last_point = tail;
+            }
+        }
+        self.apply_live_segment(&seg);
+        self.working = composite_stack(&self.stack);
+        Ok(true)
+    }
+
+    /// Commit (`commit == true`) as one Undo step or cancel (`commit == false`)
+    /// the active live stroke session.
+    pub fn live_stroke_end(&mut self, commit: bool) -> Result<bool, UiText> {
+        let Some(session) = self.live_stroke.take() else {
+            return Ok(false);
+        };
+        if !commit {
+            self.stack = session.before_stack;
+            self.working = composite_stack(&self.stack);
+            return Ok(true);
+        }
+        let label = match &session.stroke {
+            kogaview_protocol::LiveStrokeKind::Paint { erase, .. } => {
+                if session.editing_mask {
+                    UiText::new("mask_paint")
+                } else if *erase {
+                    UiText::new("eraser")
+                } else {
+                    UiText::new("brush")
+                }
+            }
+            kogaview_protocol::LiveStrokeKind::Liquify { .. } => UiText::new("liquify"),
+        };
+        let op = EditOperation::AiResult {
+            label,
+            pixels: Arc::clone(&self.stack.active_layer().pixels),
+        };
+        self.push(op, ApplyTarget::ActiveLayer, session.before_stack);
+        self.working = composite_stack(&self.stack);
+        self.saved = false;
+        Ok(true)
+    }
+
+    fn apply_live_segment(&mut self, points: &[[f64; 2]]) {
+        let Some(session) = self.live_stroke.as_ref() else {
+            return;
+        };
+        let stroke = session.stroke.clone();
+        let editing_mask = session.editing_mask;
+        let sel = self.selection.clone();
+        let active = self.stack.active_layer_mut();
+        let ox = active.offset_x;
+        let oy = active.offset_y;
+
+        match stroke {
+            kogaview_protocol::LiveStrokeKind::Paint {
+                color,
+                radius,
+                opacity,
+                erase,
+                brush,
+            } => {
+                let local_pts: Vec<[f64; 2]> = points
+                    .iter()
+                    .map(|p| [p[0] - ox as f64, p[1] - oy as f64])
+                    .collect();
+                if editing_mask {
+                    if let Some(mask_arc) = active.mask.as_ref() {
+                        let (mw, mh) = active.pixels.dimensions();
+                        let mut rgba = RgbaImage::new(mw, mh);
+                        for y in 0..mh {
+                            for x in 0..mw {
+                                let idx = (y as usize) * (mw as usize) + (x as usize);
+                                let v = mask_arc.get(idx).copied().unwrap_or(255);
+                                rgba.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+                            }
+                        }
+                        let mask_color = if erase { [0, 0, 0] } else { color };
+                        let painted = crate::pixels::paint_stroke_with_brush(
+                            &rgba,
+                            &local_pts,
+                            mask_color,
+                            radius,
+                            opacity,
+                            false,
+                            brush,
+                        );
+                        let mut next_mask = (**mask_arc).clone();
+                        next_mask.resize((mw as usize) * (mh as usize), 255);
+                        for y in 0..mh {
+                            for x in 0..mw {
+                                let sf = match &sel {
+                                    Some(s) => s.alpha_at(x as i32 + ox, y as i32 + oy) as f32 / 255.0,
+                                    None => 1.0,
+                                };
+                                if sf <= 1e-4 {
+                                    continue;
+                                }
+                                let idx = (y as usize) * (mw as usize) + (x as usize);
+                                let p = painted.get_pixel(x, y).0;
+                                let lum = ((0.299 * p[0] as f32
+                                    + 0.587 * p[1] as f32
+                                    + 0.114 * p[2] as f32)
+                                    .round()
+                                    .clamp(0.0, 255.0)) as u8;
+                                let orig = next_mask[idx];
+                                let blended = (orig as f32 * (1.0 - sf) + lum as f32 * sf)
+                                    .round()
+                                    .clamp(0.0, 255.0) as u8;
+                                next_mask[idx] = blended;
+                            }
+                        }
+                        active.mask = Some(Arc::new(next_mask));
+                    }
+                } else {
+                    let prev = Arc::clone(&active.pixels);
+                    let mut painted = crate::pixels::paint_stroke_with_brush(
+                        &prev,
+                        &local_pts,
+                        color,
+                        radius,
+                        opacity,
+                        erase,
+                        brush,
+                    );
+                    if let Some(s) = &sel {
+                        let (lw, lh) = painted.dimensions();
+                        for y in 0..lh {
+                            for x in 0..lw {
+                                let m = s.alpha_at(x as i32 + ox, y as i32 + oy);
+                                if m == 255 {
+                                    continue;
+                                }
+                                if m == 0 {
+                                    painted.put_pixel(x, y, *prev.get_pixel(x, y));
+                                } else {
+                                    let f = m as f32 / 255.0;
+                                    let a = prev.get_pixel(x, y).0;
+                                    let b = painted.get_pixel(x, y).0;
+                                    painted.put_pixel(
+                                        x,
+                                        y,
+                                        image::Rgba([
+                                            (a[0] as f32 * (1.0 - f) + b[0] as f32 * f).round() as u8,
+                                            (a[1] as f32 * (1.0 - f) + b[1] as f32 * f).round() as u8,
+                                            (a[2] as f32 * (1.0 - f) + b[2] as f32 * f).round() as u8,
+                                            (a[3] as f32 * (1.0 - f) + b[3] as f32 * f).round() as u8,
+                                        ]),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    active.pixels = Arc::new(painted);
+                }
+            }
+            kogaview_protocol::LiveStrokeKind::Liquify {
+                mode,
+                radius,
+                strength,
+            } => {
+                let warped = crate::pixels::liquify_stroke(
+                    &active.pixels,
+                    points,
+                    mode,
+                    radius,
+                    strength,
+                    sel.as_ref(),
+                    (ox, oy),
+                );
+                active.pixels = Arc::new(warped);
+            }
+        }
     }
 
     /// Duplicate pixels inside the active selection from the active layer into a
@@ -1147,6 +1562,8 @@ impl EditorDocument {
         self.undo.clear();
         self.redo.clear();
         self.snapshot_bytes = 0;
+        self.history_trimmed = false;
+        self.live_stroke = None;
         self.selection = None;
         true
     }
@@ -1279,13 +1696,16 @@ impl EditorDocument {
             _ => {}
         }
 
-        // 3. Paint always targets the active layer (checking lock/visibility & translating offset).
+        // 3. Paint always targets the active layer (or its transparency mask when
+        // `editing_mask` is active), checking lock/visibility, translating offset,
+        // and clipping to any active selection mask.
         if let EditOperation::Paint {
             points,
             color,
             radius,
             opacity,
             erase,
+            brush,
         } = operation
         {
             let active = self.stack.active_layer();
@@ -1297,48 +1717,374 @@ impl EditorDocument {
             }
             let ox = active.offset_x as f64;
             let oy = active.offset_y as f64;
+            let local_pts: Vec<[f64; 2]> = points.iter().map(|[x, y]| [x - ox, y - oy]).collect();
+
+            if active.editing_mask {
+                if let Some(existing_mask) = &active.mask {
+                    let (lw, lh) = active.dimensions();
+                    let mut mask_img = RgbaImage::new(lw, lh);
+                    for y in 0..lh {
+                        let row = (y as usize) * (lw as usize);
+                        for x in 0..lw {
+                            let v = existing_mask.get(row + x as usize).copied().unwrap_or(255);
+                            mask_img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+                        }
+                    }
+                    let gray = if *erase {
+                        0u8
+                    } else {
+                        (0.299 * f64::from(color[0])
+                            + 0.587 * f64::from(color[1])
+                            + 0.114 * f64::from(color[2]))
+                        .round()
+                        .clamp(0.0, 255.0) as u8
+                    };
+                    let mask_op = EditOperation::Paint {
+                        points: local_pts,
+                        color: [gray, gray, gray],
+                        radius: *radius,
+                        opacity: *opacity,
+                        erase: false,
+                        brush: *brush,
+                    };
+                    let mut next = render_operation(&mask_img, &mask_op)?;
+                    if let Some(sel) = &self.selection {
+                        blend_with_selection(
+                            &mask_img,
+                            &mut next,
+                            sel,
+                            active.offset_x,
+                            active.offset_y,
+                        );
+                    }
+                    let mut out_mask = vec![0u8; (lw as usize) * (lh as usize)];
+                    for y in 0..lh {
+                        let row = (y as usize) * (lw as usize);
+                        for x in 0..lw {
+                            out_mask[row + x as usize] = next.get_pixel(x, y).0[0];
+                        }
+                    }
+                    self.stack.active_layer_mut().mask = Some(Arc::new(out_mask));
+                    return Ok(());
+                }
+            }
+
             let local_op = EditOperation::Paint {
-                points: points.iter().map(|[x, y]| [x - ox, y - oy]).collect(),
+                points: local_pts,
                 color: *color,
                 radius: *radius,
                 opacity: *opacity,
                 erase: *erase,
+                brush: *brush,
             };
             let mut next = render_operation(&active.pixels, &local_op)?;
             // If a selection mask is active, constrain the paint/erase stroke to it!
             if let Some(sel) = &self.selection {
-                let (lw, lh) = next.dimensions();
-                let oxi = active.offset_x;
-                let oyi = active.offset_y;
-                for y in 0..lh {
-                    for x in 0..lw {
-                        let m = sel.alpha_at(x as i32 + oxi, y as i32 + oyi);
-                        if m == 255 {
-                            continue;
-                        }
-                        let prev = active.pixels.get_pixel(x, y).0;
-                        if m == 0 {
-                            next.put_pixel(x, y, image::Rgba(prev));
-                        } else {
-                            let cur = next.get_pixel(x, y).0;
-                            let t = m as f32 / 255.0;
-                            let inv = 1.0 - t;
-                            let mix = |a: u8, b: u8| -> u8 {
-                                (a as f32 * inv + b as f32 * t).round().clamp(0.0, 255.0) as u8
-                            };
-                            next.put_pixel(
-                                x,
-                                y,
-                                image::Rgba([
-                                    mix(prev[0], cur[0]),
-                                    mix(prev[1], cur[1]),
-                                    mix(prev[2], cur[2]),
-                                    mix(prev[3], cur[3]),
-                                ]),
-                            );
+                blend_with_selection(
+                    &active.pixels,
+                    &mut next,
+                    sel,
+                    active.offset_x,
+                    active.offset_y,
+                );
+            }
+            self.stack.active_layer_mut().pixels = Arc::new(next);
+            return Ok(());
+        }
+
+        // 3a. DrawShape targets the active layer (or its transparency mask when
+        // `editing_mask` is active), translating coordinates by the layer's offset,
+        // and clipping to the active selection mask.
+        if let EditOperation::DrawShape {
+            kind,
+            points,
+            closed,
+            stroke_color,
+            stroke_width,
+            stroke_opacity,
+            fill_color,
+            fill_opacity,
+        } = operation
+        {
+            let active = self.stack.active_layer();
+            if active.locked {
+                return Err(UiText::new("layer_locked"));
+            }
+            if !active.visible {
+                return Err(UiText::new("layer_hidden"));
+            }
+            let ox = active.offset_x as f64;
+            let oy = active.offset_y as f64;
+            let local_pts: Vec<[f64; 2]> = points.iter().map(|[x, y]| [x - ox, y - oy]).collect();
+
+            if active.editing_mask {
+                if let Some(existing_mask) = &active.mask {
+                    let (lw, lh) = active.dimensions();
+                    let mut mask_img = RgbaImage::new(lw, lh);
+                    for y in 0..lh {
+                        let row = (y as usize) * (lw as usize);
+                        for x in 0..lw {
+                            let v = existing_mask.get(row + x as usize).copied().unwrap_or(255);
+                            mask_img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
                         }
                     }
+                    let to_gray = |c: [u8; 3]| -> [u8; 3] {
+                        let g = (0.299 * f64::from(c[0])
+                            + 0.587 * f64::from(c[1])
+                            + 0.114 * f64::from(c[2]))
+                        .round()
+                        .clamp(0.0, 255.0) as u8;
+                        [g, g, g]
+                    };
+                    let mask_op = EditOperation::DrawShape {
+                        kind: *kind,
+                        points: local_pts,
+                        closed: *closed,
+                        stroke_color: stroke_color.map(to_gray),
+                        stroke_width: *stroke_width,
+                        stroke_opacity: *stroke_opacity,
+                        fill_color: fill_color.map(to_gray),
+                        fill_opacity: *fill_opacity,
+                    };
+                    let mut next = render_operation(&mask_img, &mask_op)?;
+                    if let Some(sel) = &self.selection {
+                        blend_with_selection(
+                            &mask_img,
+                            &mut next,
+                            sel,
+                            active.offset_x,
+                            active.offset_y,
+                        );
+                    }
+                    let mut out_mask = vec![0u8; (lw as usize) * (lh as usize)];
+                    for y in 0..lh {
+                        let row = (y as usize) * (lw as usize);
+                        for x in 0..lw {
+                            out_mask[row + x as usize] = next.get_pixel(x, y).0[0];
+                        }
+                    }
+                    self.stack.active_layer_mut().mask = Some(Arc::new(out_mask));
+                    return Ok(());
                 }
+            }
+
+            let local_op = EditOperation::DrawShape {
+                kind: *kind,
+                points: local_pts,
+                closed: *closed,
+                stroke_color: *stroke_color,
+                stroke_width: *stroke_width,
+                stroke_opacity: *stroke_opacity,
+                fill_color: *fill_color,
+                fill_opacity: *fill_opacity,
+            };
+            let mut next = render_operation(&active.pixels, &local_op)?;
+            if let Some(sel) = &self.selection {
+                blend_with_selection(&active.pixels, &mut next, sel, active.offset_x, active.offset_y);
+            }
+            self.stack.active_layer_mut().pixels = Arc::new(next);
+            return Ok(());
+        }
+
+        // 3b-fill. FloodFill targets the active layer (or its transparency mask),
+        // optionally sampling the composited stack for lineart coloring, and
+        // clips strictly to any active selection mask.
+        if let EditOperation::FloodFill {
+            x,
+            y,
+            color,
+            opacity,
+            tolerance,
+            grow,
+            contiguous,
+            sample_all_layers,
+        } = operation
+        {
+            let active = self.stack.active_layer();
+            if active.locked {
+                return Err(UiText::new("layer_locked"));
+            }
+            if !active.visible {
+                return Err(UiText::new("layer_hidden"));
+            }
+            let (lw, lh) = active.dimensions();
+            let ox = active.offset_x;
+            let oy = active.offset_y;
+            let composite_ref = if *sample_all_layers {
+                Some(composite_stack(&self.stack))
+            } else {
+                None
+            };
+            let (ref_img, ref_ox, ref_oy, seed_x, seed_y) = match &composite_ref {
+                Some(comp) => (comp.as_ref(), ox, oy, *x, *y),
+                None => (active.pixels.as_ref(), 0, 0, *x - ox, *y - oy),
+            };
+            if active.editing_mask {
+                if let Some(existing_mask) = &active.mask {
+                    let mut mask_img = RgbaImage::new(lw, lh);
+                    for py in 0..lh {
+                        let row = (py as usize) * (lw as usize);
+                        for px in 0..lw {
+                            let v = existing_mask.get(row + px as usize).copied().unwrap_or(255);
+                            mask_img.put_pixel(px, py, image::Rgba([v, v, v, 255]));
+                        }
+                    }
+                    let g = (0.299 * f64::from(color[0])
+                        + 0.587 * f64::from(color[1])
+                        + 0.114 * f64::from(color[2]))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                    let mut next = crate::pixels::flood_fill(
+                        &mask_img,
+                        &mask_img,
+                        0,
+                        0,
+                        *x - ox,
+                        *y - oy,
+                        [g, g, g],
+                        *opacity,
+                        *tolerance,
+                        *grow,
+                        *contiguous,
+                    );
+                    if let Some(sel) = &self.selection {
+                        blend_with_selection(&mask_img, &mut next, sel, ox, oy);
+                    }
+                    let mut out_mask = vec![0u8; (lw as usize) * (lh as usize)];
+                    for py in 0..lh {
+                        let row = (py as usize) * (lw as usize);
+                        for px in 0..lw {
+                            out_mask[row + px as usize] = next.get_pixel(px, py).0[0];
+                        }
+                    }
+                    self.stack.active_layer_mut().mask = Some(Arc::new(out_mask));
+                    return Ok(());
+                }
+            }
+            let mut next = crate::pixels::flood_fill(
+                &active.pixels,
+                ref_img,
+                ref_ox,
+                ref_oy,
+                seed_x,
+                seed_y,
+                *color,
+                *opacity,
+                *tolerance,
+                *grow,
+                *contiguous,
+            );
+            if let Some(sel) = &self.selection {
+                blend_with_selection(&active.pixels, &mut next, sel, ox, oy);
+            }
+            self.stack.active_layer_mut().pixels = Arc::new(next);
+            return Ok(());
+        }
+
+        // 3b-grad. Gradient targets the active layer (or its transparency mask)
+        // and clips strictly to any active selection mask.
+        if let EditOperation::Gradient {
+            start,
+            end,
+            start_color,
+            start_alpha,
+            end_color,
+            end_alpha,
+            stops,
+            opacity,
+            shape,
+            repeat,
+            reverse,
+            dither,
+            blend_mode,
+        } = operation
+        {
+            let active = self.stack.active_layer();
+            if active.locked {
+                return Err(UiText::new("layer_locked"));
+            }
+            if !active.visible {
+                return Err(UiText::new("layer_hidden"));
+            }
+            let ox = active.offset_x;
+            let oy = active.offset_y;
+            let local_start = [start[0] - ox as f64, start[1] - oy as f64];
+            let local_end = [end[0] - ox as f64, end[1] - oy as f64];
+            if active.editing_mask {
+                if let Some(existing_mask) = &active.mask {
+                    let (lw, lh) = active.dimensions();
+                    let mut mask_img = RgbaImage::new(lw, lh);
+                    for py in 0..lh {
+                        let row = (py as usize) * (lw as usize);
+                        for px in 0..lw {
+                            let v = existing_mask.get(row + px as usize).copied().unwrap_or(255);
+                            mask_img.put_pixel(px, py, image::Rgba([v, v, v, 255]));
+                        }
+                    }
+                    let to_gray = |c: [u8; 3]| -> [u8; 3] {
+                        let g = (0.299 * f64::from(c[0])
+                            + 0.587 * f64::from(c[1])
+                            + 0.114 * f64::from(c[2]))
+                        .round()
+                        .clamp(0.0, 255.0) as u8;
+                        [g, g, g]
+                    };
+                    let gray_stops: Vec<kogaview_protocol::GradientStop> = stops
+                        .iter()
+                        .map(|s| kogaview_protocol::GradientStop {
+                            pos: s.pos,
+                            color: to_gray(s.color),
+                            alpha: s.alpha,
+                        })
+                        .collect();
+                    let mut next = crate::pixels::render_gradient(
+                        &mask_img,
+                        local_start,
+                        local_end,
+                        to_gray(*start_color),
+                        *start_alpha,
+                        to_gray(*end_color),
+                        *end_alpha,
+                        &gray_stops,
+                        *opacity,
+                        *shape,
+                        *repeat,
+                        *reverse,
+                        *dither,
+                        "normal",
+                    );
+                    if let Some(sel) = &self.selection {
+                        blend_with_selection(&mask_img, &mut next, sel, ox, oy);
+                    }
+                    let mut out_mask = vec![0u8; (lw as usize) * (lh as usize)];
+                    for py in 0..lh {
+                        let row = (py as usize) * (lw as usize);
+                        for px in 0..lw {
+                            out_mask[row + px as usize] = next.get_pixel(px, py).0[0];
+                        }
+                    }
+                    self.stack.active_layer_mut().mask = Some(Arc::new(out_mask));
+                    return Ok(());
+                }
+            }
+            let mut next = crate::pixels::render_gradient(
+                &active.pixels,
+                local_start,
+                local_end,
+                *start_color,
+                *start_alpha,
+                *end_color,
+                *end_alpha,
+                stops,
+                *opacity,
+                *shape,
+                *repeat,
+                *reverse,
+                *dither,
+                blend_mode,
+            );
+            if let Some(sel) = &self.selection {
+                blend_with_selection(&active.pixels, &mut next, sel, ox, oy);
             }
             self.stack.active_layer_mut().pixels = Arc::new(next);
             return Ok(());
@@ -1977,6 +2723,47 @@ impl EditorDocument {
                 validate_paint(points, *radius, *opacity)?;
                 Ok(false)
             }
+            EditOperation::DrawShape {
+                points,
+                stroke_color,
+                stroke_width,
+                stroke_opacity,
+                fill_color,
+                fill_opacity,
+                ..
+            } => {
+                if points.is_empty()
+                    || points.iter().any(|[x, y]| !x.is_finite() || !y.is_finite())
+                {
+                    return Ok(true);
+                }
+                let has_stroke = stroke_color.is_some()
+                    && stroke_width.is_finite()
+                    && *stroke_width > 0.0
+                    && stroke_opacity.is_finite()
+                    && *stroke_opacity > 0.0;
+                let has_fill =
+                    fill_color.is_some() && fill_opacity.is_finite() && *fill_opacity > 0.0;
+                Ok(!has_stroke && !has_fill)
+            }
+            EditOperation::FloodFill { opacity, .. } => {
+                Ok(!opacity.is_finite() || *opacity <= 0.0)
+            }
+            EditOperation::Gradient {
+                start,
+                end,
+                opacity,
+                ..
+            } => {
+                let valid = start[0].is_finite()
+                    && start[1].is_finite()
+                    && end[0].is_finite()
+                    && end[1].is_finite()
+                    && opacity.is_finite()
+                    && *opacity > 0.0
+                    && (end[0] - start[0]).hypot(end[1] - start[1]) >= 0.5;
+                Ok(!valid)
+            }
             EditOperation::AiResult { .. } | EditOperation::Layer(_) => Ok(false),
         }
     }
@@ -2014,10 +2801,12 @@ impl EditorDocument {
     fn trim_history(&mut self) {
         while self.undo.len() > MAX_HISTORY_STEPS {
             self.undo.remove(0);
+            self.history_trimmed = true;
         }
         self.snapshot_bytes = self.compute_snapshot_bytes();
         while self.snapshot_bytes > MAX_SNAPSHOT_BYTES && self.undo.len() > 1 {
             self.undo.remove(0);
+            self.history_trimmed = true;
             self.snapshot_bytes = self.compute_snapshot_bytes();
         }
     }

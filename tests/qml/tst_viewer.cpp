@@ -1870,16 +1870,18 @@ private slots:
   void viewerUiModesToggleChromeAndHud()
   {
     QQuickItem* rightPanel = item("viewerRightPanel");
-    QQuickItem* compactHud = item("viewerCompactHud");
-    QVERIFY(rightPanel != nullptr && compactHud != nullptr);
+    QVERIFY(rightPanel != nullptr);
 
-    // Standard mode (default): right panel visible, compact HUD off.
+    // Standard mode (default): right panel visible, compact HUD not active.
     QVariantMap layout;
     layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("standard"));
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(rightPanel->isVisible());
-    QVERIFY(!compactHud->isVisible());
+    {
+      QQuickItem* compactHud = item("viewerCompactHud");
+      QVERIFY(compactHud == nullptr || !compactHud->isVisible());
+    }
 
     // Simple mode: right panel hidden by default, compact HUD off, and
     // toggling Info & Color opens/closes the right sidebar on demand.
@@ -1887,7 +1889,10 @@ private slots:
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(!rightPanel->isVisible());
-    QVERIFY(!compactHud->isVisible());
+    {
+      QQuickItem* compactHud = item("viewerCompactHud");
+      QVERIFY(compactHud == nullptr || !compactHud->isVisible());
+    }
 
     QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel", Q_ARG(QVariant, QVariant())));
     QCoreApplication::processEvents();
@@ -1912,46 +1917,50 @@ private slots:
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(!rightPanel->isVisible());
-    QVERIFY(compactHud->isVisible());
+    {
+      QQuickItem* compactHud = item("viewerCompactHud");
+      QVERIFY(compactHud != nullptr && compactHud->isVisible());
+    }
 
     // Restore standard mode: previous panel visibility returns intact.
     layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("standard"));
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(rightPanel->isVisible());
-    QVERIFY(!compactHud->isVisible());
+    {
+      QQuickItem* compactHud = item("viewerCompactHud");
+      QVERIFY(compactHud == nullptr || !compactHud->isVisible());
+    }
   }
 
   /// Switching between single, dual, and webtoon activates the matching
   /// display surface and auto-hides the bottom filmstrip in webtoon mode.
   void viewerDisplayModesSwitchSingleDualAndWebtoon()
   {
-    QQuickItem* dualSpread = item("viewerDualSpread");
-    QQuickItem* webtoon = item("viewerWebtoonView");
     QQuickItem* singleImg = item("viewerImage");
-    QVERIFY(dualSpread != nullptr && webtoon != nullptr && singleImg != nullptr);
+    QVERIFY(singleImg != nullptr);
 
     QVariantMap layout;
     layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("single"));
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(singleImg->isVisible());
-    QVERIFY(!dualSpread->isVisible());
-    QVERIFY(!webtoon->isVisible());
+    QVERIFY(item("viewerDualSpread") == nullptr || !item("viewerDualSpread")->isVisible());
+    QVERIFY(item("viewerWebtoonView") == nullptr || !item("viewerWebtoonView")->isVisible());
 
     layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("dual"));
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(!singleImg->isVisible());
-    QVERIFY(dualSpread->isVisible());
-    QVERIFY(!webtoon->isVisible());
+    QVERIFY(item("viewerDualSpread") != nullptr && item("viewerDualSpread")->isVisible());
+    QVERIFY(item("viewerWebtoonView") == nullptr || !item("viewerWebtoonView")->isVisible());
 
     layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("webtoon"));
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(!singleImg->isVisible());
-    QVERIFY(!dualSpread->isVisible());
-    QVERIFY(webtoon->isVisible());
+    QVERIFY(item("viewerDualSpread") == nullptr || !item("viewerDualSpread")->isVisible());
+    QVERIFY(item("viewerWebtoonView") != nullptr && item("viewerWebtoonView")->isVisible());
 
     // Restore single mode.
     layout.insert(QStringLiteral("viewerDisplayMode"), QStringLiteral("single"));

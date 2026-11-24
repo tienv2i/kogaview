@@ -2278,6 +2278,7 @@ struct StartupGraphicsConfig
 {
   bool hardwareAcceleration = true;
   bool antiAliasing = true;
+  QString language;
 };
 
 StartupGraphicsConfig readStartupGraphicsConfig()
@@ -2309,6 +2310,9 @@ StartupGraphicsConfig readStartupGraphicsConfig()
   if (obj.contains(QStringLiteral("anti_aliasing"))) {
     cfg.antiAliasing = obj.value(QStringLiteral("anti_aliasing")).toBool(true);
   }
+  if (obj.contains(QStringLiteral("language"))) {
+    cfg.language = obj.value(QStringLiteral("language")).toString();
+  }
   return cfg;
 }
 } // namespace
@@ -2337,9 +2341,8 @@ int main(int argc, char* argv[])
     (cliSafeMode || cliResetConfig) ? StartupGraphicsConfig{} : readStartupGraphicsConfig();
   if (cliSafeMode || !graphicsCfg.hardwareAcceleration) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
-  } else if (graphicsCfg.antiAliasing) {
+  } else {
     QSurfaceFormat format = QSurfaceFormat::defaultFormat();
-    format.setSamples(4);
     format.setSwapInterval(1);
     QSurfaceFormat::setDefaultFormat(format);
   }
@@ -2402,24 +2405,29 @@ int main(int argc, char* argv[])
   ThumbnailCache thumbnails(kogaview_cache_dir() + QStringLiteral("/thumbnails"));
   QQmlEngine engine;
 
+  // Pre-install the translator before loading QML so every `qsTr()` binding
+  // evaluates in the target language on the first pass without a full
+  // `engine.retranslate()` sweep right after startup.
+  const QString envLang = qEnvironmentVariable("KOGAVIEW_UI_LANG");
+  const QString initialLang = !envLang.isEmpty() ? envLang : graphicsCfg.language;
+  auto* language = new InterfaceLanguage(&engine, nullptr, initialLang, &app);
+  engine.rootContext()->setContextProperty(QStringLiteral("LanguageInstaller"), language);
+
   QObject* rootObject = loadUserInterface(engine, launchArguments, platform, thumbnails);
   if (rootObject == nullptr) {
     kogaview_shutdown();
     return 1;
   }
 
+  language->setRootObject(rootObject);
+  if (envLang.isEmpty()) {
+    language->reapply();
+  }
+
   QObject::connect(&engine, &QQmlEngine::quit, &app, &QGuiApplication::quit);
   QObject::connect(&engine, &QQmlEngine::exit, &app, &QCoreApplication::exit);
   auto* inputFocusFilter = new InputFocusDismissFilter(&app);
   app.installEventFilter(inputFocusFilter);
-
-  // The language is persisted state like the theme: the first snapshot carries
-  // it, and `Main.qml` applies every later change (a `set_settings` from the
-  // dialog). `KOGAVIEW_UI_LANG` overrides both for a harness run.
-  auto* language = new InterfaceLanguage(&engine, rootObject,
-                                         qEnvironmentVariable("KOGAVIEW_UI_LANG"), rootObject);
-  language->reapply();
-  engine.rootContext()->setContextProperty(QStringLiteral("LanguageInstaller"), language);
 
 #ifdef KOGAVIEW_DEV_HARNESS
   installDevHarness(rootObject, app, platform, thumbnails);

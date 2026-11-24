@@ -625,12 +625,81 @@ impl Core {
                 radius,
                 opacity,
                 erase,
+                brush,
             } => self.editor_apply(EditOperation::Paint {
                 points,
                 color,
                 radius,
                 opacity,
                 erase,
+                brush,
+            }),
+            Command::EditorDrawShape {
+                kind,
+                points,
+                closed,
+                stroke_color,
+                stroke_width,
+                stroke_opacity,
+                fill_color,
+                fill_opacity,
+            } => self.editor_apply(EditOperation::DrawShape {
+                kind,
+                points,
+                closed,
+                stroke_color,
+                stroke_width,
+                stroke_opacity,
+                fill_color,
+                fill_opacity,
+            }),
+            Command::EditorFloodFill {
+                x,
+                y,
+                color,
+                opacity,
+                tolerance,
+                grow,
+                contiguous,
+                sample_all_layers,
+            } => self.editor_apply(EditOperation::FloodFill {
+                x,
+                y,
+                color,
+                opacity,
+                tolerance,
+                grow,
+                contiguous,
+                sample_all_layers,
+            }),
+            Command::EditorGradient {
+                start,
+                end,
+                start_color,
+                start_alpha,
+                end_color,
+                end_alpha,
+                stops,
+                opacity,
+                shape,
+                repeat,
+                reverse,
+                dither,
+                blend_mode,
+            } => self.editor_apply(EditOperation::Gradient {
+                start,
+                end,
+                start_color,
+                start_alpha,
+                end_color,
+                end_alpha,
+                stops,
+                opacity,
+                shape,
+                repeat,
+                reverse,
+                dither,
+                blend_mode,
             }),
             Command::EditorSave => self.editor_save(None),
             Command::EditorSaveAs { path } => self.editor_save(Some(&path)),
@@ -786,6 +855,65 @@ impl Core {
             Command::EditorLayerFlatten => {
                 self.editor_layer_op(crate::editor::LayerOperation::Flatten)
             }
+            Command::EditorLayerMaskAdd {
+                id,
+                reveal_all,
+                from_selection,
+            } => {
+                let initial = if from_selection {
+                    self.editor.as_ref().and_then(|doc| {
+                        let sel = doc.selection()?;
+                        let layer = doc.layers().iter().find(|l| l.id == id)?;
+                        let (lw, lh) = layer.dimensions();
+                        let mut buf = vec![0u8; (lw as usize) * (lh as usize)];
+                        for y in 0..lh {
+                            let row = (y as usize) * (lw as usize);
+                            for x in 0..lw {
+                                buf[row + x as usize] =
+                                    sel.alpha_at(x as i32 + layer.offset_x, y as i32 + layer.offset_y);
+                            }
+                        }
+                        Some(std::sync::Arc::new(buf))
+                    })
+                } else {
+                    None
+                };
+                self.editor_layer_op(crate::editor::LayerOperation::AddMask {
+                    id,
+                    reveal_all,
+                    initial,
+                })
+            }
+            Command::EditorLayerMaskDelete { id } => {
+                self.editor_layer_op(crate::editor::LayerOperation::DeleteMask { id })
+            }
+            Command::EditorLayerMaskApply { id } => {
+                self.editor_layer_op(crate::editor::LayerOperation::ApplyMask { id })
+            }
+            Command::EditorLayerMaskInvert { id } => {
+                self.editor_layer_op(crate::editor::LayerOperation::InvertMask { id })
+            }
+            Command::EditorLayerMaskSetEnabled { id, enabled } => {
+                self.editor_layer_op(crate::editor::LayerOperation::SetMaskEnabled { id, enabled })
+            }
+            Command::EditorLayerMaskSetEditing { id, editing } => {
+                self.editor_layer_op(crate::editor::LayerOperation::SetEditingMask { id, editing })
+            }
+            Command::EditorLayerMaskSetLinked { id, linked } => {
+                self.editor_layer_op(crate::editor::LayerOperation::SetMaskLinked { id, linked })
+            }
+            Command::EditorLayerAddAdjustment { name, adjustment } => {
+                self.editor_layer_op(crate::editor::LayerOperation::AddAdjustment {
+                    name,
+                    adjustment,
+                })
+            }
+            Command::EditorLayerUpdateAdjustment { id, adjustment } => {
+                self.editor_layer_op(crate::editor::LayerOperation::UpdateAdjustment {
+                    id,
+                    adjustment,
+                })
+            }
             Command::EditorSetCanvasBackground { color, transparent } => {
                 let next = if transparent {
                     None
@@ -847,11 +975,29 @@ impl Core {
             Command::EditorSelectAll => self.editor_select_all(),
             Command::EditorSelectClear => self.editor_select_clear(),
             Command::EditorSelectInvert => self.editor_select_invert(),
+            Command::EditorSelectModify { op, amount } => self.editor_select_modify(op, amount),
             Command::EditorSelectMove { dx, dy } => self.editor_select_move(dx, dy),
             Command::EditorSelectionDelete => self.editor_selection_delete(),
             Command::EditorSelectionFill { color, opacity } => {
                 self.editor_selection_fill(color, opacity)
             }
+            Command::EditorSelectionStroke {
+                color,
+                width,
+                position,
+                opacity,
+            } => self.editor_selection_stroke(color, width, position, opacity),
+            Command::EditorLiquifyStroke {
+                points,
+                mode,
+                radius,
+                strength,
+            } => self.editor_liquify_stroke(&points, mode, radius, strength),
+            Command::EditorLiveStrokeBegin { stroke, x, y } => {
+                self.editor_live_stroke_begin(stroke, x, y)
+            }
+            Command::EditorLiveStrokeStep { points } => self.editor_live_stroke_step(&points),
+            Command::EditorLiveStrokeEnd { commit } => self.editor_live_stroke_end(commit),
             Command::EditorSelectionDuplicateLayer => self.editor_selection_duplicate_layer(),
             Command::EditorSelectionCopy { cut } => self.editor_selection_copy(cut),
             Command::EditorSelectionCrop => self.editor_selection_crop(),

@@ -147,7 +147,7 @@ ApplicationWindow {
     /// only what moved; the rest is taken from the layout on screen.
     function requestLayout(patch) {
         var next = root.mergeLayout(root.activeLayout, patch)
-        if (settingsDialog.visible) {
+        if (settingsDialog && settingsDialog.visible) {
             root.previewLayout = next
             settingsDialog.adoptLayout(next)
             return
@@ -303,10 +303,12 @@ ApplicationWindow {
     /// Settings header reached the Viewer's pan handler: the dialog stood still
     /// while the picture slid behind it. Disabling the workspace loader is
     /// also the modal contract for the wheel, taps and clicks, not just drags.
-    readonly property bool modalDialogOpen: settingsDialog.visible
-                                            || batchResizeDialog.visible
-                                            || batchCropDialog.visible
-                                            || batchConvertDialog.visible
+    property bool launchReady: false
+    readonly property var settingsDialog: settingsDialogLoader.item
+    readonly property bool modalDialogOpen: !!(settingsDialog && settingsDialog.visible)
+                                            || !!(batchResizeDialogLoader.item && batchResizeDialogLoader.item.visible)
+                                            || !!(batchCropDialogLoader.item && batchCropDialogLoader.item.visible)
+                                            || !!(batchConvertDialogLoader.item && batchConvertDialogLoader.item.visible)
                                             || unsavedDialog.visible
                                             || deleteDialog.visible
                                             || fileFallback.visible
@@ -450,6 +452,7 @@ ApplicationWindow {
     }
 
     function openSettings() {
+        settingsDialogLoader.active = true;
         // Open on what is stored, not on a default: the snapshot carries the
         // two checkboxes beside the theme, so the dialog shows the saved values.
         settingsDialog.initialTheme = root.state.theme || "dark";
@@ -617,7 +620,8 @@ ApplicationWindow {
         var savePath = String((ed && (ed.savePath || ed.path)) || "");
         if (root.editorLayerCount() > 1 && !savePath.toLowerCase().endsWith(".ora")) {
             root.pendingFlatSavePath = "";
-            flattenSaveDialog.open();
+            flattenSaveDialogLoader.active = true;
+            flattenSaveDialogLoader.item.open();
             return;
         }
         root.send({ type: "editor_save" });
@@ -641,8 +645,9 @@ ApplicationWindow {
     property int pendingPasteH: 0
 
     function openNewImageDialog() {
-        newImageDialog.refreshClipboardPreset();
-        newImageDialog.open();
+        newImageDialogLoader.active = true;
+        newImageDialogLoader.item.refreshClipboardPreset();
+        newImageDialogLoader.item.open();
     }
 
     function pasteClipboardImage() {
@@ -658,7 +663,8 @@ ApplicationWindow {
             root.pendingPastePath = tempPath;
             root.pendingPasteW = clipSz.width;
             root.pendingPasteH = clipSz.height;
-            pasteOversizedDialog.open();
+            pasteOversizedDialogLoader.active = true;
+            pasteOversizedDialogLoader.item.open();
             return;
         }
         root.send({
@@ -672,7 +678,7 @@ ApplicationWindow {
     function commitPendingPaste(mode) {
         var p = root.pendingPastePath;
         root.pendingPastePath = "";
-        pasteOversizedDialog.close();
+        if (pasteOversizedDialogLoader.item) pasteOversizedDialogLoader.item.close();
         if (!p) return;
         root.send({
             type: "editor_paste_image",
@@ -694,7 +700,8 @@ ApplicationWindow {
         } else {
             if (root.editorLayerCount() > 1 && !path.toLowerCase().endsWith(".ora")) {
                 root.pendingFlatSavePath = path;
-                flattenSaveDialog.open();
+                flattenSaveDialogLoader.active = true;
+                flattenSaveDialogLoader.item.open();
                 return;
             }
             root.send({ type: "editor_save_as", path: path });
@@ -728,8 +735,9 @@ ApplicationWindow {
         root.pendingSave = "export";
         if (Platform.requestSaveFile(qsTr("Export image as"), path)) return;
         root.pendingSave = "";
-        exportFallback.currentFile = "file://" + path;
-        exportFallback.open()
+        exportFallbackLoader.active = true;
+        exportFallbackLoader.item.currentFile = "file://" + path;
+        exportFallbackLoader.item.open()
     }
 
     /// A request to leave the Editor while edits are unsaved. `action` is what
@@ -911,9 +919,15 @@ ApplicationWindow {
     /// the Tools… entry — which names no action — has something to open.
     function batchDialogFor(operation) {
         switch (operation) {
-        case "crop": return batchCropDialog
-        case "convert": return batchConvertDialog
-        default: return batchResizeDialog
+        case "crop":
+            batchCropDialogLoader.active = true
+            return batchCropDialogLoader.item
+        case "convert":
+            batchConvertDialogLoader.active = true
+            return batchConvertDialogLoader.item
+        default:
+            batchResizeDialogLoader.active = true
+            return batchResizeDialogLoader.item
         }
     }
 
@@ -1104,6 +1118,7 @@ ApplicationWindow {
         var installed = root.languageInstaller ? root.languageInstaller.locale : "";
         root.appliedLanguage = installed === undefined || installed === null ? "" : String(installed);
         root.processLaunchArguments();
+        root.launchReady = true;
     }
 
     Connections {
@@ -1385,6 +1400,7 @@ ApplicationWindow {
     Loader {
         id: workspaceLoader
         anchors.fill: parent
+        active: root.launchReady
         // A modal dialog owns the pointer. Pointer handlers are not occluded by
         // a popup (the Settings header drag used to pan the Viewer instead), so
         // the workspace has to be switched off while one is open. Focus returns
@@ -1544,114 +1560,149 @@ ApplicationWindow {
     /// live in the shell, not in the Browser, so the window can make them modal
     /// for the whole workspace (`modalDialogOpen`) while the dialog itself stays
     /// interactive. The Browser's Batch page names which one to open.
-    BatchResizeDialog {
-        id: batchResizeDialog
-        objectName: "batchResizeDialog"
-        theme: appTheme
-        onRunRequested: function(command) { root.startBatchJob(command) }
-    }
-
-    BatchCropDialog {
-        id: batchCropDialog
-        objectName: "batchCropDialog"
-        theme: appTheme
-        onRunRequested: function(command) { root.startBatchJob(command) }
-    }
-
-    BatchConvertDialog {
-        id: batchConvertDialog
-        objectName: "batchConvertDialog"
-        theme: appTheme
-        onRunRequested: function(command) { root.startBatchJob(command) }
-    }
-
-    SettingsDialog {
-        id: settingsDialog
-        objectName: "settingsDialog"
-        theme: appTheme
-        safeMode: !!root.state.safeMode
-        aiSettings: root.state.aiSettings || ({ device: "cpu", autoUnloadSecs: 60, customModelPaths: ({}) })
-        aiPlugins: root.state.aiPlugins || []
-        aiModels: root.state.aiModels || []
-        aiTask: root.state.aiTask || null
-        onResetConfigRequested: function(resetLayout, resetSettings, resetFavorites) {
-            root.send({
-                type: "reset_config",
-                reset_layout: resetLayout,
-                reset_settings: resetSettings,
-                reset_favorites: resetFavorites
-            });
-            settingsDialog.close();
-        }
-        onAiSettingsSaveRequested: function(device, autoUnloadSecs) {
-            root.send({ type: "ai_set_settings", device: device, auto_unload_secs: autoUnloadSecs });
-        }
-        onAiDownloadModelRequested: function(modelId) {
-            root.send({ type: "ai_download_model", model_id: modelId });
-        }
-        onAiDeleteModelRequested: function(modelId) {
-            root.send({ type: "ai_delete_model", model_id: modelId });
-        }
-        onAiBrowseModelRequested: function(modelId) {
-            onnxModelDialog.targetModelId = modelId;
-            onnxModelDialog.open();
-        }
-        onAiCancelRequested: root.send({ type: "ai_cancel" })
-        onAiRefreshPluginsRequested: root.send({ type: "ai_refresh_plugins" })
-        /// Live preview: the window repaints with the value under the control
-        /// that was just changed, before anything is saved. The theme is an
-        /// ephemeral override (`previewTheme`); the language goes through the
-        /// same live translator switch the menu uses.
-        onPreviewRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
-            root.previewTheme = themeName;
-            if (language) root.applyInterfaceLanguage(language === "system" ? "" : language);
-        }
-        onLayoutPreviewRequested: function(layout) {
-            root.previewLayout = JSON.parse(JSON.stringify(layout));
-        }
-        /// Apply (stay open) or OK (close): persist through the one command
-        /// that owns these values. The preview becomes the stored value, so the
-        /// override is dropped and the binding takes over again.
-        onSaveRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
-            root.previewTheme = "";
-            root.send({ type: "set_settings", theme: themeName,
-                        remember_last_folder: rememberLastFolder,
-                        background_thumbnails: backgroundThumbnails,
-                        hardware_acceleration: settingsDialog.hardwareAccelerationValue,
-                        anti_aliasing: settingsDialog.antiAliasingValue,
-                        language: language });
-        }
-        onLayoutSaveRequested: function(layout) {
-            root.previewLayout = null;
-            root.send({ type: "set_layout", layout: layout });
-        }
-        /// Cancel, × or Escape: nothing was written, so dropping the override
-        /// is the whole undo, and the language goes back to the stored one.
-        onRevertRequested: {
-            root.previewTheme = "";
-            root.previewLayout = null;
-            root.applyInterfaceLanguage(root.state.language === "system"
-                                        ? "" : (root.state.language || ""));
-        }
-    }
-
-    FileDialog {
-        id: onnxModelDialog
-        property string targetModelId: ""
-        title: qsTr("Select ONNX model file")
-        fileMode: FileDialog.OpenFile
-        nameFilters: [qsTr("ONNX models (*.onnx)"), qsTr("All files (*)")]
-        onAccepted: {
-            if (targetModelId && selectedFile) {
-                root.send({
-                    type: "ai_set_custom_model",
-                    model_id: targetModelId,
-                    path: root.toLocalPath(selectedFile)
-                });
+    Loader {
+        id: batchResizeDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            BatchResizeDialog {
+                id: batchResizeDialog
+                objectName: "batchResizeDialog"
+                theme: appTheme
+                onRunRequested: function(command) { root.startBatchJob(command) }
             }
-            targetModelId = "";
         }
-        onRejected: targetModelId = ""
+    }
+
+    Loader {
+        id: batchCropDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            BatchCropDialog {
+                id: batchCropDialog
+                objectName: "batchCropDialog"
+                theme: appTheme
+                onRunRequested: function(command) { root.startBatchJob(command) }
+            }
+        }
+    }
+
+    Loader {
+        id: batchConvertDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            BatchConvertDialog {
+                id: batchConvertDialog
+                objectName: "batchConvertDialog"
+                theme: appTheme
+                onRunRequested: function(command) { root.startBatchJob(command) }
+            }
+        }
+    }
+
+    Loader {
+        id: settingsDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            SettingsDialog {
+                id: settingsDialogItem
+                objectName: "settingsDialog"
+                theme: appTheme
+                safeMode: !!root.state.safeMode
+                aiSettings: root.state.aiSettings || ({ device: "cpu", autoUnloadSecs: 60, customModelPaths: ({}) })
+                aiPlugins: root.state.aiPlugins || []
+                aiModels: root.state.aiModels || []
+                aiTask: root.state.aiTask || null
+                onResetConfigRequested: function(resetLayout, resetSettings, resetFavorites) {
+                    root.send({
+                        type: "reset_config",
+                        reset_layout: resetLayout,
+                        reset_settings: resetSettings,
+                        reset_favorites: resetFavorites
+                    });
+                    settingsDialogItem.close();
+                }
+                onAiSettingsSaveRequested: function(device, autoUnloadSecs) {
+                    root.send({ type: "ai_set_settings", device: device, auto_unload_secs: autoUnloadSecs });
+                }
+                onAiDownloadModelRequested: function(modelId) {
+                    root.send({ type: "ai_download_model", model_id: modelId });
+                }
+                onAiDeleteModelRequested: function(modelId) {
+                    root.send({ type: "ai_delete_model", model_id: modelId });
+                }
+                onAiBrowseModelRequested: function(modelId) {
+                    onnxModelDialogLoader.active = true;
+                    onnxModelDialogLoader.item.targetModelId = modelId;
+                    onnxModelDialogLoader.item.open();
+                }
+                onAiCancelRequested: root.send({ type: "ai_cancel" })
+                onAiRefreshPluginsRequested: root.send({ type: "ai_refresh_plugins" })
+                /// Live preview: the window repaints with the value under the control
+                /// that was just changed, before anything is saved. The theme is an
+                /// ephemeral override (`previewTheme`); the language goes through the
+                /// same live translator switch the menu uses.
+                onPreviewRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
+                    root.previewTheme = themeName;
+                    if (language) root.applyInterfaceLanguage(language === "system" ? "" : language);
+                }
+                onLayoutPreviewRequested: function(layout) {
+                    root.previewLayout = JSON.parse(JSON.stringify(layout));
+                }
+                /// Apply (stay open) or OK (close): persist through the one command
+                /// that owns these values. The preview becomes the stored value, so the
+                /// override is dropped and the binding takes over again.
+                onSaveRequested: function(themeName, rememberLastFolder, backgroundThumbnails, language) {
+                    root.previewTheme = "";
+                    root.send({ type: "set_settings", theme: themeName,
+                                remember_last_folder: rememberLastFolder,
+                                background_thumbnails: backgroundThumbnails,
+                                hardware_acceleration: settingsDialogItem.hardwareAccelerationValue,
+                                anti_aliasing: settingsDialogItem.antiAliasingValue,
+                                language: language });
+                }
+                onLayoutSaveRequested: function(layout) {
+                    root.previewLayout = null;
+                    root.send({ type: "set_layout", layout: layout });
+                }
+                /// Cancel, × or Escape: nothing was written, so dropping the override
+                /// is the whole undo, and the language goes back to the stored one.
+                onRevertRequested: {
+                    root.previewTheme = "";
+                    root.previewLayout = null;
+                    root.applyInterfaceLanguage(root.state.language === "system"
+                                                ? "" : (root.state.language || ""));
+                }
+            }
+        }
+    }
+
+    Loader {
+        id: onnxModelDialogLoader
+        active: false
+        sourceComponent: Component {
+            FileDialog {
+                id: onnxModelDialog
+                property string targetModelId: ""
+                title: qsTr("Select ONNX model file")
+                fileMode: FileDialog.OpenFile
+                nameFilters: [qsTr("ONNX models (*.onnx)"), qsTr("All files (*)")]
+                onAccepted: {
+                    if (targetModelId && selectedFile) {
+                        root.send({
+                            type: "ai_set_custom_model",
+                            model_id: targetModelId,
+                            path: root.toLocalPath(selectedFile)
+                        });
+                    }
+                    targetModelId = "";
+                }
+                onRejected: targetModelId = ""
+            }
+        }
     }
 
     FileDialog {
@@ -1770,15 +1821,21 @@ ApplicationWindow {
 
     // Export picks a destination only; the quality and metadata live in the
     // Editor's own dialog, which the chosen path is written back into.
-    FileDialog {
-        id: exportFallback
-        objectName: "exportFallback"
-        title: qsTr("Export image as")
-        fileMode: FileDialog.SaveFile
-        nameFilters: Platform.saveNameFilters()
-        defaultSuffix: "jpg"
-        onAccepted: root.handleSaveFileChosen(root.toLocalPath(selectedFile))
-        onRejected: root.pendingSave = ""
+    Loader {
+        id: exportFallbackLoader
+        active: false
+        sourceComponent: Component {
+            FileDialog {
+                id: exportFallback
+                objectName: "exportFallback"
+                title: qsTr("Export image as")
+                fileMode: FileDialog.SaveFile
+                nameFilters: Platform.saveNameFilters()
+                defaultSuffix: "jpg"
+                onAccepted: root.handleSaveFileChosen(root.toLocalPath(selectedFile))
+                onRejected: root.pendingSave = ""
+            }
+        }
     }
 
     // Asked before leaving the Editor with edits that are not on disk, and
@@ -1835,243 +1892,264 @@ ApplicationWindow {
         }
     }
 
-    DialogFrame {
-        id: flattenSaveDialog
-        objectName: "flattenSaveDialog"
-        namePrefix: "flattenSave"
-        title: qsTr("Save multi-layer document")
-        preferredWidth: 460
-        onCloseRequested: flattenSaveDialog.close()
+    Loader {
+        id: flattenSaveDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            DialogFrame {
+                id: flattenSaveDialog
+                objectName: "flattenSaveDialog"
+                namePrefix: "flattenSave"
+                title: qsTr("Save multi-layer document")
+                preferredWidth: 460
+                onCloseRequested: flattenSaveDialog.close()
 
-        Label {
-            Layout.fillWidth: true
-            text: qsTr("This document has %1 layers. Saving to a flat image format will merge all layers into one. Save as OpenRaster (.ora) to keep all layers editable.").arg(root.editorLayerCount())
-            color: appTheme.text
-            wrapMode: Text.WordWrap
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-            Item { Layout.fillWidth: true }
-            PanelAction {
-                objectName: "flattenSaveCancel"
-                theme: appTheme
-                text: qsTr("Cancel")
-                onClicked: flattenSaveDialog.close()
-            }
-            PanelAction {
-                objectName: "flattenSaveProceed"
-                theme: appTheme
-                text: qsTr("Flatten & Save")
-                onClicked: {
-                    var targetPath = root.pendingFlatSavePath;
-                    root.pendingFlatSavePath = "";
-                    flattenSaveDialog.close();
-                    if (targetPath !== "") {
-                        root.send({ type: "editor_save_as", path: targetPath });
-                    } else {
-                        root.send({ type: "editor_save" });
-                    }
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("This document has %1 layers. Saving to a flat image format will merge all layers into one. Save as OpenRaster (.ora) to keep all layers editable.").arg(root.editorLayerCount())
+                    color: appTheme.text
+                    wrapMode: Text.WordWrap
                 }
-            }
-            PanelAction {
-                objectName: "flattenSaveAsOra"
-                theme: appTheme
-                text: qsTr("Save as .ora")
-                primary: true
-                onClicked: {
-                    root.pendingFlatSavePath = "";
-                    flattenSaveDialog.close();
-                    root.chooseEditorSaveAsOra();
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Item { Layout.fillWidth: true }
+                    PanelAction {
+                        objectName: "flattenSaveCancel"
+                        theme: appTheme
+                        text: qsTr("Cancel")
+                        onClicked: flattenSaveDialog.close()
+                    }
+                    PanelAction {
+                        objectName: "flattenSaveProceed"
+                        theme: appTheme
+                        text: qsTr("Flatten & Save")
+                        onClicked: {
+                            var targetPath = root.pendingFlatSavePath;
+                            root.pendingFlatSavePath = "";
+                            flattenSaveDialog.close();
+                            if (targetPath !== "") {
+                                root.send({ type: "editor_save_as", path: targetPath });
+                            } else {
+                                root.send({ type: "editor_save" });
+                            }
+                        }
+                    }
+                    PanelAction {
+                        objectName: "flattenSaveAsOra"
+                        theme: appTheme
+                        text: qsTr("Save as .ora")
+                        primary: true
+                        onClicked: {
+                            root.pendingFlatSavePath = "";
+                            flattenSaveDialog.close();
+                            root.chooseEditorSaveAsOra();
+                        }
+                    }
                 }
             }
         }
     }
 
-    DialogFrame {
-        id: newImageDialog
-        objectName: "newImageDialog"
-        namePrefix: "newImage"
-        title: qsTr("New image")
-        preferredWidth: 420
-        onCloseRequested: newImageDialog.close()
+    Loader {
+        id: newImageDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            DialogFrame {
+                id: newImageDialog
+                objectName: "newImageDialog"
+                namePrefix: "newImage"
+                title: qsTr("New image")
+                preferredWidth: 420
+                onCloseRequested: newImageDialog.close()
 
-        property int clipW: 0
-        property int clipH: 0
+                property int clipW: 0
+                property int clipH: 0
 
-        function refreshClipboardPreset() {
-            var sz = Platform.clipboardImageSize();
-            clipW = sz ? sz.width : 0;
-            clipH = sz ? sz.height : 0;
-            if (clipW > 0 && clipH > 0) {
-                newImgWidthField.text = String(clipW);
-                newImgHeightField.text = String(clipH);
-                newImgPresetCombo.currentIndex = 0;
-            }
-        }
-
-        function createCanvas() {
-            var w = Math.max(1, Math.min(16384, parseInt(newImgWidthField.text) || 1920));
-            var h = Math.max(1, Math.min(16384, parseInt(newImgHeightField.text) || 1080));
-            var bgKey = newImgBgCombo.keys[newImgBgCombo.currentIndex] || "white";
-            var fill = bgKey === "white" ? [255, 255, 255]
-                     : bgKey === "black" ? [0, 0, 0]
-                     : null;
-            var alpha = bgKey === "transparent" ? 0 : 255;
-            newImageDialog.close();
-            root.send({
-                type: "editor_new",
-                width: w,
-                height: h,
-                fill: fill,
-                fill_alpha: alpha,
-                name: "Untitled.png"
-            });
-        }
-
-        GridLayout {
-            Layout.fillWidth: true
-            columns: 2
-            columnSpacing: 10
-            rowSpacing: 8
-
-            Label { text: qsTr("Preset"); color: appTheme.textMuted; font.pixelSize: 12 }
-            ComboBox {
-                id: newImgPresetCombo
-                objectName: "newImgPresetCombo"
-                Layout.fillWidth: true
-                focusPolicy: Qt.NoFocus
-                readonly property var presets: [
-                    { label: newImageDialog.clipW > 0
-                             ? qsTr("Clipboard (%1 × %2)").arg(newImageDialog.clipW).arg(newImageDialog.clipH)
-                             : qsTr("Custom"),
-                      w: newImageDialog.clipW, h: newImageDialog.clipH },
-                    { label: "1920 × 1080 (Full HD)", w: 1920, h: 1080 },
-                    { label: "1280 × 720 (HD)", w: 1280, h: 720 },
-                    { label: "2048 × 2048 (Square)", w: 2048, h: 2048 },
-                    { label: "1024 × 1024 (Square)", w: 1024, h: 1024 },
-                    { label: "1080 × 1920 (Portrait)", w: 1080, h: 1920 },
-                    { label: "2480 × 3508 (A4 300 DPI)", w: 2480, h: 3508 }
-                ]
-                model: presets.map(function(p) { return p.label })
-                currentIndex: 1
-                onActivated: function(idx) {
-                    var p = presets[idx]
-                    if (p && p.w > 0 && p.h > 0) {
-                        newImgWidthField.text = String(p.w)
-                        newImgHeightField.text = String(p.h)
+                function refreshClipboardPreset() {
+                    var sz = Platform.clipboardImageSize();
+                    clipW = sz ? sz.width : 0;
+                    clipH = sz ? sz.height : 0;
+                    if (clipW > 0 && clipH > 0) {
+                        newImgWidthField.text = String(clipW);
+                        newImgHeightField.text = String(clipH);
+                        newImgPresetCombo.currentIndex = 0;
                     }
                 }
-            }
 
-            Label { text: qsTr("Width"); color: appTheme.textMuted; font.pixelSize: 12 }
-            TextField {
-                id: newImgWidthField
-                objectName: "newImgWidthField"
-                Layout.fillWidth: true
-                text: "1920"
-                validator: IntValidator { bottom: 1; top: 16384 }
-                onAccepted: newImageDialog.createCanvas()
-            }
+                function createCanvas() {
+                    var w = Math.max(1, Math.min(16384, parseInt(newImgWidthField.text) || 1920));
+                    var h = Math.max(1, Math.min(16384, parseInt(newImgHeightField.text) || 1080));
+                    var bgKey = newImgBgCombo.keys[newImgBgCombo.currentIndex] || "white";
+                    var fill = bgKey === "white" ? [255, 255, 255]
+                             : bgKey === "black" ? [0, 0, 0]
+                             : null;
+                    var alpha = bgKey === "transparent" ? 0 : 255;
+                    newImageDialog.close();
+                    root.send({
+                        type: "editor_new",
+                        width: w,
+                        height: h,
+                        fill: fill,
+                        fill_alpha: alpha,
+                        name: "Untitled.png"
+                    });
+                }
 
-            Label { text: qsTr("Height"); color: appTheme.textMuted; font.pixelSize: 12 }
-            TextField {
-                id: newImgHeightField
-                objectName: "newImgHeightField"
-                Layout.fillWidth: true
-                text: "1080"
-                validator: IntValidator { bottom: 1; top: 16384 }
-                onAccepted: newImageDialog.createCanvas()
-            }
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: 10
+                    rowSpacing: 8
 
-            Label { text: qsTr("Background"); color: appTheme.textMuted; font.pixelSize: 12 }
-            ComboBox {
-                id: newImgBgCombo
-                objectName: "newImgBgCombo"
-                Layout.fillWidth: true
-                focusPolicy: Qt.NoFocus
-                readonly property var keys: ["white", "transparent", "black"]
-                model: [qsTr("White"), qsTr("Transparent"), qsTr("Black")]
-                currentIndex: 0
-            }
-        }
+                    Label { text: qsTr("Preset"); color: appTheme.textMuted; font.pixelSize: 12 }
+                    ComboBox {
+                        id: newImgPresetCombo
+                        objectName: "newImgPresetCombo"
+                        Layout.fillWidth: true
+                        focusPolicy: Qt.NoFocus
+                        readonly property var presets: [
+                            { label: newImageDialog.clipW > 0
+                                     ? qsTr("Clipboard (%1 × %2)").arg(newImageDialog.clipW).arg(newImageDialog.clipH)
+                                     : qsTr("Custom"),
+                              w: newImageDialog.clipW, h: newImageDialog.clipH },
+                            { label: "1920 × 1080 (Full HD)", w: 1920, h: 1080 },
+                            { label: "1280 × 720 (HD)", w: 1280, h: 720 },
+                            { label: "2048 × 2048 (Square)", w: 2048, h: 2048 },
+                            { label: "1024 × 1024 (Square)", w: 1024, h: 1024 },
+                            { label: "1080 × 1920 (Portrait)", w: 1080, h: 1920 },
+                            { label: "2480 × 3508 (A4 300 DPI)", w: 2480, h: 3508 }
+                        ]
+                        model: presets.map(function(p) { return p.label })
+                        currentIndex: 1
+                        onActivated: function(idx) {
+                            var p = presets[idx]
+                            if (p && p.w > 0 && p.h > 0) {
+                                newImgWidthField.text = String(p.w)
+                                newImgHeightField.text = String(p.h)
+                            }
+                        }
+                    }
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-            Item { Layout.fillWidth: true }
-            PanelAction {
-                objectName: "newImageCancel"
-                theme: appTheme
-                text: qsTr("Cancel")
-                onClicked: newImageDialog.close()
-            }
-            PanelAction {
-                objectName: "newImageCreate"
-                theme: appTheme
-                text: qsTr("Create")
-                primary: true
-                onClicked: newImageDialog.createCanvas()
+                    Label { text: qsTr("Width"); color: appTheme.textMuted; font.pixelSize: 12 }
+                    TextField {
+                        id: newImgWidthField
+                        objectName: "newImgWidthField"
+                        Layout.fillWidth: true
+                        text: "1920"
+                        validator: IntValidator { bottom: 1; top: 16384 }
+                        onAccepted: newImageDialog.createCanvas()
+                    }
+
+                    Label { text: qsTr("Height"); color: appTheme.textMuted; font.pixelSize: 12 }
+                    TextField {
+                        id: newImgHeightField
+                        objectName: "newImgHeightField"
+                        Layout.fillWidth: true
+                        text: "1080"
+                        validator: IntValidator { bottom: 1; top: 16384 }
+                        onAccepted: newImageDialog.createCanvas()
+                    }
+
+                    Label { text: qsTr("Background"); color: appTheme.textMuted; font.pixelSize: 12 }
+                    ComboBox {
+                        id: newImgBgCombo
+                        objectName: "newImgBgCombo"
+                        Layout.fillWidth: true
+                        focusPolicy: Qt.NoFocus
+                        readonly property var keys: ["white", "transparent", "black"]
+                        model: [qsTr("White"), qsTr("Transparent"), qsTr("Black")]
+                        currentIndex: 0
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Item { Layout.fillWidth: true }
+                    PanelAction {
+                        objectName: "newImageCancel"
+                        theme: appTheme
+                        text: qsTr("Cancel")
+                        onClicked: newImageDialog.close()
+                    }
+                    PanelAction {
+                        objectName: "newImageCreate"
+                        theme: appTheme
+                        text: qsTr("Create")
+                        primary: true
+                        onClicked: newImageDialog.createCanvas()
+                    }
+                }
             }
         }
     }
 
-    DialogFrame {
-        id: pasteOversizedDialog
-        objectName: "pasteOversizedDialog"
-        namePrefix: "pasteOversized"
-        title: qsTr("Pasted image is larger than canvas")
-        preferredWidth: 480
-        onCloseRequested: {
-            root.pendingPastePath = "";
-            pasteOversizedDialog.close();
-        }
-
-        Label {
-            Layout.fillWidth: true
-            text: {
-                var ed = root.state && root.state.editor;
-                var cw = ed ? ed.width : 0;
-                var ch = ed ? ed.height : 0;
-                return qsTr("The clipboard image (%1 × %2) is larger than the canvas (%3 × %4). How would you like to paste it?")
-                    .arg(root.pendingPasteW).arg(root.pendingPasteH).arg(cw).arg(ch);
-            }
-            color: appTheme.text
-            wrapMode: Text.WordWrap
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
-            Item { Layout.fillWidth: true }
-            PanelAction {
-                objectName: "pasteOversizedCancel"
-                theme: appTheme
-                text: qsTr("Cancel")
-                onClicked: {
+    Loader {
+        id: pasteOversizedDialogLoader
+        anchors.fill: parent
+        active: false
+        sourceComponent: Component {
+            DialogFrame {
+                id: pasteOversizedDialog
+                objectName: "pasteOversizedDialog"
+                namePrefix: "pasteOversized"
+                title: qsTr("Pasted image is larger than canvas")
+                preferredWidth: 480
+                onCloseRequested: {
                     root.pendingPastePath = "";
                     pasteOversizedDialog.close();
                 }
-            }
-            PanelAction {
-                objectName: "pasteOversizedKeep"
-                theme: appTheme
-                text: qsTr("Keep original")
-                onClicked: root.commitPendingPaste("keep_original")
-            }
-            PanelAction {
-                objectName: "pasteOversizedExpand"
-                theme: appTheme
-                text: qsTr("Expand canvas")
-                onClicked: root.commitPendingPaste("expand_canvas")
-            }
-            PanelAction {
-                objectName: "pasteOversizedFit"
-                theme: appTheme
-                text: qsTr("Fit to canvas")
-                primary: true
-                onClicked: root.commitPendingPaste("fit_to_canvas")
+
+                Label {
+                    Layout.fillWidth: true
+                    text: {
+                        var ed = root.state && root.state.editor;
+                        var cw = ed ? ed.width : 0;
+                        var ch = ed ? ed.height : 0;
+                        return qsTr("The clipboard image (%1 × %2) is larger than the canvas (%3 × %4). How would you like to paste it?")
+                            .arg(root.pendingPasteW).arg(root.pendingPasteH).arg(cw).arg(ch);
+                    }
+                    color: appTheme.text
+                    wrapMode: Text.WordWrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Item { Layout.fillWidth: true }
+                    PanelAction {
+                        objectName: "pasteOversizedCancel"
+                        theme: appTheme
+                        text: qsTr("Cancel")
+                        onClicked: {
+                            root.pendingPastePath = "";
+                            pasteOversizedDialog.close();
+                        }
+                    }
+                    PanelAction {
+                        objectName: "pasteOversizedKeep"
+                        theme: appTheme
+                        text: qsTr("Keep original")
+                        onClicked: root.commitPendingPaste("keep_original")
+                    }
+                    PanelAction {
+                        objectName: "pasteOversizedExpand"
+                        theme: appTheme
+                        text: qsTr("Expand canvas")
+                        onClicked: root.commitPendingPaste("expand_canvas")
+                    }
+                    PanelAction {
+                        objectName: "pasteOversizedFit"
+                        theme: appTheme
+                        text: qsTr("Fit to canvas")
+                        primary: true
+                        onClicked: root.commitPendingPaste("fit_to_canvas")
+                    }
+                }
             }
         }
     }

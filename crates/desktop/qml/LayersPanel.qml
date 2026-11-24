@@ -18,6 +18,8 @@ Item {
     property var canvasBackground: null
     property string lastOpaqueBgHex: "#ffffff"
     property bool hasDocument: false
+    property bool hasSelection: false
+    property int thumbRevision: 0
     property bool collapsed: false
     property bool detached: false
 
@@ -219,7 +221,7 @@ Item {
                 readonly property bool isEditing: layerData.id === panel.editingLayerId
 
                 width: ListView.view ? ListView.view.width : 200
-                height: 34
+                height: 38
                 radius: panel.theme.radius
                 color: isActive ? panel.theme.selection
                      : rowHover.containsMouse ? panel.theme.hover
@@ -238,6 +240,13 @@ Item {
                             panel.commandRequested({
                                 type: "editor_layer_select",
                                 id: row.layerData.id
+                            })
+                        } else if (row.layerData.hasMask && row.layerData.editingMask && mouse.button === Qt.LeftButton) {
+                            // Clicking the layer body switches back from mask editing to pixel editing.
+                            panel.commandRequested({
+                                type: "editor_layer_mask_set_editing",
+                                id: row.layerData.id,
+                                editing: false
                             })
                         }
                         if (mouse.button === Qt.RightButton) {
@@ -264,8 +273,8 @@ Item {
                     // Visibility toggle (eye)
                     ToolButton {
                         objectName: "layerVis_" + row.layerData.id
-                        Layout.preferredWidth: 24
-                        Layout.preferredHeight: 24
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 22
                         padding: 0
                         focusPolicy: Qt.NoFocus
                         text: row.layerData.visible ? "👁" : "·"
@@ -277,6 +286,123 @@ Item {
                             id: row.layerData.id,
                             visible: !row.layerData.visible
                         })
+                    }
+
+                    // Live Layer Thumbnail (or Adjustment Layer icon)
+                    Rectangle {
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                        radius: 3
+                        color: row.layerData.kind === "adjustment" ? panel.theme.surfaceAlt : "transparent"
+                        border.width: (row.isActive && !row.layerData.editingMask) ? 1.5 : 1
+                        border.color: (row.isActive && !row.layerData.editingMask)
+                                      ? panel.theme.accent : panel.theme.border
+                        clip: true
+
+                        Checkerboard {
+                            anchors.fill: parent
+                            visible: row.layerData.kind !== "adjustment"
+                            square: 4
+                        }
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            visible: row.layerData.kind !== "adjustment" && panel.thumbRevision > 0
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: false
+                            cache: false
+                            smooth: true
+                            source: (row.layerData.kind !== "adjustment" && panel.thumbRevision > 0)
+                                    ? ("image://editor/layer_thumb_" + row.layerData.id + "?rev=" + panel.thumbRevision)
+                                    : ""
+                        }
+                        Label {
+                            anchors.centerIn: parent
+                            visible: row.layerData.kind === "adjustment"
+                            text: "◑"
+                            color: panel.theme.accent
+                            font.pixelSize: 15
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: row.layerData.kind === "adjustment"
+                            hoverEnabled: enabled
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: {
+                                if (!row.isActive) {
+                                    panel.commandRequested({ type: "editor_layer_select", id: row.layerData.id })
+                                }
+                                adjustmentDialog.openForLayer(row.layerData)
+                            }
+                            ToolTip.visible: enabled && containsMouse
+                            ToolTip.text: qsTr("Edit adjustment settings…")
+                        }
+                    }
+
+                    // Layer ↔ Mask Link toggle (between Layer thumbnail and Mask thumbnail)
+                    ToolButton {
+                        objectName: "layerMaskLink_" + row.layerData.id
+                        visible: !!row.layerData.hasMask
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 24
+                        padding: 0
+                        focusPolicy: Qt.NoFocus
+                        text: row.layerData.maskLinked !== false ? "🔗" : "·"
+                        font.pixelSize: 11
+                        opacity: row.layerData.maskLinked !== false ? 0.95 : 0.45
+                        ToolTip.visible: hovered
+                        ToolTip.text: row.layerData.maskLinked !== false
+                                      ? qsTr("Linked: layer and mask move together (click to unlink)")
+                                      : qsTr("Unlinked: layer and mask move independently (click to link)")
+                        onClicked: panel.commandRequested({
+                            type: "editor_layer_mask_set_linked",
+                            id: row.layerData.id,
+                            linked: !(row.layerData.maskLinked !== false)
+                        })
+                    }
+
+                    // Live Layer Mask Thumbnail (when attached) — click to edit mask vs pixels
+                    Rectangle {
+                        objectName: "layerMaskBadge_" + row.layerData.id
+                        visible: !!row.layerData.hasMask
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                        radius: 3
+                        color: "#111111"
+                        border.width: (row.isActive && row.layerData.editingMask) ? 2 : 1
+                        border.color: (row.isActive && row.layerData.editingMask)
+                                      ? panel.theme.accent : panel.theme.border
+                        opacity: row.layerData.maskEnabled ? 1.0 : 0.4
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: false
+                            cache: false
+                            smooth: true
+                            source: (row.layerData.hasMask && panel.thumbRevision > 0)
+                                    ? ("image://editor/mask_thumb_" + row.layerData.id + "?rev=" + panel.thumbRevision)
+                                    : ""
+                        }
+                        Label {
+                            anchors.centerIn: parent
+                            visible: !row.layerData.maskEnabled
+                            text: "✕"
+                            color: "#ff5555"
+                            font.bold: true
+                            font.pixelSize: 13
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: panel.commandRequested({
+                                type: "editor_layer_mask_set_editing",
+                                id: row.layerData.id,
+                                editing: !(row.isActive && row.layerData.editingMask)
+                            })
+                        }
                     }
 
                     // Layer name (or inline rename field) + subtle meta
@@ -320,6 +446,37 @@ Item {
                             color: panel.theme.textMuted
                             font.pixelSize: 10
                             elide: Text.ElideRight
+                        }
+                    }
+
+                    // Per-layer Add Mask (◐) / Delete Mask (−) toggle right beside Lock
+                    ToolButton {
+                        objectName: "layerMaskToggle_" + row.layerData.id
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 22
+                        padding: 0
+                        focusPolicy: Qt.NoFocus
+                        enabled: !row.layerData.locked
+                        text: row.layerData.hasMask ? "−" : "◐"
+                        opacity: row.layerData.hasMask ? 0.9 : 0.45
+                        ToolTip.visible: hovered
+                        ToolTip.text: row.layerData.hasMask
+                                      ? qsTr("Delete layer mask")
+                                      : (panel.hasSelection ? qsTr("Add mask from selection") : qsTr("Add layer mask"))
+                        onClicked: {
+                            if (row.layerData.hasMask) {
+                                panel.commandRequested({
+                                    type: "editor_layer_mask_delete",
+                                    id: row.layerData.id
+                                })
+                            } else {
+                                panel.commandRequested({
+                                    type: "editor_layer_mask_add",
+                                    id: row.layerData.id,
+                                    reveal_all: true,
+                                    from_selection: panel.hasSelection
+                                })
+                            }
                         }
                     }
 
@@ -463,6 +620,16 @@ Item {
                 onClicked: if (panel.activeLayer) panel.commandRequested({ type: "editor_layer_duplicate", id: panel.activeLayer.id })
             }
             PanelAction {
+                id: layerAdjBtn
+                objectName: "layerAdjBtn"
+                Layout.fillWidth: true
+                theme: panel.theme
+                text: "◑"
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Add adjustment layer")
+                onClicked: adjustmentLayerMenu.popup(layerAdjBtn, 0, -adjustmentLayerMenu.implicitHeight)
+            }
+            PanelAction {
                 objectName: "layerUpBtn"
                 Layout.fillWidth: true
                 theme: panel.theme
@@ -512,6 +679,225 @@ Item {
                 ToolTip.text: qsTr("Delete layer")
                 onClicked: if (panel.activeLayer) panel.commandRequested({ type: "editor_layer_delete", id: panel.activeLayer.id })
             }
+        }
+    }
+
+    DialogFrame {
+        id: adjustmentDialog
+        objectName: "adjustmentLayerDialog"
+        parent: Overlay.overlay
+        namePrefix: "adjustmentLayer"
+        preferredWidth: 360
+        title: layerName ? (layerName + " — " + qsTr("Adjustment")) : qsTr("Adjustment Layer")
+
+        property int layerId: 0
+        property string layerName: ""
+        property string adjType: ""
+        property int brightVal: 0
+        property int contrVal: 0
+        property int satVal: 0
+        property int hueVal: 0
+        property int valVal: 0
+
+        function openForLayer(layer) {
+            if (!layer || !layer.adjustment) return
+            layerId = layer.id
+            layerName = layer.name || ""
+            var a = layer.adjustment
+            adjType = a.type || ""
+            brightVal = Math.round((a.brightness || 0) * 100)
+            contrVal = Math.round((a.contrast || 0) * 100)
+            satVal = Math.round((a.saturation || 0) * 100)
+            hueVal = Math.round(a.hue || 0)
+            valVal = Math.round((a.value || 0) * 100)
+            open()
+        }
+
+        function commit() {
+            if (layerId <= 0) return
+            if (adjType === "brightness_contrast") {
+                panel.commandRequested({
+                    type: "editor_layer_update_adjustment",
+                    id: layerId,
+                    adjustment: {
+                        type: "brightness_contrast",
+                        brightness: brightVal / 100.0,
+                        contrast: contrVal / 100.0,
+                        saturation: satVal / 100.0
+                    }
+                })
+            } else if (adjType === "hsv") {
+                panel.commandRequested({
+                    type: "editor_layer_update_adjustment",
+                    id: layerId,
+                    adjustment: {
+                        type: "hsv",
+                        hue: hueVal,
+                        saturation: satVal / 100.0,
+                        value: valVal / 100.0
+                    }
+                })
+            }
+        }
+
+        onCloseRequested: adjustmentDialog.close()
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 10
+
+            // Brightness / Contrast / Saturation
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: adjustmentDialog.adjType === "brightness_contrast"
+                spacing: 8
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Brightness"); color: panel.theme.textMuted; Layout.preferredWidth: 82 }
+                    Slider {
+                        Layout.fillWidth: true; from: -100; to: 100; stepSize: 1
+                        value: adjustmentDialog.brightVal
+                        onMoved: adjustmentDialog.brightVal = Math.round(value)
+                        onPressedChanged: if (!pressed) adjustmentDialog.commit()
+                    }
+                    Label { text: adjustmentDialog.brightVal + "%"; color: panel.theme.text; Layout.preferredWidth: 42; horizontalAlignment: Text.AlignRight }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Contrast"); color: panel.theme.textMuted; Layout.preferredWidth: 82 }
+                    Slider {
+                        Layout.fillWidth: true; from: -100; to: 100; stepSize: 1
+                        value: adjustmentDialog.contrVal
+                        onMoved: adjustmentDialog.contrVal = Math.round(value)
+                        onPressedChanged: if (!pressed) adjustmentDialog.commit()
+                    }
+                    Label { text: adjustmentDialog.contrVal + "%"; color: panel.theme.text; Layout.preferredWidth: 42; horizontalAlignment: Text.AlignRight }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Saturation"); color: panel.theme.textMuted; Layout.preferredWidth: 82 }
+                    Slider {
+                        Layout.fillWidth: true; from: -100; to: 100; stepSize: 1
+                        value: adjustmentDialog.satVal
+                        onMoved: adjustmentDialog.satVal = Math.round(value)
+                        onPressedChanged: if (!pressed) adjustmentDialog.commit()
+                    }
+                    Label { text: adjustmentDialog.satVal + "%"; color: panel.theme.text; Layout.preferredWidth: 42; horizontalAlignment: Text.AlignRight }
+                }
+            }
+
+            // HSV Adjustment
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: adjustmentDialog.adjType === "hsv"
+                spacing: 8
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Hue"); color: panel.theme.textMuted; Layout.preferredWidth: 82 }
+                    Slider {
+                        Layout.fillWidth: true; from: -180; to: 180; stepSize: 1
+                        value: adjustmentDialog.hueVal
+                        onMoved: adjustmentDialog.hueVal = Math.round(value)
+                        onPressedChanged: if (!pressed) adjustmentDialog.commit()
+                    }
+                    Label { text: adjustmentDialog.hueVal + "°"; color: panel.theme.text; Layout.preferredWidth: 42; horizontalAlignment: Text.AlignRight }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Saturation"); color: panel.theme.textMuted; Layout.preferredWidth: 82 }
+                    Slider {
+                        Layout.fillWidth: true; from: -100; to: 100; stepSize: 1
+                        value: adjustmentDialog.satVal
+                        onMoved: adjustmentDialog.satVal = Math.round(value)
+                        onPressedChanged: if (!pressed) adjustmentDialog.commit()
+                    }
+                    Label { text: adjustmentDialog.satVal + "%"; color: panel.theme.text; Layout.preferredWidth: 42; horizontalAlignment: Text.AlignRight }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Value"); color: panel.theme.textMuted; Layout.preferredWidth: 82 }
+                    Slider {
+                        Layout.fillWidth: true; from: -100; to: 100; stepSize: 1
+                        value: adjustmentDialog.valVal
+                        onMoved: adjustmentDialog.valVal = Math.round(value)
+                        onPressedChanged: if (!pressed) adjustmentDialog.commit()
+                    }
+                    Label { text: adjustmentDialog.valVal + "%"; color: panel.theme.text; Layout.preferredWidth: 42; horizontalAlignment: Text.AlignRight }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: adjustmentDialog.adjType !== "brightness_contrast" && adjustmentDialog.adjType !== "hsv"
+                wrapMode: Text.WordWrap
+                color: panel.theme.textMuted
+                text: qsTr("This adjustment layer has no extra sliders. Adjust its strength using layer Opacity, Blend Mode, or a Layer Mask.")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                PanelAction {
+                    visible: adjustmentDialog.adjType === "brightness_contrast" || adjustmentDialog.adjType === "hsv"
+                    theme: panel.theme
+                    text: qsTr("Reset")
+                    onClicked: {
+                        adjustmentDialog.brightVal = 0
+                        adjustmentDialog.contrVal = 0
+                        adjustmentDialog.satVal = 0
+                        adjustmentDialog.hueVal = 0
+                        adjustmentDialog.valVal = 0
+                        adjustmentDialog.commit()
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                PanelAction {
+                    theme: panel.theme
+                    primary: true
+                    text: qsTr("Done")
+                    onClicked: adjustmentDialog.close()
+                }
+            }
+        }
+    }
+
+    AppMenu {
+        id: adjustmentLayerMenu
+        objectName: "adjustmentLayerMenu"
+        theme: panel.theme
+        implicitWidth: 200
+
+        MenuItem {
+            text: qsTr("Brightness / Contrast")
+            onTriggered: panel.commandRequested({
+                type: "editor_layer_add_adjustment",
+                name: "",
+                adjustment: { type: "brightness_contrast", brightness: 0, contrast: 0, saturation: 0 }
+            })
+        }
+        MenuItem {
+            text: qsTr("HSV Adjustment")
+            onTriggered: panel.commandRequested({
+                type: "editor_layer_add_adjustment",
+                name: "",
+                adjustment: { type: "hsv", hue: 0, saturation: 0, value: 0 }
+            })
+        }
+        MenuItem {
+            text: qsTr("Invert")
+            onTriggered: panel.commandRequested({
+                type: "editor_layer_add_adjustment",
+                name: "",
+                adjustment: { type: "invert" }
+            })
+        }
+        MenuItem {
+            text: qsTr("Black && White")
+            onTriggered: panel.commandRequested({
+                type: "editor_layer_add_adjustment",
+                name: "",
+                adjustment: { type: "desaturate" }
+            })
         }
     }
 
@@ -566,6 +952,102 @@ Item {
             text: qsTr("Flatten image")
             enabled: (panel.layers || []).length > 1
             onTriggered: panel.commandRequested({ type: "editor_layer_flatten" })
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Add mask (Reveal all)")
+            visible: !(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            enabled: layerContextMenu.targetLayer !== null && !layerContextMenu.targetLayer.locked
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({
+                    type: "editor_layer_mask_add",
+                    id: layerContextMenu.targetLayer.id,
+                    reveal_all: true,
+                    from_selection: false
+                })
+            }
+        }
+        MenuItem {
+            text: qsTr("Add mask (Hide all)")
+            visible: !(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            enabled: layerContextMenu.targetLayer !== null && !layerContextMenu.targetLayer.locked
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({
+                    type: "editor_layer_mask_add",
+                    id: layerContextMenu.targetLayer.id,
+                    reveal_all: false,
+                    from_selection: false
+                })
+            }
+        }
+        MenuItem {
+            text: qsTr("Add mask from selection")
+            visible: !(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            enabled: panel.hasSelection && layerContextMenu.targetLayer !== null && !layerContextMenu.targetLayer.locked
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({
+                    type: "editor_layer_mask_add",
+                    id: layerContextMenu.targetLayer.id,
+                    reveal_all: false,
+                    from_selection: true
+                })
+            }
+        }
+        MenuItem {
+            text: (layerContextMenu.targetLayer && layerContextMenu.targetLayer.editingMask)
+                  ? qsTr("Edit layer pixels") : qsTr("Edit layer mask")
+            visible: !!(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({
+                    type: "editor_layer_mask_set_editing",
+                    id: layerContextMenu.targetLayer.id,
+                    editing: !layerContextMenu.targetLayer.editingMask
+                })
+            }
+        }
+        MenuItem {
+            text: (layerContextMenu.targetLayer && layerContextMenu.targetLayer.maskEnabled)
+                  ? qsTr("Disable layer mask") : qsTr("Enable layer mask")
+            visible: !!(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({
+                    type: "editor_layer_mask_set_enabled",
+                    id: layerContextMenu.targetLayer.id,
+                    enabled: !layerContextMenu.targetLayer.maskEnabled
+                })
+            }
+        }
+        MenuItem {
+            text: qsTr("Invert layer mask")
+            visible: !!(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            enabled: layerContextMenu.targetLayer !== null && !layerContextMenu.targetLayer.locked
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({ type: "editor_layer_mask_invert", id: layerContextMenu.targetLayer.id })
+            }
+        }
+        MenuItem {
+            text: qsTr("Apply layer mask")
+            visible: !!(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            enabled: layerContextMenu.targetLayer !== null && !layerContextMenu.targetLayer.locked
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({ type: "editor_layer_mask_apply", id: layerContextMenu.targetLayer.id })
+            }
+        }
+        MenuItem {
+            text: qsTr("Delete layer mask")
+            visible: !!(layerContextMenu.targetLayer && layerContextMenu.targetLayer.hasMask)
+            height: visible ? implicitHeight : 0
+            enabled: layerContextMenu.targetLayer !== null && !layerContextMenu.targetLayer.locked
+            onTriggered: if (layerContextMenu.targetLayer) {
+                panel.commandRequested({ type: "editor_layer_mask_delete", id: layerContextMenu.targetLayer.id })
+            }
         }
         MenuSeparator {}
         MenuItem {

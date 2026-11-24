@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use image::RgbaImage;
-use kogaview_protocol::{FlipAxis, ResizeFilter, ResizeMode, UiText};
+use kogaview_protocol::{
+    BrushSettings, DrawShapeKind, FlipAxis, GradientRepeat, GradientShape, GradientStop,
+    ResizeFilter, ResizeMode, UiText,
+};
 use serde::Serialize;
 
 use crate::layer::LayerOperation;
@@ -118,6 +121,50 @@ pub enum EditOperation {
         radius: f64,
         opacity: f64,
         erase: bool,
+        #[serde(default)]
+        brush: BrushSettings,
+    },
+    /// Geometric shape or path (line, rectangle, ellipse, polygon, polyline,
+    /// or Bezier curve) rasterized onto the active layer as one history step.
+    DrawShape {
+        kind: DrawShapeKind,
+        points: Vec<[f64; 2]>,
+        closed: bool,
+        stroke_color: Option<[u8; 3]>,
+        stroke_width: f64,
+        stroke_opacity: f64,
+        fill_color: Option<[u8; 3]>,
+        fill_opacity: f64,
+    },
+    /// Krita-style flood fill (Paint Bucket) onto the active layer or its mask.
+    FloodFill {
+        x: i32,
+        y: i32,
+        color: [u8; 3],
+        opacity: f64,
+        tolerance: u8,
+        grow: u32,
+        contiguous: bool,
+        sample_all_layers: bool,
+    },
+    /// Krita-style gradient fill onto the active layer or its mask.
+    Gradient {
+        start: [f64; 2],
+        end: [f64; 2],
+        start_color: [u8; 3],
+        start_alpha: f64,
+        end_color: [u8; 3],
+        end_alpha: f64,
+        #[serde(default)]
+        stops: Vec<GradientStop>,
+        opacity: f64,
+        shape: GradientShape,
+        repeat: GradientRepeat,
+        reverse: bool,
+        #[serde(default)]
+        dither: bool,
+        #[serde(default)]
+        blend_mode: String,
     },
     /// Non-destructive pixel output produced by an out-of-process AI plugin
     /// (e.g. Remove Background, Upscale). Stored as an `Arc<RgbaImage>` so
@@ -229,6 +276,16 @@ impl EditOperation {
                     UiText::new("brush_stroke")
                 }
             }
+            Self::DrawShape { kind, .. } => match kind {
+                DrawShapeKind::Line => UiText::new("draw_line"),
+                DrawShapeKind::Rect => UiText::new("draw_rect"),
+                DrawShapeKind::Ellipse => UiText::new("draw_ellipse"),
+                DrawShapeKind::Polygon => UiText::new("draw_polygon"),
+                DrawShapeKind::Polyline => UiText::new("draw_polyline"),
+                DrawShapeKind::Bezier => UiText::new("draw_bezier"),
+            },
+            Self::FloodFill { .. } => UiText::new("flood_fill"),
+            Self::Gradient { .. } => UiText::new("draw_gradient"),
             Self::AiResult { label, .. } => label.clone(),
             Self::Layer(op) => op.label(),
         }

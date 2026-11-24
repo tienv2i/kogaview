@@ -29,7 +29,7 @@ public:
   explicit PlatformHelper(QObject* parent = nullptr);
   ~PlatformHelper() override;
 
-  bool portalAvailable() const { return m_portalAvailable; }
+  bool portalAvailable() const;
 
   /// Start an XDG FileChooser request. Returns false when the portal cannot be
   /// used, so the caller can show a fallback dialog.
@@ -160,7 +160,8 @@ private:
   /// can fall back to opening the file with the default application.
   bool openWithSystemChooser(const QString& path);
 
-  bool m_portalAvailable = false;
+  mutable bool m_portalChecked = false;
+  mutable bool m_portalAvailable = false;
   bool m_folderMode = false;
   bool m_saveMode = false;
   bool m_colorMode = false;

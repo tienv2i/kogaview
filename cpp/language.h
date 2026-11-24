@@ -35,6 +35,9 @@ public:
   /// getter alone: QML reads `LanguageInstaller.locale`.
   Q_PROPERTY(QString locale READ locale NOTIFY localeChanged)
   QString locale() const { return m_current; }
+  /// Attach the root QML object after `QQmlComponent::create()` when the
+  /// translator was pre-installed before UI creation.
+  void setRootObject(QObject* rootObject);
 signals:
   void localeChanged();
 

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use image::{Rgba, RgbaImage};
 pub use kogaview_protocol::ApplyTarget;
-use kogaview_protocol::UiText;
+use kogaview_protocol::{LayerAdjustment, UiText};
 use serde::{Deserialize, Serialize};
 
 /// Layer blending modes (1:1 with OpenRaster `composite-op` values).
@@ -97,6 +97,21 @@ pub struct Layer {
     /// Optional layer-local baseline pixels captured before destructive alpha
     /// edits (e.g. Remove Background) so Refine Alpha Restore recovers this layer.
     pub original: Option<Arc<RgbaImage>>,
+    /// Optional non-destructive 8-bit grayscale transparency mask matching
+    /// `pixels.dimensions()` (`255` = revealed, `0` = hidden).
+    pub mask: Option<Arc<Vec<u8>>>,
+    /// Whether `mask` is currently applied during compositing.
+    pub mask_enabled: bool,
+    /// Whether paint/shape/fill operations target `mask` instead of `pixels`.
+    pub editing_mask: bool,
+    /// When `true`, moving the layer moves its mask together; when `false`,
+    /// layer pixels and mask move independently via `mask_offset_x/y`.
+    pub mask_linked: bool,
+    pub mask_offset_x: i32,
+    pub mask_offset_y: i32,
+    /// When `Some`, this is a non-destructive Adjustment Layer applied live to
+    /// the composited canvas underneath it (respecting `opacity`, `blend_mode`, and `mask`).
+    pub adjustment: Option<LayerAdjustment>,
 }
 
 impl Layer {
@@ -112,6 +127,13 @@ impl Layer {
             offset_y: 0,
             original: Some(Arc::clone(&pixels)),
             pixels,
+            mask: None,
+            mask_enabled: true,
+            editing_mask: false,
+            mask_linked: true,
+            mask_offset_x: 0,
+            mask_offset_y: 0,
+            adjustment: None,
         }
     }
 
@@ -180,6 +202,50 @@ pub enum LayerOperation {
     SetCanvasBackground {
         color: Option<[u8; 3]>,
     },
+    /// Attach a non-destructive transparency mask to `id`.
+    AddMask {
+        id: u64,
+        reveal_all: bool,
+        #[serde(skip)]
+        initial: Option<Arc<Vec<u8>>>,
+    },
+    /// Remove the transparency mask from `id` without altering its RGB pixels.
+    DeleteMask {
+        id: u64,
+    },
+    /// Bake the transparency mask permanently into `id`'s alpha channel.
+    ApplyMask {
+        id: u64,
+    },
+    /// Invert every value (`v -> 255 - v`) of `id`'s transparency mask.
+    InvertMask {
+        id: u64,
+    },
+    /// Enable or temporarily bypass `id`'s transparency mask.
+    SetMaskEnabled {
+        id: u64,
+        enabled: bool,
+    },
+    /// Switch whether brush/shape/fill edits target `id`'s mask or its pixels.
+    SetEditingMask {
+        id: u64,
+        editing: bool,
+    },
+    /// Link or unlink layer `id`'s pixels and transparency mask during moves.
+    SetMaskLinked {
+        id: u64,
+        linked: bool,
+    },
+    /// Add a non-destructive Adjustment Layer above the active layer.
+    AddAdjustment {
+        name: String,
+        adjustment: LayerAdjustment,
+    },
+    /// Update live parameters of an existing Adjustment Layer.
+    UpdateAdjustment {
+        id: u64,
+        adjustment: LayerAdjustment,
+    },
 }
 
 impl LayerOperation {
@@ -195,6 +261,15 @@ impl LayerOperation {
             Self::MergeDown { .. } => UiText::new("layer_merge_down"),
             Self::Flatten => UiText::new("layer_flatten"),
             Self::SetCanvasBackground { .. } => UiText::new("canvas_background"),
+            Self::AddMask { .. } => UiText::new("layer_mask_add"),
+            Self::DeleteMask { .. } => UiText::new("layer_mask_delete"),
+            Self::ApplyMask { .. } => UiText::new("layer_mask_apply"),
+            Self::InvertMask { .. } => UiText::new("layer_mask_invert"),
+            Self::SetMaskEnabled { .. } => UiText::new("layer_mask_toggle"),
+            Self::SetEditingMask { .. } => UiText::new("layer_mask_edit"),
+            Self::SetMaskLinked { .. } => UiText::new("layer_mask_link"),
+            Self::AddAdjustment { .. } => UiText::new("layer_adjustment_add"),
+            Self::UpdateAdjustment { .. } => UiText::new("layer_adjustment_update"),
         }
     }
 }
@@ -379,8 +454,16 @@ impl LayerStack {
                     if layer.locked {
                         return Err(UiText::new("layer_locked"));
                     }
-                    if layer.offset_x != ox {
-                        layer.offset_x = ox;
+                    let dx = ox - layer.offset_x;
+                    if dx != 0 {
+                        if layer.mask.is_some() && !layer.mask_linked && layer.editing_mask {
+                            layer.mask_offset_x += dx;
+                        } else {
+                            layer.offset_x = ox;
+                            if layer.mask.is_some() && !layer.mask_linked {
+                                layer.mask_offset_x -= dx;
+                            }
+                        }
                         changed = true;
                     }
                 }
@@ -388,8 +471,16 @@ impl LayerStack {
                     if layer.locked {
                         return Err(UiText::new("layer_locked"));
                     }
-                    if layer.offset_y != oy {
-                        layer.offset_y = oy;
+                    let dy = oy - layer.offset_y;
+                    if dy != 0 {
+                        if layer.mask.is_some() && !layer.mask_linked && layer.editing_mask {
+                            layer.mask_offset_y += dy;
+                        } else {
+                            layer.offset_y = oy;
+                            if layer.mask.is_some() && !layer.mask_linked {
+                                layer.mask_offset_y -= dy;
+                            }
+                        }
                         changed = true;
                     }
                 }
@@ -451,6 +542,162 @@ impl LayerStack {
                 self.background = *color;
                 Ok(true)
             }
+            LayerOperation::AddMask {
+                id,
+                reveal_all,
+                initial,
+            } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].locked {
+                    return Err(UiText::new("layer_locked"));
+                }
+                let (lw, lh) = self.layers[idx].dimensions();
+                let expected = (lw as usize) * (lh as usize);
+                let data = match initial {
+                    Some(buf) if buf.len() == expected => Arc::clone(buf),
+                    _ => Arc::new(vec![if *reveal_all { 255u8 } else { 0u8 }; expected]),
+                };
+                self.layers[idx].mask = Some(data);
+                self.layers[idx].mask_enabled = true;
+                self.layers[idx].editing_mask = true;
+                self.layers[idx].mask_linked = true;
+                self.layers[idx].mask_offset_x = 0;
+                self.layers[idx].mask_offset_y = 0;
+                self.active_layer_id = *id;
+                Ok(true)
+            }
+            LayerOperation::DeleteMask { id } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].locked {
+                    return Err(UiText::new("layer_locked"));
+                }
+                if self.layers[idx].mask.is_none() {
+                    return Ok(false);
+                }
+                self.layers[idx].mask = None;
+                self.layers[idx].mask_enabled = true;
+                self.layers[idx].editing_mask = false;
+                Ok(true)
+            }
+            LayerOperation::ApplyMask { id } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].locked {
+                    return Err(UiText::new("layer_locked"));
+                }
+                let Some(mask) = self.layers[idx].mask.take() else {
+                    return Ok(false);
+                };
+                let (lw, lh) = self.layers[idx].dimensions();
+                if mask.len() == (lw as usize) * (lh as usize) {
+                    let mut next = (*self.layers[idx].pixels).clone();
+                    for y in 0..lh {
+                        let row = (y as usize) * (lw as usize);
+                        for x in 0..lw {
+                            let m = mask[row + x as usize] as u16;
+                            let px = next.get_pixel_mut(x, y);
+                            px.0[3] = ((px.0[3] as u16 * m + 127) / 255) as u8;
+                        }
+                    }
+                    self.layers[idx].pixels = Arc::new(next);
+                }
+                self.layers[idx].mask_enabled = true;
+                self.layers[idx].editing_mask = false;
+                Ok(true)
+            }
+            LayerOperation::InvertMask { id } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].locked {
+                    return Err(UiText::new("layer_locked"));
+                }
+                let Some(mask) = &self.layers[idx].mask else {
+                    return Ok(false);
+                };
+                let inverted: Vec<u8> = mask.iter().map(|&v| 255 - v).collect();
+                self.layers[idx].mask = Some(Arc::new(inverted));
+                Ok(true)
+            }
+            LayerOperation::SetMaskEnabled { id, enabled } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].mask.is_none() || self.layers[idx].mask_enabled == *enabled {
+                    return Ok(false);
+                }
+                self.layers[idx].mask_enabled = *enabled;
+                Ok(true)
+            }
+            LayerOperation::SetEditingMask { id, editing } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                let want = *editing && self.layers[idx].mask.is_some();
+                if self.layers[idx].editing_mask == want && self.active_layer_id == *id {
+                    return Ok(false);
+                }
+                self.layers[idx].editing_mask = want;
+                self.active_layer_id = *id;
+                Ok(true)
+            }
+            LayerOperation::SetMaskLinked { id, linked } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].mask.is_none() || self.layers[idx].mask_linked == *linked {
+                    return Ok(false);
+                }
+                self.layers[idx].mask_linked = *linked;
+                Ok(true)
+            }
+            LayerOperation::AddAdjustment { name, adjustment } => {
+                let id = self.next_id;
+                self.next_id += 1;
+                let default_name = match adjustment {
+                    LayerAdjustment::BrightnessContrast { .. } => "Brightness / Contrast",
+                    LayerAdjustment::Hsv { .. } => "HSV Adjustment",
+                    LayerAdjustment::ColorBalance { .. } => "Color Balance",
+                    LayerAdjustment::Invert => "Invert",
+                    LayerAdjustment::Desaturate => "Black & White",
+                };
+                let label = if name.trim().is_empty() {
+                    default_name.to_owned()
+                } else {
+                    name.trim().to_owned()
+                };
+                // Canvas-sized 1x1 dummy pixel buffer isn't used for RGB, but keep canvas
+                // dimensions so attaching a transparency mask to an Adjustment Layer works cleanly!
+                let blank = Arc::new(RgbaImage::from_pixel(
+                    self.canvas_width.max(1),
+                    self.canvas_height.max(1),
+                    Rgba([0, 0, 0, 0]),
+                ));
+                let mut layer = Layer::new(id, label, blank);
+                layer.adjustment = Some(adjustment.clone());
+                let insert_at = (self.active_index() + 1).min(self.layers.len());
+                self.layers.insert(insert_at, layer);
+                self.active_layer_id = id;
+                Ok(true)
+            }
+            LayerOperation::UpdateAdjustment { id, adjustment } => {
+                let Some(idx) = self.index_of(*id) else {
+                    return Err(UiText::new("layer_not_found"));
+                };
+                if self.layers[idx].locked {
+                    return Err(UiText::new("layer_locked"));
+                }
+                if self.layers[idx].adjustment.as_ref() == Some(adjustment) {
+                    return Ok(false);
+                }
+                self.layers[idx].adjustment = Some(adjustment.clone());
+                Ok(true)
+            }
         }
     }
 }
@@ -466,6 +713,8 @@ pub fn composite_stack(stack: &LayerStack) -> Arc<RgbaImage> {
             && l.blend_mode == BlendMode::Normal
             && l.offset_x == 0
             && l.offset_y == 0
+            && l.adjustment.is_none()
+            && (l.mask.is_none() || !l.mask_enabled)
             && l.dimensions() == (stack.canvas_width, stack.canvas_height)
         {
             return Arc::clone(&l.pixels);
@@ -556,8 +805,99 @@ fn blend_channel(mode: BlendMode, dst: f32, src: f32) -> f32 {
 }
 
 /// Blend `layer` onto `canvas` using exact W3C Compositing & Blending Level 1 math.
+/// When `layer.adjustment` is `Some`, applies the non-destructive adjustment live to
+/// `canvas` respecting `layer.opacity`, `layer.blend_mode`, and `layer.mask`.
 pub fn blend_layer_onto(canvas: &mut RgbaImage, layer: &Layer) {
     let (cw, ch) = canvas.dimensions();
+    if let Some(adj) = &layer.adjustment {
+        let adjusted = match adj {
+            LayerAdjustment::BrightnessContrast {
+                brightness,
+                contrast,
+                saturation,
+            } => crate::pixels::adjust_color(canvas, *brightness, *contrast, *saturation),
+            LayerAdjustment::Hsv {
+                hue,
+                saturation,
+                value,
+            } => crate::pixels::adjust_hsv(canvas, *hue, *saturation, *value),
+            LayerAdjustment::ColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+            } => crate::pixels::color_balance(
+                canvas,
+                *shadows,
+                *midtones,
+                *highlights,
+                *preserve_luminosity,
+            ),
+            LayerAdjustment::Invert => {
+                let mut out = canvas.clone();
+                for px in out.pixels_mut() {
+                    px.0[0] = 255 - px.0[0];
+                    px.0[1] = 255 - px.0[1];
+                    px.0[2] = 255 - px.0[2];
+                }
+                out
+            }
+            LayerAdjustment::Desaturate => {
+                let mut out = canvas.clone();
+                for px in out.pixels_mut() {
+                    let g = (0.2126 * f32::from(px.0[0])
+                        + 0.7152 * f32::from(px.0[1])
+                        + 0.0722 * f32::from(px.0[2]))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                    px.0[0] = g;
+                    px.0[1] = g;
+                    px.0[2] = g;
+                }
+                out
+            }
+        };
+        let opacity = layer.opacity.clamp(0.0, 1.0);
+        let (lw, lh) = layer.dimensions();
+        let active_mask = if layer.mask_enabled {
+            layer.mask.as_deref().filter(|m| m.len() == (lw as usize) * (lh as usize))
+        } else {
+            None
+        };
+        let mode = layer.blend_mode;
+        for y in 0..ch {
+            for x in 0..cw {
+                let m = match active_mask {
+                    Some(mask) if x < lw && y < lh => {
+                        mask[(y as usize) * (lw as usize) + (x as usize)] as f32 / 255.0
+                    }
+                    Some(_) => 0.0,
+                    None => 1.0,
+                };
+                let t = (opacity * m).clamp(0.0, 1.0);
+                if t <= 1e-5 {
+                    continue;
+                }
+                let dp = canvas.get_pixel(x, y).0;
+                let sp = adjusted.get_pixel(x, y).0;
+                let mix = |d: u8, s: u8| -> u8 {
+                    let df = f32::from(d) / 255.0;
+                    let sf = f32::from(s) / 255.0;
+                    let b = blend_channel(mode, df, sf);
+                    ((df * (1.0 - t) + b * t) * 255.0)
+                        .round()
+                        .clamp(0.0, 255.0) as u8
+                };
+                canvas.put_pixel(
+                    x,
+                    y,
+                    Rgba([mix(dp[0], sp[0]), mix(dp[1], sp[1]), mix(dp[2], sp[2]), dp[3]]),
+                );
+            }
+        }
+        return;
+    }
+
     let (lw, lh) = layer.pixels.dimensions();
     let ox = layer.offset_x;
     let oy = layer.offset_y;
@@ -572,13 +912,33 @@ pub fn blend_layer_onto(canvas: &mut RgbaImage, layer: &Layer) {
 
     let opacity = layer.opacity.clamp(0.0, 1.0);
     let mode = layer.blend_mode;
+    let active_mask = if layer.mask_enabled {
+        layer.mask.as_deref().filter(|m| m.len() == (lw as usize) * (lh as usize))
+    } else {
+        None
+    };
+
+    let mox = layer.mask_offset_x;
+    let moy = layer.mask_offset_y;
 
     for cy in y_start..y_end {
         let ly = (cy - oy) as u32;
+        let my = ly as i32 - moy;
         for cx in x_start..x_end {
             let lx = (cx - ox) as u32;
             let sp = layer.pixels.get_pixel(lx, ly);
-            let sa = (sp[3] as f32 / 255.0) * opacity;
+            let mask_factor = match active_mask {
+                Some(m) => {
+                    let mx = lx as i32 - mox;
+                    if mx >= 0 && my >= 0 && (mx as u32) < lw && (my as u32) < lh {
+                        m[(my as usize) * (lw as usize) + (mx as usize)] as f32 / 255.0
+                    } else {
+                        0.0
+                    }
+                }
+                None => 1.0,
+            };
+            let sa = (sp[3] as f32 / 255.0) * opacity * mask_factor;
             if sa <= 1e-5 {
                 continue;
             }

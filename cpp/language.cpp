@@ -93,6 +93,14 @@ void InterfaceLanguage::apply(const QString& requested)
   emit localeChanged();
 }
 
+void InterfaceLanguage::setRootObject(QObject* rootObject)
+{
+  m_root = rootObject;
+  if (m_root != nullptr && !m_current.isEmpty()) {
+    m_root->setProperty("interfaceLanguage", m_current);
+  }
+}
+
 void InterfaceLanguage::reapply()
 {
   if (m_root == nullptr) {

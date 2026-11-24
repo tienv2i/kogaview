@@ -721,6 +721,7 @@ fn a_brush_stroke_paints_its_colour_and_undoes_in_one_step() {
             radius: 4.0,
             opacity: 1.0,
             erase: false,
+                brush: Default::default(),
         })
         .unwrap());
 
@@ -758,6 +759,7 @@ fn an_eraser_lowers_alpha_without_building_up_at_a_join() {
             radius: 3.0,
             opacity: 0.5,
             erase: true,
+                brush: Default::default(),
         })
         .unwrap());
 
@@ -786,6 +788,7 @@ fn an_eraser_lowers_alpha_without_building_up_at_a_join() {
             radius: 3.0,
             opacity: 0.5,
             erase: true,
+                brush: Default::default(),
         })
         .unwrap());
     assert_eq!(
@@ -809,6 +812,7 @@ fn a_malformed_stroke_is_rejected_with_a_line() {
             radius,
             opacity,
             erase: false,
+                brush: Default::default(),
         })
     };
 
@@ -1594,6 +1598,7 @@ fn active_layer_target_respects_lock_visibility_and_offset_without_touching_sibl
                 radius: 2.0,
                 opacity: 1.0,
                 erase: false,
+                brush: Default::default(),
             },
             ApplyTarget::ActiveLayer,
         )
@@ -2114,6 +2119,7 @@ fn selection_mask_shapes_combine_paint_masking_and_actions() {
         radius: 3.0,
         opacity: 1.0,
         erase: false,
+                brush: Default::default(),
     })
     .unwrap();
     assert_eq!(
@@ -2649,6 +2655,294 @@ fn adjust_hsv_and_color_balance_respect_selection_and_layers() {
         .unwrap());
     assert!(doc.pixels().get_pixel(2, 2).0[2] > inside[2]);
     assert_eq!(doc.pixels().get_pixel(12, 2).0, [200, 50, 50, 255]);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn draw_shape_respects_active_layer_and_selection_mask() {
+    use kogaview_protocol::{DrawShapeKind, SelectionMode};
+
+    let dir = temp_dir();
+    let img = RgbaImage::from_pixel(32, 32, image::Rgba([255, 255, 255, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("base.png"), img);
+
+    doc.apply_selection_mask(SelectionMask::rect(32, 32, 0, 0, 16, 32), SelectionMode::Replace, 0);
+
+    assert!(doc
+        .apply(EditOperation::DrawShape {
+            kind: DrawShapeKind::Rect,
+            points: vec![[4.0, 4.0], [28.0, 28.0]],
+            closed: true,
+            stroke_color: Some([0, 0, 255]),
+            stroke_width: 2.0,
+            stroke_opacity: 1.0,
+            fill_color: Some([255, 0, 0]),
+            fill_opacity: 1.0,
+        })
+        .unwrap());
+
+    assert_eq!(doc.pixels().get_pixel(10, 16).0, [255, 0, 0, 255]);
+    assert_eq!(doc.pixels().get_pixel(22, 16).0, [255, 255, 255, 255]);
+    assert!(doc.undo());
+    assert_eq!(doc.pixels().get_pixel(10, 16).0, [255, 255, 255, 255]);
+
+    doc.clear_selection();
+    assert!(doc
+        .apply(EditOperation::DrawShape {
+            kind: DrawShapeKind::Polygon,
+            points: vec![[4.0, 4.0], [28.0, 4.0], [16.0, 28.0]],
+            closed: true,
+            stroke_color: Some([0, 128, 0]),
+            stroke_width: 2.0,
+            stroke_opacity: 1.0,
+            fill_color: Some([0, 200, 0]),
+            fill_opacity: 1.0,
+        })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(16, 12).0, [0, 200, 0, 255]);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn krita_brush_tips_and_layer_mask_workflow() {
+    use crate::layer::LayerOperation;
+    use kogaview_protocol::{BrushSettings, BrushTip};
+
+    let dir = temp_dir();
+    let img = RgbaImage::from_pixel(32, 32, image::Rgba([200, 100, 50, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("mask.png"), img);
+    let bg_id = doc.active_layer_id();
+
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddMask {
+            id: bg_id,
+            reveal_all: true,
+            initial: None,
+        })
+        .unwrap());
+    assert!(doc.active_layer().mask.is_some());
+    assert!(doc.active_layer().editing_mask);
+    assert_eq!(doc.pixels().get_pixel(16, 16).0[3], 255);
+
+    assert!(doc
+        .apply(EditOperation::Paint {
+            points: vec![[16.0, 16.0]],
+            color: [0, 0, 0],
+            radius: 6.0,
+            opacity: 1.0,
+            erase: false,
+            brush: BrushSettings {
+                tip: BrushTip::Round,
+                hardness: 0.2,
+                flow: 1.0,
+                spacing: 0.1,
+                angle: 0.0,
+                scatter: 0.0,
+            },
+        })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(16, 16).0[3], 0);
+    assert_eq!(doc.active_layer().pixels.get_pixel(16, 16).0, [200, 100, 50, 255]);
+
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetMaskEnabled {
+            id: bg_id,
+            enabled: false,
+        })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(16, 16).0[3], 255);
+
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetMaskEnabled {
+            id: bg_id,
+            enabled: true,
+        })
+        .unwrap());
+    assert!(doc
+        .apply_layer_op(LayerOperation::InvertMask { id: bg_id })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(16, 16).0[3], 255);
+    assert_eq!(doc.pixels().get_pixel(1, 1).0[3], 0);
+
+    assert!(doc
+        .apply_layer_op(LayerOperation::ApplyMask { id: bg_id })
+        .unwrap());
+    assert!(doc.active_layer().mask.is_none());
+    assert_eq!(doc.active_layer().pixels.get_pixel(1, 1).0[3], 0);
+    assert_eq!(doc.active_layer().pixels.get_pixel(16, 16).0[3], 255);
+
+    for tip in [BrushTip::Flat, BrushTip::Chalk, BrushTip::Spray, BrushTip::Pixel] {
+        assert!(doc
+            .apply(EditOperation::Paint {
+                points: vec![[4.0, 16.0], [28.0, 16.0]],
+                color: [10, 20, 240],
+                radius: 4.0,
+                opacity: 0.9,
+                erase: false,
+                brush: BrushSettings {
+                    tip,
+                    hardness: 0.8,
+                    flow: 0.9,
+                    spacing: 0.2,
+                    angle: 35.0,
+                    scatter: if tip == BrushTip::Spray { 1.0 } else { 0.1 },
+                },
+            })
+            .unwrap());
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn selection_modify_grow_shrink_border_smooth() {
+    use kogaview_protocol::{SelectionMode, SelectionModifyOp};
+
+    let dir = temp_dir();
+    let img = RgbaImage::from_pixel(40, 40, image::Rgba([255, 255, 255, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("selmod.png"), img);
+
+    doc.apply_selection_mask(SelectionMask::rect(40, 40, 12, 12, 16, 16), SelectionMode::Replace, 0);
+    assert_eq!(doc.selection_bounds(), Some([12, 12, 16, 16]));
+
+    assert!(doc.modify_selection(SelectionModifyOp::Grow, 2));
+    assert_eq!(doc.selection_bounds(), Some([10, 10, 20, 20]));
+
+    assert!(doc.modify_selection(SelectionModifyOp::Shrink, 4));
+    assert_eq!(doc.selection_bounds(), Some([14, 14, 12, 12]));
+
+    assert!(doc.modify_selection(SelectionModifyOp::Border, 4));
+    let sel = doc.selection().unwrap();
+    assert_eq!(sel.alpha_at(20, 20), 0);
+    assert_eq!(sel.alpha_at(14, 20), 255);
+
+    assert!(doc.modify_selection(SelectionModifyOp::Smooth, 1));
+    assert!(doc.selection().is_some());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn flood_fill_and_gradient_respect_selection_and_mask() {
+    use kogaview_protocol::{GradientRepeat, GradientShape, SelectionMode};
+
+    let dir = temp_dir();
+    let mut img = RgbaImage::from_pixel(32, 32, image::Rgba([255, 255, 255, 255]));
+    // Draw a black vertical barrier at x = 16
+    for y in 0..32 {
+        img.put_pixel(16, y, image::Rgba([0, 0, 0, 255]));
+    }
+    let mut doc = EditorDocument::from_image(dir.join("fillgrad.png"), img);
+
+    // 1. Contiguous flood fill on left side (x=4, y=16) paints left half blue, stops at barrier
+    assert!(doc
+        .apply(EditOperation::FloodFill {
+            x: 4,
+            y: 16,
+            color: [0, 100, 255],
+            opacity: 1.0,
+            tolerance: 10,
+            grow: 0,
+            contiguous: true,
+            sample_all_layers: false,
+        })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(4, 16).0, [0, 100, 255, 255]);
+    assert_eq!(doc.pixels().get_pixel(24, 16).0, [255, 255, 255, 255]);
+
+    // 2. Multi-stop linear gradient clipped to right half selection [17..32]
+    doc.apply_selection_mask(SelectionMask::rect(32, 32, 17, 0, 15, 32), SelectionMode::Replace, 0);
+    assert!(doc
+        .apply(EditOperation::Gradient {
+            start: [17.0, 16.0],
+            end: [31.0, 16.0],
+            start_color: [255, 0, 0],
+            start_alpha: 1.0,
+            end_color: [0, 255, 0],
+            end_alpha: 1.0,
+            stops: vec![
+                kogaview_protocol::GradientStop { pos: 0.0, color: [255, 0, 0], alpha: 1.0 },
+                kogaview_protocol::GradientStop { pos: 0.5, color: [0, 0, 255], alpha: 1.0 },
+                kogaview_protocol::GradientStop { pos: 1.0, color: [0, 255, 0], alpha: 1.0 },
+            ],
+            opacity: 1.0,
+            shape: GradientShape::Linear,
+            repeat: GradientRepeat::None,
+            reverse: false,
+            dither: true,
+            blend_mode: "normal".to_owned(),
+        })
+        .unwrap());
+    // Left half untouched by gradient because of selection
+    assert_eq!(doc.pixels().get_pixel(4, 16).0, [0, 100, 255, 255]);
+    // Right half transitions from red (17) -> blue (24) -> green (31)
+    assert!(doc.pixels().get_pixel(17, 16).0[0] > 230);
+    assert!(doc.pixels().get_pixel(24, 16).0[2] > 200);
+    assert!(doc.pixels().get_pixel(31, 16).0[1] > 230);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn adjustment_layer_and_mask_non_destructive() {
+    use crate::layer::LayerOperation;
+    use kogaview_protocol::LayerAdjustment;
+
+    let dir = temp_dir();
+    let img = RgbaImage::from_pixel(16, 16, image::Rgba([200, 100, 50, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("adj.png"), img);
+
+    // 1. Add Invert adjustment layer above Background
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddAdjustment {
+            name: String::new(),
+            adjustment: LayerAdjustment::Invert,
+        })
+        .unwrap());
+    let adj_id = doc.active_layer_id();
+    // Composite is inverted: [55, 155, 205, 255]
+    assert_eq!(doc.pixels().get_pixel(8, 8).0, [55, 155, 205, 255]);
+    // Background layer pixels are completely untouched (non-destructive)
+    assert_eq!(doc.layers()[0].pixels.get_pixel(8, 8).0, [200, 100, 50, 255]);
+
+    // 2. Attach a Hide-All mask to the Adjustment Layer -> effect disappears!
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddMask {
+            id: adj_id,
+            reveal_all: false,
+            initial: None,
+        })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(8, 8).0, [200, 100, 50, 255]);
+
+    // 3. Paint white on the Adjustment Layer's mask at (8, 8) -> only center is inverted!
+    assert!(doc
+        .apply(EditOperation::Paint {
+            points: vec![[8.0, 8.0]],
+            color: [255, 255, 255],
+            radius: 3.0,
+            opacity: 1.0,
+            erase: false,
+            brush: Default::default(),
+        })
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(8, 8).0, [55, 155, 205, 255]);
+    assert_eq!(doc.pixels().get_pixel(1, 1).0, [200, 100, 50, 255]);
+
+    // 4. Update adjustment live to Desaturate (Black & White)
+    assert!(doc
+        .apply_layer_op(LayerOperation::UpdateAdjustment {
+            id: adj_id,
+            adjustment: LayerAdjustment::Desaturate,
+        })
+        .unwrap());
+    let center = doc.pixels().get_pixel(8, 8).0;
+    assert_eq!(center[0], center[1]);
+    assert_eq!(center[1], center[2]);
+    // Corner still original color because of mask
+    assert_eq!(doc.pixels().get_pixel(1, 1).0, [200, 100, 50, 255]);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

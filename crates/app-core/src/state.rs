@@ -94,6 +94,12 @@ pub struct LayerSummary {
     pub width: u32,
     pub height: u32,
     pub kind: String,
+    pub has_mask: bool,
+    pub mask_enabled: bool,
+    pub editing_mask: bool,
+    pub mask_linked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjustment: Option<kogaview_protocol::LayerAdjustment>,
 }
 
 /// What the Editor paints, projected from the Core-owned working document.
@@ -120,6 +126,7 @@ pub struct EditorState {
     pub history: Vec<UiText>,
     pub redo_history: Vec<UiText>,
     pub redo_count: usize,
+    pub history_trimmed: bool,
     pub layers: Vec<LayerSummary>,
     pub active_layer_id: u64,
     /// Optional solid RGB backdrop composited underneath all layers (`null` = transparent).

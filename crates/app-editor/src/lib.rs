@@ -25,44 +25,29 @@
 //! `codec` (the arithmetic), `render` (applying it), `document` (recording it)
 //! and `tasks` (the parts too slow for the UI thread).
 
-mod codec;
 mod document;
-mod layer;
 mod operation;
-pub mod ora;
-mod pixels;
 mod render;
-pub mod selection;
 mod tasks;
 mod validate;
 
 #[cfg(test)]
 mod tests;
 
-// The Editor's vocabulary is public: Core validates with the same functions it
-// applies with, and the batch worker renders with the same branch a single edit
-// does. A narrower API would only make Core re-implement checks. `pixels` is the
-// exception — the arithmetic is reached through the modules that use it, and
-// nothing outside this crate calls `resample` or `cover_rect` directly.
-pub use codec::*;
-pub use document::*;
-pub use layer::*;
-pub use operation::EditOperation;
-pub use ora::{
+pub use kogaview_image::{
+    codec, layer, ora, pixels, selection, MAX_DOCUMENT_PIXELS, PREVIEW_LONG_EDGE,
+};
+pub use kogaview_image::codec::*;
+pub use kogaview_image::layer::*;
+pub use kogaview_image::ora::{
     extract_archive_preview_png, has_archive_decoder, is_archive_image_path, is_kra_path,
     is_ora_path, read_ora, read_zip_dimensions, read_zip_merged_image, write_ora,
 };
-pub(crate) use pixels::*;
+pub use kogaview_image::selection::SelectionMask;
+pub(crate) use kogaview_image::pixels::*;
+
+pub use document::*;
+pub use operation::EditOperation;
 pub use render::*;
-pub use selection::SelectionMask;
 pub use tasks::*;
 pub use validate::*;
-
-/// Refuse documents larger than this; a full RGBA buffer at 80 MP is already
-/// 320 MB and this slice has no tiling, so a bigger image would risk the app
-/// instead of editing it. The message says so rather than failing silently.
-pub const MAX_DOCUMENT_PIXELS: u64 = 80_000_000;
-
-/// Longest edge of the PNG handed to QML. The document keeps full resolution;
-/// the preview exists so each edit renders in a frame, not a second.
-pub const PREVIEW_LONG_EDGE: u32 = 2048;

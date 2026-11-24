@@ -8,10 +8,9 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kogaview_protocol::{Command, ProtocolError};
+use kogaview_protocol::{Command, ProtocolError, UiText};
 
 use crate::paths;
-use crate::state::UiText;
 
 /// Record of one command execution.
 pub struct JournalEntry<'a> {

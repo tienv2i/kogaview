@@ -62,10 +62,15 @@ Dialog {
     property real customWidth: 0
     property real customHeight: 0
 
+    readonly property Item boundsItem:
+        (parent && parent.width > 0 && parent.height > 0)
+        ? parent
+        : (Overlay.overlay ? Overlay.overlay : parent)
+
     readonly property real maxDialogWidth:
-        parent ? Math.max(frame.minWidth, parent.width - 48) : 960
+        boundsItem ? Math.max(frame.minWidth, boundsItem.width - 48) : 960
     readonly property real maxDialogHeight:
-        parent ? Math.max(frame.minHeight, parent.height - 48) : 800
+        boundsItem ? Math.max(frame.minHeight, boundsItem.height - 48) : 800
 
     /// A strip between the title bar and the scrolling body, for a form with
     /// pages: `Component { PanelTabs { … } }`. It takes the height it needs and
@@ -98,9 +103,10 @@ Dialog {
     /// Centre the dialog in its parent. Called from `aboutToShow` — before the
     /// first frame — and from every size change until the user drags it.
     function centreInParent() {
-        if (!parent) return
-        x = Math.round((parent.width - width) / 2)
-        y = Math.round((parent.height - height) / 2)
+        var space = frame.boundsItem
+        if (!space) return
+        x = Math.round((space.width - width) / 2)
+        y = Math.round((space.height - height) / 2)
     }
 
     /// The form's own opening work, in the form's own file. The frame calls it
@@ -117,14 +123,16 @@ Dialog {
     width: {
         var wanted = frame.userResized && frame.customWidth > 0
                      ? frame.customWidth : frame.preferredWidth
-        var limit = parent ? Math.max(240, parent.width - 48) : wanted
+        var space = frame.boundsItem
+        var limit = space ? Math.max(240, space.width - 48) : wanted
         return Math.min(limit, Math.max(Math.min(frame.minWidth, limit), wanted))
     }
     // Auto-fit content height without overflowing the parent window: both plain
     // and tabbed forms expand to avoid unnecessary scrollbars when the window
-    // has room, while still clamping inside `parent.height - 48`.
+    // has room, while still clamping inside `boundsItem.height - 48`.
     height: {
-        var limit = parent ? Math.max(240, parent.height - 48) : 800
+        var space = frame.boundsItem
+        var limit = space ? Math.max(240, space.height - 48) : 800
         if (frame.userResized && frame.customHeight > 0) {
             return Math.min(limit, Math.max(Math.min(frame.minHeight, limit), frame.customHeight))
         }
@@ -213,112 +221,130 @@ Dialog {
     Component.onCompleted: frame.applyPalette()
 
     background: Rectangle {
+        id: dialogBg
         color: frame.theme.surface
         border.color: frame.theme.border
         border.width: 1
         radius: frame.theme.radius
 
-        // Right-edge resize handle.
-        MouseArea {
-            objectName: frame.namePrefix + "ResizeRight"
-            visible: frame.resizable
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.right: parent.right
-            anchors.topMargin: frame.headerHeight
-            anchors.bottomMargin: 12
-            width: 6
-            cursorShape: Qt.SizeHorCursor
-            property real startX: 0
-            property real startW: 0
-            onPressed: function(mouse) {
-                startX = mapToItem(frame.parent, mouse.x, mouse.y).x
-                startW = frame.width
-                frame.userResized = true
-                frame.moved = true
-            }
-            onPositionChanged: function(mouse) {
-                if (!pressed) return
-                var nowX = mapToItem(frame.parent, mouse.x, mouse.y).x
-                var maxW = frame.parent ? Math.max(frame.minWidth, frame.parent.width - frame.x - 8) : 1200
-                frame.customWidth = Math.max(frame.minWidth, Math.min(maxW, startW + (nowX - startX)))
-            }
-        }
-
-        // Bottom-edge resize handle.
-        MouseArea {
-            objectName: frame.namePrefix + "ResizeBottom"
-            visible: frame.resizable
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.rightMargin: 12
-            height: 6
-            cursorShape: Qt.SizeVerCursor
-            property real startY: 0
-            property real startH: 0
-            onPressed: function(mouse) {
-                startY = mapToItem(frame.parent, mouse.x, mouse.y).y
-                startH = frame.height
-                frame.userResized = true
-                frame.moved = true
-            }
-            onPositionChanged: function(mouse) {
-                if (!pressed) return
-                var nowY = mapToItem(frame.parent, mouse.x, mouse.y).y
-                var maxH = frame.parent ? Math.max(frame.minHeight, frame.parent.height - frame.y - 8) : 1000
-                frame.customHeight = Math.max(frame.minHeight, Math.min(maxH, startH + (nowY - startY)))
-            }
-        }
-
-        // Bottom-right corner resize grip.
+        // Interactive resize overlay reparented into `dialogBg.parent`
+        // (QQuickPopupItem) at `z: 1000` so the edge and corner handles sit
+        // ABOVE `contentItem` and `footer` instead of behind `background` (z: -1).
         Item {
-            objectName: frame.namePrefix + "ResizeCorner"
+            id: resizeOverlay
+            parent: dialogBg.parent ? dialogBg.parent : dialogBg
+            anchors.fill: parent
+            z: 1000
             visible: frame.resizable
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            width: 14
-            height: 14
-            z: 20
 
-            Canvas {
-                anchors.fill: parent
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.reset()
-                    ctx.strokeStyle = frame.theme.textMuted
-                    ctx.globalAlpha = 0.55
-                    ctx.lineWidth = 1.2
-                    ctx.beginPath()
-                    ctx.moveTo(4, 12); ctx.lineTo(12, 4)
-                    ctx.moveTo(8, 12); ctx.lineTo(12, 8)
-                    ctx.stroke()
+            // Right-edge resize handle.
+            MouseArea {
+                objectName: frame.namePrefix + "ResizeRight"
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                anchors.topMargin: frame.headerHeight
+                anchors.bottomMargin: 16
+                width: 8
+                cursorShape: Qt.SizeHorCursor
+                preventStealing: true
+                property real startX: 0
+                property real startW: 0
+                onPressed: function(mouse) {
+                    var space = frame.boundsItem
+                    startX = mapToItem(space, mouse.x, mouse.y).x
+                    startW = frame.width
+                    frame.userResized = true
+                    frame.moved = true
+                }
+                onPositionChanged: function(mouse) {
+                    if (!pressed) return
+                    var space = frame.boundsItem
+                    var nowX = mapToItem(space, mouse.x, mouse.y).x
+                    var maxW = space ? Math.max(frame.minWidth, space.width - frame.x - 8) : 1200
+                    frame.customWidth = Math.max(frame.minWidth, Math.min(maxW, startW + (nowX - startX)))
                 }
             }
 
+            // Bottom-edge resize handle.
             MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.SizeFDiagCursor
-                property real startX: 0
+                objectName: frame.namePrefix + "ResizeBottom"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: 16
+                height: 8
+                cursorShape: Qt.SizeVerCursor
+                preventStealing: true
                 property real startY: 0
-                property real startW: 0
                 property real startH: 0
                 onPressed: function(mouse) {
-                    var pt = mapToItem(frame.parent, mouse.x, mouse.y)
-                    startX = pt.x
-                    startY = pt.y
-                    startW = frame.width
+                    var space = frame.boundsItem
+                    startY = mapToItem(space, mouse.x, mouse.y).y
                     startH = frame.height
                     frame.userResized = true
                     frame.moved = true
                 }
                 onPositionChanged: function(mouse) {
                     if (!pressed) return
-                    var pt = mapToItem(frame.parent, mouse.x, mouse.y)
-                    var maxW = frame.parent ? Math.max(frame.minWidth, frame.parent.width - frame.x - 8) : 1200
-                    var maxH = frame.parent ? Math.max(frame.minHeight, frame.parent.height - frame.y - 8) : 1000
-                    frame.customWidth = Math.max(frame.minWidth, Math.min(maxW, startW + (pt.x - startX)))
-                    frame.customHeight = Math.max(frame.minHeight, Math.min(maxH, startH + (pt.y - startY)))
+                    var space = frame.boundsItem
+                    var nowY = mapToItem(space, mouse.x, mouse.y).y
+                    var maxH = space ? Math.max(frame.minHeight, space.height - frame.y - 8) : 1000
+                    frame.customHeight = Math.max(frame.minHeight, Math.min(maxH, startH + (nowY - startY)))
+                }
+            }
+
+            // Bottom-right corner resize grip.
+            Item {
+                objectName: frame.namePrefix + "ResizeCorner"
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                width: 18
+                height: 18
+                z: 20
+
+                Canvas {
+                    anchors.fill: parent
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        ctx.strokeStyle = frame.theme.textMuted
+                        ctx.globalAlpha = 0.65
+                        ctx.lineWidth = 1.3
+                        ctx.beginPath()
+                        ctx.moveTo(6, 15); ctx.lineTo(15, 6)
+                        ctx.moveTo(10, 15); ctx.lineTo(15, 10)
+                        ctx.stroke()
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.SizeFDiagCursor
+                    preventStealing: true
+                    property real startX: 0
+                    property real startY: 0
+                    property real startW: 0
+                    property real startH: 0
+                    onPressed: function(mouse) {
+                        var space = frame.boundsItem
+                        var pt = mapToItem(space, mouse.x, mouse.y)
+                        startX = pt.x
+                        startY = pt.y
+                        startW = frame.width
+                        startH = frame.height
+                        frame.userResized = true
+                        frame.moved = true
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) return
+                        var space = frame.boundsItem
+                        var pt = mapToItem(space, mouse.x, mouse.y)
+                        var maxW = space ? Math.max(frame.minWidth, space.width - frame.x - 8) : 1200
+                        var maxH = space ? Math.max(frame.minHeight, space.height - frame.y - 8) : 1000
+                        frame.customWidth = Math.max(frame.minWidth, Math.min(maxW, startW + (pt.x - startX)))
+                        frame.customHeight = Math.max(frame.minHeight, Math.min(maxH, startH + (pt.y - startY)))
+                    }
                 }
             }
         }
@@ -345,8 +371,9 @@ Dialog {
             }
             onActiveTranslationChanged: {
                 if (!active) return
-                var maxX = frame.parent ? Math.max(0, frame.parent.width - frame.width) : frame.x
-                var maxY = frame.parent ? Math.max(0, frame.parent.height - frame.height) : frame.y
+                var space = frame.boundsItem
+                var maxX = space ? Math.max(0, space.width - frame.width) : frame.x
+                var maxY = space ? Math.max(0, space.height - frame.height) : frame.y
                 frame.x = Math.max(0, Math.min(maxX, originX + activeTranslation.x))
                 frame.y = Math.max(0, Math.min(maxY, originY + activeTranslation.y))
             }

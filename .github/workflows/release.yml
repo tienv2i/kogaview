@@ -18,21 +18,35 @@ jobs:
   build-ubuntu-deb-tar-appimage:
     name: Linux (.deb, .tar.gz, .AppImage + Plugins)
     runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Install Qt 6 & build dependencies
+      - name: Install Qt 6.8 & build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config python3 \
+          apt-get update
+          apt-get install -y build-essential cmake ninja-build pkg-config python3 git curl ca-certificates \
             qt6-base-dev qt6-declarative-dev qt6-svg-dev libqt6core5compat6-dev \
             qt6-l10n-tools libdav1d-dev libgl1-mesa-dev desktop-file-utils appstream \
-            dpkg-dev file fuse libfuse2 librsvg2-bin
-      - uses: dtolnay/rust-toolchain@stable
+            dpkg-dev file librsvg2-bin
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Build KogaView Release
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: |
           cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DKOGAVIEW_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build/release --target kogaview kogaview_translations -j"$(nproc)"
       - name: Build all 9 standalone plugins
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: |
           for p in rembg upscale utils ocr translate ai-ocr dewatermark caption ai-inpaint; do
             cargo build --manifest-path "plugins/kogaview-plugin-$p/Cargo.toml" --release
@@ -121,7 +135,9 @@ jobs:
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 dist/appimagetool "$APPDIR" "dist/KogaView-${VER}-x86_64.AppImage"
 
           # 5. Source archive
-          git archive --format=tar.gz --prefix="kogaview-${VER}/" -o "dist/kogaview-${VER}-src.tar.gz" HEAD
+          tar --exclude='.git' --exclude='dist' --exclude='build' --exclude='target' \
+            --transform="s,^\.,kogaview-${VER}," \
+            -czf "dist/kogaview-${VER}-src.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
           name: ubuntu-artifacts
@@ -157,6 +173,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: fedora:41
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Install Fedora RPM build dependencies
@@ -170,7 +189,9 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} dist
-          git archive --format=tar.gz --prefix="kogaview-${VER}/" -o ~/rpmbuild/SOURCES/kogaview-${VER}.tar.gz HEAD
+          tar --exclude='.git' --exclude='dist' --exclude='build' --exclude='target' \
+            --transform="s,^\.,kogaview-${VER}," \
+            -czf ~/rpmbuild/SOURCES/kogaview-${VER}.tar.gz .
           cp packaging/rpm/kogaview.spec ~/rpmbuild/SPECS/
           rpmbuild -bb ~/rpmbuild/SPECS/kogaview.spec
           cp ~/rpmbuild/RPMS/x86_64/*.rpm dist/
@@ -193,7 +214,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          flatpak-builder --force-clean --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
+          flatpak-builder --force-clean --install-deps-from=flathub --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
           flatpak build-bundle flatpak-repo "dist/KogaView-${VER}-x86_64.flatpak" io.github.tienv2i.KogaView
       - uses: actions/upload-artifact@v4
         with:

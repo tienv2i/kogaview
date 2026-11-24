@@ -6,6 +6,7 @@
 //! copies the raw RGBA bytes in < 2 ms — zero PNG encode, zero disk I/O, zero
 //! flicker while painting.
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use image::RgbaImage;
@@ -13,6 +14,7 @@ use image::RgbaImage;
 use crate::editor::PREVIEW_LONG_EDGE;
 
 const LAYER_PREVIEW_LONG_EDGE: u32 = 1400;
+const LAYER_THUMB_MAX_EDGE: u32 = 48;
 
 #[derive(Default)]
 struct EditorRamFrames {
@@ -26,6 +28,8 @@ struct EditorRamFrames {
     sel_mask: Option<Arc<RgbaImage>>,
     sel_base: Option<Arc<RgbaImage>>,
     sel_float: Option<Arc<RgbaImage>>,
+    layer_thumbs: HashMap<u64, Arc<RgbaImage>>,
+    mask_thumbs: HashMap<u64, Arc<RgbaImage>>,
 }
 
 fn store() -> &'static RwLock<EditorRamFrames> {
@@ -174,6 +178,55 @@ pub fn clear_selection() {
     }
 }
 
+pub fn set_layer_thumbnails(layers: &[crate::editor::Layer]) {
+    let mut l_map = HashMap::with_capacity(layers.len());
+    let mut m_map = HashMap::new();
+    for layer in layers {
+        if layer.adjustment.is_none() {
+            l_map.insert(
+                layer.id,
+                downscale_if_needed(Arc::clone(&layer.pixels), LAYER_THUMB_MAX_EDGE),
+            );
+        }
+        if let Some(mask) = &layer.mask {
+            let (sw, sh) = layer.dimensions();
+            if sw > 0 && sh > 0 && mask.len() == (sw as usize) * (sh as usize) {
+                let scale = if sw.max(sh) > LAYER_THUMB_MAX_EDGE {
+                    LAYER_THUMB_MAX_EDGE as f64 / sw.max(sh) as f64
+                } else {
+                    1.0
+                };
+                let nw = ((sw as f64 * scale).round() as u32).max(1);
+                let nh = ((sh as f64 * scale).round() as u32).max(1);
+                let mut raw = vec![0u8; (nw as usize) * (nh as usize) * 4];
+                for dy in 0..nh {
+                    let sy = (((dy as f64 + 0.5) * (sh as f64 / nh as f64)).floor() as usize)
+                        .min(sh as usize - 1);
+                    let src_row = sy * (sw as usize);
+                    let dst_row = (dy as usize) * (nw as usize) * 4;
+                    for dx in 0..nw {
+                        let sx = (((dx as f64 + 0.5) * (sw as f64 / nw as f64)).floor() as usize)
+                            .min(sw as usize - 1);
+                        let v = mask[src_row + sx];
+                        let di = dst_row + (dx as usize) * 4;
+                        raw[di] = v;
+                        raw[di + 1] = v;
+                        raw[di + 2] = v;
+                        raw[di + 3] = 255;
+                    }
+                }
+                if let Some(img) = RgbaImage::from_raw(nw, nh, raw) {
+                    m_map.insert(layer.id, Arc::new(img));
+                }
+            }
+        }
+    }
+    if let Ok(mut guard) = store().write() {
+        guard.layer_thumbs = l_map;
+        guard.mask_thumbs = m_map;
+    }
+}
+
 pub fn clear_all() {
     if let Ok(mut guard) = store().write() {
         *guard = EditorRamFrames::default();
@@ -195,7 +248,17 @@ pub fn copy_frame(kind: &str) -> Option<(Vec<u8>, u32, u32)> {
         "sel_mask" => guard.sel_mask.as_ref()?,
         "sel_base" => guard.sel_base.as_ref()?,
         "sel_float" => guard.sel_float.as_ref()?,
-        _ => return None,
+        other => {
+            if let Some(rest) = other.strip_prefix("layer_thumb_") {
+                let id: u64 = rest.parse().ok()?;
+                guard.layer_thumbs.get(&id)?
+            } else if let Some(rest) = other.strip_prefix("mask_thumb_") {
+                let id: u64 = rest.parse().ok()?;
+                guard.mask_thumbs.get(&id)?
+            } else {
+                return None;
+            }
+        }
     };
     let (w, h) = frame.dimensions();
     if w == 0 || h == 0 {

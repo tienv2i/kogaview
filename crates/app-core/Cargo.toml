@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-build = "build.rs"
 
 [dependencies]
 # Format support is the feature list here; everything is compiled in, nothing is
@@ -31,9 +30,9 @@ image = { version = "0.25", default-features = false, features = [
     "tga",
 ] }
 kogaview-editor = { path = "../app-editor" }
+kogaview-plugins = { path = "../app-plugins" }
 kogaview-protocol = { path = "../app-protocol" }
+kogaview-storage = { path = "../app-storage" }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-tracing-appender.workspace = true
-tracing-subscriber.workspace = true

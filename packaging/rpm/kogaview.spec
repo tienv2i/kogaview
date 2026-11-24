@@ -1,7 +1,7 @@
 %global _lto_cflags %{nil}
 
 Name:           kogaview
-Version:        2.1.0
+Version:        2.2.0
 Release:        1%{?dist}
 Summary:        Fast native desktop photo manager, viewer, and non-destructive editor
 License:        MIT

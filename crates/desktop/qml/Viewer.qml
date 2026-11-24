@@ -90,6 +90,11 @@ Item {
 
     property bool fullscreen: false
     property bool translateMode: false
+    property string translateOverlayMode: "translate"
+    readonly property var dualSpread: dualSpreadLoader.item
+    readonly property var webtoonView: webtoonViewLoader.item
+    readonly property var translateOverlay: translateOverlayLoader.item
+    readonly property var compactHud: compactHudLoader.item
     signal toggleFullscreen()
 
     signal command(var command)
@@ -209,7 +214,7 @@ Item {
     onRightDockVisibleChanged: Qt.callLater(view.refitOrClamp)
     onDisplayModeChanged: {
         if (view.displayMode === "webtoon") {
-            Qt.callLater(function() { webtoonView.jumpToPage(view.imageIndex) })
+            Qt.callLater(function() { if (webtoonView) webtoonView.jumpToPage(view.imageIndex) })
         } else {
             Qt.callLater(view.fit)
         }
@@ -291,22 +296,22 @@ Item {
     function setZoom(value) { viewport.setZoom(value) }
     function zoomAt(factor, pointX, pointY) { viewport.zoomAt(factor, pointX, pointY) }
     function zoomIn() {
-        if (view.displayMode === "webtoon") webtoonView.zoomIn()
+        if (view.displayMode === "webtoon") { if (webtoonView) webtoonView.zoomIn() }
         else viewport.zoomIn()
     }
     function zoomOut() {
-        if (view.displayMode === "webtoon") webtoonView.zoomOut()
+        if (view.displayMode === "webtoon") { if (webtoonView) webtoonView.zoomOut() }
         else viewport.zoomOut()
     }
     function fit() {
-        if (view.displayMode === "webtoon") webtoonView.resetZoom()
+        if (view.displayMode === "webtoon") { if (webtoonView) webtoonView.resetZoom() }
         else viewport.fit()
     }
     function fittedZoom() { return viewport.fittedZoom() }
     function refitOrClamp() { viewport.refitOrClamp() }
     function clampOffsets() { viewport.clampOffsets() }
     function actualSize() {
-        if (view.displayMode === "webtoon") webtoonView.setWidthZoom(1.0)
+        if (view.displayMode === "webtoon") { if (webtoonView) webtoonView.setWidthZoom(1.0) }
         else viewport.actualSize()
     }
 
@@ -347,12 +352,12 @@ Item {
         }
         if (view.displayMode === "dual") {
             var spreadDelta = view.mangaRtl ? -delta : delta
-            var target = dualSpread.targetIndexForSpreadStep(spreadDelta)
+            var target = dualSpread ? dualSpread.targetIndexForSpreadStep(spreadDelta) : -1
             if (target >= 0) view.openImageAt(target)
             return
         }
         if (view.displayMode === "webtoon") {
-            webtoonView.stepPage(delta)
+            if (webtoonView) webtoonView.stepPage(delta)
             return
         }
         view.command({ type: delta < 0 ? "viewer_previous" : "viewer_next" });
@@ -422,7 +427,7 @@ Item {
         case Qt.Key_Space:
             // In Read & Translate / OCR edit mode, holding Space temporarily switches
             // to hand-pan (Photoshop/Krita style). In Review mode, Space advances page.
-            if (view.translateMode && !translateOverlay.reviewMode) {
+            if (view.translateMode && !(translateOverlay && translateOverlay.reviewMode)) {
                 if (!event.isAutoRepeat) {
                     view.spacePanning = true;
                 }
@@ -585,10 +590,10 @@ Item {
                            ? view.theme.background
                            : (view.canvasBgChecker ? "transparent" : view.canvasBgColor)
                     hasContent: view.displayMode === "dual"
-                                ? dualSpread.ready
+                                ? !!(dualSpread && dualSpread.ready)
                                 : (!!view.currentPath && image.implicitWidth > 0 && image.implicitHeight > 0)
-                    contentWidth: view.displayMode === "dual" ? dualSpread.contentWidth : image.implicitWidth
-                    contentHeight: view.displayMode === "dual" ? dualSpread.contentHeight : image.implicitHeight
+                    contentWidth: view.displayMode === "dual" ? (dualSpread ? dualSpread.contentWidth : 0) : image.implicitWidth
+                    contentHeight: view.displayMode === "dual" ? (dualSpread ? dualSpread.contentHeight : 0) : image.implicitHeight
                 minZoom: 0.05
                 maxZoom: 16
                 fitPadding: 0
@@ -597,13 +602,13 @@ Item {
                 clampOnZoom: false
                 // Free pan in Viewer (always behaves like Hand tool without a separate mode).
                 panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
-                inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
+                inputBlocked: viewerBgColorDialog.visible || !!(compactHud && compactHud.dragging)
                 rotationAngle: view.rotationAngle
                 flipH: view.flipH
                 flipV: view.flipV
-                allowLeftPan: !view.translateMode || translateOverlay.effectivePanMode || translateOverlay.reviewMode
+                allowLeftPan: !view.translateMode || !!(translateOverlay && (translateOverlay.effectivePanMode || translateOverlay.reviewMode))
                 allowMiddlePan: true
-                allowDoubleTapZoom: !view.translateMode || translateOverlay.effectivePanMode || translateOverlay.reviewMode
+                allowDoubleTapZoom: !view.translateMode || !!(translateOverlay && (translateOverlay.effectivePanMode || translateOverlay.reviewMode))
 
                 Checkerboard {
                     objectName: "viewerViewportCheckerboard"
@@ -615,8 +620,8 @@ Item {
                 Item {
                     id: canvas
                     objectName: "viewerCanvas"
-                    width: Math.max(1, view.displayMode === "dual" ? dualSpread.contentWidth : image.implicitWidth)
-                    height: Math.max(1, view.displayMode === "dual" ? dualSpread.contentHeight : image.implicitHeight)
+                    width: Math.max(1, view.displayMode === "dual" ? (dualSpread ? dualSpread.contentWidth : 0) : image.implicitWidth)
+                    height: Math.max(1, view.displayMode === "dual" ? (dualSpread ? dualSpread.contentHeight : 0) : image.implicitHeight)
                     scale: viewport.zoom
                     rotation: view.rotationAngle
                     x: viewport.itemX
@@ -663,28 +668,33 @@ Item {
                         }
                     }
 
-                    ViewerDualSpread {
-                        id: dualSpread
-                        objectName: "viewerDualSpread"
-                        visible: view.displayMode === "dual"
-                        images: view.images
-                        currentIndex: view.imageIndex
-                        rtl: view.mangaRtl
-                        separateCover: view.mangaCoverSeparate
-                        pageGap: view.mangaPageGap
-                        smoothFiltering: view.state.antiAliasing !== false
-                        colorAdjustActive: viewerAdjustPanel.changed
-                        brightness: viewerAdjustPanel.brightness
-                        contrast: viewerAdjustPanel.contrast
-                        saturation: viewerAdjustPanel.saturation
-                        onSpreadReady: {
-                            if (view.autoFit && view.displayMode === "dual") {
-                                Qt.callLater(view.fit);
-                            }
-                        }
-                        onGeometryChanged: {
-                            if (view.autoFit && view.displayMode === "dual") {
-                                Qt.callLater(view.fit);
+                    Loader {
+                        id: dualSpreadLoader
+                        active: view.displayMode === "dual"
+                        sourceComponent: Component {
+                            ViewerDualSpread {
+                                objectName: "viewerDualSpread"
+                                visible: view.displayMode === "dual"
+                                images: view.images
+                                currentIndex: view.imageIndex
+                                rtl: view.mangaRtl
+                                separateCover: view.mangaCoverSeparate
+                                pageGap: view.mangaPageGap
+                                smoothFiltering: view.state.antiAliasing !== false
+                                colorAdjustActive: viewerAdjustPanel.changed
+                                brightness: viewerAdjustPanel.brightness
+                                contrast: viewerAdjustPanel.contrast
+                                saturation: viewerAdjustPanel.saturation
+                                onSpreadReady: {
+                                    if (view.autoFit && view.displayMode === "dual") {
+                                        Qt.callLater(view.fit);
+                                    }
+                                }
+                                onGeometryChanged: {
+                                    if (view.autoFit && view.displayMode === "dual") {
+                                        Qt.callLater(view.fit);
+                                    }
+                                }
                             }
                         }
                     }
@@ -768,136 +778,156 @@ Item {
                         visible: !view.canvasBgUseTheme && view.canvasBgChecker
                     }
 
-                    ViewerWebtoonView {
-                        id: webtoonView
-                        objectName: "viewerWebtoonView"
+                    Loader {
+                        id: webtoonViewLoader
                         anchors.fill: parent
-                        theme: view.theme
-                        images: view.images
-                        currentIndex: view.imageIndex
-                        pageGap: view.mangaPageGap
-                        smoothFiltering: view.state.antiAliasing !== false
-                        colorAdjustActive: viewerAdjustPanel.changed
-                        brightness: viewerAdjustPanel.brightness
-                        contrast: viewerAdjustPanel.contrast
-                        saturation: viewerAdjustPanel.saturation
-                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
-                        allowLeftPan: !view.translateMode || translateOverlay.effectivePanMode || translateOverlay.reviewMode
-                        onPageCentered: function(idx) {
-                            view.openImageAt(idx)
-                        }
-                        onContextMenuRequested: function(px, py) {
-                            if (!view.currentPath) return
-                            var local = webtoonView.mapToItem(view, px, py)
-                            canvasMenu.popup(view, local.x, local.y)
+                        active: view.displayMode === "webtoon"
+                        sourceComponent: Component {
+                            ViewerWebtoonView {
+                                id: webtoonViewItem
+                                objectName: "viewerWebtoonView"
+                                anchors.fill: parent
+                                theme: view.theme
+                                images: view.images
+                                currentIndex: view.imageIndex
+                                pageGap: view.mangaPageGap
+                                smoothFiltering: view.state.antiAliasing !== false
+                                colorAdjustActive: viewerAdjustPanel.changed
+                                brightness: viewerAdjustPanel.brightness
+                                contrast: viewerAdjustPanel.contrast
+                                saturation: viewerAdjustPanel.saturation
+                                inputBlocked: viewerBgColorDialog.visible || !!(compactHud && compactHud.dragging)
+                                allowLeftPan: !view.translateMode || !!(translateOverlay && (translateOverlay.effectivePanMode || translateOverlay.reviewMode))
+                                onPageCentered: function(idx) {
+                                    view.openImageAt(idx)
+                                }
+                                onContextMenuRequested: function(px, py) {
+                                    if (!view.currentPath) return
+                                    var local = webtoonViewItem.mapToItem(view, px, py)
+                                    canvasMenu.popup(view, local.x, local.y)
+                                }
+                            }
                         }
                     }
                 }
 
-                ViewerTranslateOverlay {
-                    id: translateOverlay
-                    theme: view.theme
+                Loader {
+                    id: translateOverlayLoader
+                    anchors.fill: parent
                     active: view.translateMode && !!view.currentPath
-                    spacePanning: view.spacePanning
-                    canvasPanning: viewport.panning || webtoonView.panning
-                    imagePath: view.currentPath
-                    canvasItem: canvas
-                    zoom: view.zoom
-                    offsetX: view.offsetX
-                    offsetY: view.offsetY
-                    webtoonMode: view.displayMode === "webtoon"
-                    webtoonItem: webtoonView
-                    webtoonScrollY: webtoonView.scrollY
-                    webtoonZoom: webtoonView.widthZoom
-                    webtoonPanX: webtoonView.panX
-                    aiTask: (view.state && view.state.aiTask) || null
-                    savedTranslation: (view.state && view.state.viewerSavedTranslation) || null
-                    onTranslateRequested: function(targetPath, sourceLang, targetLang, region, ocrEngine) {
-                        var effectivePath = targetPath || view.currentPath
-                        if (!effectivePath) return
-                        var cmd = {
-                            type: "viewer_translate",
-                            path: effectivePath,
-                            source_lang: sourceLang,
-                            target_lang: targetLang,
-                            ocr_engine: ocrEngine || "tesseract"
+                    sourceComponent: Component {
+                        ViewerTranslateOverlay {
+                            theme: view.theme
+                            overlayMode: view.translateOverlayMode
+                            active: view.translateMode && !!view.currentPath
+                            spacePanning: view.spacePanning
+                            canvasPanning: viewport.panning || !!(webtoonView && webtoonView.panning)
+                            imagePath: view.currentPath
+                            canvasItem: canvas
+                            zoom: view.zoom
+                            offsetX: view.offsetX
+                            offsetY: view.offsetY
+                            webtoonMode: view.displayMode === "webtoon"
+                            webtoonItem: webtoonView
+                            webtoonScrollY: webtoonView ? webtoonView.scrollY : 0
+                            webtoonZoom: webtoonView ? webtoonView.widthZoom : 1.0
+                            webtoonPanX: webtoonView ? webtoonView.panX : 0
+                            aiTask: (view.state && view.state.aiTask) || null
+                            savedTranslation: (view.state && view.state.viewerSavedTranslation) || null
+                            onTranslateRequested: function(targetPath, sourceLang, targetLang, region, ocrEngine) {
+                                var effectivePath = targetPath || view.currentPath
+                                if (!effectivePath) return
+                                var cmd = {
+                                    type: "viewer_translate",
+                                    path: effectivePath,
+                                    source_lang: sourceLang,
+                                    target_lang: targetLang,
+                                    ocr_engine: ocrEngine || "tesseract"
+                                }
+                                if (region) cmd.region = region
+                                view.command(cmd)
+                            }
+                            onSaveTranslationRequested: function(targetPath, blocks) {
+                                var effectivePath = targetPath || view.currentPath
+                                if (!effectivePath) return
+                                view.command({
+                                    type: "viewer_save_translation",
+                                    path: effectivePath,
+                                    blocks: blocks || []
+                                })
+                            }
+                            onDeleteTranslationRequested: function() {
+                                if (!view.currentPath) return
+                                view.command({
+                                    type: "viewer_delete_translation",
+                                    path: view.currentPath
+                                })
+                            }
+                            onCopyTextRequested: function(text) { view.copyText(text) }
+                            onCancelRequested: view.command({ type: "ai_cancel" })
+                            onCloseRequested: view.translateMode = false
                         }
-                        if (region) cmd.region = region
-                        view.command(cmd)
                     }
-                    onSaveTranslationRequested: function(targetPath, blocks) {
-                        var effectivePath = targetPath || view.currentPath
-                        if (!effectivePath) return
-                        view.command({
-                            type: "viewer_save_translation",
-                            path: effectivePath,
-                            blocks: blocks || []
-                        })
-                    }
-                    onDeleteTranslationRequested: function() {
-                        if (!view.currentPath) return
-                        view.command({
-                            type: "viewer_delete_translation",
-                            path: view.currentPath
-                        })
-                    }
-                    onCopyTextRequested: function(text) { view.copyText(text) }
-                    onCancelRequested: view.command({ type: "ai_cancel" })
-                    onCloseRequested: view.translateMode = false
                 }
 
-                ViewerCompactHud {
-                    id: compactHud
-                    objectName: "viewerCompactHud"
-                    theme: view.theme
+                Loader {
+                    id: compactHudLoader
+                    anchors.fill: parent
                     active: view.fullscreen || view.uiMode === "compact"
-                    fullscreen: view.fullscreen
-                    hasImage: !!view.currentPath
-                    imageCount: view.images.length
-                    imageIndex: view.imageIndex
-                    imageName: view.currentInfo ? view.currentInfo.name : ""
-                    colorAdjustActive: viewerAdjustPanel.changed
-                    flipH: view.flipH
-                    flipV: view.flipV
-                    uiModeModified: view.uiMode !== "standard" || view.displayMode !== "single"
-                    canvasBgUseTheme: view.canvasBgUseTheme
-                    canvasBgChecker: view.canvasBgChecker
-                    canvasBgColor: view.canvasBgColor
-                    edge: view.savedCompactHudEdge
-                    pinned: view.savedCompactHudPinned
-                    keepOpen: viewerModePopup.visible || viewerColorPopover.visible || viewerBgPopup.visible
-                    onEdgeSelected: function(edge) {
-                        view.layoutRequested({ compactHudEdge: edge })
-                    }
-                    onPinnedToggled: function(pinned) {
-                        view.layoutRequested({ compactHudPinned: pinned })
-                    }
-                    onPreviousRequested: view.stepImage(-1)
-                    onNextRequested: view.stepImage(1)
-                    onZoomOutRequested: view.zoomOut()
-                    onFitRequested: view.fit()
-                    onZoomInRequested: view.zoomIn()
-                    onActualSizeRequested: view.actualSize()
-                    onRotateLeftRequested: view.rotateLeft()
-                    onRotateRightRequested: view.rotateRight()
-                    onFlipHRequested: view.toggleFlipH()
-                    onFlipVRequested: view.toggleFlipV()
-                    onResetViewRequested: view.resetView()
-                    onColorToggleRequested: function(anchor, edge) {
-                        viewerColorPopover.toggleNear(anchor, edge)
-                    }
-                    onModeToggleRequested: function(anchor, edge) {
-                        viewerModePopup.toggleNear(anchor, edge)
-                    }
-                    onFullscreenToggleRequested: view.toggleFullscreen()
-                    onBgToggleRequested: function(anchor) {
-                        viewerBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
-                        viewerBgPopup.colour = view.canvasBgColor
-                        viewerBgPopup.showBelow(anchor || view)
-                    }
-                    onBrowserRequested: view.backToBrowser()
-                    onEditorRequested: {
-                        if (view.currentPath) view.editInEditor(view.currentPath)
+                    sourceComponent: Component {
+                        ViewerCompactHud {
+                            objectName: "viewerCompactHud"
+                            theme: view.theme
+                            active: view.fullscreen || view.uiMode === "compact"
+                            fullscreen: view.fullscreen
+                            hasImage: !!view.currentPath
+                            imageCount: view.images.length
+                            imageIndex: view.imageIndex
+                            imageName: view.currentInfo ? view.currentInfo.name : ""
+                            colorAdjustActive: viewerAdjustPanel.changed
+                            flipH: view.flipH
+                            flipV: view.flipV
+                            uiModeModified: view.uiMode !== "standard" || view.displayMode !== "single"
+                            canvasBgUseTheme: view.canvasBgUseTheme
+                            canvasBgChecker: view.canvasBgChecker
+                            canvasBgColor: view.canvasBgColor
+                            edge: view.savedCompactHudEdge
+                            pinned: view.savedCompactHudPinned
+                            keepOpen: viewerModePopup.visible || viewerColorPopover.visible || viewerBgPopup.visible
+                            onEdgeSelected: function(edge) {
+                                view.layoutRequested({ compactHudEdge: edge })
+                            }
+                            onPinnedToggled: function(pinned) {
+                                view.layoutRequested({ compactHudPinned: pinned })
+                            }
+                            onPreviousRequested: view.stepImage(-1)
+                            onNextRequested: view.stepImage(1)
+                            onZoomOutRequested: view.zoomOut()
+                            onFitRequested: view.fit()
+                            onZoomInRequested: view.zoomIn()
+                            onActualSizeRequested: view.actualSize()
+                            onRotateLeftRequested: view.rotateLeft()
+                            onRotateRightRequested: view.rotateRight()
+                            onFlipHRequested: view.toggleFlipH()
+                            onFlipVRequested: view.toggleFlipV()
+                            onResetViewRequested: view.resetView()
+                            onColorToggleRequested: function(anchor, edge) {
+                                viewerColorPopover.toggleNear(anchor, edge)
+                            }
+                            onModeToggleRequested: function(anchor, edge) {
+                                viewerModePopup.toggleNear(anchor, edge)
+                            }
+                            onFullscreenToggleRequested: view.toggleFullscreen()
+                            onBgToggleRequested: function(anchor) {
+                                viewerBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
+                                viewerBgPopup.colour = view.canvasBgColor
+                                viewerBgPopup.showBelow(anchor || view)
+                            }
+                            onBrowserRequested: view.backToBrowser()
+                            onEditorRequested: {
+                                if (view.currentPath) view.editInEditor(view.currentPath)
+                            }
+                        }
                     }
                 }
             }
@@ -1174,13 +1204,13 @@ Item {
             text: qsTr("Read & translate")
             icon.source: "icons/ai-rembg.svg"
             checkable: true
-            checked: view.translateMode && translateOverlay.overlayMode === "translate"
+            checked: view.translateMode && view.translateOverlayMode === "translate"
             enabled: !!view.currentPath
             onTriggered: {
-                if (view.translateMode && translateOverlay.overlayMode === "translate") {
+                if (view.translateMode && view.translateOverlayMode === "translate") {
                     view.translateMode = false
                 } else {
-                    translateOverlay.overlayMode = "translate"
+                    view.translateOverlayMode = "translate"
                     view.translateMode = true
                 }
             }
@@ -1190,13 +1220,13 @@ Item {
             text: qsTr("Scan text region (OCR)")
             icon.name: "edit-find-symbolic"
             checkable: true
-            checked: view.translateMode && translateOverlay.overlayMode === "ocr"
+            checked: view.translateMode && view.translateOverlayMode === "ocr"
             enabled: !!view.currentPath
             onTriggered: {
-                if (view.translateMode && translateOverlay.overlayMode === "ocr") {
+                if (view.translateMode && view.translateOverlayMode === "ocr") {
                     view.translateMode = false
                 } else {
-                    translateOverlay.overlayMode = "ocr"
+                    view.translateOverlayMode = "ocr"
                     view.translateMode = true
                 }
             }
@@ -1699,11 +1729,11 @@ Item {
         mangaRtl: view.mangaRtl
         mangaCoverSeparate: view.mangaCoverSeparate
         mangaPageGap: view.mangaPageGap
-        webtoonFitMode: webtoonView.fitMode
+        webtoonFitMode: webtoonView ? webtoonView.fitMode : "fit_width"
         onModeSelected: function(mode) { view.setUiMode(mode) }
         onDisplayModeSelected: function(mode) { view.setDisplayMode(mode) }
         onMangaOptionsChanged: function(patch) { view.layoutRequested(patch) }
-        onWebtoonFitSelected: function(mode) { webtoonView.setFitMode(mode) }
+        onWebtoonFitSelected: function(mode) { if (webtoonView) webtoonView.setFitMode(mode) }
     }
 
     ViewerColorPopover {

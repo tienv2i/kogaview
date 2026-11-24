@@ -1,0 +1,31 @@
+[package]
+name = "kogaview-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+    "tiff",
+    "avif",
+    "avif-native",
+    "dds",
+    "exr",
+    "ff",
+    "hdr",
+    "ico",
+    "pnm",
+    "qoi",
+    "tga",
+] }
+jpeg-decoder = { version = "0.3", default-features = false }
+kogaview-protocol = { path = "../app-protocol" }
+serde.workspace = true
+tracing.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
