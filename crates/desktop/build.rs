@@ -11,6 +11,7 @@ fn main() {
         "qml/CompactToolbarButton.qml",
         "qml/MenuShortcut.qml",
         "qml/AppMenu.qml",
+        "qml/QuickActionMenu.qml",
         "qml/ToolbarMetrics.qml",
         "qml/ToolbarSeparator.qml",
         "qml/WorkspaceSwitcher.qml",

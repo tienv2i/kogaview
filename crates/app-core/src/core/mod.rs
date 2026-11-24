@@ -194,6 +194,9 @@ pub struct Core {
     ai_generation: u64,
     ai_temp_input: Option<PathBuf>,
     ai_temp_output: Option<PathBuf>,
+    /// When `Some`, the active AI inference is a Browser/Viewer Quick Action
+    /// writing a new sibling file rather than editing the open Editor document.
+    ai_quick_action_output: Option<PathBuf>,
     /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
     /// listing on its own and only re-sends it when this changes, because it is
     /// the one part of the snapshot that grows with the folder.
@@ -270,6 +273,7 @@ impl Core {
             ai_generation: 0,
             ai_temp_input: None,
             ai_temp_output: None,
+            ai_quick_action_output: None,
             listing_epoch: 0,
         };
 
@@ -380,6 +384,7 @@ impl Core {
             ai_generation: 0,
             ai_temp_input: None,
             ai_temp_output: None,
+            ai_quick_action_output: None,
             listing_epoch: 0,
         }
     }

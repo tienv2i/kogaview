@@ -667,8 +667,8 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/BrowserView.qml" line="1735"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1812"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1874"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1829"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1891"/>
         <source>Open</source>
         <translation>Mở</translation>
     </message>
@@ -678,77 +678,77 @@
         <translation>Chỉnh sửa</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1758"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1775"/>
         <source>Open with…</source>
         <translation>Mở bằng…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1769"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1786"/>
         <source>Copy image content</source>
         <translation>Sao chép nội dung ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1776"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1793"/>
         <source>Copy file path</source>
         <translation>Sao chép đường dẫn tệp</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1783"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1845"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1800"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1862"/>
         <source>Copy to…</source>
         <translation>Sao chép tới…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1788"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1850"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1805"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1867"/>
         <source>Move to…</source>
         <translation>Di chuyển tới…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1794"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1856"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1811"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1873"/>
         <source>Move to trash</source>
         <translation>Chuyển vào thùng rác</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1799"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1861"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1816"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1878"/>
         <source>Delete permanently…</source>
         <translation>Xoá vĩnh viễn…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1817"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1834"/>
         <source>New folder…</source>
         <translation>Thư mục mới…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1828"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1845"/>
         <source>Copy path</source>
         <translation>Sao chép đường dẫn</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1835"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1852"/>
         <source>Add to quick access</source>
         <translation>Thêm vào truy cập nhanh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1885"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1902"/>
         <source>Move up</source>
         <translation>Di chuyển lên</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1894"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1911"/>
         <source>Move down</source>
         <translation>Di chuyển xuống</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="2049"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="2066"/>
         <source>More browser actions</source>
         <translation>Thêm thao tác trình duyệt</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1835"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1904"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1852"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1921"/>
         <source>Remove from quick access</source>
         <translation>Bỏ khỏi truy cập nhanh</translation>
     </message>
@@ -758,39 +758,39 @@
         <translation>Thư mục nhà</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1933"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1966"/>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="2035"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1950"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1983"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="2052"/>
         <source>New folder</source>
         <translation>Thư mục mới</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1980"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1997"/>
         <source>Cancel</source>
         <translation>Huỷ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1987"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="2004"/>
         <source>Create</source>
         <translation>Tạo</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="1958"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="1975"/>
         <source>Folder name</source>
         <translation>Tên thư mục</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="2007"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="2024"/>
         <source>Go to parent folder (Backspace)</source>
         <translation>Tới thư mục cha (Backspace)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="2015"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="2032"/>
         <source>Refresh (F5)</source>
         <translation>Làm mới (F5)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/BrowserView.qml" line="2024"/>
+        <location filename="../crates/desktop/qml/BrowserView.qml" line="2041"/>
         <source>Open folder… (Ctrl+Shift+O)</source>
         <translation>Mở thư mục… (Ctrl+Shift+O)</translation>
     </message>
@@ -2054,6 +2054,14 @@
     </message>
 </context>
 <context>
+    <name>QuickActionMenu</name>
+    <message>
+        <location filename="../crates/desktop/qml/QuickActionMenu.qml" line="13"/>
+        <source>Quick actions</source>
+        <translation>Thao tác nhanh</translation>
+    </message>
+</context>
+<context>
     <name>ResizeDialog</name>
     <message>
         <location filename="../crates/desktop/qml/ResizeDialog.qml" line="537"/>
@@ -2211,168 +2219,188 @@
 <context>
     <name>SettingsDialog</name>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="925"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="977"/>
         <source>Apply</source>
         <translation>Áp dụng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="935"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="987"/>
         <source>OK</source>
         <translation>OK</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="904"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="956"/>
         <source>Defaults</source>
         <translation>Mặc định</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="389"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="390"/>
         <source>Look</source>
         <translation>Giao diện</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="621"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="622"/>
         <source>Default Viewer mode</source>
         <translation>Chế độ Trình xem mặc định</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="626"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="627"/>
         <source>Open mode</source>
         <translation>Chế độ khi mở</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="636"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="637"/>
         <source>Standard (full workspace)</source>
         <translation>Tiêu chuẩn (đầy đủ giao diện)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="635"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="636"/>
         <source>Simple (toolbar only)</source>
         <translation>Tinh gọn (chỉ thanh công cụ)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="637"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="638"/>
         <source>Compact (image &amp; floating HUD)</source>
         <translation>Siêu gọn (chỉ ảnh &amp; thanh nổi)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="655"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="656"/>
         <source>Display mode</source>
         <translation>Chế độ hiển thị</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="664"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="665"/>
         <source>Single</source>
         <translation>Đơn</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="665"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="666"/>
         <source>Dual page (book)</source>
         <translation>Hai trang (sách / manga)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="666"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="667"/>
         <source>Webtoon (vertical)</source>
         <translation>Webtoon (cuộn dọc)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="683"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="684"/>
         <source>Default interface density when opening images in Viewer.</source>
         <translation>Mức hiển thị giao diện mặc định khi mở ảnh bằng Trình xem.</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="712"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="713"/>
         <source>Execution &amp; memory</source>
         <translation>Thực thi &amp; bộ nhớ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="717"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="718"/>
         <source>Device</source>
         <translation>Thiết bị</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="723"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="724"/>
         <source>CPU (Default — safest)</source>
         <translation>CPU (Mặc định — ổn định nhất)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="724"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="725"/>
         <source>Auto (GPU with CPU fallback)</source>
         <translation>Tự động (GPU, dự phòng CPU)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="725"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="726"/>
         <source>GPU (Fallback to CPU if unavailable)</source>
         <translation>GPU (Chuyển sang CPU nếu không khả dụng)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="742"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="743"/>
         <source>AI plugins run out-of-process, load only when invoked, and unload automatically after each job to free RAM and VRAM.</source>
         <translation>Plugin AI chạy tách tiến trình, chỉ nạp khi sử dụng và tự giải phóng RAM/VRAM ngay sau khi xong.</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="752"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="753"/>
         <source>Remove Background models (On-demand)</source>
         <translation>Model xoá nền (Tải theo nhu cầu)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="772"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="918"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="773"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="970"/>
         <source>Cancel</source>
         <translation>Huỷ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="813"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="814"/>
         <source>Installed</source>
         <translation>Đã cài đặt</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="813"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="814"/>
         <source>Not downloaded</source>
         <translation>Chưa tải</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="815"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="817"/>
         <source>Custom file</source>
         <translation>Tệp tùy chọn</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="825"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="827"/>
         <source>Local .onnx…</source>
         <translation>Tệp .onnx…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="832"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="834"/>
         <source>Delete</source>
         <translation>Xoá</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="832"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="834"/>
         <source>Download</source>
         <translation>Tải về</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="850"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="70"/>
         <source>Plugins</source>
         <translation>Plugin</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="867"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="862"/>
+        <source>Installed &amp; discovered plugins</source>
+        <translation>Plugin đã cài đặt &amp; phát hiện</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="866"/>
+        <source>Plugins live under $XDG_DATA_HOME/kogaview/plugins/ with a manifest.json declaring capabilities and Quick Actions. Plugins are never loaded at startup.</source>
+        <translation>Plugin nằm tại $XDG_DATA_HOME/kogaview/plugins/ với manifest.json khai báo tính năng và Thao tác nhanh. Plugin không bao giờ được nạp lúc khởi động.</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="902"/>
         <source>Ready</source>
         <translation>Sẵn sàng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="868"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="903"/>
         <source>Not built (just build-plugin-rembg)</source>
         <translation>Chưa build (chạy: just build-plugin-rembg)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="877"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="910"/>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="917"/>
+        <source>Quick actions: %1</source>
+        <translation>Thao tác nhanh: %1</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="929"/>
         <source>Refresh plugins</source>
         <translation>Làm mới plugin</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="885"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="937"/>
         <source>Changes are previewed as you make them. Apply saves them; OK saves and closes.</source>
         <translation>Thay đổi được xem trước ngay khi bạn chọn. Áp dụng để lưu; OK để lưu và đóng.</translation>
     </message>
@@ -2402,50 +2430,50 @@
         <translation>AI</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="76"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="82"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="77"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="83"/>
         <source>Quick access</source>
         <translation>Truy cập nhanh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="77"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="83"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="78"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="84"/>
         <source>Explorer</source>
         <translation>Cây thư mục</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="78"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="79"/>
         <source>Preview</source>
         <translation>Xem trước</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="79"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="80"/>
         <source>Batch action</source>
         <translation>Tác vụ hàng loạt</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="84"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="85"/>
         <source>Tool rail</source>
         <translation>Dải công cụ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="85"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="86"/>
         <source>Tool options</source>
         <translation>Tuỳ chọn công cụ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="86"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="91"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="87"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="92"/>
         <source>Info</source>
         <translation>Thông tin</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="87"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="88"/>
         <source>History</source>
         <translation>Lịch sử</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="88"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="89"/>
         <source>Original</source>
         <translation>Gốc</translation>
     </message>
@@ -2455,78 +2483,78 @@
         <translation>Cài đặt</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="394"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="395"/>
         <source>Theme</source>
         <translation>Chủ đề</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="414"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="418"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="415"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="419"/>
         <source>Dark</source>
         <translation>Tối</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="414"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="418"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="415"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="419"/>
         <source>Light</source>
         <translation>Sáng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="428"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="429"/>
         <source>Language</source>
         <translation>Ngôn ngữ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="477"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="583"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="602"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="693"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="478"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="584"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="603"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="694"/>
         <source>Panels</source>
         <translation>Bảng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="481"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="482"/>
         <source>The sidebar and detail panel widths are dragged on the window; the saved layout keeps them.</source>
         <translation>Kéo rộng thanh bên và bảng chi tiết ngay trên cửa sổ; bố cục đã lưu sẽ ghi nhớ chúng.</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="492"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="493"/>
         <source>Reset layout</source>
         <translation>Đặt lại bố cục</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="507"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="508"/>
         <source>Browsing</source>
         <translation>Đang duyệt</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="517"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="518"/>
         <source>Remember the last opened folder</source>
         <translation>Nhớ thư mục mở gần nhất</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="526"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="527"/>
         <source>Generate thumbnails in the background</source>
         <translation>Tạo hình thu nhỏ ở chế độ nền</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/SettingsDialog.qml" line="65"/>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="543"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="544"/>
         <source>Performance</source>
         <translation>Hiệu năng</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="550"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="551"/>
         <source>Hardware acceleration (GPU)</source>
         <translation>Tăng tốc phần cứng (GPU)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="559"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="560"/>
         <source>Anti-aliasing and smooth image filtering</source>
         <translation>Khử răng cưa và lọc ảnh mượt (Anti-aliasing)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="565"/>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="566"/>
         <source>Hardware acceleration changes apply on next restart.</source>
         <translation>Thay đổi tăng tốc phần cứng sẽ có hiệu lực sau khi khởi động lại.</translation>
     </message>
@@ -2780,6 +2808,11 @@
         <location filename="../crates/desktop/qml/Theme.qml" line="106"/>
         <source>Info &amp; color</source>
         <translation>Thông tin &amp; màu sắc</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/Theme.qml" line="107"/>
+        <source>Quick actions</source>
+        <translation>Thao tác nhanh</translation>
     </message>
 </context>
 <context>
@@ -3046,6 +3079,7 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/UiLines.qml" line="118"/>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="224"/>
         <source>Saved %1</source>
         <translation>Đã lưu %1</translation>
     </message>
@@ -3396,12 +3430,12 @@
         <translation>Đã xoá nền</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/UiLines.qml" line="224"/>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="225"/>
         <source>AI processing failed</source>
         <translation>Xử lý AI thất bại</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/UiLines.qml" line="225"/>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="226"/>
         <source>Operation cancelled</source>
         <translation>Đã huỷ thao tác</translation>
     </message>
@@ -3573,8 +3607,8 @@
 <context>
     <name>Viewer</name>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1229"/>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1441"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1246"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1458"/>
         <source>Reset view</source>
         <translation>Đặt lại góc nhìn</translation>
     </message>
@@ -3587,34 +3621,34 @@
         <translation type="vanished">Xoay &amp; lật</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1494"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1511"/>
         <source>Viewer mode &amp; layout (M)</source>
         <translation>Chế độ &amp; bố cục Trình xem (M)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1458"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1475"/>
         <source>Exit fullscreen (F11)</source>
         <translation>Thoát toàn màn hình (F11)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1418"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1435"/>
         <source>Flip horizontal (H)</source>
         <translation>Lật ngang (H)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1430"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1447"/>
         <source>Flip vertical (V)</source>
         <translation>Lật dọc (V)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1458"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1475"/>
         <source>Fullscreen (F11)</source>
         <translation>Toàn màn hình (F11)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1280"/>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1522"/>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1612"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1297"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1539"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1629"/>
         <source>Canvas background</source>
         <translation>Nền khung vẽ</translation>
     </message>
@@ -3657,98 +3691,98 @@
         <translation>Chỉnh sửa</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1064"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1081"/>
         <source>Open with…</source>
         <translation>Mở bằng…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1077"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1094"/>
         <source>Copy image content</source>
         <translation>Sao chép nội dung ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1084"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1101"/>
         <source>Copy file path</source>
         <translation>Sao chép đường dẫn tệp</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1092"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1109"/>
         <source>Copy to…</source>
         <translation>Sao chép tới…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1098"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1115"/>
         <source>Move to…</source>
         <translation>Di chuyển tới…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1105"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1122"/>
         <source>Move to trash</source>
         <translation>Chuyển vào thùng rác</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1112"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1129"/>
         <source>Delete permanently…</source>
         <translation>Xoá vĩnh viễn…</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1119"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1136"/>
         <source>Fit to window</source>
         <translation>Vừa cửa sổ</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1126"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1143"/>
         <source>Actual size</source>
         <translation>Kích thước thật</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1133"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1150"/>
         <source>Rotate left</source>
         <translation>Xoay trái</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1140"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1157"/>
         <source>Rotate right</source>
         <translation>Xoay phải</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1261"/>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1483"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1278"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1500"/>
         <source>Info &amp; color</source>
         <translation>Thông tin &amp; màu sắc</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1272"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1289"/>
         <source>Viewer mode &amp; layout</source>
         <translation>Chế độ &amp; bố cục Trình xem</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1241"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1258"/>
         <source>Fullscreen</source>
         <translation>Toàn màn hình</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1317"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1334"/>
         <source>Previous image (Left)</source>
         <translation>Ảnh trước (Left)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1333"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1350"/>
         <source>Next image (Right)</source>
         <translation>Ảnh sau (Right)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1368"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1385"/>
         <source>Zoom in (+ or scroll wheel)</source>
         <translation>Phóng to (+ hoặc lăn chuột)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1349"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1366"/>
         <source>Zoom out (- or scroll wheel)</source>
         <translation>Thu nhỏ (- hoặc lăn chuột)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1378"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1395"/>
         <source>Actual size at 100% (0/1)</source>
         <translation>Kích thước thật 100% (0/1)</translation>
     </message>
@@ -3765,27 +3799,27 @@
         <translation type="vanished">Bố cục Trình xem (M)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1470"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1487"/>
         <source>Toggle thumbnail filmstrip (T)</source>
         <translation>Bật/tắt dải hình thu nhỏ (T)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1537"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1554"/>
         <source>More viewer actions</source>
         <translation>Thêm thao tác xem ảnh</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1358"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1375"/>
         <source>Fit to window (F)</source>
         <translation>Vừa cửa sổ (F)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1395"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1412"/>
         <source>Rotate left (Shift+R)</source>
         <translation>Xoay trái (Shift+R)</translation>
     </message>
     <message>
-        <location filename="../crates/desktop/qml/Viewer.qml" line="1406"/>
+        <location filename="../crates/desktop/qml/Viewer.qml" line="1423"/>
         <source>Rotate right (R)</source>
         <translation>Xoay phải (R)</translation>
     </message>

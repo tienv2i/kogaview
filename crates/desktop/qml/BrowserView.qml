@@ -1754,6 +1754,23 @@ Item {
                 view.editInEditor(view.menuPath);
             }
         }
+        QuickActionMenu {
+            objectName: "browserQuickActionMenu"
+            theme: view.theme
+            implicitWidth: view.menuWidth
+            workspace: "browser"
+            quickActions: (view.state && view.state.quickActions) || []
+            targetPaths: view.menuPath ? [view.menuPath] : []
+            targetEnabled: view.menuIsImage
+            onActionTriggered: function(pluginId, actionId, paths) {
+                view.command({
+                    type: "quick_action_run",
+                    plugin_id: pluginId,
+                    action_id: actionId,
+                    paths: paths
+                })
+            }
+        }
         MenuItem {
             text: qsTr("Open with…")
             icon.name: "application-x-executable-symbolic"

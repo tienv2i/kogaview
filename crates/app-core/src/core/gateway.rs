@@ -567,6 +567,11 @@ impl Core {
             Command::EditorAiRemoveBackground { model_id, feather } => {
                 self.editor_ai_remove_background(&model_id, feather)
             }
+            Command::QuickActionRun {
+                plugin_id,
+                action_id,
+                paths,
+            } => self.quick_action_run(&plugin_id, &action_id, paths),
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {

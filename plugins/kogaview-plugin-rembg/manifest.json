@@ -23,6 +23,15 @@
       "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
     },
     {
+      "id": "silueta",
+      "name": "Silueta (Fast)",
+      "tier": "fast",
+      "file": "silueta.onnx",
+      "sizeBytes": 44200000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/silueta.onnx"
+    },
+    {
       "id": "rmbg-1.4",
       "name": "BRIA RMBG-1.4 (Balanced)",
       "tier": "balanced",
@@ -39,6 +48,42 @@
       "sizeBytes": 176000000,
       "sha256": "",
       "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
+    },
+    {
+      "id": "isnet-anime",
+      "name": "IS-Net Anime (Anime)",
+      "tier": "anime",
+      "file": "isnet-anime.onnx",
+      "sizeBytes": 176000000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx"
+    },
+    {
+      "id": "birefnet-general-lite",
+      "name": "BiRefNet Lite (High)",
+      "tier": "high",
+      "file": "birefnet-general-lite.onnx",
+      "sizeBytes": 214000000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
+    },
+    {
+      "id": "u2net_human_seg",
+      "name": "U²-Net Human (Portrait)",
+      "tier": "portrait",
+      "file": "u2net_human_seg.onnx",
+      "sizeBytes": 176000000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx"
+    },
+    {
+      "id": "birefnet-portrait",
+      "name": "BiRefNet Portrait (Portrait)",
+      "tier": "portrait",
+      "file": "birefnet-portrait.onnx",
+      "sizeBytes": 973000000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx"
     }
   ],
   "capabilities": [
@@ -50,6 +95,22 @@
       "params": [
         { "key": "feather", "type": "int", "min": 0, "max": 20, "default": 0 }
       ]
+    }
+  ],
+  "quickActions": [
+    {
+      "id": "rembg-general",
+      "label": "Remove background (General)",
+      "action": "editor.remove_background",
+      "workspaces": ["browser", "viewer"],
+      "params": { "modelId": "rmbg-1.4", "feather": 0 }
+    },
+    {
+      "id": "rembg-anime",
+      "label": "Remove background (Anime)",
+      "action": "editor.remove_background",
+      "workspaces": ["browser", "viewer"],
+      "params": { "modelId": "isnet-anime", "feather": 0 }
     }
   ]
 }

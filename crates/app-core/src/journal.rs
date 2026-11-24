@@ -99,7 +99,8 @@ fn sanitized_paths(command: &Command) -> Vec<String> {
         Command::OpenFile { paths }
         | Command::Select { paths }
         | Command::Trash { paths }
-        | Command::DeletePermanently { paths } => paths.iter().map(|p| sanitize(p)).collect(),
+        | Command::DeletePermanently { paths }
+        | Command::QuickActionRun { paths, .. } => paths.iter().map(|p| sanitize(p)).collect(),
         Command::OpenFolder { path }
         | Command::Navigate { path }
         | Command::AddFavorite { path }

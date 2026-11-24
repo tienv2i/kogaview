@@ -543,6 +543,22 @@ pub struct PluginCapability {
     pub params: Vec<PluginParamSpec>,
 }
 
+/// One context-menu quick action contributed by a plugin's `manifest.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginQuickAction {
+    pub id: String,
+    pub label: String,
+    pub action: String,
+    /// Workspaces whose context menus should list this quick action
+    /// (e.g. `["browser", "viewer"]`).
+    #[serde(default)]
+    pub workspaces: Vec<String>,
+    /// Default parameters forwarded to the plugin when invoked (e.g. `{"modelId":"isnet-anime"}`).
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
 /// Declarative `manifest.json` read by Core without spawning any process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -558,6 +574,21 @@ pub struct PluginManifest {
     pub models: Vec<PluginModelSpec>,
     #[serde(default)]
     pub capabilities: Vec<PluginCapability>,
+    #[serde(default)]
+    pub quick_actions: Vec<PluginQuickAction>,
+}
+
+/// Live quick action published in `UiState` for shared Browser/Viewer context menus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiQuickAction {
+    pub plugin_id: String,
+    pub id: String,
+    pub label: String,
+    pub action: String,
+    pub workspaces: Vec<String>,
+    pub params: serde_json::Value,
+    pub available: bool,
 }
 
 /// Live status of one AI model published in `UiState` for `Settings → AI` and Editor.
@@ -582,6 +613,7 @@ pub struct AiPluginStatus {
     pub version: String,
     pub available: bool,
     pub actions: Vec<String>,
+    pub quick_actions: Vec<String>,
 }
 
 /// Active or most-recent AI background job (model download or inference).
@@ -1145,6 +1177,13 @@ pub enum Command {
         #[serde(default)]
         feather: u8,
     },
+    /// Run a plugin-contributed Quick Action from Browser or Viewer context menus.
+    /// Non-destructive: writes a new sibling output file rather than overwriting the source.
+    QuickActionRun {
+        plugin_id: String,
+        action_id: String,
+        paths: Vec<String>,
+    },
     CancelOperation,
 }
 
@@ -1215,6 +1254,7 @@ impl Command {
             Self::AiSetCustomModel { .. } => "ai_set_custom_model",
             Self::AiCancel => "ai_cancel",
             Self::EditorAiRemoveBackground { .. } => "editor_ai_remove_background",
+            Self::QuickActionRun { .. } => "quick_action_run",
         }
     }
 }

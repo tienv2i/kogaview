@@ -22,8 +22,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kogaview_protocol::{
-    AiDevice, AiModelStatus, AiPluginStatus, AiSettings, PluginCapability, PluginEntry,
-    PluginManifest, PluginModelSpec, PluginParamSpec, PluginPermissions,
+    AiDevice, AiModelStatus, AiPluginStatus, AiQuickAction, AiSettings, PluginCapability,
+    PluginEntry, PluginManifest, PluginModelSpec, PluginParamSpec, PluginPermissions,
+    PluginQuickAction,
 };
 use serde_json::{json, Value};
 
@@ -48,6 +49,16 @@ pub fn builtin_rembg_models() -> Vec<PluginModelSpec> {
                 .to_owned(),
         },
         PluginModelSpec {
+            id: "silueta".to_owned(),
+            name: "Silueta (Fast)".to_owned(),
+            tier: "fast".to_owned(),
+            file: "silueta.onnx".to_owned(),
+            size_bytes: 44_200_000,
+            sha256: String::new(),
+            url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/silueta.onnx"
+                .to_owned(),
+        },
+        PluginModelSpec {
             id: "rmbg-1.4".to_owned(),
             name: "BRIA RMBG-1.4 (Balanced)".to_owned(),
             tier: "balanced".to_owned(),
@@ -66,6 +77,65 @@ pub fn builtin_rembg_models() -> Vec<PluginModelSpec> {
             sha256: String::new(),
             url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
                 .to_owned(),
+        },
+        PluginModelSpec {
+            id: "isnet-anime".to_owned(),
+            name: "IS-Net Anime (Anime)".to_owned(),
+            tier: "anime".to_owned(),
+            file: "isnet-anime.onnx".to_owned(),
+            size_bytes: 176_000_000,
+            sha256: String::new(),
+            url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx"
+                .to_owned(),
+        },
+        PluginModelSpec {
+            id: "birefnet-general-lite".to_owned(),
+            name: "BiRefNet Lite (High)".to_owned(),
+            tier: "high".to_owned(),
+            file: "birefnet-general-lite.onnx".to_owned(),
+            size_bytes: 214_000_000,
+            sha256: String::new(),
+            url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
+                .to_owned(),
+        },
+        PluginModelSpec {
+            id: "u2net_human_seg".to_owned(),
+            name: "U²-Net Human (Portrait)".to_owned(),
+            tier: "portrait".to_owned(),
+            file: "u2net_human_seg.onnx".to_owned(),
+            size_bytes: 176_000_000,
+            sha256: String::new(),
+            url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx"
+                .to_owned(),
+        },
+        PluginModelSpec {
+            id: "birefnet-portrait".to_owned(),
+            name: "BiRefNet Portrait (Portrait)".to_owned(),
+            tier: "portrait".to_owned(),
+            file: "birefnet-portrait.onnx".to_owned(),
+            size_bytes: 973_000_000,
+            sha256: String::new(),
+            url: "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx"
+                .to_owned(),
+        },
+    ]
+}
+
+pub fn builtin_rembg_quick_actions() -> Vec<PluginQuickAction> {
+    vec![
+        PluginQuickAction {
+            id: "rembg-general".to_owned(),
+            label: "Remove background (General)".to_owned(),
+            action: REMBG_ACTION.to_owned(),
+            workspaces: vec!["browser".to_owned(), "viewer".to_owned()],
+            params: json!({ "modelId": "rmbg-1.4", "feather": 0 }),
+        },
+        PluginQuickAction {
+            id: "rembg-anime".to_owned(),
+            label: "Remove background (Anime)".to_owned(),
+            action: REMBG_ACTION.to_owned(),
+            workspaces: vec!["browser".to_owned(), "viewer".to_owned()],
+            params: json!({ "modelId": "isnet-anime", "feather": 0 }),
         },
     ]
 }
@@ -218,6 +288,7 @@ pub fn discover_plugins(plugins_dir: &Path) -> Vec<DiscoveredPlugin> {
                         default: 0,
                     }],
                 }],
+                quick_actions: builtin_rembg_quick_actions(),
             },
             root_dir,
             executable,
@@ -291,8 +362,32 @@ pub fn plugin_statuses(plugins: &[DiscoveredPlugin]) -> Vec<AiPluginStatus> {
                 .iter()
                 .map(|c| c.action.clone())
                 .collect(),
+            quick_actions: p
+                .manifest
+                .quick_actions
+                .iter()
+                .map(|q| q.label.clone())
+                .collect(),
         })
         .collect()
+}
+
+pub fn quick_actions(plugins: &[DiscoveredPlugin]) -> Vec<AiQuickAction> {
+    let mut list = Vec::new();
+    for plugin in plugins {
+        for qa in &plugin.manifest.quick_actions {
+            list.push(AiQuickAction {
+                plugin_id: plugin.manifest.id.clone(),
+                id: qa.id.clone(),
+                label: qa.label.clone(),
+                action: qa.action.clone(),
+                workspaces: qa.workspaces.clone(),
+                params: qa.params.clone(),
+                available: plugin.available,
+            });
+        }
+    }
+    list
 }
 
 /// Download a model on demand into `models_dir/<spec.file>` with progress and
@@ -762,6 +857,7 @@ for line in sys.stdin:
                 permissions: PluginPermissions::default(),
                 models: vec![],
                 capabilities: vec![],
+                quick_actions: vec![],
             },
             root_dir: root.clone(),
             executable: worker,

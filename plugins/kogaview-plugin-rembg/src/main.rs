@@ -67,8 +67,10 @@ fn norm_for_model(model_id: &str) -> ([f32; 3], [f32; 3], (u32, u32)) {
     let lower = model_id.to_ascii_lowercase();
     if lower.contains("u2net") || lower.contains("silueta") {
         ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225], (320, 320))
+    } else if lower.contains("birefnet") {
+        ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225], (1024, 1024))
     } else {
-        // BRIA RMBG-1.4, IS-Net, BiRefNet-general standard normalization.
+        // BRIA RMBG-1.4, IS-Net General, IS-Net Anime normalization.
         ([0.5, 0.5, 0.5], [1.0, 1.0, 1.0], (1024, 1024))
     }
 }

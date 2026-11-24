@@ -43,6 +43,7 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/ExplorerPanel.qml \
           ../crates/desktop/qml/LeftDock.qml \
           ../crates/desktop/qml/FolderMenu.qml \
+          ../crates/desktop/qml/QuickActionMenu.qml \
           ../crates/desktop/qml/RightDock.qml \
           ../crates/desktop/qml/SidePanelRail.qml \
           ../crates/desktop/qml/WorkspaceSwitcher.qml \

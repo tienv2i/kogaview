@@ -27,6 +27,7 @@ impl Core {
         self.state.ai_plugins = plugins::plugin_statuses(&self.ai_plugins);
         self.state.ai_models =
             plugins::model_statuses(&self.paths.models_dir, &self.config.ai, &self.ai_plugins);
+        self.state.quick_actions = plugins::quick_actions(&self.ai_plugins);
     }
 
     pub(super) fn ai_refresh_plugins(&mut self) -> Result<Option<UiText>, ProtocolError> {
@@ -279,6 +280,152 @@ impl Core {
         Ok(Some(UiText::new("ai_removing_background")))
     }
 
+    /// Run a plugin-contributed Quick Action from Browser or Viewer context menus.
+    /// Non-destructive: writes `<stem>-nobg.png` next to the source file and
+    /// refreshes the folder listing when done.
+    pub(super) fn quick_action_run(
+        &mut self,
+        plugin_id: &str,
+        action_id: &str,
+        paths: Vec<String>,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if self.ai_rx.is_some() {
+            return Err(ProtocolError::with_line(
+                "busy",
+                "an AI task is already running",
+                UiText::new("ai_task_busy"),
+            ));
+        }
+        let Some(first_path) = paths.into_iter().find(|p| !p.trim().is_empty()) else {
+            return Err(ProtocolError::with_line(
+                "invalid_input",
+                "no image path provided for quick action",
+                UiText::new("no_source_files"),
+            ));
+        };
+        let src_path = PathBuf::from(&first_path);
+        if !src_path.is_file() {
+            return Err(ProtocolError::with_line(
+                "not_found",
+                format!("image not found: {}", src_path.display()),
+                UiText::new("no_existing_paths"),
+            ));
+        }
+
+        self.refresh_ai_inventory();
+
+        let Some(plugin) = self
+            .ai_plugins
+            .iter()
+            .find(|p| p.manifest.id == plugin_id)
+            .cloned()
+        else {
+            return Err(ProtocolError::with_line(
+                "plugin_missing",
+                format!("plugin '{plugin_id}' not found"),
+                UiText::new("ai_plugin_missing"),
+            ));
+        };
+        if !plugin.available {
+            return Err(ProtocolError::with_line(
+                "plugin_missing",
+                format!(
+                    "plugin '{}' binary is not installed (run: just build-plugin-rembg)",
+                    plugin.manifest.name
+                ),
+                UiText::new("ai_plugin_missing"),
+            ));
+        }
+        let Some(qa) = plugin
+            .manifest
+            .quick_actions
+            .iter()
+            .find(|q| q.id == action_id)
+            .cloned()
+        else {
+            return Err(ProtocolError::with_line(
+                "not_found",
+                format!("quick action '{action_id}' not found on plugin '{plugin_id}'"),
+                UiText::new("ai_inference_failed"),
+            ));
+        };
+
+        let model_id = qa
+            .params
+            .get("modelId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("rmbg-1.4")
+            .to_owned();
+        let Some(model_status) = self.state.ai_models.iter().find(|m| m.id == model_id) else {
+            return Err(ProtocolError::with_line(
+                "not_found",
+                format!("unknown AI model: {model_id}"),
+                UiText::with("ai_model_unknown", [model_id]),
+            ));
+        };
+        let Some(model_path_str) = model_status.effective_path.clone() else {
+            return Err(ProtocolError::with_line(
+                "model_missing",
+                format!("AI model '{model_id}' is not downloaded yet"),
+                UiText::with("ai_model_not_installed", [model_status.name.clone()]),
+            ));
+        };
+
+        let parent = src_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let stem = src_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image");
+        let mut out_path = parent.join(format!("{stem}-nobg.png"));
+        let mut suffix = 2u32;
+        while out_path.exists() {
+            out_path = parent.join(format!("{stem}-nobg-{suffix}.png"));
+            suffix += 1;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.ai_rx = Some(rx);
+        self.ai_cancel = Some(Arc::clone(&cancel));
+        self.ai_temp_input = None;
+        self.ai_temp_output = None;
+        self.ai_quick_action_output = Some(out_path.clone());
+        self.state.busy = true;
+        self.state.ai_task = Some(AiTaskState {
+            kind: "inference".to_owned(),
+            target: qa.label.clone(),
+            running: true,
+            percent: 5,
+            stage: format!("{}…", qa.label),
+            error: None,
+        });
+        self.state.status = UiText::new("ai_removing_background");
+
+        let device = self.config.ai.device;
+        let model_path = PathBuf::from(model_path_str);
+        let action_name = qa.action.clone();
+        let params = qa.params.clone();
+
+        std::thread::spawn(move || {
+            plugins::run_plugin_inference(
+                &plugin,
+                &action_name,
+                &model_id,
+                &model_path,
+                device,
+                &src_path,
+                &out_path,
+                params,
+                cancel,
+                &tx,
+            );
+        });
+
+        Ok(Some(UiText::new("ai_removing_background")))
+    }
+
     /// Drain events from any active AI download or inference worker.
     pub(super) fn poll_ai(&mut self) -> bool {
         let mut changed = false;
@@ -324,39 +471,57 @@ impl Core {
                     device_used,
                 } => {
                     finished = true;
-                    match image::open(&output_path).map(|img| img.into_rgba8()) {
-                        Ok(rgba) => {
-                            let label = UiText::with("remove_background", [model_id]);
-                            let op = EditOperation::AiResult {
-                                label,
-                                pixels: Arc::new(rgba),
-                            };
-                            match self.editor_apply(op) {
-                                Ok(_) => {
-                                    if let Some(task) = self.state.ai_task.as_mut() {
-                                        task.running = false;
-                                        task.percent = 100;
-                                        task.stage = format!("Done ({device_used})");
-                                        task.error = None;
-                                    }
-                                    self.state.status = UiText::new("ai_remove_background_done");
-                                }
-                                Err(err) => {
-                                    if let Some(task) = self.state.ai_task.as_mut() {
-                                        task.running = false;
-                                        task.error = Some(err.message.clone());
-                                    }
-                                    self.state.status = UiText::new("ai_inference_failed");
-                                }
-                            }
+                    if let Some(qa_out) = self.ai_quick_action_output.take() {
+                        let out_name = qa_out
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("output.png")
+                            .to_owned();
+                        if let Some(task) = self.state.ai_task.as_mut() {
+                            task.running = false;
+                            task.percent = 100;
+                            task.stage = format!("Saved {out_name} ({device_used})");
+                            task.error = None;
                         }
-                        Err(error) => {
-                            if let Some(task) = self.state.ai_task.as_mut() {
-                                task.running = false;
-                                task.error =
-                                    Some(format!("cannot decode plugin output PNG: {error}"));
+                        self.state.tree_revision += 1;
+                        self.refresh_current();
+                        self.state.status = UiText::with("ai_quick_action_saved", [out_name]);
+                    } else {
+                        match image::open(&output_path).map(|img| img.into_rgba8()) {
+                            Ok(rgba) => {
+                                let label = UiText::with("remove_background", [model_id]);
+                                let op = EditOperation::AiResult {
+                                    label,
+                                    pixels: Arc::new(rgba),
+                                };
+                                match self.editor_apply(op) {
+                                    Ok(_) => {
+                                        if let Some(task) = self.state.ai_task.as_mut() {
+                                            task.running = false;
+                                            task.percent = 100;
+                                            task.stage = format!("Done ({device_used})");
+                                            task.error = None;
+                                        }
+                                        self.state.status =
+                                            UiText::new("ai_remove_background_done");
+                                    }
+                                    Err(err) => {
+                                        if let Some(task) = self.state.ai_task.as_mut() {
+                                            task.running = false;
+                                            task.error = Some(err.message.clone());
+                                        }
+                                        self.state.status = UiText::new("ai_inference_failed");
+                                    }
+                                }
                             }
-                            self.state.status = UiText::new("ai_inference_failed");
+                            Err(error) => {
+                                if let Some(task) = self.state.ai_task.as_mut() {
+                                    task.running = false;
+                                    task.error =
+                                        Some(format!("cannot decode plugin output PNG: {error}"));
+                                }
+                                self.state.status = UiText::new("ai_inference_failed");
+                            }
                         }
                     }
                 }
@@ -382,6 +547,7 @@ impl Core {
         if finished {
             self.ai_rx = None;
             self.ai_cancel = None;
+            self.ai_quick_action_output = None;
             if let Some(p) = self.ai_temp_input.take() {
                 let _ = fs::remove_file(p);
             }

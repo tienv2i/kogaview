@@ -4,7 +4,8 @@
 //! produced by Core after a command or a completed background task.
 
 use kogaview_protocol::{
-    AiModelStatus, AiPluginStatus, AiSettings, AiTaskState, Language, LayoutState, Theme, Workspace,
+    AiModelStatus, AiPluginStatus, AiQuickAction, AiSettings, AiTaskState, Language, LayoutState,
+    Theme, Workspace,
 };
 use serde::Serialize;
 
@@ -193,6 +194,8 @@ pub struct UiState {
     pub ai_plugins: Vec<AiPluginStatus>,
     /// On-demand AI model catalog and installation status.
     pub ai_models: Vec<AiModelStatus>,
+    /// Plugin-contributed Quick Actions for Browser and Viewer context menus.
+    pub quick_actions: Vec<AiQuickAction>,
     /// Active or most-recent AI background task (download or inference).
     pub ai_task: Option<AiTaskState>,
     pub busy: bool,
@@ -246,6 +249,7 @@ impl UiState {
             ai_settings: AiSettings::default(),
             ai_plugins: Vec::new(),
             ai_models: Vec::new(),
+            quick_actions: Vec::new(),
             ai_task: None,
             busy: false,
             status: UiText::new("ready"),
@@ -296,6 +300,7 @@ impl UiState {
             ai_settings: &self.ai_settings,
             ai_plugins: &self.ai_plugins,
             ai_models: &self.ai_models,
+            quick_actions: &self.quick_actions,
             ai_task: &self.ai_task,
             busy: self.busy,
             status: &self.status,
@@ -354,6 +359,7 @@ pub struct StateMeta<'a> {
     pub ai_settings: &'a AiSettings,
     pub ai_plugins: &'a [AiPluginStatus],
     pub ai_models: &'a [AiModelStatus],
+    pub quick_actions: &'a [AiQuickAction],
     pub ai_task: &'a Option<AiTaskState>,
     pub busy: bool,
     pub status: &'a UiText,

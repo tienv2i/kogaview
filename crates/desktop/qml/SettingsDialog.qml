@@ -66,7 +66,8 @@ DialogFrame {
         { key: "browser", label: qsTr("Browser"), icon: "icons/browser.svg" },
         { key: "editor", label: qsTr("Editor"), icon: "icons/editor.svg" },
         { key: "viewer", label: qsTr("Viewer"), icon: "icons/viewer.svg" },
-        { key: "ai", label: qsTr("AI"), icon: "icons/ai-rembg.svg" }
+        { key: "ai", label: qsTr("AI"), icon: "icons/ai-rembg.svg" },
+        { key: "plugins", label: qsTr("Plugins"), icon: "icons/batch.svg" }
     ]
 
     /// The panels each workspace offers, with the keys `LayoutState` uses.
@@ -811,6 +812,7 @@ DialogFrame {
                             }
                             Label {
                                 text: (modelData.installed ? qsTr("Installed") : qsTr("Not downloaded"))
+                                      + " · " + (modelData.tier || "general")
                                       + " · " + dialog.theme.formatBytes(modelData.sizeBytes || 0)
                                       + (modelData.customPath ? " (" + qsTr("Custom file") + ")" : "")
                                 color: modelData.installed ? dialog.theme.accent : dialog.theme.textMuted
@@ -845,29 +847,79 @@ DialogFrame {
             }
         }
 
+        // End of AI page
+    }
+
+    // -------------------------------------------------- Plugins
+    ColumnLayout {
+        objectName: "settingsPluginsPage"
+        Layout.fillWidth: true
+        spacing: 10
+        visible: dialog.section === "plugins"
+
         FormSection {
             theme: dialog.theme
-            title: qsTr("Plugins")
+            title: qsTr("Installed & discovered plugins")
             Layout.fillWidth: true
+
+            Label {
+                text: qsTr("Plugins live under $XDG_DATA_HOME/kogaview/plugins/ with a manifest.json declaring capabilities and Quick Actions. Plugins are never loaded at startup.")
+                color: dialog.theme.textMuted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
 
             Repeater {
                 model: dialog.aiPlugins || []
-                delegate: RowLayout {
+                delegate: Rectangle {
                     required property var modelData
                     Layout.fillWidth: true
-                    spacing: 8
-                    Label {
-                        text: modelData.name + " v" + modelData.version
-                        color: dialog.theme.text
-                        font.pixelSize: 12
-                        Layout.fillWidth: true
-                    }
-                    Label {
-                        text: modelData.available
-                              ? qsTr("Ready")
-                              : qsTr("Not built (just build-plugin-rembg)")
-                        color: modelData.available ? dialog.theme.accent : dialog.theme.textMuted
-                        font.pixelSize: 11
+                    implicitHeight: pluginCardCol.implicitHeight + 16
+                    radius: dialog.theme.radius
+                    color: dialog.theme.surfaceAlt
+                    border.width: 1
+                    border.color: dialog.theme.border
+
+                    ColumnLayout {
+                        id: pluginCardCol
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Label {
+                                text: modelData.name + " v" + modelData.version
+                                color: dialog.theme.text
+                                font.pixelSize: 13
+                                font.bold: true
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: modelData.available
+                                      ? qsTr("Ready")
+                                      : qsTr("Not built (just build-plugin-rembg)")
+                                color: modelData.available ? dialog.theme.accent : dialog.theme.textMuted
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        Label {
+                            text: qsTr("ID: %1").arg(modelData.id)
+                            color: dialog.theme.textMuted
+                            font.pixelSize: 11
+                        }
+
+                        Label {
+                            visible: (modelData.quickActions || []).length > 0
+                            text: qsTr("Quick actions: %1").arg((modelData.quickActions || []).join(", "))
+                            color: dialog.theme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
                     }
                 }
             }
