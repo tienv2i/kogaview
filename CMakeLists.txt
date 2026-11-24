@@ -116,11 +116,14 @@ target_link_libraries(kogaview PRIVATE PkgConfig::DAV1D)
 # the QML module's `/qt/qml` tree, which would otherwise own any resource under
 # it.
 if(KOGAVIEW_QM_FILES)
-  get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
-  get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
-  find_program(KOGAVIEW_RCC rcc HINTS "${_qt_bin_dir}" NO_DEFAULT_PATH)
+  if(TARGET Qt6::rcc)
+    get_target_property(KOGAVIEW_RCC Qt6::rcc IMPORTED_LOCATION)
+  endif()
   if(NOT KOGAVIEW_RCC)
-    find_program(KOGAVIEW_RCC rcc)
+    get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
+    find_program(KOGAVIEW_RCC NAMES rcc rcc-qt6
+      HINTS "${_qt_bin_dir}" "/usr/lib/qt6" "/usr/lib/qt6/libexec" "/usr/lib64/qt6/libexec" "/usr/lib/qt6/bin")
   endif()
   set(KOGAVIEW_TRANSLATIONS_RCC "${CMAKE_CURRENT_BINARY_DIR}/i18n/kogaview_translations.rcc")
   set(KOGAVIEW_QM_QRC "${CMAKE_CURRENT_BINARY_DIR}/i18n/kogaview_translations.qrc")
