@@ -351,6 +351,10 @@ Item {
             if (target >= 0) view.openImageAt(target)
             return
         }
+        if (view.displayMode === "webtoon") {
+            webtoonView.stepPage(delta)
+            return
+        }
         view.command({ type: delta < 0 ? "viewer_previous" : "viewer_next" });
     }
 
@@ -794,12 +798,19 @@ Item {
                     zoom: view.zoom
                     offsetX: view.offsetX
                     offsetY: view.offsetY
+                    webtoonMode: view.displayMode === "webtoon"
+                    webtoonItem: webtoonView
+                    webtoonScrollY: webtoonView.scrollY
+                    webtoonZoom: webtoonView.widthZoom
+                    webtoonPanX: webtoonView.panX
                     aiTask: (view.state && view.state.aiTask) || null
                     savedTranslation: (view.state && view.state.viewerSavedTranslation) || null
-                    onTranslateRequested: function(sourceLang, targetLang, region, ocrEngine) {
+                    onTranslateRequested: function(targetPath, sourceLang, targetLang, region, ocrEngine) {
+                        var effectivePath = targetPath || view.currentPath
+                        if (!effectivePath) return
                         var cmd = {
                             type: "viewer_translate",
-                            path: view.currentPath,
+                            path: effectivePath,
                             source_lang: sourceLang,
                             target_lang: targetLang,
                             ocr_engine: ocrEngine || "tesseract"
@@ -807,11 +818,12 @@ Item {
                         if (region) cmd.region = region
                         view.command(cmd)
                     }
-                    onSaveTranslationRequested: function(blocks) {
-                        if (!view.currentPath) return
+                    onSaveTranslationRequested: function(targetPath, blocks) {
+                        var effectivePath = targetPath || view.currentPath
+                        if (!effectivePath) return
                         view.command({
                             type: "viewer_save_translation",
-                            path: view.currentPath,
+                            path: effectivePath,
                             blocks: blocks || []
                         })
                     }

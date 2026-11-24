@@ -23,11 +23,16 @@ Item {
     property real zoom: 1.0
     property real offsetX: 0
     property real offsetY: 0
+    property bool webtoonMode: false
+    property Item webtoonItem: null
+    property real webtoonScrollY: 0
+    property real webtoonZoom: 1.0
+    property real webtoonPanX: 0
     property var aiTask: null
     property var savedTranslation: null
 
-    signal translateRequested(string sourceLang, string targetLang, var region, string ocrEngine)
-    signal saveTranslationRequested(var blocks)
+    signal translateRequested(string targetPath, string sourceLang, string targetLang, var region, string ocrEngine)
+    signal saveTranslationRequested(string targetPath, var blocks)
     signal deleteTranslationRequested()
     signal copyTextRequested(string text)
     signal cancelRequested()
@@ -49,7 +54,9 @@ Item {
     property var bubblesByPath: ({})
     property var currentBubbles: []
     property var latestResult: null
+    property string lastTargetPath: ""
     property var lastRegion: null
+    property int _replacingBubbleIndex: -1
     property bool cardVisible: false
     property string _lastResultKey: ""
 
@@ -120,7 +127,28 @@ Item {
         map[overlay.imagePath] = list
         overlay.bubblesByPath = map
         overlay.currentBubbles = list
-        overlay.saveTranslationRequested(list)
+        overlay.saveTranslationRequested(overlay.imagePath, list)
+    }
+
+    function retryBubble(idx) {
+        if (overlay.busy) return
+        var list = overlay.currentBubbles
+        if (idx < 0 || idx >= list.length) return
+        var b = list[idx]
+        var targetPath = b.pagePath || overlay.imagePath
+        overlay._replacingBubbleIndex = idx
+        overlay.lastTargetPath = targetPath
+        overlay.lastRegion = [b.x, b.y, b.w, b.h]
+        overlay._lastResultKey = ""
+        overlay.translateRequested(targetPath, overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
+    }
+
+    function retryLast() {
+        if (overlay.busy) return
+        var targetPath = overlay.lastTargetPath || overlay.imagePath
+        if (!targetPath) return
+        overlay._lastResultKey = ""
+        overlay.translateRequested(targetPath, overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
     }
 
     function moveBubble(idx, newImgX, newImgY) {
@@ -139,7 +167,7 @@ Item {
         map[overlay.imagePath] = list
         overlay.bubblesByPath = map
         overlay.currentBubbles = list
-        overlay.saveTranslationRequested(list)
+        overlay.saveTranslationRequested(overlay.imagePath, list)
     }
 
     onImagePathChanged: overlay.syncBubblesForPath()
@@ -156,23 +184,33 @@ Item {
         var task = overlay.aiTask
         if (!task || task.running || !task.translation) return
         var tr = task.translation
-        if (tr.path !== overlay.imagePath) return
-        var key = tr.path + "|" + (tr.originalText || "") + "|" + (tr.translatedText || "") + "|" + (tr.blocks ? tr.blocks.length : 0)
+        var trPath = tr.path || overlay.imagePath
+        var key = trPath + "|" + (tr.originalText || "") + "|" + (tr.translatedText || "") + "|" + (tr.blocks ? tr.blocks.length : 0)
         if (key === overlay._lastResultKey) return
         overlay._lastResultKey = key
 
-        var existing = overlay.currentBubbles.slice()
+        var existing = (overlay.bubblesByPath[trPath] || []).slice()
         var incoming = tr.blocks || []
-        for (var i = 0; i < incoming.length; ++i) {
-            existing.push(incoming[i])
+        if (overlay._replacingBubbleIndex >= 0
+                && overlay._replacingBubbleIndex < existing.length
+                && incoming.length > 0) {
+            existing[overlay._replacingBubbleIndex] = incoming[0]
+            overlay._replacingBubbleIndex = -1
+        } else {
+            overlay._replacingBubbleIndex = -1
+            for (var i = 0; i < incoming.length; ++i) {
+                existing.push(incoming[i])
+            }
         }
         var map = overlay.bubblesByPath
-        map[overlay.imagePath] = existing
+        map[trPath] = existing
         overlay.bubblesByPath = map
-        overlay.currentBubbles = existing
+        if (trPath === overlay.imagePath) {
+            overlay.currentBubbles = existing
+        }
         overlay.latestResult = tr
         overlay.cardVisible = true
-        overlay.saveTranslationRequested(existing)
+        overlay.saveTranslationRequested(trPath, existing)
     }
 
     // --------------------------------------------------- Drag-to-select region
@@ -211,7 +249,20 @@ Item {
         onReleased: {
             if (!overlay.dragging) return
             overlay.dragging = false
-            if (overlay.selW < 8 || overlay.selH < 8 || !overlay.canvasItem) return
+            if (overlay.selW < 8 || overlay.selH < 8) return
+            overlay._replacingBubbleIndex = -1
+            if (overlay.webtoonMode && overlay.webtoonItem) {
+                var hit = overlay.webtoonItem.mapOverlayRectToPage(
+                    overlay, overlay.selX, overlay.selY, overlay.selW, overlay.selH
+                )
+                if (!hit || !hit.path || !hit.region) return
+                overlay.lastTargetPath = hit.path
+                overlay.lastRegion = hit.region
+                overlay._lastResultKey = ""
+                overlay.translateRequested(hit.path, overlay.sourceCode(), overlay.targetCode(), hit.region, overlay.engineCode())
+                return
+            }
+            if (!overlay.canvasItem) return
             var p1 = overlay.canvasItem.mapFromItem(overlay, overlay.selX, overlay.selY)
             var p2 = overlay.canvasItem.mapFromItem(overlay, overlay.selX + overlay.selW, overlay.selY + overlay.selH)
             var x = Math.round(Math.min(p1.x, p2.x))
@@ -219,8 +270,10 @@ Item {
             var w = Math.round(Math.abs(p2.x - p1.x))
             var h = Math.round(Math.abs(p2.y - p1.y))
             if (w < 4 || h < 4) return
+            overlay.lastTargetPath = overlay.imagePath
             overlay.lastRegion = [x, y, w, h]
-            overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
+            overlay._lastResultKey = ""
+            overlay.translateRequested(overlay.imagePath, overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
         }
         onCanceled: overlay.dragging = false
     }
@@ -252,16 +305,25 @@ Item {
             property bool moving: false
 
             readonly property var mapped: {
+                if (overlay.webtoonMode && overlay.webtoonItem) {
+                    var _wy = overlay.webtoonScrollY
+                    var _wz = overlay.webtoonZoom
+                    var _wx = overlay.webtoonPanX
+                    return overlay.webtoonItem.mapPageRectToOverlay(
+                        overlay, overlay.imagePath, modelData.x, modelData.y, modelData.w, modelData.h
+                    )
+                }
                 var _z = overlay.zoom
                 var _ox = overlay.offsetX
                 var _oy = overlay.offsetY
-                if (!overlay.canvasItem) return { x: 0, y: 0, w: 0, h: 0 }
+                if (!overlay.canvasItem) return { visible: false, x: 0, y: 0, w: 0, h: 0 }
                 var _cx = overlay.canvasItem.x
                 var _cy = overlay.canvasItem.y
                 var _cs = overlay.canvasItem.scale
                 var tl = overlay.canvasItem.mapToItem(overlay, modelData.x, modelData.y)
                 var br = overlay.canvasItem.mapToItem(overlay, modelData.x + modelData.w, modelData.y + modelData.h)
                 return {
+                    visible: true,
                     x: Math.min(tl.x, br.x),
                     y: Math.min(tl.y, br.y),
                     w: Math.max(96, Math.abs(br.x - tl.x)),
@@ -269,6 +331,7 @@ Item {
                 }
             }
 
+            visible: mapped.visible !== false
             x: mapped.x + dragDx
             y: mapped.y + dragDy
             width: mapped.w
@@ -293,7 +356,7 @@ Item {
                 MouseArea {
                     id: bubbleDragArea
                     anchors.fill: parent
-                    anchors.rightMargin: 28
+                    anchors.rightMargin: 48
                     acceptedButtons: Qt.LeftButton
                     preventStealing: true
                     cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
@@ -322,7 +385,14 @@ Item {
                         var dy = bubbleRect.dragDy
                         bubbleRect.dragDx = 0
                         bubbleRect.dragDy = 0
-                        if ((Math.abs(dx) > 1 || Math.abs(dy) > 1) && overlay.canvasItem) {
+                        if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return
+                        if (overlay.webtoonMode && overlay.webtoonItem) {
+                            var wp = overlay.webtoonItem.mapOverlayPointToPage(
+                                overlay, overlay.imagePath,
+                                bubbleRect.mapped.x + dx, bubbleRect.mapped.y + dy
+                            )
+                            if (wp) overlay.moveBubble(index, wp.x, wp.y)
+                        } else if (overlay.canvasItem) {
                             var newTopLeft = overlay.canvasItem.mapFromItem(
                                 overlay,
                                 bubbleRect.mapped.x + dx,
@@ -348,7 +418,35 @@ Item {
                     opacity: 0.8
                 }
 
+                // Per-bubble Reload / Retry OCR & translate button
                 Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: removeBubbleBtn.left
+                    anchors.rightMargin: 4
+                    width: 18
+                    height: 18
+                    radius: 9
+                    z: 2
+                    color: retryHover.hovered ? overlay.theme.accent : "transparent"
+                    HoverHandler { id: retryHover }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "↻"
+                        color: retryHover.hovered ? overlay.theme.accentText : overlay.theme.textMuted
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        enabled: !overlay.busy
+                        onClicked: overlay.retryBubble(index)
+                    }
+                }
+
+                Rectangle {
+                    id: removeBubbleBtn
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
                     anchors.rightMargin: 4
@@ -621,8 +719,11 @@ Item {
                     text: overlay.isOcrMode ? qsTr("Scan page") : qsTr("Translate page")
                     enabled: !overlay.busy && !!overlay.imagePath
                     onClicked: {
+                        overlay._replacingBubbleIndex = -1
+                        overlay.lastTargetPath = overlay.imagePath
                         overlay.lastRegion = null
-                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), null, overlay.engineCode())
+                        overlay._lastResultKey = ""
+                        overlay.translateRequested(overlay.imagePath, overlay.sourceCode(), overlay.targetCode(), null, overlay.engineCode())
                     }
                 }
 
@@ -882,7 +983,8 @@ Item {
 
             // Divider before actions
             Rectangle {
-                visible: !overlay.busy && !!overlay.latestResult
+                visible: !overlay.busy && (!!overlay.latestResult
+                         || !!(overlay.aiTask && overlay.aiTask.kind === "translate" && overlay.aiTask.error))
                 Layout.fillWidth: true
                 height: 1
                 color: overlay.theme.border
@@ -892,10 +994,12 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
-                visible: !overlay.busy && !!overlay.latestResult
+                visible: !overlay.busy && (!!overlay.latestResult
+                         || !!(overlay.aiTask && overlay.aiTask.kind === "translate" && overlay.aiTask.error))
 
                 PanelAction {
                     theme: overlay.theme
+                    visible: !!overlay.latestResult
                     text: qsTr("Copy")
                     onClicked: {
                         if (!overlay.latestResult) return
@@ -904,14 +1008,22 @@ Item {
                     }
                 }
 
+                PanelAction {
+                    objectName: "translateRetryButton"
+                    theme: overlay.theme
+                    text: qsTr("Retry")
+                    onClicked: overlay.retryLast()
+                }
+
                 // In OCR-only mode, allow 1-click forwarding of the scanned region to Google Translate
                 PanelAction {
                     theme: overlay.theme
-                    visible: !(overlay.latestResult && overlay.latestResult.translatedText)
+                    visible: !!overlay.latestResult && !(overlay.latestResult.translatedText)
                     text: qsTr("Translate this")
                     onClicked: {
                         overlay.overlayMode = "translate"
-                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
+                        overlay._lastResultKey = ""
+                        overlay.translateRequested(overlay.lastTargetPath || overlay.imagePath, overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
                     }
                 }
 

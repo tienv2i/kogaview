@@ -44,6 +44,116 @@ Item {
     /// Horizontal pan offset when `widthZoom > 1.0`.
     property real panX: 0
     property bool _syncingFromExternal: false
+    readonly property real scrollY: strip.contentY
+
+    /// Map a selection rectangle `(sx, sy, sw, sh)` in `overlayItem` coordinates
+    /// to `{ path, region: [x, y, w, h] }` in natural document pixels of the
+    /// exact page under the selection center. Returns `null` if no page matches.
+    function mapOverlayRectToPage(overlayItem, sx, sy, sw, sh) {
+        if (!overlayItem || sw < 4 || sh < 4) return null
+        var mid = strip.mapFromItem(overlayItem, sx + sw / 2, sy + sh / 2)
+        var slot = strip.itemAt(mid.x, mid.y + strip.contentY)
+        if (!slot || !slot.modelData) return null
+        var path = slot.modelData
+        var natW = 0
+        var natH = 0
+        if (typeof Platform !== "undefined" && Platform && Platform.imageSize) {
+            var sz = Platform.imageSize(path)
+            if (sz && sz.width > 0 && sz.height > 0) {
+                natW = sz.width
+                natH = sz.height
+            }
+        }
+        if (natW <= 0 || natH <= 0) return null
+        var box = slot.pageBoxItem
+        if (!box || box.width <= 0 || box.height <= 0) return null
+
+        var p1 = box.mapFromItem(overlayItem, sx, sy)
+        var p2 = box.mapFromItem(overlayItem, sx + sw, sy + sh)
+        var bx1 = Math.max(0, Math.min(box.width, Math.min(p1.x, p2.x)))
+        var by1 = Math.max(0, Math.min(box.height, Math.min(p1.y, p2.y)))
+        var bx2 = Math.max(0, Math.min(box.width, Math.max(p1.x, p2.x)))
+        var by2 = Math.max(0, Math.min(box.height, Math.max(p1.y, p2.y)))
+        var bw = bx2 - bx1
+        var bh = by2 - by1
+        if (bw < 4 || bh < 4) return null
+
+        var scaleX = natW / box.width
+        var scaleY = natH / box.height
+        return {
+            path: path,
+            region: [
+                Math.round(bx1 * scaleX),
+                Math.round(by1 * scaleY),
+                Math.max(4, Math.round(bw * scaleX)),
+                Math.max(4, Math.round(bh * scaleY))
+            ]
+        }
+    }
+
+    /// Map a natural-pixel rectangle `[rx, ry, rw, rh]` on `pagePath` into
+    /// `overlayItem` coordinates. Returns `{ visible, x, y, w, h }`.
+    function mapPageRectToOverlay(overlayItem, pagePath, rx, ry, rw, rh) {
+        if (!overlayItem || !pagePath) return { visible: false, x: 0, y: 0, w: 0, h: 0 }
+        var natW = 0
+        var natH = 0
+        if (typeof Platform !== "undefined" && Platform && Platform.imageSize) {
+            var sz = Platform.imageSize(pagePath)
+            if (sz && sz.width > 0 && sz.height > 0) {
+                natW = sz.width
+                natH = sz.height
+            }
+        }
+        if (natW <= 0 || natH <= 0) return { visible: false, x: 0, y: 0, w: 0, h: 0 }
+
+        var children = strip.contentItem ? strip.contentItem.children : []
+        for (var i = 0; i < children.length; ++i) {
+            var child = children[i]
+            if (child && child.visible && child.modelData === pagePath && child.pageBoxItem) {
+                var box = child.pageBoxItem
+                if (box.width <= 0 || box.height <= 0) continue
+                var sx = box.width / natW
+                var sy = box.height / natH
+                var tl = box.mapToItem(overlayItem, rx * sx, ry * sy)
+                var br = box.mapToItem(overlayItem, (rx + rw) * sx, (ry + rh) * sy)
+                return {
+                    visible: true,
+                    x: Math.min(tl.x, br.x),
+                    y: Math.min(tl.y, br.y),
+                    w: Math.max(96, Math.abs(br.x - tl.x)),
+                    h: Math.max(48, Math.abs(br.y - tl.y))
+                }
+            }
+        }
+        return { visible: false, x: 0, y: 0, w: 0, h: 0 }
+    }
+
+    /// Map an overlay screen point back to natural document coordinates on `pagePath`
+    /// (used when dragging a bubble in Webtoon mode).
+    function mapOverlayPointToPage(overlayItem, pagePath, ox, oy) {
+        if (!overlayItem || !pagePath) return null
+        var natW = 0
+        var natH = 0
+        if (typeof Platform !== "undefined" && Platform && Platform.imageSize) {
+            var sz = Platform.imageSize(pagePath)
+            if (sz && sz.width > 0 && sz.height > 0) {
+                natW = sz.width
+                natH = sz.height
+            }
+        }
+        if (natW <= 0 || natH <= 0) return null
+        var children = strip.contentItem ? strip.contentItem.children : []
+        for (var i = 0; i < children.length; ++i) {
+            var child = children[i]
+            if (child && child.visible && child.modelData === pagePath && child.pageBoxItem) {
+                var box = child.pageBoxItem
+                if (box.width <= 0 || box.height <= 0) continue
+                var pt = box.mapFromItem(overlayItem, ox, oy)
+                return { x: pt.x * (natW / box.width), y: pt.y * (natH / box.height) }
+            }
+        }
+        return null
+    }
 
     /// Median natural width sampled from up to the first 20 images via
     /// header-only `Platform.imageSize(path)` (takes < 2 ms, zero full decode).
@@ -149,9 +259,20 @@ Item {
 
     function jumpToPage(index) {
         if (index < 0 || index >= webtoon.images.length) return
+        scrollGlide.stop()
         webtoon._syncingFromExternal = true
         strip.positionViewAtIndex(index, ListView.Beginning)
         externalSyncGuard.restart()
+    }
+
+    function stepPage(delta) {
+        var total = (webtoon.images || []).length
+        if (total === 0) return
+        var base = webtoon.currentIndex >= 0 ? webtoon.currentIndex : 0
+        var next = Math.max(0, Math.min(total - 1, base + delta))
+        if (next === base) return
+        webtoon.jumpToPage(next)
+        webtoon.pageCentered(next)
     }
 
     onImagesChanged: {
@@ -198,7 +319,7 @@ Item {
         id: scrollGlide
         target: strip
         property: "contentY"
-        duration: 130
+        duration: 95
         easing.type: Easing.OutCubic
     }
 
@@ -210,10 +331,11 @@ Item {
         spacing: webtoon.pageGap
         clip: true
         reuseItems: true
-        cacheBuffer: Math.max(800, Math.round(strip.height * 1.2))
+        cacheBuffer: Math.max(1200, Math.round(strip.height * 1.6))
         boundsBehavior: Flickable.StopAtBounds
         model: webtoon.images
-        interactive: !webtoon.inputBlocked
+        // Hand-drag is driven by `webtoonPanHandler` below for crisp 2D desktop mouse scrolling.
+        interactive: false
 
         onContentYChanged: {
             if (!webtoon._syncingFromExternal) centerSyncTimer.restart()
@@ -227,6 +349,7 @@ Item {
             id: pageSlot
             required property int index
             required property string modelData
+            readonly property Item pageBoxItem: pageBox
 
             readonly property real aspect: webtoon.probeAspect(modelData)
             readonly property real slotWidth:
@@ -241,6 +364,7 @@ Item {
             height: pageSlot.slotHeight
 
             Rectangle {
+                id: pageBox
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.horizontalCenterOffset: webtoon.panX
                 y: 0
@@ -283,11 +407,13 @@ Item {
                 else if (dir < 0) webtoon.zoomOut()
                 return
             }
+            // Fast scrolling for long manga chapters; Shift+Wheel scrolls 2x faster.
+            var step = (event.modifiers & Qt.ShiftModifier) ? 900 : 460
             var dy = 0
             if (event.angleDelta.y !== 0) {
-                dy = -(event.angleDelta.y / 120) * 260
+                dy = -(event.angleDelta.y / 120) * step
             } else if (event.pixelDelta.y !== 0) {
-                dy = -event.pixelDelta.y * 1.5
+                dy = -event.pixelDelta.y * 2.2
             }
             if (dy !== 0) webtoon.scrollBy(dy)
 
@@ -298,20 +424,33 @@ Item {
         }
     }
 
+    // 2D mouse drag-to-scroll (up/down always + horizontal pan when zoomed)
     DragHandler {
+        id: webtoonPanHandler
         objectName: "webtoonPanHandler"
-        enabled: !webtoon.inputBlocked && webtoon.widthZoom > 1.0
+        enabled: !webtoon.inputBlocked
         target: null
         acceptedDevices: PointerDevice.AllDevices
         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+        cursorShape: active ? Qt.ClosedHandCursor : Qt.OpenHandCursor
         property real startPanX: 0
+        property real startContentY: 0
         onActiveChanged: {
-            if (active) startPanX = webtoon.panX
+            if (active) {
+                scrollGlide.stop()
+                startPanX = webtoon.panX
+                startContentY = strip.contentY
+            }
         }
         onTranslationChanged: {
             if (!active) return
-            webtoon.panX = Math.max(-webtoon.maxPanX,
-                                    Math.min(webtoon.maxPanX, startPanX + translation.x))
+            var minY = strip.originY
+            var maxY = minY + Math.max(0, strip.contentHeight - strip.height)
+            strip.contentY = Math.max(minY, Math.min(maxY, startContentY - translation.y))
+            if (webtoon.widthZoom > 1.0) {
+                webtoon.panX = Math.max(-webtoon.maxPanX,
+                                        Math.min(webtoon.maxPanX, startPanX + translation.x))
+            }
         }
     }
 
