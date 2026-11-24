@@ -1210,6 +1210,166 @@
 <context>
     <name>EditorView</name>
     <message>
+        <source>Apply to</source>
+        <translation>Áp dụng cho</translation>
+    </message>
+    <message>
+        <source>Active layer</source>
+        <translation>Layer đang chọn</translation>
+    </message>
+    <message>
+        <source>Whole image</source>
+        <translation>Toàn ảnh</translation>
+    </message>
+    <message>
+        <source>New layer</source>
+        <translation>Layer mới</translation>
+    </message>
+    <message>
+        <source>New image… (Ctrl+N)</source>
+        <translation>Ảnh mới… (Ctrl+N)</translation>
+    </message>
+    <message>
+        <source>Paste image as new layer (Ctrl+V)</source>
+        <translation>Dán ảnh vào layer mới (Ctrl+V)</translation>
+    </message>
+    <message>
+        <source>Brush (B)</source>
+        <translation>Cọ vẽ (B)</translation>
+    </message>
+    <message>
+        <source>Eraser (E)</source>
+        <translation>Tẩy (E)</translation>
+    </message>
+    <message>
+        <source>Fit to canvas</source>
+        <translation>Thu vừa khung vẽ</translation>
+    </message>
+    <message>
+        <source>Color picker / Eyedropper (I)</source>
+        <translation>Lấy mã màu (I)</translation>
+    </message>
+    <message>
+        <source>Select (M)</source>
+        <translation>Chọn vùng (M)</translation>
+    </message>
+    <message>
+        <source>Shape</source>
+        <translation>Hình dạng</translation>
+    </message>
+    <message>
+        <source>Rect</source>
+        <translation>Chữ nhật</translation>
+    </message>
+    <message>
+        <source>Ellipse</source>
+        <translation>Hình elip</translation>
+    </message>
+    <message>
+        <source>Lasso</source>
+        <translation>Tự do</translation>
+    </message>
+    <message>
+        <source>Mode</source>
+        <translation>Chế độ</translation>
+    </message>
+    <message>
+        <source>Replace</source>
+        <translation>Thay thế</translation>
+    </message>
+    <message>
+        <source>Add</source>
+        <translation>Thêm</translation>
+    </message>
+    <message>
+        <source>Subtract</source>
+        <translation>Trừ bớt</translation>
+    </message>
+    <message>
+        <source>Feather</source>
+        <translation>Làm mềm biên</translation>
+    </message>
+    <message>
+        <source>Invert</source>
+        <translation>Đảo ngược</translation>
+    </message>
+    <message>
+        <source>Fill</source>
+        <translation>Đổ màu</translation>
+    </message>
+    <message>
+        <source>To new layer</source>
+        <translation>Tách ra layer mới</translation>
+    </message>
+    <message>
+        <source>Magic Wand</source>
+        <translation>Đũa thần</translation>
+    </message>
+    <message>
+        <source>Tolerance</source>
+        <translation>Dung sai</translation>
+    </message>
+    <message>
+        <source>Contiguous</source>
+        <translation>Liên tục</translation>
+    </message>
+    <message>
+        <source>Sample all layers</source>
+        <translation>Lấy mẫu mọi lớp</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Sao chép</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>Cắt</translation>
+    </message>
+    <message>
+        <source>Image size</source>
+        <translation>Kích thước ảnh</translation>
+    </message>
+    <message>
+        <source>Image size — resize or canvas size</source>
+        <translation>Kích thước ảnh — co giãn ảnh hoặc khung vẽ</translation>
+    </message>
+    <message>
+        <source>Transform — move, scale, rotate and flip</source>
+        <translation>Biến đổi — di chuyển, co giãn, xoay và lật</translation>
+    </message>
+    <message>
+        <source>Selection</source>
+        <translation>Vùng chọn</translation>
+    </message>
+    <message>
+        <source>Transforming active selection</source>
+        <translation>Đang biến đổi vùng chọn hiện tại</translation>
+    </message>
+    <message>
+        <source>Shift: ratio / 15° · Alt: center · Arrows: nudge</source>
+        <translation>Shift: tỷ lệ / 15° · Alt: từ tâm · Mũi tên: nhích 1 px</translation>
+    </message>
+    <message>
+        <source>Keep aspect ratio</source>
+        <translation>Giữ tỷ lệ khung hình</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>Dán</translation>
+    </message>
+    <message>
+        <source>Rename</source>
+        <translation>Đổi tên</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>Chọn tất cả</translation>
+    </message>
+    <message>
+        <source>Deselect</source>
+        <translation>Bỏ chọn</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="4173"/>
         <source>Canvas size</source>
         <translation>Kích thước khung vẽ</translation>
@@ -1512,6 +1672,11 @@
         <location filename="../crates/desktop/qml/EditorView.qml" line="4579"/>
         <source>Caption &amp; tags</source>
         <translation>Mô tả &amp; thẻ</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="6660"/>
+        <source>Layers</source>
+        <translation>Lớp (Layers)</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="5158"/>
@@ -2273,6 +2438,90 @@
         <translation>Thay đổi chưa lưu</translation>
     </message>
     <message>
+        <source>Save multi-layer document</source>
+        <translation>Lưu tài liệu nhiều layer</translation>
+    </message>
+    <message>
+        <source>This document has %1 layers. Saving to a flat image format will merge all layers into one. Save as OpenRaster (.ora) to keep all layers editable.</source>
+        <translation>Tài liệu này có %1 layer. Lưu ra định dạng ảnh phẳng sẽ gộp toàn bộ layer thành một ảnh duy nhất. Hãy lưu định dạng OpenRaster (.ora) để giữ nguyên các layer.</translation>
+    </message>
+    <message>
+        <source>Flatten &amp; Save</source>
+        <translation>Gộp &amp; Lưu</translation>
+    </message>
+    <message>
+        <source>Save as .ora</source>
+        <translation>Lưu dạng .ora</translation>
+    </message>
+    <message>
+        <source>New image</source>
+        <translation>Ảnh mới</translation>
+    </message>
+    <message>
+        <source>Clipboard does not contain an image</source>
+        <translation>Bảng nhớ tạm không có ảnh</translation>
+    </message>
+    <message>
+        <source>Preset</source>
+        <translation>Mẫu có sẵn</translation>
+    </message>
+    <message>
+        <source>Clipboard (%1 × %2)</source>
+        <translation>Bảng nhớ tạm (%1 × %2)</translation>
+    </message>
+    <message>
+        <source>Custom</source>
+        <translation>Tùy chỉnh</translation>
+    </message>
+    <message>
+        <source>Width</source>
+        <translation>Rộng</translation>
+    </message>
+    <message>
+        <source>Height</source>
+        <translation>Cao</translation>
+    </message>
+    <message>
+        <source>Background</source>
+        <translation>Nền</translation>
+    </message>
+    <message>
+        <source>White</source>
+        <translation>Trắng</translation>
+    </message>
+    <message>
+        <source>Transparent</source>
+        <translation>Trong suốt</translation>
+    </message>
+    <message>
+        <source>Black</source>
+        <translation>Đen</translation>
+    </message>
+    <message>
+        <source>Create</source>
+        <translation>Tạo</translation>
+    </message>
+    <message>
+        <source>Pasted image is larger than canvas</source>
+        <translation>Ảnh dán lớn hơn khung vẽ</translation>
+    </message>
+    <message>
+        <source>The clipboard image (%1 × %2) is larger than the canvas (%3 × %4). How would you like to paste it?</source>
+        <translation>Ảnh trong bảng nhớ tạm (%1 × %2) lớn hơn khung vẽ (%3 × %4). Bạn muốn dán theo cách nào?</translation>
+    </message>
+    <message>
+        <source>Keep original</source>
+        <translation>Giữ nguyên gốc</translation>
+    </message>
+    <message>
+        <source>Expand canvas</source>
+        <translation>Mở rộng khung vẽ</translation>
+    </message>
+    <message>
+        <source>Fit to canvas</source>
+        <translation>Thu vừa khung vẽ</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/Main.qml" line="1678"/>
         <source>The editor has changes that are not saved to a file. Save them first?</source>
         <translation>Trình chỉnh sửa có thay đổi chưa lưu vào tệp. Lưu lại trước không?</translation>
@@ -2840,6 +3089,36 @@
         <translation>Thay đổi tăng tốc phần cứng sẽ có hiệu lực sau khi khởi động lại.</translation>
     </message>
     <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="568"/>
+        <source>Recovery &amp; Reset</source>
+        <translation>Khôi phục &amp; Đặt lại</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="573"/>
+        <source>Safe Mode is active: running with in-memory factory defaults (plugins &amp; GPU disabled; config.json is not modified).</source>
+        <translation>Đang chạy Chế độ An toàn (Safe Mode): dùng cấu hình mặc định trong bộ nhớ (tắt plugin &amp; GPU; không ghi đè config.json).</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="588"/>
+        <source>Reset layout</source>
+        <translation>Đặt lại bố cục</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="599"/>
+        <source>Click again to confirm reset</source>
+        <translation>Bấm lần nữa để xác nhận đặt lại</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="600"/>
+        <source>Factory reset all</source>
+        <translation>Khôi phục mặc định gốc</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/SettingsDialog.qml" line="613"/>
+        <source>Resets back up your current config to config.json.bak. CLI flags: --safe-mode, --reset-layout, --reset-config.</source>
+        <translation>Thao tác đặt lại sẽ tự sao lưu cấu hình hiện tại ra config.json.bak. Cờ CLI: --safe-mode, --reset-layout, --reset-config.</translation>
+    </message>
+    <message>
         <location filename="../crates/desktop/qml/SettingsDialog.qml" line="783"/>
         <source>Caption</source>
         <translation>Caption</translation>
@@ -3122,6 +3401,22 @@
         <location filename="../crates/desktop/qml/UiLines.qml" line="29"/>
         <source>Ready</source>
         <translation>Sẵn sàng</translation>
+    </message>
+    <message>
+        <source>Canvas background</source>
+        <translation>Nền khung vẽ</translation>
+    </message>
+    <message>
+        <source>Color adjustment curves</source>
+        <translation>Đường cong chỉnh màu (Curves)</translation>
+    </message>
+    <message>
+        <source>HSV adjustment</source>
+        <translation>Điều chỉnh HSV</translation>
+    </message>
+    <message>
+        <source>Color balance</source>
+        <translation>Cân bằng màu</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/UiLines.qml" line="30"/>
@@ -3754,6 +4049,122 @@
         <location filename="../crates/desktop/qml/UiLines.qml" line="228"/>
         <source>Mask refined</source>
         <translation>Đã tinh chỉnh mask</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="229"/>
+        <source>Safe Mode active (factory defaults, plugins &amp; GPU disabled)</source>
+        <translation>Đang chạy Safe Mode (cấu hình mặc định, tắt plugin &amp; GPU)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="230"/>
+        <source>Settings reset to factory defaults (backup saved)</source>
+        <translation>Đã khôi phục cấu hình mặc định (đã lưu bản sao lưu)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="231"/>
+        <source>Layout reset to defaults</source>
+        <translation>Đã đặt lại bố cục về mặc định</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="232"/>
+        <source>History updated</source>
+        <translation>Đã chuyển bước lịch sử</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="233"/>
+        <source>Add layer %1</source>
+        <translation>Thêm layer %1</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="234"/>
+        <source>Duplicate layer</source>
+        <translation>Nhân đôi layer</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="235"/>
+        <source>Delete layer</source>
+        <translation>Xoá layer</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="236"/>
+        <source>Reorder layer</source>
+        <translation>Đổi thứ tự layer</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="237"/>
+        <source>Update layer</source>
+        <translation>Cập nhật layer</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="238"/>
+        <source>Merge layer down</source>
+        <translation>Gộp layer xuống dưới</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="239"/>
+        <source>Flatten layers</source>
+        <translation>Gộp phẳng tất cả layer</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="240"/>
+        <source>Active layer is locked</source>
+        <translation>Layer đang chọn bị khoá</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="241"/>
+        <source>Active layer is hidden</source>
+        <translation>Layer đang chọn đang bị ẩn</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="242"/>
+        <source>Layer not found</source>
+        <translation>Không tìm thấy layer</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="243"/>
+        <source>Cannot delete the last remaining layer</source>
+        <translation>Không thể xoá layer cuối cùng</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="244"/>
+        <source>Cannot merge the bottom layer down</source>
+        <translation>Không thể gộp layer dưới cùng xuống</translation>
+    </message>
+    <message>
+        <source>Created %1 × %2 canvas</source>
+        <translation>Đã tạo khung vẽ %1 × %2</translation>
+    </message>
+    <message>
+        <source>Pasted image as new layer</source>
+        <translation>Đã dán ảnh vào layer mới</translation>
+    </message>
+    <message>
+        <source>Invalid canvas dimensions: %1 × %2</source>
+        <translation>Kích thước khung vẽ không hợp lệ: %1 × %2</translation>
+    </message>
+    <message>
+        <source>Cleared selection</source>
+        <translation>Đã xóa nội dung vùng chọn</translation>
+    </message>
+    <message>
+        <source>Filled selection</source>
+        <translation>Đã đổ màu vùng chọn</translation>
+    </message>
+    <message>
+        <source>Duplicated selection to new layer</source>
+        <translation>Đã tách vùng chọn ra layer mới</translation>
+    </message>
+    <message>
+        <source>Copied selection to clipboard</source>
+        <translation>Đã sao chép vùng chọn vào bộ nhớ tạm</translation>
+    </message>
+    <message>
+        <source>Cut selection to clipboard</source>
+        <translation>Đã cắt vùng chọn vào bộ nhớ tạm</translation>
+    </message>
+    <message>
+        <source>Cropped to selection</source>
+        <translation>Đã cắt khung vẽ theo vùng chọn</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/UiLines.qml" line="225"/>
@@ -4777,5 +5188,175 @@
         <source>Editor workspace: non-destructive edits (Ctrl+3)</source>
         <translation>Không gian chỉnh sửa: sửa ảnh không phá huỷ (Ctrl+3)</translation>
     </message>
+</context>
+<context>
+    <name>LayersPanel</name>
+    <message><source>Layers</source><translation>Lớp (Layers)</translation></message>
+    <message><source>Normal</source><translation>Bình thường</translation></message>
+    <message><source>Multiply</source><translation>Nhân tối (Multiply)</translation></message>
+    <message><source>Screen</source><translation>Lọc sáng (Screen)</translation></message>
+    <message><source>Overlay</source><translation>Phủ (Overlay)</translation></message>
+    <message><source>Darken</source><translation>Làm tối (Darken)</translation></message>
+    <message><source>Lighten</source><translation>Làm sáng (Lighten)</translation></message>
+    <message><source>Difference</source><translation>Khác biệt (Difference)</translation></message>
+    <message><source>Hide layer</source><translation>Ẩn layer</translation></message>
+    <message><source>Show layer</source><translation>Hiện layer</translation></message>
+    <message><source>Lock layer</source><translation>Khoá layer</translation></message>
+    <message><source>Unlock layer</source><translation>Mở khoá layer</translation></message>
+    <message><source>Add empty layer</source><translation>Thêm layer trống</translation></message>
+    <message><source>Duplicate layer</source><translation>Nhân đôi layer</translation></message>
+    <message><source>Move layer up</source><translation>Đưa layer lên trên</translation></message>
+    <message><source>Move layer down</source><translation>Đưa layer xuống dưới</translation></message>
+    <message><source>Merge down</source><translation>Gộp xuống dưới</translation></message>
+    <message><source>Flatten image</source><translation>Gộp phẳng ảnh</translation></message>
+    <message><source>Delete layer</source><translation>Xoá layer</translation></message>
+    <message><source>Canvas background</source><translation>Nền khung vẽ</translation></message>
+    <message><source>Transparent</source><translation>Trong suốt</translation></message>
+    <message><source>Enable opaque canvas background</source><translation>Bật nền khung vẽ đục</translation></message>
+    <message><source>Make canvas background transparent</source><translation>Chuyển nền khung vẽ sang trong suốt</translation></message>
+    <message><source>Pop out panel</source><translation>Tách bảng nổi</translation></message>
+    <message><source>Dock panel</source><translation>Gắn lại vào thanh bên</translation></message>
+</context>
+<context>
+    <name>EditorView</name>
+    <message><source>Filter</source><translation>Bộ lọc</translation></message>
+    <message><source>Image filters &amp; color adjustments</source><translation>Bộ lọc ảnh &amp; chỉnh màu sắc</translation></message>
+    <message><source>Adjust</source><translation>Điều chỉnh</translation></message>
+    <message><source>Color &amp; light…</source><translation>Màu sắc &amp; ánh sáng…</translation></message>
+    <message><source>HSV Adjustment… (Ctrl+U)</source><translation>Điều chỉnh HSV… (Ctrl+U)</translation></message>
+    <message><source>Curves… (Ctrl+M)</source><translation>Đường cong màu (Curves)… (Ctrl+M)</translation></message>
+    <message><source>Color balance… (Ctrl+B)</source><translation>Cân bằng màu… (Ctrl+B)</translation></message>
+    <message><source>Intersect</source><translation>Giao nhau</translation></message>
+    <message><source>Polygon</source><translation>Đa giác</translation></message>
+    <message><source>Ants</source><translation>Viền nét đứt</translation></message>
+    <message><source>Mask</source><translation>Mặt nạ đỏ</translation></message>
+    <message><source>Pop out panel</source><translation>Tách bảng nổi</translation></message>
+    <message><source>Dock panel</source><translation>Gắn lại vào thanh bên</translation></message>
+    <message><source>HSV Adjustment</source><translation>Điều chỉnh HSV</translation></message>
+    <message><source>Curves</source><translation>Đường cong màu (Curves)</translation></message>
+    <message><source>Color balance</source><translation>Cân bằng màu</translation></message>
+    <message><source>Layers</source><translation>Lớp (Layers)</translation></message>
+    <message><source>R/A/S: mode · Shift: Add · Alt: Subtract · Shift+Alt: Intersect · Drag inside / Arrows: move frame</source><translation>R/A/S: chế độ · Shift: Cộng · Alt: Trừ · Shift+Alt: Giao · Kéo bên trong / Mũi tên: di chuyển khung</translation></message>
+</context>
+<context>
+    <name>ColorAdjustDialog</name>
+    <message><source>Color &amp; light</source><translation>Màu sắc &amp; ánh sáng</translation></message>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Reset</source><translation>Đặt lại</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+</context>
+<context>
+    <name>CurvesDialog</name>
+    <message><source>Curves</source><translation>Đường cong màu (Curves)</translation></message>
+    <message><source>Red</source><translation>Đỏ</translation></message>
+    <message><source>Green</source><translation>Xanh lá</translation></message>
+    <message><source>Blue</source><translation>Xanh dương</translation></message>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Input: %1 · Output: %2</source><translation>Đầu vào: %1 · Đầu ra: %2</translation></message>
+    <message><source>Click curve to add point · Right-click or drag out to remove</source><translation>Nhấn đường cong để thêm điểm · Chuột phải hoặc kéo ra ngoài để xoá</translation></message>
+    <message><source>S-Curve</source><translation>Chữ S</translation></message>
+    <message><source>Lighter</source><translation>Sáng hơn</translation></message>
+    <message><source>Darker</source><translation>Tối hơn</translation></message>
+    <message><source>Invert</source><translation>Đảo ngược</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Reset channel</source><translation>Đặt lại kênh</translation></message>
+    <message><source>Reset all</source><translation>Đặt lại tất cả</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+</context>
+<context>
+    <name>HsvAdjustDialog</name>
+    <message><source>HSV Adjustment</source><translation>Điều chỉnh HSV</translation></message>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Hue</source><translation>Sắc độ (Hue)</translation></message>
+    <message><source>Saturation</source><translation>Độ bão hòa</translation></message>
+    <message><source>Value</source><translation>Độ sáng (Value)</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Reset</source><translation>Đặt lại</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+</context>
+<context>
+    <name>ColorBalanceDialog</name>
+    <message><source>Color balance</source><translation>Cân bằng màu</translation></message>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Shadows</source><translation>Vùng tối</translation></message>
+    <message><source>Midtones</source><translation>Trung gian</translation></message>
+    <message><source>Highlights</source><translation>Vùng sáng</translation></message>
+    <message><source>Cyan</source><translation>Xanh lơ (Cyan)</translation></message>
+    <message><source>Red</source><translation>Đỏ</translation></message>
+    <message><source>Magenta</source><translation>Hồng cánh sen</translation></message>
+    <message><source>Green</source><translation>Xanh lá</translation></message>
+    <message><source>Yellow</source><translation>Vàng</translation></message>
+    <message><source>Blue</source><translation>Xanh dương</translation></message>
+    <message><source>Preserve luminosity</source><translation>Giữ độ sáng</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Reset range</source><translation>Đặt lại vùng</translation></message>
+    <message><source>Reset all</source><translation>Đặt lại tất cả</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+</context>
+<context>
+    <name>HsvAdjustPanel</name>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Hue</source><translation>Sắc độ (Hue)</translation></message>
+    <message><source>Saturation</source><translation>Độ bão hòa</translation></message>
+    <message><source>Value</source><translation>Độ sáng (Value)</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+    <message><source>Reset</source><translation>Đặt lại</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
+</context>
+<context>
+    <name>CurvesPanel</name>
+    <message><source>Red</source><translation>Đỏ</translation></message>
+    <message><source>Green</source><translation>Xanh lá</translation></message>
+    <message><source>Blue</source><translation>Xanh dương</translation></message>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Input: %1 · Output: %2</source><translation>Đầu vào: %1 · Đầu ra: %2</translation></message>
+    <message><source>Click curve to add point · Right-click or drag out to remove</source><translation>Nhấn đường cong để thêm điểm · Chuột phải hoặc kéo ra ngoài để xoá</translation></message>
+    <message><source>S-Curve</source><translation>Chữ S</translation></message>
+    <message><source>Lighter</source><translation>Sáng hơn</translation></message>
+    <message><source>Darker</source><translation>Tối hơn</translation></message>
+    <message><source>Invert</source><translation>Đảo ngược</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Reset channel</source><translation>Đặt lại kênh</translation></message>
+    <message><source>Reset all</source><translation>Đặt lại tất cả</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
+</context>
+<context>
+    <name>ColorBalancePanel</name>
+    <message><source>Active layer</source><translation>Layer đang chọn</translation></message>
+    <message><source>Whole image</source><translation>Toàn ảnh</translation></message>
+    <message><source>Selection</source><translation>Vùng chọn</translation></message>
+    <message><source>Shadows</source><translation>Vùng tối</translation></message>
+    <message><source>Midtones</source><translation>Trung gian</translation></message>
+    <message><source>Highlights</source><translation>Vùng sáng</translation></message>
+    <message><source>Cyan</source><translation>Xanh lơ (Cyan)</translation></message>
+    <message><source>Red</source><translation>Đỏ</translation></message>
+    <message><source>Magenta</source><translation>Hồng cánh sen</translation></message>
+    <message><source>Green</source><translation>Xanh lá</translation></message>
+    <message><source>Yellow</source><translation>Vàng</translation></message>
+    <message><source>Blue</source><translation>Xanh dương</translation></message>
+    <message><source>Preserve luminosity</source><translation>Giữ độ sáng</translation></message>
+    <message><source>Preview</source><translation>Xem trước</translation></message>
+    <message><source>Apply</source><translation>Áp dụng</translation></message>
+    <message><source>Reset range</source><translation>Đặt lại vùng</translation></message>
+    <message><source>Cancel</source><translation>Huỷ</translation></message>
 </context>
 </TS>

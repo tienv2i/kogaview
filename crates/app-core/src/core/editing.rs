@@ -5,6 +5,7 @@
 //! in Core — its save target, its preview cache, its open/closed lifecycle and
 //! the rule that a second open cannot replace unsaved work.
 use super::*;
+use crate::state::LayerSummary;
 
 impl Core {
     /// Load a source image into the Editor as a working document.
@@ -109,7 +110,24 @@ impl Core {
             can_redo: false,
             modified: false,
             history: Vec::new(),
+            redo_history: Vec::new(),
             redo_count: 0,
+            layers: Vec::new(),
+            active_layer_id: 0,
+            canvas_background: None,
+            has_selection: false,
+            selection_bounds: None,
+            selection_overlay_path: None,
+            selection_revision: 0,
+            clipboard_export_path: None,
+            clipboard_export_revision: 0,
+            active_layer_preview_path: None,
+            below_active_preview_path: None,
+            above_active_preview_path: None,
+            layer_preview_revision: 0,
+            ram_canvas_revision: 0,
+            ram_layer_revision: 0,
+            ram_selection_revision: 0,
             preview_path: None,
             preview_revision: generation,
             preview_modified: 0,
@@ -129,16 +147,261 @@ impl Core {
         Ok(Some(opening))
     }
 
+    /// Create a brand-new blank canvas in memory without touching disk.
+    pub(super) fn editor_new(
+        &mut self,
+        width: u32,
+        height: u32,
+        fill: Option<[u8; 3]>,
+        fill_alpha: u8,
+        name: &str,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if width == 0 || height == 0 || width > 16384 || height > 16384 {
+            return Err(ProtocolError::line(
+                "invalid_edit",
+                UiText::with(
+                    "invalid_dimensions",
+                    [width.to_string(), height.to_string()],
+                ),
+            ));
+        }
+        if u64::from(width) * u64::from(height) > editor::MAX_DOCUMENT_PIXELS {
+            return Err(ProtocolError::line(
+                "invalid_edit",
+                UiText::with(
+                    "invalid_dimensions",
+                    [width.to_string(), height.to_string()],
+                ),
+            ));
+        }
+        let doc_name = if name.trim().is_empty() {
+            "Untitled.png".to_owned()
+        } else {
+            name.trim().to_owned()
+        };
+        if let Some(document) = self.editor.as_ref() {
+            if document.has_unsaved_changes() {
+                return Err(ProtocolError::line(
+                    "unsaved_document",
+                    UiText::with("unsaved_document", [doc_name]),
+                ));
+            }
+        }
+        let [r, g, b] = fill.unwrap_or([0, 0, 0]);
+        let alpha = if fill.is_none() && fill_alpha == 0 {
+            0
+        } else {
+            fill_alpha
+        };
+        let blank = Arc::new(image::RgbaImage::from_pixel(
+            width,
+            height,
+            image::Rgba([0, 0, 0, 0]),
+        ));
+        let mut stack = editor::LayerStack::from_single(blank);
+        stack.layers[0].name = "Layer 1".to_owned();
+        stack.background = if alpha == 0 { None } else { Some([r, g, b]) };
+        self.install_in_memory_stack(stack, &doc_name)?;
+        Ok(Some(UiText::with(
+            "editor_created",
+            [width.to_string(), height.to_string()],
+        )))
+    }
+
+    /// Paste an image file (e.g. from the system clipboard) as a new centered
+    /// layer in the open document, or create a new document when Editor is empty.
+    pub(super) fn editor_paste_image(
+        &mut self,
+        path: &str,
+        name: &str,
+        mode: kogaview_protocol::PasteMode,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let source = ops::normalize_path(Path::new(path));
+        if !source.is_file() {
+            return Err(ProtocolError::line(
+                "not_found",
+                UiText::with("not_a_file", [source.display().to_string()]),
+            ));
+        }
+        let decoded = editor::decode_rgba(&source).map_err(|msg| {
+            ProtocolError::with_line(
+                "decode_error",
+                msg,
+                UiText::with("no_decoder", [source.display().to_string()]),
+            )
+        })?;
+        // Clean up temporary clipboard PNG written by PlatformHelper.
+        if source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("kogaview-clipboard-"))
+        {
+            let _ = std::fs::remove_file(&source);
+        }
+
+        if let Some(document) = self.editor.as_mut() {
+            let layer_name = if name.trim().is_empty() {
+                "Pasted Layer".to_owned()
+            } else {
+                name.trim().to_owned()
+            };
+            document
+                .paste_image_with_mode(layer_name, decoded, mode)
+                .map_err(invalid_edit)?;
+            self.clear_editor_draft();
+            self.schedule_editor_preview();
+            self.refresh_editor_status();
+            Ok(Some(UiText::new("layer_pasted")))
+        } else {
+            let (w, h) = decoded.dimensions();
+            let doc_name = if name.trim().is_empty() {
+                "Clipboard.png".to_owned()
+            } else {
+                name.trim().to_owned()
+            };
+            self.install_in_memory_document(decoded, &doc_name)?;
+            Ok(Some(UiText::with(
+                "editor_created",
+                [w.to_string(), h.to_string()],
+            )))
+        }
+    }
+
+    fn install_in_memory_document(
+        &mut self,
+        image: image::RgbaImage,
+        doc_name: &str,
+    ) -> Result<(), ProtocolError> {
+        let stack = editor::LayerStack::from_single(Arc::new(image));
+        self.install_in_memory_stack(stack, doc_name)
+    }
+
+    fn install_in_memory_stack(
+        &mut self,
+        stack: editor::LayerStack,
+        doc_name: &str,
+    ) -> Result<(), ProtocolError> {
+        let base_dir = self
+            .state
+            .current_folder
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let virtual_path = base_dir.join(doc_name);
+        let mut document = EditorDocument::from_stack(virtual_path, stack);
+        document.mark_unsaved();
+
+        if let Some(previous) = self.editor_preview_path.take() {
+            let _ = std::fs::remove_file(previous);
+        }
+        self.editor_preview_stamp = None;
+        self.clear_editor_draft();
+        self.editor = Some(document);
+        self.state.workspace = Workspace::Editor;
+        self.state.editor_caption = None;
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(())
+    }
+
+    /// Publish an ephemeral in-RAM preview for a filter popup (Color & light or
+    /// Curves) without mutating the document or recording an undo step.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn editor_preview_filter(
+        &mut self,
+        clear: bool,
+        kind: &str,
+        brightness: f64,
+        contrast: f64,
+        hue: f64,
+        saturation: f64,
+        value: f64,
+        shadows: [f64; 3],
+        midtones: [f64; 3],
+        highlights: [f64; 3],
+        preserve_luminosity: bool,
+        rgb: Vec<[f64; 2]>,
+        red: Vec<[f64; 2]>,
+        green: Vec<[f64; 2]>,
+        blue: Vec<[f64; 2]>,
+        target: ApplyTarget,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &self.editor else {
+            return Err(no_editor_document());
+        };
+        if clear {
+            crate::ram_preview::set_canvas(document.pixels());
+            self.editor_ram_canvas_revision += 1;
+            self.publish_editor();
+            return Ok(None);
+        }
+        let op = match kind {
+            "hsv" => EditOperation::AdjustHsv {
+                hue,
+                saturation,
+                value,
+            },
+            "color_balance" => EditOperation::ColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+            },
+            "curves" => EditOperation::AdjustCurves {
+                rgb,
+                red,
+                green,
+                blue,
+            },
+            _ if !rgb.is_empty() || !red.is_empty() || !green.is_empty() || !blue.is_empty() => {
+                EditOperation::AdjustCurves {
+                    rgb,
+                    red,
+                    green,
+                    blue,
+                }
+            }
+            _ => EditOperation::AdjustColor {
+                brightness,
+                contrast,
+                saturation,
+            },
+        };
+        let preview = document.preview_color_filter(&op, target);
+        crate::ram_preview::set_canvas(Arc::new(preview));
+        self.editor_ram_canvas_revision += 1;
+        self.publish_editor();
+        Ok(None)
+    }
+
     pub(super) fn editor_apply(
         &mut self,
         operation: EditOperation,
     ) -> Result<Option<UiText>, ProtocolError> {
+        self.editor_apply_with_target(operation, ApplyTarget::WholeImage)
+    }
+
+    pub(super) fn editor_apply_with_target(
+        &mut self,
+        operation: EditOperation,
+        target: ApplyTarget,
+    ) -> Result<Option<UiText>, ProtocolError> {
         let Some(document) = &mut self.editor else {
             return Err(no_editor_document());
         };
-        let changed = document.apply(operation.clone()).map_err(invalid_edit)?;
+        let had_selection = document.selection().is_some();
+        let changed = document
+            .apply_with_target(operation.clone(), target)
+            .map_err(invalid_edit)?;
         if !changed {
             return Ok(Some(UiText::new("edit_noop")));
+        }
+        // Only clear the selection overlay here if the edit dropped the selection;
+        // when a selection remains active, `schedule_editor_preview()` refreshes it once.
+        if had_selection && document.selection().is_none() {
+            self.refresh_selection_overlay();
         }
         self.clear_editor_draft();
         self.schedule_editor_preview();
@@ -146,6 +409,354 @@ impl Core {
         // The same line the History panel records, so the toast and the history
         // cannot word one operation two ways.
         Ok(Some(operation.label()))
+    }
+
+    /// Jump directly to `target_index` in the Undo/Redo history stack (`0` = original).
+    pub(super) fn editor_history_jump(
+        &mut self,
+        target_index: usize,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        if !document.jump_history(target_index) {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("history_jumped")))
+    }
+
+    /// Select the active layer without recording an undo step.
+    pub(super) fn editor_layer_select(&mut self, id: u64) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        document.select_layer(id).map_err(invalid_edit)?;
+        self.refresh_layer_split_previews();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    /// Publish downscaled `(below, active, above)` RGBA frames into RAM for
+    /// both single-layer and multi-layer documents so live Transform previews
+    /// always render the active layer's own bounds cleanly with zero disk I/O.
+    pub(super) fn refresh_layer_split_previews(&mut self) {
+        for slot in [
+            &mut self.editor_active_layer_preview_path,
+            &mut self.editor_below_active_preview_path,
+            &mut self.editor_above_active_preview_path,
+        ] {
+            if let Some(old) = slot.take() {
+                let _ = std::fs::remove_file(old);
+            }
+        }
+        let Some(document) = &self.editor else {
+            crate::ram_preview::clear_split_layers();
+            self.editor_ram_layer_revision = 0;
+            return;
+        };
+        let (below, active, above) = document.active_layer_split_previews();
+        crate::ram_preview::set_split_layers(below, active, above);
+        self.editor_ram_layer_revision += 1;
+        self.editor_layer_preview_revision = self.editor_ram_layer_revision;
+    }
+
+    /// Apply a structural or property [`editor::LayerOperation`] (recorded in Undo/Redo).
+    pub(super) fn editor_layer_op(
+        &mut self,
+        op: editor::LayerOperation,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let label = op.label();
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document.apply_layer_op(op).map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(label))
+    }
+
+    pub(super) fn refresh_selection_overlay(&mut self) {
+        if let Some(old) = self.editor_selection_overlay_path.take() {
+            let _ = std::fs::remove_file(old);
+        }
+        let Some(document) = &self.editor else {
+            crate::ram_preview::clear_selection();
+            self.editor_ram_selection_revision = 0;
+            return;
+        };
+        let Some(mask) = document.selection() else {
+            crate::ram_preview::clear_selection();
+            self.editor_ram_selection_revision = 0;
+            return;
+        };
+        let ants0 = mask.render_overlay_image_phase(false);
+        let ants1 = mask.render_overlay_image_phase(true);
+        let red_mask = mask.render_red_overlay_image();
+        crate::ram_preview::set_selection_visuals(ants0, ants1, red_mask);
+        crate::ram_preview::set_selection_mask(mask.render_mask_image());
+        if let Some((sel_base, sel_float)) = document.selection_split_previews() {
+            crate::ram_preview::set_selection_split(sel_base, sel_float);
+        }
+        self.editor_ram_selection_revision += 1;
+        self.editor_selection_revision = self.editor_ram_selection_revision;
+    }
+
+    pub(super) fn editor_select_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        mode: kogaview_protocol::SelectionMode,
+        feather: u32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let (cw, ch) = document.dimensions();
+        let mask = editor::SelectionMask::rect(cw, ch, x, y, width, height);
+        document.apply_selection_mask(mask, mode, feather);
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    pub(super) fn editor_select_ellipse(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        mode: kogaview_protocol::SelectionMode,
+        feather: u32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let (cw, ch) = document.dimensions();
+        let mask = editor::SelectionMask::ellipse(cw, ch, x, y, width, height);
+        document.apply_selection_mask(mask, mode, feather);
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    pub(super) fn editor_select_lasso(
+        &mut self,
+        points: &[[f64; 2]],
+        mode: kogaview_protocol::SelectionMode,
+        feather: u32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let (cw, ch) = document.dimensions();
+        let mask = editor::SelectionMask::polygon(cw, ch, points);
+        document.apply_selection_mask(mask, mode, feather);
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn editor_select_magic_wand(
+        &mut self,
+        x: i32,
+        y: i32,
+        tolerance: u8,
+        contiguous: bool,
+        sample_all_layers: bool,
+        mode: kogaview_protocol::SelectionMode,
+        feather: u32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        document.select_magic_wand(
+            x,
+            y,
+            tolerance,
+            contiguous,
+            sample_all_layers,
+            mode,
+            feather,
+        );
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    pub(super) fn editor_select_move(
+        &mut self,
+        dx: i32,
+        dy: i32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        if document.move_selection(dx, dy) {
+            self.refresh_selection_overlay();
+            self.publish_editor();
+        }
+        Ok(None)
+    }
+
+    pub(super) fn editor_selection_copy(
+        &mut self,
+        cut: bool,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let extracted = {
+            let Some(document) = &self.editor else {
+                return Err(no_editor_document());
+            };
+            document.extract_selection_image().map_err(invalid_edit)?
+        };
+        let dir = self.editor_preview_dir()?;
+        self.editor_clipboard_export_revision += 1;
+        let out_path = dir.join(format!(
+            "clipboard-{}.png",
+            self.editor_clipboard_export_revision
+        ));
+        extracted.save(&out_path).map_err(|error| {
+            ProtocolError::with_line(
+                "io_error",
+                format!("could not write clipboard export: {error}"),
+                UiText::new("edit_error"),
+            )
+        })?;
+        if let Some(prev) = self.editor_clipboard_export_path.replace(out_path) {
+            let _ = std::fs::remove_file(prev);
+        }
+        if cut {
+            if let Some(document) = &mut self.editor {
+                let changed = if document.selection().is_some() {
+                    document.selection_delete().map_err(invalid_edit)?
+                } else if document.layers().len() > 1 {
+                    let active_id = document.active_layer_id();
+                    document
+                        .apply_layer_op(editor::LayerOperation::Delete { id: active_id })
+                        .map_err(invalid_edit)?
+                } else {
+                    document.clear_active_layer().map_err(invalid_edit)?
+                };
+                if changed {
+                    self.clear_editor_draft();
+                    self.schedule_editor_preview();
+                    self.refresh_editor_status();
+                    return Ok(Some(UiText::new("selection_cut")));
+                }
+            }
+        }
+        self.publish_editor();
+        Ok(Some(if cut {
+            UiText::new("selection_cut")
+        } else {
+            UiText::new("selection_copied")
+        }))
+    }
+
+    pub(super) fn editor_select_all(&mut self) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        document.select_all();
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    pub(super) fn editor_select_clear(&mut self) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        if !document.clear_selection() {
+            return Ok(None);
+        }
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    pub(super) fn editor_select_invert(&mut self) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        document.invert_selection();
+        self.refresh_selection_overlay();
+        self.publish_editor();
+        Ok(None)
+    }
+
+    pub(super) fn editor_selection_delete(&mut self) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document.selection_delete().map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("selection_delete")))
+    }
+
+    pub(super) fn editor_selection_fill(
+        &mut self,
+        color: [u8; 3],
+        opacity: f32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document
+            .selection_fill(color, opacity)
+            .map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("selection_fill")))
+    }
+
+    pub(super) fn editor_selection_duplicate_layer(
+        &mut self,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document.selection_duplicate_layer().map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("selection_duplicated")))
+    }
+
+    pub(super) fn editor_selection_crop(&mut self) -> Result<Option<UiText>, ProtocolError> {
+        let Some(document) = &mut self.editor else {
+            return Err(no_editor_document());
+        };
+        let changed = document.selection_crop().map_err(invalid_edit)?;
+        if !changed {
+            return Ok(None);
+        }
+        self.refresh_selection_overlay();
+        self.clear_editor_draft();
+        self.schedule_editor_preview();
+        self.refresh_editor_status();
+        Ok(Some(UiText::new("selection_cropped")))
     }
 
     /// Render what an edit *would* produce, without applying it.
@@ -372,7 +983,7 @@ impl Core {
                 UiText::with("source_changed_on_disk", [source.display().to_string()]),
             ));
         }
-        let pixels = document.pixels();
+        let stack = document.stack().clone();
         let label = destination
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -389,7 +1000,7 @@ impl Core {
         let (sender, receiver) = mpsc::channel();
         let thread_source = source.clone();
         std::thread::spawn(move || {
-            let result = editor::save_pixels(&thread_source, &pixels, &destination);
+            let result = editor::save_stack(&thread_source, &stack, &destination);
             let _ = sender.send(EditorSaveResult {
                 save,
                 destination,
@@ -623,14 +1234,18 @@ impl Core {
             let _ = std::fs::remove_file(preview);
         }
         self.editor_preview_stamp = None;
+        crate::ram_preview::clear_all();
+        self.editor_ram_canvas_revision = 0;
+        self.editor_ram_layer_revision = 0;
+        self.editor_ram_selection_revision = 0;
         self.state.status = UiText::new("editor_closed");
         Ok(Some(UiText::new("editor_closed")))
     }
 
-    /// Republish the Editor projection after a synchronous edit, then ask a
-    /// worker for a preview. The previous preview stays on screen (marked
-    /// `rendering`) until the new file exists, so QML never loads a missing
-    /// image and flashes empty.
+    /// Republish the Editor projection after a synchronous edit. Publishes the
+    /// live RGBA frame directly into RAM (`image://editor/canvas?rev=N`) so the
+    /// UI updates on the very next frame with zero PNG encode / disk latency,
+    /// while keeping the background preview PNG path up to date for legacy callers.
     pub(super) fn schedule_editor_preview(&mut self) {
         let Some(document) = &self.editor else {
             return;
@@ -638,7 +1253,17 @@ impl Core {
         self.editor_generation += 1;
         let generation = self.editor_generation;
         let pixels = document.pixels();
+        crate::ram_preview::set_canvas(Arc::clone(&pixels));
+        self.editor_ram_canvas_revision += 1;
         self.editor_rendering = true;
+        self.refresh_layer_split_previews();
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|d| d.selection().is_some())
+        {
+            self.refresh_selection_overlay();
+        }
         self.publish_editor();
         let Ok(dir) = self.editor_preview_dir() else {
             self.editor_rendering = false;
@@ -688,6 +1313,27 @@ impl Core {
         // last wrote, and a save to the same path changes these two numbers
         // without changing the path.
         let (file_modified, file_size) = file_identity(Path::new(&save_path));
+        let layers: Vec<LayerSummary> = document
+            .layers()
+            .iter()
+            .map(|l| LayerSummary {
+                id: l.id,
+                name: l.name.clone(),
+                visible: l.visible,
+                locked: l.locked,
+                opacity: l.opacity,
+                blend_mode: l.blend_mode.as_key().to_owned(),
+                offset_x: l.offset_x,
+                offset_y: l.offset_y,
+                width: l.pixels.width(),
+                height: l.pixels.height(),
+                kind: "raster".to_owned(),
+            })
+            .collect();
+        let active_layer_id = document.active_layer_id();
+        let canvas_background = document.canvas_background();
+        let has_selection = document.selection().is_some();
+        let selection_bounds = document.selection_bounds();
         self.state.editor = Some(EditorState {
             path,
             name,
@@ -697,7 +1343,39 @@ impl Core {
             can_redo: document.can_redo(),
             modified: document.can_undo(),
             history: document.history(),
+            redo_history: document.redo_history(),
             redo_count: document.redo_count(),
+            layers,
+            active_layer_id,
+            canvas_background,
+            has_selection,
+            selection_bounds,
+            selection_overlay_path: self
+                .editor_selection_overlay_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            selection_revision: self.editor_selection_revision,
+            clipboard_export_path: self
+                .editor_clipboard_export_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            clipboard_export_revision: self.editor_clipboard_export_revision,
+            active_layer_preview_path: self
+                .editor_active_layer_preview_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            below_active_preview_path: self
+                .editor_below_active_preview_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            above_active_preview_path: self
+                .editor_above_active_preview_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            layer_preview_revision: self.editor_layer_preview_revision,
+            ram_canvas_revision: self.editor_ram_canvas_revision,
+            ram_layer_revision: self.editor_ram_layer_revision,
+            ram_selection_revision: self.editor_ram_selection_revision,
             preview_path: self
                 .editor_preview_path
                 .as_ref()
@@ -760,7 +1438,24 @@ impl Core {
             can_redo: false,
             modified: false,
             history: Vec::new(),
+            redo_history: Vec::new(),
             redo_count: 0,
+            layers: Vec::new(),
+            active_layer_id: 0,
+            canvas_background: None,
+            has_selection: false,
+            selection_bounds: None,
+            selection_overlay_path: None,
+            selection_revision: 0,
+            clipboard_export_path: None,
+            clipboard_export_revision: 0,
+            active_layer_preview_path: None,
+            below_active_preview_path: None,
+            above_active_preview_path: None,
+            layer_preview_revision: 0,
+            ram_canvas_revision: 0,
+            ram_layer_revision: 0,
+            ram_selection_revision: 0,
             preview_path: Some(preview.to_string_lossy().into_owned()),
             preview_revision: generation,
             preview_modified,
@@ -847,7 +1542,10 @@ impl Core {
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let caption = super::ai::load_caption_for_image(document.source_path());
+                crate::ram_preview::set_canvas(document.pixels());
+                self.editor_ram_canvas_revision += 1;
                 self.editor = Some(document);
+                self.refresh_layer_split_previews();
                 self.editor_rendering = false;
                 self.state.busy = false;
                 self.state.editor_caption = caption;

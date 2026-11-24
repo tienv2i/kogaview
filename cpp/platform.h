@@ -57,6 +57,14 @@ public:
   /// clipboard (image/png on Wayland).
   Q_INVOKABLE void copyImage(const QString& path);
   Q_INVOKABLE void copyText(const QString& text);
+  /// Size of the image currently on the system clipboard, or empty if none.
+  Q_INVOKABLE QSize clipboardImageSize() const;
+  /// Write the system clipboard's image to a temporary PNG file and return its
+  /// local path (or empty if the clipboard holds no image).
+  Q_INVOKABLE QString saveClipboardImageToTemp() const;
+  /// Sample the `#rrggbb` hex color at normalized `(normX, normY)` in `[0, 1]`
+  /// from an image file (cached by path + mtime for 60 fps eyedropper dragging).
+  Q_INVOKABLE QString sampleImageColor(const QString& path, double normX, double normY) const;
   /// Hand the file to the desktop's default handler.
   Q_INVOKABLE void openExternally(const QString& path);
   /// Show the desktop's own "Open With" chooser for the file, so the user picks

@@ -41,6 +41,8 @@ DialogFrame {
     property bool initialBackground: true
     property bool initialHardwareAcceleration: true
     property bool initialAntiAliasing: true
+    property bool safeMode: false
+    property bool confirmFactoryReset: false
     /// The stored interface language (`system`, `en`, `vi`).
     property string initialLanguage: "system"
     /// The languages the picker offers, `Platform.languages()` in the app and
@@ -555,6 +557,62 @@ DialogFrame {
             }
             Label {
                 text: qsTr("Hardware acceleration changes apply on next restart.")
+                color: dialog.theme.textMuted
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+        }
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Recovery & Reset")
+            Layout.fillWidth: true
+
+            Label {
+                visible: dialog.safeMode
+                text: qsTr("Safe Mode is active: running with in-memory factory defaults (plugins & GPU disabled; config.json is not modified).")
+                color: dialog.theme.accent
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                PanelAction {
+                    objectName: "settingsResetLayoutBtn"
+                    Layout.fillWidth: true
+                    theme: dialog.theme
+                    text: qsTr("Reset layout")
+                    onClicked: {
+                        dialog.confirmFactoryReset = false
+                        dialog.resetConfigRequested(true, false, false)
+                    }
+                }
+                PanelAction {
+                    objectName: "settingsResetFactoryBtn"
+                    Layout.fillWidth: true
+                    theme: dialog.theme
+                    primary: dialog.confirmFactoryReset
+                    text: dialog.confirmFactoryReset
+                        ? qsTr("Click again to confirm reset")
+                        : qsTr("Factory reset all")
+                    onClicked: {
+                        if (!dialog.confirmFactoryReset) {
+                            dialog.confirmFactoryReset = true
+                        } else {
+                            dialog.confirmFactoryReset = false
+                            dialog.resetConfigRequested(true, true, true)
+                        }
+                    }
+                }
+            }
+
+            Label {
+                text: qsTr("Resets back up your current config to config.json.bak. CLI flags: --safe-mode, --reset-layout, --reset-config.")
                 color: dialog.theme.textMuted
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
@@ -1094,6 +1152,7 @@ DialogFrame {
     signal saveRequested(string themeName, bool rememberLastFolder,
                          bool backgroundThumbnails, string language)
     signal layoutSaveRequested(var layout)
+    signal resetConfigRequested(bool resetLayout, bool resetSettings, bool resetFavorites)
     signal aiSettingsSaveRequested(string device, int autoUnloadSecs)
     signal aiDownloadModelRequested(string modelId)
     signal aiDeleteModelRequested(string modelId)

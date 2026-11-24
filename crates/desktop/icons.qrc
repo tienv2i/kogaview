@@ -27,6 +27,7 @@
     <file alias="icons/transform-scale.svg">qml/icons/transform-scale.svg</file>
     <file alias="icons/brush.svg">qml/icons/brush.svg</file>
     <file alias="icons/eyedropper.svg">qml/icons/eyedropper.svg</file>
+    <file alias="icons/select.svg">qml/icons/select.svg</file>
     <file alias="icons/eraser.svg">qml/icons/eraser.svg</file>
     <file alias="icons/resize.svg">qml/icons/resize.svg</file>
     <file alias="icons/rotate-left.svg">qml/icons/rotate-left.svg</file>

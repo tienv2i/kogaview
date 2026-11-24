@@ -6,6 +6,8 @@ use image::RgbaImage;
 use kogaview_protocol::{FlipAxis, ResizeFilter, ResizeMode, UiText};
 use serde::Serialize;
 
+use crate::layer::LayerOperation;
+
 /// One edit, described so it can be serialized into a session file later.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -86,6 +88,26 @@ pub enum EditOperation {
         contrast: f64,
         saturation: f64,
     },
+    /// Adjust per-channel tonal curves (RGB / R / G / B control points in `0.0..=1.0`).
+    AdjustCurves {
+        rgb: Vec<[f64; 2]>,
+        red: Vec<[f64; 2]>,
+        green: Vec<[f64; 2]>,
+        blue: Vec<[f64; 2]>,
+    },
+    /// Krita-style HSV adjustment (`hue` in `-180..=180`, `saturation` & `value` in `-1.0..=1.0`).
+    AdjustHsv {
+        hue: f64,
+        saturation: f64,
+        value: f64,
+    },
+    /// Krita/Photoshop-style Color Balance across Shadows, Midtones, Highlights.
+    ColorBalance {
+        shadows: [f64; 3],
+        midtones: [f64; 3],
+        highlights: [f64; 3],
+        preserve_luminosity: bool,
+    },
     /// One freehand stroke. `points` are in document pixels in drawing order,
     /// `radius` is half the brush width, `opacity` is 0–1 and `erase` lowers
     /// the destination alpha instead of blending `color` over it. The stroke is
@@ -105,6 +127,8 @@ pub enum EditOperation {
         #[serde(skip)]
         pixels: Arc<RgbaImage>,
     },
+    /// Structural or property change to the document's layer stack.
+    Layer(LayerOperation),
 }
 
 impl EditOperation {
@@ -195,6 +219,9 @@ impl EditOperation {
                 UiText::with("rotate_angle", [format!("{degrees:.1}")])
             }
             Self::AdjustColor { .. } => UiText::new("adjust_color"),
+            Self::AdjustCurves { .. } => UiText::new("adjust_curves"),
+            Self::AdjustHsv { .. } => UiText::new("adjust_hsv"),
+            Self::ColorBalance { .. } => UiText::new("color_balance"),
             Self::Paint { erase, .. } => {
                 if *erase {
                     UiText::new("eraser_stroke")
@@ -203,6 +230,7 @@ impl EditOperation {
                 }
             }
             Self::AiResult { label, .. } => label.clone(),
+            Self::Layer(op) => op.label(),
         }
     }
 }

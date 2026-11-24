@@ -31,7 +31,7 @@ modules:
       - install -Dm755 bin/kogaview /app/bin/kogaview
       - install -Dm644 ../packaging/linux/io.github.tienv2i.KogaView.metainfo.xml /app/share/metainfo/io.github.tienv2i.KogaView.metainfo.xml
       - install -Dm644 ../packaging/linux/io.github.tienv2i.KogaView.svg /app/share/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg
-      - python3 -c "import pathlib; tpl = pathlib.Path('../packaging/linux/io.github.tienv2i.KogaView.desktop.in').read_text(); out = tpl.replace('@EXEC@', 'kogaview').replace('@ICON@', 'io.github.tienv2i.KogaView').replace('@NAME@', 'KogaView').replace('@MIME_TYPES@', 'image/png;image/jpeg;image/webp;image/gif;image/bmp;image/tiff;image/avif;image/x-tga;image/qoi;'); pathlib.Path('/app/share/applications').mkdir(parents=True, exist_ok=True); pathlib.Path('/app/share/applications/io.github.tienv2i.KogaView.desktop').write_text(out)"
+      - python3 -c "import pathlib; apps = pathlib.Path('/app/share/applications'); apps.mkdir(parents=True, exist_ok=True); [((apps / n).write_text(pathlib.Path('../packaging/linux/' + n + '.in').read_text().replace('@BINDIR@', '/app/bin'))) for n in ('io.github.tienv2i.KogaView.desktop', 'io.github.tienv2i.KogaView.Editor.desktop')]"
     sources:
       - type: dir
         path: ../..

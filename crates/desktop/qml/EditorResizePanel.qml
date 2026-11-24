@@ -47,6 +47,11 @@ ColumnLayout {
                               Math.round(sourceHeight * factor))
     }
 
+    function setDimensions(w, h) {
+        dimGrid.setDimensions(Math.max(1, Math.min(16384, Math.round(w))),
+                              Math.max(1, Math.min(16384, Math.round(h))))
+    }
+
     onSourceWidthChanged: {
         if (targetWidth <= 0 && sourceWidth > 0) reset()
     }

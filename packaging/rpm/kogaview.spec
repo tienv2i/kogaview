@@ -1,7 +1,7 @@
 %global _lto_cflags %{nil}
 
 Name:           kogaview
-Version:        2.0.0
+Version:        2.1.0
 Release:        1%{?dist}
 Summary:        Fast native desktop photo manager, viewer, and non-destructive editor
 License:        MIT
@@ -42,10 +42,19 @@ install -Dm755 build/bin/kogaview %{buildroot}%{_bindir}/kogaview
 install -Dm644 packaging/linux/io.github.tienv2i.KogaView.metainfo.xml %{buildroot}%{_metainfodir}/io.github.tienv2i.KogaView.metainfo.xml
 install -Dm644 packaging/linux/io.github.tienv2i.KogaView.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg
 install -Dm644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
+mkdir -p %{buildroot}%{_datadir}/applications
+python3 -c "
+import pathlib
+for name in ('io.github.tienv2i.KogaView.desktop', 'io.github.tienv2i.KogaView.Editor.desktop'):
+    tpl = pathlib.Path('packaging/linux/' + name + '.in').read_text()
+    pathlib.Path('%{buildroot}%{_datadir}/applications/' + name).write_text(tpl.replace('@BINDIR@', '%{_bindir}'))
+"
 
 %files
 %license LICENSE
 %{_bindir}/kogaview
+%{_datadir}/applications/io.github.tienv2i.KogaView.desktop
+%{_datadir}/applications/io.github.tienv2i.KogaView.Editor.desktop
 %{_metainfodir}/io.github.tienv2i.KogaView.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/io.github.tienv2i.KogaView.svg
 

@@ -26,6 +26,13 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/EditorResizePanel.qml \
           ../crates/desktop/qml/EditorCanvasSizePanel.qml \
           ../crates/desktop/qml/ColorAdjustPanel.qml \
+          ../crates/desktop/qml/ColorAdjustDialog.qml \
+          ../crates/desktop/qml/HsvAdjustDialog.qml \
+          ../crates/desktop/qml/HsvAdjustPanel.qml \
+          ../crates/desktop/qml/ColorBalanceDialog.qml \
+          ../crates/desktop/qml/ColorBalancePanel.qml \
+          ../crates/desktop/qml/CurvesDialog.qml \
+          ../crates/desktop/qml/CurvesPanel.qml \
           ../crates/desktop/qml/UnitField.qml \
           ../crates/desktop/qml/DimensionRatioGrid.qml \
           ../crates/desktop/qml/SettingsDialog.qml \
@@ -39,6 +46,7 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/InfoPanel.qml \
           ../crates/desktop/qml/PreviewPanel.qml \
           ../crates/desktop/qml/HistoryPanel.qml \
+          ../crates/desktop/qml/LayersPanel.qml \
           ../crates/desktop/qml/BatchPanel.qml \
           ../crates/desktop/qml/QuickAccessPanel.qml \
           ../crates/desktop/qml/ExplorerPanel.qml \

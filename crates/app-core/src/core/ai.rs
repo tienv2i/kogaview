@@ -166,10 +166,39 @@ impl Core {
         }
     }
 
+    /// Resolve the input pixel buffer and coordinate offset `(ox, oy)` for an
+    /// Editor AI operation targeting `target`. Refuses early if `ActiveLayer` is
+    /// locked or hidden so no worker process is spawned unnecessarily.
+    fn editor_ai_input(
+        &self,
+        target: ApplyTarget,
+    ) -> Result<(Arc<image::RgbaImage>, i32, i32), ProtocolError> {
+        let doc = self.editor.as_ref().ok_or_else(no_editor_document)?;
+        if target == ApplyTarget::ActiveLayer {
+            let active = doc.active_layer();
+            if active.locked {
+                return Err(ProtocolError::line(
+                    "invalid_edit",
+                    UiText::new("layer_locked"),
+                ));
+            }
+            if !active.visible {
+                return Err(ProtocolError::line(
+                    "invalid_edit",
+                    UiText::new("layer_hidden"),
+                ));
+            }
+            Ok((Arc::clone(&active.pixels), active.offset_x, active.offset_y))
+        } else {
+            Ok((doc.pixels(), 0, 0))
+        }
+    }
+
     pub(super) fn editor_ai_remove_background(
         &mut self,
         model_id: &str,
         feather: u8,
+        target: ApplyTarget,
     ) -> Result<Option<UiText>, ProtocolError> {
         if self.ai_rx.is_some() {
             return Err(ProtocolError::with_line(
@@ -178,11 +207,7 @@ impl Core {
                 UiText::new("ai_task_busy"),
             ));
         }
-        let pixels = self
-            .editor
-            .as_ref()
-            .ok_or_else(no_editor_document)?
-            .pixels();
+        let (pixels, _, _) = self.editor_ai_input(target)?;
 
         // Ensure plugin list is up to date before spawning.
         self.refresh_ai_inventory();
@@ -249,6 +274,7 @@ impl Core {
         self.ai_cancel = Some(Arc::clone(&cancel));
         self.ai_temp_input = Some(input_path.clone());
         self.ai_temp_output = Some(output_path.clone());
+        self.ai_apply_target = target;
         self.state.busy = true;
         self.state.ai_task = Some(AiTaskState {
             kind: "inference".to_owned(),
@@ -727,7 +753,8 @@ impl Core {
                                     label,
                                     pixels: Arc::new(rgba),
                                 };
-                                match self.editor_apply(op) {
+                                let apply_target = self.ai_apply_target;
+                                match self.editor_apply_with_target(op, apply_target) {
                                     Ok(_) => {
                                         if let Some(task) = self.state.ai_task.as_mut() {
                                             task.running = false;
@@ -784,6 +811,7 @@ impl Core {
             self.ai_rx = None;
             self.ai_cancel = None;
             self.ai_quick_action_output = None;
+            self.ai_apply_target = ApplyTarget::WholeImage;
             if let Some(p) = self.ai_temp_input.take() {
                 let _ = fs::remove_file(p);
             }
@@ -1019,6 +1047,7 @@ impl Core {
         force: bool,
         offset_x: i32,
         offset_y: i32,
+        target: ApplyTarget,
     ) -> Result<Option<UiText>, ProtocolError> {
         self.run_editor_image_plugin(
             "editor.dewatermark_gemini",
@@ -1031,6 +1060,7 @@ impl Core {
                 "offsetY": offset_y,
             }),
             "Watermark Remover plugin is not installed (run: just build-plugin-dewatermark)",
+            target,
         )
     }
 
@@ -1043,18 +1073,21 @@ impl Core {
         width: i32,
         height: i32,
         feather: u32,
+        target: ApplyTarget,
     ) -> Result<Option<UiText>, ProtocolError> {
+        let (_, ox, oy) = self.editor_ai_input(target)?;
         self.run_editor_image_plugin(
             "editor.inpaint_region",
             "Removing watermark region…",
             json!({
-                "x": x,
-                "y": y,
+                "x": x - ox,
+                "y": y - oy,
                 "width": width,
                 "height": height,
                 "feather": feather,
             }),
             "Watermark Remover plugin is not installed (run: just build-plugin-dewatermark)",
+            target,
         )
     }
 
@@ -1072,7 +1105,24 @@ impl Core {
         region_width: i32,
         region_height: i32,
         brush_strokes: &[kogaview_protocol::AiMaskStroke],
+        target: ApplyTarget,
     ) -> Result<Option<UiText>, ProtocolError> {
+        let (_, ox, oy) = self.editor_ai_input(target)?;
+        let local_strokes: Vec<kogaview_protocol::AiMaskStroke> = if ox == 0 && oy == 0 {
+            brush_strokes.to_vec()
+        } else {
+            brush_strokes
+                .iter()
+                .map(|s| kogaview_protocol::AiMaskStroke {
+                    radius: s.radius,
+                    points: s
+                        .points
+                        .iter()
+                        .map(|[px, py]| [px - ox as f32, py - oy as f32])
+                        .collect(),
+                })
+                .collect()
+        };
         let models_dir = self.paths.models_dir.display().to_string();
         self.run_editor_image_plugin(
             "editor.ai_inpaint",
@@ -1083,19 +1133,20 @@ impl Core {
                 "inpainterModel": inpainter_model,
                 "confidence": confidence,
                 "maskPadding": mask_padding,
-                "regionX": region_x,
-                "regionY": region_y,
+                "regionX": region_x - ox,
+                "regionY": region_y - oy,
                 "regionWidth": region_width,
                 "regionHeight": region_height,
-                "brushStrokes": brush_strokes,
+                "brushStrokes": local_strokes,
             }),
             "AI Watermark Remover plugin is not installed (run: just build-plugin-ai-inpaint)",
+            target,
         )
     }
 
-    /// Refine alpha transparency on the open Editor document natively in Core:
+    /// Refine alpha transparency on the active layer of the open Editor document:
     /// - `erase_strokes`: smoothly lowers alpha toward 0 (removes leftover BG)
-    /// - `restore_strokes`: blends pixels back from `doc.original_pixels()`
+    /// - `restore_strokes`: blends pixels back from `doc.active_layer_original_pixels()`
     ///   (restores foreground accidentally cut by AI Remove Background)
     pub(super) fn editor_refine_alpha(
         &mut self,
@@ -1106,9 +1157,27 @@ impl Core {
         if erase_strokes.is_empty() && restore_strokes.is_empty() {
             return Ok(None);
         }
-        let (working, original) = {
+        let (working, original, ox, oy) = {
             let doc = self.editor.as_ref().ok_or_else(no_editor_document)?;
-            (doc.pixels(), doc.original_pixels())
+            let active = doc.active_layer();
+            if active.locked {
+                return Err(ProtocolError::line(
+                    "invalid_edit",
+                    UiText::new("layer_locked"),
+                ));
+            }
+            if !active.visible {
+                return Err(ProtocolError::line(
+                    "invalid_edit",
+                    UiText::new("layer_hidden"),
+                ));
+            }
+            (
+                Arc::clone(&active.pixels),
+                doc.active_layer_original_pixels(),
+                active.offset_x as f32,
+                active.offset_y as f32,
+            )
         };
         let (w, h) = working.dimensions();
         let softness = softness.clamp(0.0, 1.0);
@@ -1147,11 +1216,11 @@ impl Core {
                     }
                 };
                 if stroke.points.len() == 1 {
-                    stamp_disk(stroke.points[0][0], stroke.points[0][1]);
+                    stamp_disk(stroke.points[0][0] - ox, stroke.points[0][1] - oy);
                 } else {
                     for win in stroke.points.windows(2) {
-                        let (x0, y0) = (win[0][0], win[0][1]);
-                        let (x1, y1) = (win[1][0], win[1][1]);
+                        let (x0, y0) = (win[0][0] - ox, win[0][1] - oy);
+                        let (x1, y1) = (win[1][0] - ox, win[1][1] - oy);
                         let dist = (x1 - x0).hypot(y1 - y0).max(1.0);
                         let step = (r * 0.30).max(1.5);
                         let steps = (dist / step).ceil() as usize;
@@ -1219,19 +1288,20 @@ impl Core {
             label: UiText::new("refine_alpha_mask"),
             pixels: Arc::new(out),
         };
-        self.editor_apply(op)?;
+        self.editor_apply_with_target(op, ApplyTarget::ActiveLayer)?;
         self.state.status = UiText::new("ai_mask_refined");
         Ok(Some(UiText::new("ai_mask_refined")))
     }
 
     /// Shared helper to run an image-output plugin on the open Editor document
-    /// non-destructively (renders current working image -> temp PNG -> plugin -> `AiResult`).
+    /// non-destructively (renders active layer or composited image -> temp PNG -> plugin -> `AiResult`).
     fn run_editor_image_plugin(
         &mut self,
         action: &str,
         stage_label: &str,
         params: serde_json::Value,
         missing_msg: &str,
+        target: ApplyTarget,
     ) -> Result<Option<UiText>, ProtocolError> {
         if self.ai_rx.is_some() {
             return Err(ProtocolError::with_line(
@@ -1240,11 +1310,7 @@ impl Core {
                 UiText::new("ai_task_busy"),
             ));
         }
-        let pixels = self
-            .editor
-            .as_ref()
-            .ok_or_else(no_editor_document)?
-            .pixels();
+        let (pixels, _, _) = self.editor_ai_input(target)?;
 
         self.refresh_ai_inventory();
         let Some(plugin) = self
@@ -1287,6 +1353,7 @@ impl Core {
         self.ai_temp_input = Some(tmp_in.clone());
         self.ai_temp_output = Some(tmp_out.clone());
         self.ai_quick_action_output = None;
+        self.ai_apply_target = target;
         self.state.busy = true;
         self.state.ai_task = Some(AiTaskState {
             kind: "inference".to_owned(),

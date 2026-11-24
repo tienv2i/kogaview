@@ -66,6 +66,7 @@ DEVPROD_DIR = ROOT / "build" / "dev-prod"
 DEVPROD_BINARY = DEVPROD_DIR / "bin" / "kogaview"
 PACKAGING_DIR = ROOT / "packaging" / "linux"
 DESKTOP_TEMPLATE = PACKAGING_DIR / f"{APP_ID_PROD}.desktop.in"
+EDITOR_DESKTOP_TEMPLATE = PACKAGING_DIR / f"{APP_ID_PROD}.Editor.desktop.in"
 ICON_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.svg"
 METAINFO_SOURCE = PACKAGING_DIR / f"{APP_ID_PROD}.metainfo.xml"
 # Raster copies of `ICON_SOURCE` written beside it. The scalable SVG alone is not
@@ -89,6 +90,16 @@ DESKTOP_LANGUAGES = {
             "trước, mở ảnh trong trình xem có thể thu phóng và kéo, và chỉnh sửa "
             "trên một bản làm việc của ảnh."
         ),
+    },
+}
+
+
+EDITOR_DESKTOP_LANGUAGES = {
+    "vi": {
+        "Name": "KogaView (Chỉnh sửa)",
+        "GenericName": "Trình chỉnh sửa ảnh",
+        "Comment": "Mở ảnh trực tiếp trong Trình chỉnh sửa KogaView",
+        "Keywords": "ảnh;hình;chỉnh sửa;biên tập;layer;retouch;",
     },
 }
 
@@ -419,6 +430,7 @@ def installed_files() -> dict[str, Path]:
     files = {
         "binary": PREFIX / "bin" / "kogaview",
         "desktop entry": PREFIX / "share" / "applications" / f"{APP_ID_PROD}.desktop",
+        "editor desktop entry": PREFIX / "share" / "applications" / f"{APP_ID_PROD}.Editor.desktop",
         "icon": PREFIX
         / "share"
         / "icons"
@@ -447,6 +459,17 @@ def render_desktop_entry() -> str:
         "@BINDIR@", str(PREFIX / "bin")
     )
     for language, strings in DESKTOP_LANGUAGES.items():
+        for key in ("Name", "GenericName", "Comment", "Keywords"):
+            text = _after_desktop_key(text, key, f"{key}[{language}]={strings[key]}")
+    return text
+
+
+def render_editor_desktop_entry() -> str:
+    """The secondary Open-With desktop entry that launches directly into Editor."""
+    text = EDITOR_DESKTOP_TEMPLATE.read_text(encoding="utf-8").replace(
+        "@BINDIR@", str(PREFIX / "bin")
+    )
+    for language, strings in EDITOR_DESKTOP_LANGUAGES.items():
         for key in ("Name", "GenericName", "Comment", "Keywords"):
             text = _after_desktop_key(text, key, f"{key}[{language}]={strings[key]}")
     return text
@@ -695,6 +718,7 @@ def _desktop_assets_current(targets: dict[str, Path]) -> bool:
     installed under PREFIX and newer than their repository sources."""
     checks = [
         (targets["desktop entry"], DESKTOP_TEMPLATE),
+        (targets["editor desktop entry"], EDITOR_DESKTOP_TEMPLATE),
         (targets["AppStream metadata"], METAINFO_SOURCE),
         (targets["icon"], ICON_SOURCE),
     ]
@@ -762,14 +786,17 @@ def install(*, development: bool = False) -> int:
         # so a failure anywhere below leaves the system untouched.
         rendered = stage / f"{APP_ID_PROD}.desktop"
         rendered.write_text(render_desktop_entry(), encoding="utf-8")
+        rendered_editor = stage / f"{APP_ID_PROD}.Editor.desktop"
+        rendered_editor.write_text(render_editor_desktop_entry(), encoding="utf-8")
         rendered_metainfo = stage / f"{APP_ID_PROD}.metainfo.xml"
         rendered_metainfo.write_text(render_metainfo(), encoding="utf-8")
         validator = which("desktop-file-validate")
         if validator:
-            check = run([validator, str(rendered)])
-            if check.returncode != 0:
-                print("install: the desktop entry is invalid; nothing was installed", file=sys.stderr)
-                return check.returncode
+            for desktop_file in (rendered, rendered_editor):
+                check = run([validator, str(desktop_file)])
+                if check.returncode != 0:
+                    print("install: the desktop entry is invalid; nothing was installed", file=sys.stderr)
+                    return check.returncode
         appstream = which("appstreamcli")
         if appstream:
             check = run([appstream, "validate", "--no-net", str(rendered_metainfo)])
@@ -790,6 +817,7 @@ def install(*, development: bool = False) -> int:
             rendered_pixmaps.append(staged)
 
         sources["desktop entry"] = (rendered, "644")
+        sources["editor desktop entry"] = (rendered_editor, "644")
         sources["icon"] = (ICON_SOURCE, "644")
         sources["AppStream metadata"] = (rendered_metainfo, "644")
         for index, staged in enumerate(rendered_pixmaps):

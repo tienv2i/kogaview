@@ -27,9 +27,12 @@
 
 mod codec;
 mod document;
+mod layer;
 mod operation;
+pub mod ora;
 mod pixels;
 mod render;
+pub mod selection;
 mod tasks;
 mod validate;
 
@@ -43,9 +46,15 @@ mod tests;
 // nothing outside this crate calls `resample` or `cover_rect` directly.
 pub use codec::*;
 pub use document::*;
+pub use layer::*;
 pub use operation::EditOperation;
+pub use ora::{
+    extract_archive_preview_png, has_archive_decoder, is_archive_image_path, is_kra_path,
+    is_ora_path, read_ora, read_zip_dimensions, read_zip_merged_image, write_ora,
+};
 pub(crate) use pixels::*;
 pub use render::*;
+pub use selection::SelectionMask;
 pub use tasks::*;
 pub use validate::*;
 

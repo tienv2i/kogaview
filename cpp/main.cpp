@@ -22,6 +22,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlExpression>
+#include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -2104,11 +2105,94 @@ void installDevHarness(QObject* rootObject, QGuiApplication& app, PlatformHelper
 }
 #endif
 
+extern "C" {
+bool kogaview_extract_archive_preview(const char* path, uint8_t** out_ptr, size_t* out_len);
+bool kogaview_copy_editor_frame(const char* kind, uint8_t** out_ptr, uint32_t* out_w, uint32_t* out_h);
+void kogaview_free_buffer(uint8_t* ptr, size_t len);
+}
+
+class EditorImageProvider final : public QQuickImageProvider
+{
+public:
+  EditorImageProvider()
+    : QQuickImageProvider(QQuickImageProvider::Image)
+  {}
+
+  QImage requestImage(const QString& id, QSize* size, const QSize& requestedSize) override
+  {
+    QString kind = id;
+    const qsizetype q = kind.indexOf(QLatin1Char('?'));
+    if (q >= 0) {
+      kind = kind.left(q);
+    }
+    uint8_t* raw = nullptr;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    const QByteArray utf8 = kind.toUtf8();
+    if (!kogaview_copy_editor_frame(utf8.constData(), &raw, &w, &h) || raw == nullptr || w == 0 || h == 0) {
+      return {};
+    }
+    const size_t byteLen = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
+    QImage image = QImage(raw, static_cast<int>(w), static_cast<int>(h),
+                          static_cast<qsizetype>(w) * 4, QImage::Format_RGBA8888)
+                     .copy();
+    kogaview_free_buffer(raw, byteLen);
+    if (image.isNull()) {
+      return {};
+    }
+    if (size != nullptr) {
+      *size = image.size();
+    }
+    if (requestedSize.isValid() && !requestedSize.isEmpty()) {
+      return image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    return image;
+  }
+};
+
+class ArchiveImageProvider final : public QQuickImageProvider
+{
+public:
+  ArchiveImageProvider()
+    : QQuickImageProvider(QQuickImageProvider::Image)
+  {}
+
+  QImage requestImage(const QString& id, QSize* size, const QSize& requestedSize) override
+  {
+    QString path = id;
+    const qsizetype q = path.indexOf(QLatin1Char('?'));
+    if (q >= 0) {
+      path = path.left(q);
+    }
+    path = QUrl::fromPercentEncoding(path.toUtf8());
+    uint8_t* raw = nullptr;
+    size_t len = 0;
+    const QByteArray utf8 = path.toUtf8();
+    if (!kogaview_extract_archive_preview(utf8.constData(), &raw, &len) || raw == nullptr || len == 0) {
+      return {};
+    }
+    QImage image = QImage::fromData(raw, static_cast<int>(len));
+    kogaview_free_buffer(raw, len);
+    if (image.isNull()) {
+      return {};
+    }
+    if (size != nullptr) {
+      *size = image.size();
+    }
+    if (requestedSize.isValid() && !requestedSize.isEmpty()) {
+      return image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    return image;
+  }
+};
+
 /// Load the QML entry point, reporting compile and instantiation errors.
 /// A missing root object must fail loudly instead of starting a blank session.
 QObject* loadUserInterface(QQmlEngine& engine, const QStringList& launchArguments,
                            PlatformHelper& platform, ThumbnailCache& thumbnails)
 {
+  engine.addImageProvider(QStringLiteral("archive"), new ArchiveImageProvider());
+  engine.addImageProvider(QStringLiteral("editor"), new EditorImageProvider());
   engine.rootContext()->setContextProperty(QStringLiteral("Platform"), &platform);
   engine.rootContext()->setContextProperty(QStringLiteral("Thumbnails"), &thumbnails);
   engine.rootContext()->setContextProperty(QStringLiteral("launchArgs"), launchArguments);
@@ -2231,8 +2315,27 @@ StartupGraphicsConfig readStartupGraphicsConfig()
 
 int main(int argc, char* argv[])
 {
-  const StartupGraphicsConfig graphicsCfg = readStartupGraphicsConfig();
-  if (!graphicsCfg.hardwareAcceleration) {
+  bool cliSafeMode = qEnvironmentVariableIntValue("KOGAVIEW_SAFE_MODE") != 0;
+  bool cliResetConfig = qEnvironmentVariableIntValue("KOGAVIEW_RESET_CONFIG") != 0;
+  bool cliResetLayout = qEnvironmentVariableIntValue("KOGAVIEW_RESET_LAYOUT") != 0;
+  for (int i = 1; i < argc; ++i) {
+    const QString arg = QString::fromLocal8Bit(argv[i]);
+    if (arg == QLatin1String("--safe-mode")) {
+      cliSafeMode = true;
+      qputenv("KOGAVIEW_SAFE_MODE", "1");
+    } else if (arg == QLatin1String("--reset-config")) {
+      cliResetConfig = true;
+      qputenv("KOGAVIEW_RESET_CONFIG", "1");
+    } else if (arg == QLatin1String("--reset-layout")) {
+      cliResetLayout = true;
+      qputenv("KOGAVIEW_RESET_LAYOUT", "1");
+    }
+  }
+  Q_UNUSED(cliResetLayout);
+
+  const StartupGraphicsConfig graphicsCfg =
+    (cliSafeMode || cliResetConfig) ? StartupGraphicsConfig{} : readStartupGraphicsConfig();
+  if (cliSafeMode || !graphicsCfg.hardwareAcceleration) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
   } else if (graphicsCfg.antiAliasing) {
     QSurfaceFormat format = QSurfaceFormat::defaultFormat();
@@ -2261,6 +2364,9 @@ int main(int argc, char* argv[])
   QGuiApplication::setDesktopFileName(kogaview_app_id());
 
   QStringList launchArguments = QCoreApplication::arguments().mid(1);
+  launchArguments.removeAll(QStringLiteral("--safe-mode"));
+  launchArguments.removeAll(QStringLiteral("--reset-config"));
+  launchArguments.removeAll(QStringLiteral("--reset-layout"));
   if (launchArguments.contains(QStringLiteral("--version"))) {
     std::printf("%s %s (%s)\n", qPrintable(kogaview_display_name()),
                 qPrintable(kogaview_app_version()), qPrintable(kogaview_app_id()));
@@ -2272,7 +2378,11 @@ int main(int argc, char* argv[])
                 "Usage:\n"
                 "  kogaview                    open the browser workspace\n"
                 "  kogaview open FILE...       open images in the viewer\n"
+                "  kogaview edit FILE          open an image directly in the editor\n"
                 "  kogaview open-folder DIR    open a folder in the browser\n"
+                "  kogaview --safe-mode        start with factory defaults in memory (no plugins, software GPU)\n"
+                "  kogaview --reset-layout     reset panel layout to defaults (backs up config.json)\n"
+                "  kogaview --reset-config     reset all settings to factory defaults (backs up config.json)\n"
                 "  kogaview --version          print version and app id\n");
     return 0;
   }

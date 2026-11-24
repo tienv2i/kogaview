@@ -15,12 +15,21 @@ ColumnLayout {
     property int sourceHeight: 0
     property alias targetWidth: dimGrid.targetWidth
     property alias targetHeight: dimGrid.targetHeight
+    property alias lockRatio: dimGrid.lockRatio
     property string anchor: "center"
+    /// True when the user dragged canvas handles directly on the viewport;
+    /// stores the exact image offset inside the new canvas frame so pulling one
+    /// edge never shifts the opposite edge. Reset when an Anchor is clicked.
+    property bool customOffset: false
+    property int customOffsetX: 0
+    property int customOffsetY: 0
 
     readonly property bool valid: targetWidth >= 1 && targetWidth <= 16384
                                   && targetHeight >= 1 && targetHeight <= 16384
     readonly property bool changed: valid
-                                    && (targetWidth !== sourceWidth || targetHeight !== sourceHeight)
+                                    && (targetWidth !== sourceWidth
+                                        || targetHeight !== sourceHeight
+                                        || (customOffset && (customOffsetX !== 0 || customOffsetY !== 0)))
 
     readonly property int imageOffsetX: {
         var dw = targetWidth - sourceWidth
@@ -33,6 +42,16 @@ ColumnLayout {
         if (anchor === "top_left" || anchor === "top" || anchor === "top_right") return 0
         if (anchor === "bottom_left" || anchor === "bottom" || anchor === "bottom_right") return dh
         return Math.round(dh / 2)
+    }
+    readonly property int effectiveOffsetX: customOffset ? customOffsetX : imageOffsetX
+    readonly property int effectiveOffsetY: customOffset ? customOffsetY : imageOffsetY
+
+    function setCustomFrame(w, h, offsetX, offsetY) {
+        customOffset = true
+        customOffsetX = Math.round(offsetX)
+        customOffsetY = Math.round(offsetY)
+        dimGrid.setDimensions(Math.max(1, Math.min(16384, Math.round(w))),
+                              Math.max(1, Math.min(16384, Math.round(h))))
     }
 
     readonly property var anchorCells: [
@@ -49,6 +68,9 @@ ColumnLayout {
 
     function reset() {
         anchor = "center"
+        customOffset = false
+        customOffsetX = 0
+        customOffsetY = 0
         dimGrid.reset(Math.max(1, sourceWidth), Math.max(1, sourceHeight), false)
     }
 
@@ -90,7 +112,10 @@ ColumnLayout {
                 text: modelData.glyph
                 focusPolicy: Qt.NoFocus
                 highlighted: selected
-                onClicked: panel.anchor = modelData.key
+                onClicked: {
+                    panel.customOffset = false
+                    panel.anchor = modelData.key
+                }
             }
         }
     }

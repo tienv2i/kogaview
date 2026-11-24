@@ -604,6 +604,83 @@ ApplicationWindow {
     /// "export" (Export a copy…'s Browse). A portal answer arrives as one
     /// signal with a path, so the shell has to remember what it asked.
     property string pendingSave: ""
+    property string pendingFlatSavePath: ""
+
+    function editorLayerCount() {
+        var ed = root.state && root.state.editor
+        return (ed && ed.layers) ? ed.layers.length : 0
+    }
+
+    function requestEditorSave() {
+        if (!root.editorHasUnsavedChanges) return;
+        var ed = root.state && root.state.editor;
+        var savePath = String((ed && (ed.savePath || ed.path)) || "");
+        if (root.editorLayerCount() > 1 && !savePath.toLowerCase().endsWith(".ora")) {
+            root.pendingFlatSavePath = "";
+            flattenSaveDialog.open();
+            return;
+        }
+        root.send({ type: "editor_save" });
+    }
+
+    function chooseEditorSaveAsOra() {
+        var ed = root.state && root.state.editor;
+        var current = String((ed && (ed.savePath || ed.path)) || "");
+        var dot = current.lastIndexOf(".");
+        var base = dot > current.lastIndexOf("/") ? current.slice(0, dot) : current;
+        var path = base + ".ora";
+        root.pendingSave = "document";
+        if (Platform.requestSaveFile(qsTr("Save image as"), path)) return;
+        root.pendingSave = "";
+        saveFallback.currentFile = "file://" + path;
+        saveFallback.open();
+    }
+
+    property string pendingPastePath: ""
+    property int pendingPasteW: 0
+    property int pendingPasteH: 0
+
+    function openNewImageDialog() {
+        newImageDialog.refreshClipboardPreset();
+        newImageDialog.open();
+    }
+
+    function pasteClipboardImage() {
+        var tempPath = Platform.saveClipboardImageToTemp();
+        if (!tempPath) {
+            root.showToast(qsTr("Clipboard does not contain an image"));
+            return;
+        }
+        var ed = root.state && root.state.editor;
+        var clipSz = Platform.clipboardImageSize();
+        if (ed && ed.width > 0 && ed.height > 0 && clipSz
+                && (clipSz.width > ed.width || clipSz.height > ed.height)) {
+            root.pendingPastePath = tempPath;
+            root.pendingPasteW = clipSz.width;
+            root.pendingPasteH = clipSz.height;
+            pasteOversizedDialog.open();
+            return;
+        }
+        root.send({
+            type: "editor_paste_image",
+            path: tempPath,
+            name: "",
+            mode: "keep_original"
+        });
+    }
+
+    function commitPendingPaste(mode) {
+        var p = root.pendingPastePath;
+        root.pendingPastePath = "";
+        pasteOversizedDialog.close();
+        if (!p) return;
+        root.send({
+            type: "editor_paste_image",
+            path: p,
+            name: "",
+            mode: mode
+        });
+    }
 
     /// The answer to either save chooser, from the portal or from the Qt
     /// fallback. Both dialogs send it here so the two routes cannot drift.
@@ -615,6 +692,11 @@ ApplicationWindow {
             var editor = workspaceLoader.item;
             if (editor && editor.applyExportPath) editor.applyExportPath(path);
         } else {
+            if (root.editorLayerCount() > 1 && !path.toLowerCase().endsWith(".ora")) {
+                root.pendingFlatSavePath = path;
+                flattenSaveDialog.open();
+                return;
+            }
             root.send({ type: "editor_save_as", path: path });
         }
     }
@@ -990,12 +1072,20 @@ ApplicationWindow {
         if (args.length === 0) return;
         var rest = Array.prototype.slice.call(args);
         var mode = "open";
-        if (rest[0] === "open" || rest[0] === "open-folder") {
+        if (rest[0] === "open" || rest[0] === "open-folder" || rest[0] === "edit") {
             mode = rest.shift();
         }
         if (mode === "open-folder") {
             if (rest.length > 0) {
                 root.send({ type: "open_folder", path: rest[0] });
+            }
+        } else if (mode === "edit") {
+            if (rest.length > 0) {
+                var editTarget = root.toLocalPath(rest[0]);
+                root.send({ type: "open_file", paths: rest });
+                root.send({ type: "editor_open", path: editTarget });
+            } else {
+                root.send({ type: "set_workspace", workspace: "editor" });
             }
         } else if (rest.length > 0) {
             var target = root.toLocalPath(rest[0]);
@@ -1079,10 +1169,30 @@ ApplicationWindow {
         onActivated: root.guardEditorLeave("quit")
     }
     Shortcut {
+        sequence: "Ctrl+N"
+        onActivated: {
+            if (root.state.workspace === "editor") {
+                root.openNewImageDialog();
+            }
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+V"
+        onActivated: {
+            if (root.state.workspace === "editor") {
+                var focusItem = root.activeFocusItem;
+                if (focusItem && (focusItem.text !== undefined && focusItem.readOnly === false)) {
+                    return;
+                }
+                root.pasteClipboardImage();
+            }
+        }
+    }
+    Shortcut {
         sequence: "Ctrl+S"
         onActivated: {
             if (root.state.workspace === "editor" && root.editorHasUnsavedChanges) {
-                root.send({ type: "editor_save" });
+                root.requestEditorSave();
             }
         }
     }
@@ -1373,8 +1483,12 @@ ApplicationWindow {
             layout: root.activeLayout
             onLayoutRequested: function(patch) { root.requestLayout(patch) }
             onRevealPath: function(path) { Platform.revealInFolder(path); }
+            onCopyImage: function(path) { Platform.copyImage(path); }
             onCommand: function(command) { root.send(command); }
             onRequestOpen: root.chooseEditorImage()
+            onRequestNewImage: root.openNewImageDialog()
+            onRequestPasteImage: root.pasteClipboardImage()
+            onRequestSave: root.requestEditorSave()
             onRequestSaveAs: root.chooseEditorSaveAs()
             onRequestExportPath: root.chooseEditorExportPath()
             onRequestClose: root.guardEditorLeave({ close: true })
@@ -1455,10 +1569,20 @@ ApplicationWindow {
         id: settingsDialog
         objectName: "settingsDialog"
         theme: appTheme
+        safeMode: !!root.state.safeMode
         aiSettings: root.state.aiSettings || ({ device: "cpu", autoUnloadSecs: 60, customModelPaths: ({}) })
         aiPlugins: root.state.aiPlugins || []
         aiModels: root.state.aiModels || []
         aiTask: root.state.aiTask || null
+        onResetConfigRequested: function(resetLayout, resetSettings, resetFavorites) {
+            root.send({
+                type: "reset_config",
+                reset_layout: resetLayout,
+                reset_settings: resetSettings,
+                reset_favorites: resetFavorites
+            });
+            settingsDialog.close();
+        }
         onAiSettingsSaveRequested: function(device, autoUnloadSecs) {
             root.send({ type: "ai_set_settings", device: device, auto_unload_secs: autoUnloadSecs });
         }
@@ -1707,6 +1831,247 @@ ApplicationWindow {
                 implicitWidth: 88
                 primary: true
                 onClicked: root.leaveAfterSave()
+            }
+        }
+    }
+
+    DialogFrame {
+        id: flattenSaveDialog
+        objectName: "flattenSaveDialog"
+        namePrefix: "flattenSave"
+        title: qsTr("Save multi-layer document")
+        preferredWidth: 460
+        onCloseRequested: flattenSaveDialog.close()
+
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("This document has %1 layers. Saving to a flat image format will merge all layers into one. Save as OpenRaster (.ora) to keep all layers editable.").arg(root.editorLayerCount())
+            color: appTheme.text
+            wrapMode: Text.WordWrap
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "flattenSaveCancel"
+                theme: appTheme
+                text: qsTr("Cancel")
+                onClicked: flattenSaveDialog.close()
+            }
+            PanelAction {
+                objectName: "flattenSaveProceed"
+                theme: appTheme
+                text: qsTr("Flatten & Save")
+                onClicked: {
+                    var targetPath = root.pendingFlatSavePath;
+                    root.pendingFlatSavePath = "";
+                    flattenSaveDialog.close();
+                    if (targetPath !== "") {
+                        root.send({ type: "editor_save_as", path: targetPath });
+                    } else {
+                        root.send({ type: "editor_save" });
+                    }
+                }
+            }
+            PanelAction {
+                objectName: "flattenSaveAsOra"
+                theme: appTheme
+                text: qsTr("Save as .ora")
+                primary: true
+                onClicked: {
+                    root.pendingFlatSavePath = "";
+                    flattenSaveDialog.close();
+                    root.chooseEditorSaveAsOra();
+                }
+            }
+        }
+    }
+
+    DialogFrame {
+        id: newImageDialog
+        objectName: "newImageDialog"
+        namePrefix: "newImage"
+        title: qsTr("New image")
+        preferredWidth: 420
+        onCloseRequested: newImageDialog.close()
+
+        property int clipW: 0
+        property int clipH: 0
+
+        function refreshClipboardPreset() {
+            var sz = Platform.clipboardImageSize();
+            clipW = sz ? sz.width : 0;
+            clipH = sz ? sz.height : 0;
+            if (clipW > 0 && clipH > 0) {
+                newImgWidthField.text = String(clipW);
+                newImgHeightField.text = String(clipH);
+                newImgPresetCombo.currentIndex = 0;
+            }
+        }
+
+        function createCanvas() {
+            var w = Math.max(1, Math.min(16384, parseInt(newImgWidthField.text) || 1920));
+            var h = Math.max(1, Math.min(16384, parseInt(newImgHeightField.text) || 1080));
+            var bgKey = newImgBgCombo.keys[newImgBgCombo.currentIndex] || "white";
+            var fill = bgKey === "white" ? [255, 255, 255]
+                     : bgKey === "black" ? [0, 0, 0]
+                     : null;
+            var alpha = bgKey === "transparent" ? 0 : 255;
+            newImageDialog.close();
+            root.send({
+                type: "editor_new",
+                width: w,
+                height: h,
+                fill: fill,
+                fill_alpha: alpha,
+                name: "Untitled.png"
+            });
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 2
+            columnSpacing: 10
+            rowSpacing: 8
+
+            Label { text: qsTr("Preset"); color: appTheme.textMuted; font.pixelSize: 12 }
+            ComboBox {
+                id: newImgPresetCombo
+                objectName: "newImgPresetCombo"
+                Layout.fillWidth: true
+                focusPolicy: Qt.NoFocus
+                readonly property var presets: [
+                    { label: newImageDialog.clipW > 0
+                             ? qsTr("Clipboard (%1 × %2)").arg(newImageDialog.clipW).arg(newImageDialog.clipH)
+                             : qsTr("Custom"),
+                      w: newImageDialog.clipW, h: newImageDialog.clipH },
+                    { label: "1920 × 1080 (Full HD)", w: 1920, h: 1080 },
+                    { label: "1280 × 720 (HD)", w: 1280, h: 720 },
+                    { label: "2048 × 2048 (Square)", w: 2048, h: 2048 },
+                    { label: "1024 × 1024 (Square)", w: 1024, h: 1024 },
+                    { label: "1080 × 1920 (Portrait)", w: 1080, h: 1920 },
+                    { label: "2480 × 3508 (A4 300 DPI)", w: 2480, h: 3508 }
+                ]
+                model: presets.map(function(p) { return p.label })
+                currentIndex: 1
+                onActivated: function(idx) {
+                    var p = presets[idx]
+                    if (p && p.w > 0 && p.h > 0) {
+                        newImgWidthField.text = String(p.w)
+                        newImgHeightField.text = String(p.h)
+                    }
+                }
+            }
+
+            Label { text: qsTr("Width"); color: appTheme.textMuted; font.pixelSize: 12 }
+            TextField {
+                id: newImgWidthField
+                objectName: "newImgWidthField"
+                Layout.fillWidth: true
+                text: "1920"
+                validator: IntValidator { bottom: 1; top: 16384 }
+                onAccepted: newImageDialog.createCanvas()
+            }
+
+            Label { text: qsTr("Height"); color: appTheme.textMuted; font.pixelSize: 12 }
+            TextField {
+                id: newImgHeightField
+                objectName: "newImgHeightField"
+                Layout.fillWidth: true
+                text: "1080"
+                validator: IntValidator { bottom: 1; top: 16384 }
+                onAccepted: newImageDialog.createCanvas()
+            }
+
+            Label { text: qsTr("Background"); color: appTheme.textMuted; font.pixelSize: 12 }
+            ComboBox {
+                id: newImgBgCombo
+                objectName: "newImgBgCombo"
+                Layout.fillWidth: true
+                focusPolicy: Qt.NoFocus
+                readonly property var keys: ["white", "transparent", "black"]
+                model: [qsTr("White"), qsTr("Transparent"), qsTr("Black")]
+                currentIndex: 0
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "newImageCancel"
+                theme: appTheme
+                text: qsTr("Cancel")
+                onClicked: newImageDialog.close()
+            }
+            PanelAction {
+                objectName: "newImageCreate"
+                theme: appTheme
+                text: qsTr("Create")
+                primary: true
+                onClicked: newImageDialog.createCanvas()
+            }
+        }
+    }
+
+    DialogFrame {
+        id: pasteOversizedDialog
+        objectName: "pasteOversizedDialog"
+        namePrefix: "pasteOversized"
+        title: qsTr("Pasted image is larger than canvas")
+        preferredWidth: 480
+        onCloseRequested: {
+            root.pendingPastePath = "";
+            pasteOversizedDialog.close();
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: {
+                var ed = root.state && root.state.editor;
+                var cw = ed ? ed.width : 0;
+                var ch = ed ? ed.height : 0;
+                return qsTr("The clipboard image (%1 × %2) is larger than the canvas (%3 × %4). How would you like to paste it?")
+                    .arg(root.pendingPasteW).arg(root.pendingPasteH).arg(cw).arg(ch);
+            }
+            color: appTheme.text
+            wrapMode: Text.WordWrap
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            PanelAction {
+                objectName: "pasteOversizedCancel"
+                theme: appTheme
+                text: qsTr("Cancel")
+                onClicked: {
+                    root.pendingPastePath = "";
+                    pasteOversizedDialog.close();
+                }
+            }
+            PanelAction {
+                objectName: "pasteOversizedKeep"
+                theme: appTheme
+                text: qsTr("Keep original")
+                onClicked: root.commitPendingPaste("keep_original")
+            }
+            PanelAction {
+                objectName: "pasteOversizedExpand"
+                theme: appTheme
+                text: qsTr("Expand canvas")
+                onClicked: root.commitPendingPaste("expand_canvas")
+            }
+            PanelAction {
+                objectName: "pasteOversizedFit"
+                theme: appTheme
+                text: qsTr("Fit to canvas")
+                primary: true
+                onClicked: root.commitPendingPaste("fit_to_canvas")
             }
         }
     }

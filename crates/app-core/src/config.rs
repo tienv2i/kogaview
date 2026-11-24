@@ -97,6 +97,57 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Embedded factory-default configuration (sanitized, immutable baseline
+    /// that can be restored at any time regardless of on-disk state).
+    pub fn factory_default() -> Self {
+        Self::default().sanitized()
+    }
+
+    /// Back up an existing `config.json` to `config.json.bak` before resetting.
+    pub fn backup_existing(path: &Path) -> Option<PathBuf> {
+        if !path.is_file() {
+            return None;
+        }
+        let backup = path.with_extension("json.bak");
+        fs::copy(path, &backup).ok().map(|_| backup)
+    }
+
+    /// Back up any existing `config.json` and overwrite it with factory defaults.
+    pub fn reset_to_factory(path: &Path) -> (Self, Option<String>) {
+        let backup = Self::backup_existing(path);
+        let config = Self::factory_default();
+        let save_err = config.save(path).err();
+        let note = match (backup, save_err) {
+            (Some(bak), None) => Some(format!(
+                "configuration reset to factory defaults (backup saved at {})",
+                bak.display()
+            )),
+            (None, None) => Some("configuration reset to factory defaults".to_owned()),
+            (_, Some(err)) => Some(format!(
+                "configuration reset in memory, but failed to save: {err}"
+            )),
+        };
+        (config, note)
+    }
+
+    /// Back up existing `config.json`, reset only `layout` to factory defaults,
+    /// and persist the updated config.
+    pub fn reset_layout_only(path: &Path) -> (Self, Option<String>) {
+        let backup = Self::backup_existing(path);
+        let (mut config, _) = Self::load_or_create(path);
+        config.layout = LayoutState::default().sanitized();
+        let save_err = config.save(path).err();
+        let note = match (backup, save_err) {
+            (Some(bak), None) => Some(format!(
+                "layout reset to defaults (backup saved at {})",
+                bak.display()
+            )),
+            (None, None) => Some("layout reset to defaults".to_owned()),
+            (_, Some(err)) => Some(format!("layout reset in memory, but failed to save: {err}")),
+        };
+        (config, note)
+    }
+
     /// Load the configuration, repairing a missing or corrupt file.
     ///
     /// Returns the effective config plus an optional warning to log. The

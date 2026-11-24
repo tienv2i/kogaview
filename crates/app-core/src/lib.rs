@@ -17,6 +17,7 @@ pub mod logging;
 pub mod ops;
 pub mod paths;
 pub mod plugins;
+pub mod ram_preview;
 pub mod state;
 
 pub use config::Config;

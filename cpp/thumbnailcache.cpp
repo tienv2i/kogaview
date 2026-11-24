@@ -12,8 +12,20 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstddef>
+#include <cstdint>
+
+extern "C" {
+__attribute__((weak)) bool kogaview_extract_archive_preview(const char* path, uint8_t** out_ptr, size_t* out_len);
+__attribute__((weak)) void kogaview_free_buffer(uint8_t* ptr, size_t len);
+}
 
 namespace {
+bool isArchiveImagePath(const QString& path)
+{
+  return path.endsWith(QLatin1String(".ora"), Qt::CaseInsensitive)
+         || path.endsWith(QLatin1String(".kra"), Qt::CaseInsensitive);
+}
 /// Name suffix of the marker that records an undecodable source.
 constexpr auto kFailureSuffix = ".fail";
 constexpr auto kJpegSuffix = ".jpg";
@@ -199,24 +211,48 @@ void ThumbnailCache::workerLoop()
 
 void ThumbnailCache::produce(const Job& job)
 {
-  QImageReader reader(job.path);
-  // Honour the EXIF orientation, exactly like the un-cached `Image` did, or
-  // phone photos come out sideways.
-  reader.setAutoTransform(true);
-  const QSize original = reader.size();
-  if (!original.isValid()) {
-    finish(job.key, QString(), reader.errorString());
-    return;
-  }
-  if (original.width() > job.edge || original.height() > job.edge) {
-    // Ask the decoder for a small image instead of decoding 12 MP and scaling
-    // afterwards.
-    reader.setScaledSize(original.scaled(job.edge, job.edge, Qt::KeepAspectRatio));
-  }
-  const QImage image = reader.read();
-  if (image.isNull()) {
-    finish(job.key, QString(), reader.errorString());
-    return;
+  QImage image;
+  if (isArchiveImagePath(job.path)) {
+    if (kogaview_extract_archive_preview == nullptr || kogaview_free_buffer == nullptr) {
+      finish(job.key, QString(), QStringLiteral("archive preview extractor unavailable"));
+      return;
+    }
+    uint8_t* raw = nullptr;
+    size_t len = 0;
+    const QByteArray utf8 = job.path.toUtf8();
+    if (!kogaview_extract_archive_preview(utf8.constData(), &raw, &len) || raw == nullptr || len == 0) {
+      finish(job.key, QString(), QStringLiteral("cannot extract archive preview"));
+      return;
+    }
+    image = QImage::fromData(raw, static_cast<int>(len));
+    kogaview_free_buffer(raw, len);
+    if (image.isNull()) {
+      finish(job.key, QString(), QStringLiteral("cannot decode archive preview"));
+      return;
+    }
+    if (image.width() > job.edge || image.height() > job.edge) {
+      image = image.scaled(job.edge, job.edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+  } else {
+    QImageReader reader(job.path);
+    // Honour the EXIF orientation, exactly like the un-cached `Image` did, or
+    // phone photos come out sideways.
+    reader.setAutoTransform(true);
+    const QSize original = reader.size();
+    if (!original.isValid()) {
+      finish(job.key, QString(), reader.errorString());
+      return;
+    }
+    if (original.width() > job.edge || original.height() > job.edge) {
+      // Ask the decoder for a small image instead of decoding 12 MP and scaling
+      // afterwards.
+      reader.setScaledSize(original.scaled(job.edge, job.edge, Qt::KeepAspectRatio));
+    }
+    image = reader.read();
+    if (image.isNull()) {
+      finish(job.key, QString(), reader.errorString());
+      return;
+    }
   }
 
   const bool keepAlpha = image.hasAlphaChannel();

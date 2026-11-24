@@ -16,6 +16,14 @@ fn opaque_fill_alpha() -> u8 {
     255
 }
 
+fn default_preserve_luminosity() -> bool {
+    true
+}
+
+fn default_full_opacity() -> f32 {
+    1.0
+}
+
 /// Extensions the browser treats as images and the Editor decodes.
 ///
 /// Kept here rather than in Core so every front end (the Qt file dialog now,
@@ -29,7 +37,8 @@ fn opaque_fill_alpha() -> u8 {
 /// by name; it decodes by content sniffing.
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif", "heic",
-    "heif", "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm", "qoi", "tga", "ff",
+    "heif", "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm", "qoi", "tga", "ff", "ora",
+    "kra",
 ];
 
 /// The same list as a Qt file-dialog name filter (`Images (*.jpg …)`).
@@ -75,6 +84,43 @@ pub enum FlipAxis {
     Horizontal,
     /// Mirror top/bottom (a horizontal mirror line).
     Vertical,
+}
+
+/// How an editing tool or AI plugin targets a layered Editor document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyTarget {
+    /// Apply only to the currently selected active layer (other layers untouched).
+    ActiveLayer,
+    /// Apply to the whole canvas / all layers (default for legacy flat callers).
+    #[default]
+    WholeImage,
+    /// Insert the result as a new layer above the active layer (non-destructive output).
+    NewLayer,
+}
+
+/// How an oversized pasted image is fitted onto the open Editor canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PasteMode {
+    /// Keep original pixels & canvas size (overflow sits outside canvas bounds).
+    #[default]
+    KeepOriginal,
+    /// Scale pasted image down proportionally to fit inside the canvas.
+    FitToCanvas,
+    /// Expand canvas to at least the pasted image's size, centering existing layers.
+    ExpandCanvas,
+}
+
+/// How a new selection combines with an existing selection mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionMode {
+    #[default]
+    Replace,
+    Add,
+    Subtract,
+    Intersect,
 }
 
 /// The resampling filter a resize asks for. `Auto` is the fast box average when
@@ -1109,6 +1155,8 @@ pub enum Command {
         fill: Option<[u8; 3]>,
         #[serde(default = "opaque_fill_alpha")]
         fill_alpha: u8,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Render the transform in the canvas without reshaping the document: the
     /// pixels, the history and the save target stay as they are until
@@ -1140,6 +1188,8 @@ pub enum Command {
         fill: Option<[u8; 3]>,
         #[serde(default = "opaque_fill_alpha")]
         fill_alpha: u8,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Adjust brightness, contrast and saturation of the working document.
     /// Values are normalized in `-1.0..=1.0` (`0.0` = unchanged).
@@ -1150,14 +1200,95 @@ pub enum Command {
         contrast: f64,
         #[serde(default)]
         saturation: f64,
+        #[serde(default)]
+        target: ApplyTarget,
+    },
+    /// Apply per-channel tonal curves (Krita/Photoshop-style RGB / R / G / B)
+    /// defined by normalized control points `[x, y]` in `0.0..=1.0`.
+    EditorAdjustCurves {
+        #[serde(default)]
+        rgb: Vec<[f64; 2]>,
+        #[serde(default)]
+        red: Vec<[f64; 2]>,
+        #[serde(default)]
+        green: Vec<[f64; 2]>,
+        #[serde(default)]
+        blue: Vec<[f64; 2]>,
+        #[serde(default)]
+        target: ApplyTarget,
+    },
+    /// Krita-style HSV adjustment (`hue` in `-180..=180` degrees, `saturation` and `value` in `-1.0..=1.0`).
+    EditorAdjustHsv {
+        #[serde(default)]
+        hue: f64,
+        #[serde(default)]
+        saturation: f64,
+        #[serde(default)]
+        value: f64,
+        #[serde(default)]
+        target: ApplyTarget,
+    },
+    /// Krita/Photoshop-style Color Balance across Shadows, Midtones, and Highlights
+    /// (`[cyan_red, magenta_green, yellow_blue]` each in `-1.0..=1.0`).
+    EditorColorBalance {
+        #[serde(default)]
+        shadows: [f64; 3],
+        #[serde(default)]
+        midtones: [f64; 3],
+        #[serde(default)]
+        highlights: [f64; 3],
+        #[serde(default = "default_preserve_luminosity")]
+        preserve_luminosity: bool,
+        #[serde(default)]
+        target: ApplyTarget,
+    },
+    /// Update or clear the in-RAM live preview for a non-committed filter dialog
+    /// (HSV, Curves, Color Balance, or Color & light). Never mutates document or Undo history.
+    EditorPreviewFilter {
+        #[serde(default)]
+        clear: bool,
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        brightness: f64,
+        #[serde(default)]
+        contrast: f64,
+        #[serde(default)]
+        hue: f64,
+        #[serde(default)]
+        saturation: f64,
+        #[serde(default)]
+        value: f64,
+        #[serde(default)]
+        shadows: [f64; 3],
+        #[serde(default)]
+        midtones: [f64; 3],
+        #[serde(default)]
+        highlights: [f64; 3],
+        #[serde(default = "default_preserve_luminosity")]
+        preserve_luminosity: bool,
+        #[serde(default)]
+        rgb: Vec<[f64; 2]>,
+        #[serde(default)]
+        red: Vec<[f64; 2]>,
+        #[serde(default)]
+        green: Vec<[f64; 2]>,
+        #[serde(default)]
+        blue: Vec<[f64; 2]>,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Rotate the working document clockwise; degrees must be 90, 180 or 270
     /// (negative values rotate counter-clockwise).
     EditorRotate {
         degrees: i32,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     EditorFlip {
         axis: FlipAxis,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Paint one freehand stroke onto the working document. `points` are in
     /// document pixels in drawing order; the whole list is one history step, so
@@ -1220,6 +1351,8 @@ pub enum Command {
         model_id: String,
         #[serde(default)]
         feather: u8,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Run a plugin-contributed Quick Action from Browser or Viewer context menus.
     /// Non-destructive: writes a new sibling output file rather than overwriting the source.
@@ -1266,6 +1399,8 @@ pub enum Command {
         offset_x: i32,
         #[serde(default)]
         offset_y: i32,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Remove an arbitrary rectangular watermark region from the open Editor
     /// document via harmonic diffusion inpainting (`kogaview-plugin-dewatermark`).
@@ -1276,6 +1411,8 @@ pub enum Command {
         height: i32,
         #[serde(default = "default_inpaint_feather")]
         feather: u32,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Detect & remove watermarks from the open Editor document using selectable
     /// YOLO detector + MI-GAN / LaMa ONNX inpainter (`kogaview-plugin-ai-inpaint`).
@@ -1298,6 +1435,8 @@ pub enum Command {
         region_height: i32,
         #[serde(default)]
         brush_strokes: Vec<AiMaskStroke>,
+        #[serde(default)]
+        target: ApplyTarget,
     },
     /// Refine transparency mask on the open Editor document using freehand
     /// Erase (alpha -> 0) and/or Restore (copy from original) brush strokes.
@@ -1330,6 +1469,172 @@ pub enum Command {
     /// Save or delete the `<stem>.txt` caption file beside the open Editor image.
     EditorSaveCaption {
         text: String,
+    },
+    /// Jump directly to `target_index` in the Editor's Undo/Redo history stack
+    /// (`0` = before all edits, `k` = after step `k`).
+    EditorHistoryJump {
+        target_index: usize,
+    },
+    /// Add an empty transparent raster layer above the active layer.
+    EditorLayerAdd {
+        #[serde(default)]
+        name: String,
+    },
+    /// Duplicate a layer (`id`) above itself.
+    EditorLayerDuplicate {
+        id: u64,
+    },
+    /// Delete a layer (`id`), refusing the last remaining or locked layer.
+    EditorLayerDelete {
+        id: u64,
+    },
+    /// Select the active layer (`id`).
+    EditorLayerSelect {
+        id: u64,
+    },
+    /// Reorder a layer (`id`) to `new_index` (0 = bottom, len-1 = top).
+    EditorLayerReorder {
+        id: u64,
+        new_index: usize,
+    },
+    /// Update properties of a layer (`name`, `visible`, `locked`, `opacity`,
+    /// `blend_mode`, `offset_x`, `offset_y`).
+    EditorLayerSetProps {
+        id: u64,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        visible: Option<bool>,
+        #[serde(default)]
+        locked: Option<bool>,
+        #[serde(default)]
+        opacity: Option<f32>,
+        #[serde(default)]
+        blend_mode: Option<String>,
+        #[serde(default)]
+        offset_x: Option<i32>,
+        #[serde(default)]
+        offset_y: Option<i32>,
+    },
+    /// Merge a layer (`id`) down onto the layer directly underneath it.
+    EditorLayerMergeDown {
+        id: u64,
+    },
+    /// Flatten all visible layers into a single Background layer.
+    EditorLayerFlatten,
+    /// Set the document-wide canvas background underneath all layers
+    /// (`transparent: true` = checkerboard/alpha, `false` = solid RGB color).
+    EditorSetCanvasBackground {
+        #[serde(default)]
+        color: Option<[u8; 3]>,
+        #[serde(default)]
+        transparent: bool,
+    },
+    /// Create a brand-new blank Editor canvas in memory (not written until Save).
+    EditorNew {
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        fill: Option<[u8; 3]>,
+        #[serde(default = "opaque_fill_alpha")]
+        fill_alpha: u8,
+        #[serde(default)]
+        name: String,
+    },
+    /// Paste an image file (e.g. from the system clipboard) as a new centered
+    /// layer in the open Editor document, or open it as a new document when
+    /// the Editor is empty.
+    EditorPasteImage {
+        path: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        mode: PasteMode,
+    },
+    /// Create or combine a rectangular selection mask.
+    EditorSelectRect {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: u32,
+    },
+    /// Create or combine an elliptical selection mask.
+    EditorSelectEllipse {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: u32,
+    },
+    /// Create or combine a freehand polygon (lasso) selection mask.
+    EditorSelectLasso {
+        points: Vec<[f64; 2]>,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: u32,
+    },
+    /// Flood-fill or color-match selection starting at `(x, y)` in document pixels.
+    EditorSelectMagicWand {
+        x: i32,
+        y: i32,
+        #[serde(default = "default_wand_tolerance")]
+        tolerance: u8,
+        #[serde(default = "default_true")]
+        contiguous: bool,
+        #[serde(default = "default_true")]
+        sample_all_layers: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: u32,
+    },
+    /// Select the entire canvas.
+    EditorSelectAll,
+    /// Clear the active selection.
+    EditorSelectClear,
+    /// Invert the active selection mask.
+    EditorSelectInvert,
+    /// Translate the active selection mask by `(dx, dy)` document pixels without moving image pixels.
+    EditorSelectMove {
+        dx: i32,
+        dy: i32,
+    },
+    /// Erase (make transparent) pixels inside the active selection on the active layer.
+    EditorSelectionDelete,
+    /// Fill the active selection on the active layer with `color` at `opacity` (`0..=1`).
+    EditorSelectionFill {
+        color: [u8; 3],
+        #[serde(default = "default_full_opacity")]
+        opacity: f32,
+    },
+    /// Duplicate pixels inside the active selection onto a new layer above the active layer (`Ctrl+J`).
+    EditorSelectionDuplicateLayer,
+    /// Export pixels inside the active selection (or the active layer when no
+    /// selection is active) to a temporary PNG for system clipboard copy (`Ctrl+C`).
+    /// When `cut` is true (`Ctrl+X`), also erase the selected pixels on the active layer.
+    EditorSelectionCopy {
+        #[serde(default)]
+        cut: bool,
+    },
+    /// Crop the canvas to the active selection's tight bounding box.
+    EditorSelectionCrop,
+    /// Restore embedded factory-default configuration (backing up existing
+    /// `config.json` to `config.json.bak` first).
+    ResetConfig {
+        #[serde(default = "default_true")]
+        reset_layout: bool,
+        #[serde(default = "default_true")]
+        reset_settings: bool,
+        #[serde(default)]
+        reset_favorites: bool,
     },
     CancelOperation,
 }
@@ -1391,6 +1696,10 @@ fn default_rembg_model_id() -> String {
     "rmbg-1.4".to_owned()
 }
 
+fn default_wand_tolerance() -> u8 {
+    32
+}
+
 impl Command {
     /// Stable command name used by the journal and logs.
     pub fn name(&self) -> &'static str {
@@ -1435,6 +1744,10 @@ impl Command {
             Self::EditorCanvasSize { .. } => "editor_canvas_size",
             Self::EditorRotateAngle { .. } => "editor_rotate_angle",
             Self::EditorAdjustColor { .. } => "editor_adjust_color",
+            Self::EditorAdjustCurves { .. } => "editor_adjust_curves",
+            Self::EditorAdjustHsv { .. } => "editor_adjust_hsv",
+            Self::EditorColorBalance { .. } => "editor_color_balance",
+            Self::EditorPreviewFilter { .. } => "editor_preview_filter",
             Self::EditorRotate { .. } => "editor_rotate",
             Self::EditorFlip { .. } => "editor_flip",
             Self::EditorPaintStroke { .. } => "editor_paint_stroke",
@@ -1460,6 +1773,32 @@ impl Command {
             Self::EditorRefineAlpha { .. } => "editor_refine_alpha",
             Self::EditorGenerateCaption { .. } => "editor_generate_caption",
             Self::EditorSaveCaption { .. } => "editor_save_caption",
+            Self::EditorHistoryJump { .. } => "editor_history_jump",
+            Self::EditorLayerAdd { .. } => "editor_layer_add",
+            Self::EditorLayerDuplicate { .. } => "editor_layer_duplicate",
+            Self::EditorLayerDelete { .. } => "editor_layer_delete",
+            Self::EditorLayerSelect { .. } => "editor_layer_select",
+            Self::EditorLayerReorder { .. } => "editor_layer_reorder",
+            Self::EditorLayerSetProps { .. } => "editor_layer_set_props",
+            Self::EditorLayerMergeDown { .. } => "editor_layer_merge_down",
+            Self::EditorLayerFlatten => "editor_layer_flatten",
+            Self::EditorSetCanvasBackground { .. } => "editor_set_canvas_background",
+            Self::EditorNew { .. } => "editor_new",
+            Self::EditorPasteImage { .. } => "editor_paste_image",
+            Self::EditorSelectRect { .. } => "editor_select_rect",
+            Self::EditorSelectEllipse { .. } => "editor_select_ellipse",
+            Self::EditorSelectLasso { .. } => "editor_select_lasso",
+            Self::EditorSelectMagicWand { .. } => "editor_select_magic_wand",
+            Self::EditorSelectAll => "editor_select_all",
+            Self::EditorSelectClear => "editor_select_clear",
+            Self::EditorSelectInvert => "editor_select_invert",
+            Self::EditorSelectMove { .. } => "editor_select_move",
+            Self::EditorSelectionDelete => "editor_selection_delete",
+            Self::EditorSelectionFill { .. } => "editor_selection_fill",
+            Self::EditorSelectionDuplicateLayer => "editor_selection_duplicate_layer",
+            Self::EditorSelectionCopy { .. } => "editor_selection_copy",
+            Self::EditorSelectionCrop => "editor_selection_crop",
+            Self::ResetConfig { .. } => "reset_config",
         }
     }
 }
@@ -1875,6 +2214,7 @@ mod tests {
                     rotation: 0.0,
                     fill: Some([12, 34, 56]),
                     fill_alpha: 255,
+                    target: ApplyTarget::ActiveLayer,
                 },
                 "editor_free_transform",
             ),
@@ -1884,10 +2224,17 @@ mod tests {
                 },
                 "editor_transform_preview",
             ),
-            (Command::EditorRotate { degrees: 90 }, "editor_rotate"),
+            (
+                Command::EditorRotate {
+                    degrees: 90,
+                    target: ApplyTarget::WholeImage,
+                },
+                "editor_rotate",
+            ),
             (
                 Command::EditorFlip {
                     axis: FlipAxis::Vertical,
+                    target: ApplyTarget::ActiveLayer,
                 },
                 "editor_flip",
             ),
@@ -1922,16 +2269,25 @@ mod tests {
             assert_eq!(serde_json::to_string(&round).unwrap(), json);
             assert_eq!(round.name(), expected_name);
         }
-        // FlipAxis wire values are snake_case and stable.
+        // FlipAxis & ApplyTarget wire values are snake_case and stable.
         let json = serde_json::to_string(&Command::EditorFlip {
             axis: FlipAxis::Horizontal,
+            target: ApplyTarget::ActiveLayer,
         })
         .unwrap();
         assert!(json.contains("\"horizontal\""));
+        assert!(json.contains("\"active_layer\""));
         let env: Envelope =
             serde_json::from_str(r#"{"id":"e","command":{"type":"editor_rotate","degrees":-90}}"#)
                 .unwrap();
         assert_eq!(env.command.name(), "editor_rotate");
+        assert!(matches!(
+            env.command,
+            Command::EditorRotate {
+                degrees: -90,
+                target: ApplyTarget::WholeImage
+            }
+        ));
 
         // An older client that knows only the path still exports: quality
         // falls back to the encoder's default, metadata is off and the copy

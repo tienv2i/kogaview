@@ -16,7 +16,7 @@ Keywords=photo;image;picture;viewer;editor;browse;
 # Only the codecs the build actually decodes (ADR 0005). `.heic`/`.heif` are
 # listed by the browser but have no decoder, so they are deliberately absent:
 # declaring them here would offer KogaView for a file it cannot open.
-MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;image/vnd.ms-dds;image/x-exr;image/vnd.radiance;image/x-hdr;image/vnd.microsoft.icon;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/qoi;image/x-tga;image/x-farbfeld;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;image/vnd.ms-dds;image/x-exr;image/vnd.radiance;image/x-hdr;image/vnd.microsoft.icon;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/qoi;image/x-tga;image/x-farbfeld;image/openraster;application/x-krita;
 # The X11 class name, so a window started from the launcher is grouped with the
 # entry instead of appearing as a second, unnamed app. Verified with
 # `xprop WM_CLASS` on a real window: ("kogaview", "KogaView").

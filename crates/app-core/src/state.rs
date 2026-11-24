@@ -79,6 +79,23 @@ pub struct EditorPreviewDraft {
     pub height: u32,
 }
 
+/// Serializable summary of one raster (or future vector) layer in the open Editor document.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerSummary {
+    pub id: u64,
+    pub name: String,
+    pub visible: bool,
+    pub locked: bool,
+    pub opacity: f32,
+    pub blend_mode: String,
+    pub offset_x: i32,
+    pub offset_y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub kind: String,
+}
+
 /// What the Editor paints, projected from the Core-owned working document.
 ///
 /// The pixels stay in Core; this is the serializable description the UI needs:
@@ -101,7 +118,31 @@ pub struct EditorState {
     /// numbers it mentions, so the History panel can speak the interface
     /// language without Core knowing which language that is.
     pub history: Vec<UiText>,
+    pub redo_history: Vec<UiText>,
     pub redo_count: usize,
+    pub layers: Vec<LayerSummary>,
+    pub active_layer_id: u64,
+    /// Optional solid RGB backdrop composited underneath all layers (`null` = transparent).
+    pub canvas_background: Option<[u8; 3]>,
+    pub has_selection: bool,
+    pub selection_bounds: Option<[u32; 4]>,
+    pub selection_overlay_path: Option<String>,
+    pub selection_revision: u64,
+    pub clipboard_export_path: Option<String>,
+    pub clipboard_export_revision: u64,
+    /// Per-layer split previews (`below`, `active`, `above`) published when
+    /// `layers.len() > 1` so Transform previews move/scale/rotate ONLY the
+    /// active layer while sibling layers stay stationary.
+    pub active_layer_preview_path: Option<String>,
+    pub below_active_preview_path: Option<String>,
+    pub above_active_preview_path: Option<String>,
+    pub layer_preview_revision: u64,
+    /// In-RAM preview revision counters (`image://editor/<kind>?rev=N`).
+    /// Non-zero when Core has published the corresponding frame into RAM so QML
+    /// reads raw RGBA directly without PNG encode/decode or disk I/O.
+    pub ram_canvas_revision: u64,
+    pub ram_layer_revision: u64,
+    pub ram_selection_revision: u64,
     pub preview_path: Option<String>,
     pub preview_revision: u64,
     /// Identity of the preview file (milliseconds since the epoch, and its
@@ -202,6 +243,8 @@ pub struct UiState {
     pub viewer_saved_translation: Option<SavedTranslation>,
     /// Caption text loaded from `<stem>.txt` beside the open Editor image.
     pub editor_caption: Option<String>,
+    /// True when launched with `--safe-mode` (in-memory defaults, no plugins, no disk writes).
+    pub safe_mode: bool,
     pub busy: bool,
     /// What the status bar says, as a translatable line.
     pub status: UiText,
@@ -257,6 +300,7 @@ impl UiState {
             ai_task: None,
             viewer_saved_translation: None,
             editor_caption: None,
+            safe_mode: false,
             busy: false,
             status: UiText::new("ready"),
             config_path,
@@ -310,6 +354,7 @@ impl UiState {
             ai_task: &self.ai_task,
             viewer_saved_translation: &self.viewer_saved_translation,
             editor_caption: &self.editor_caption,
+            safe_mode: self.safe_mode,
             busy: self.busy,
             status: &self.status,
             config_path: &self.config_path,
@@ -371,6 +416,7 @@ pub struct StateMeta<'a> {
     pub ai_task: &'a Option<AiTaskState>,
     pub viewer_saved_translation: &'a Option<SavedTranslation>,
     pub editor_caption: &'a Option<String>,
+    pub safe_mode: bool,
     pub busy: bool,
     pub status: &'a UiText,
     pub config_path: &'a str,

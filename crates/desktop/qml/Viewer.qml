@@ -634,10 +634,15 @@ Item {
                         objectName: "viewerImage"
                         visible: view.displayMode === "single"
                         anchors.fill: parent
-                        source: view.currentPath
-                                ? "file://" + view.currentPath
-                                  + "?v=" + view.state.viewerModified + "-" + view.state.viewerSize
-                                : ""
+                        source: {
+                            if (!view.currentPath) return ""
+                            var lower = view.currentPath.toLowerCase()
+                            var suffix = "?v=" + view.state.viewerModified + "-" + view.state.viewerSize
+                            if (lower.endsWith(".ora") || lower.endsWith(".kra")) {
+                                return "image://archive/" + encodeURI(view.currentPath) + suffix
+                            }
+                            return "file://" + view.currentPath + suffix
+                        }
                         asynchronous: true
                         cache: false
                         smooth: view.state.antiAliasing !== false

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v2.0.0)'
+        description: 'Release tag (e.g. v2.1.0)'
         required: true
-        default: 'v2.0.0'
+        default: 'v2.1.0'
 
 permissions:
   contents: write
@@ -44,12 +44,12 @@ jobs:
           VER="${TAG#v}"
           mkdir -p dist
 
-          # Render .desktop from template
+          # Render .desktop files from templates
           python3 -c "
           import pathlib
-          tpl = pathlib.Path('packaging/linux/io.github.tienv2i.KogaView.desktop.in').read_text()
-          out = tpl.replace('@EXEC@', '/usr/bin/kogaview').replace('@ICON@', 'io.github.tienv2i.KogaView').replace('@NAME@', 'KogaView').replace('@MIME_TYPES@', 'image/png;image/jpeg;image/webp;image/gif;image/bmp;image/tiff;image/avif;image/x-tga;image/qoi;')
-          pathlib.Path('dist/io.github.tienv2i.KogaView.desktop').write_text(out)
+          for name in ('io.github.tienv2i.KogaView.desktop', 'io.github.tienv2i.KogaView.Editor.desktop'):
+              tpl = pathlib.Path('packaging/linux/' + name + '.in').read_text()
+              pathlib.Path('dist/' + name).write_text(tpl.replace('@BINDIR@', '/usr/bin'))
           "
 
           # 1. Portable Linux .tar.gz
@@ -57,6 +57,7 @@ jobs:
           mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/metainfo" "$STAGE/share/icons/hicolor/scalable/apps"
           install -m755 build/release/bin/kogaview "$STAGE/bin/kogaview"
           install -m644 dist/io.github.tienv2i.KogaView.desktop "$STAGE/share/applications/"
+          install -m644 dist/io.github.tienv2i.KogaView.Editor.desktop "$STAGE/share/applications/"
           install -m644 packaging/linux/io.github.tienv2i.KogaView.metainfo.xml "$STAGE/share/metainfo/"
           install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$STAGE/share/icons/hicolor/scalable/apps/"
           tar -C dist -czf "dist/kogaview-${VER}-linux-x86_64.tar.gz" "kogaview-${VER}-linux-x86_64"
@@ -87,6 +88,7 @@ jobs:
           mkdir -p "$DEB/DEBIAN" "$DEB/usr/bin" "$DEB/usr/share/applications" "$DEB/usr/share/metainfo" "$DEB/usr/share/icons/hicolor/scalable/apps"
           install -m755 build/release/bin/kogaview "$DEB/usr/bin/kogaview"
           install -m644 dist/io.github.tienv2i.KogaView.desktop "$DEB/usr/share/applications/"
+          install -m644 dist/io.github.tienv2i.KogaView.Editor.desktop "$DEB/usr/share/applications/"
           install -m644 packaging/linux/io.github.tienv2i.KogaView.metainfo.xml "$DEB/usr/share/metainfo/"
           install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$DEB/usr/share/icons/hicolor/scalable/apps/"
           cat > "$DEB/DEBIAN/control" <<EOF

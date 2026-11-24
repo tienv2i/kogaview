@@ -639,6 +639,13 @@ impl Core {
     }
 
     pub(super) fn save_config(&mut self) {
+        if self.safe_mode {
+            tracing::debug!(
+                target: "kogaview::config",
+                "safe mode active: skipping config.json write"
+            );
+            return;
+        }
         if let Err(error) = self.config.save(&self.config_path) {
             tracing::error!(
                 target: "kogaview::config",
@@ -648,6 +655,64 @@ impl Core {
             );
             self.state.status = UiText::with("config_save_failed", [error.to_string()]);
         }
+    }
+
+    /// Restore embedded factory-default configuration (selective or full),
+    /// backing up any existing `config.json` to `config.json.bak` first.
+    pub(super) fn reset_config(
+        &mut self,
+        reset_layout: bool,
+        reset_settings: bool,
+        reset_favorites: bool,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if !reset_layout && !reset_settings && !reset_favorites {
+            return Ok(None);
+        }
+        if !self.safe_mode {
+            if let Some(bak) = Config::backup_existing(&self.config_path) {
+                tracing::info!(
+                    target: "kogaview::config",
+                    backup = %bak.display(),
+                    "backed up config before reset"
+                );
+            }
+        }
+        let defaults = Config::factory_default();
+        if reset_layout {
+            self.config.layout = defaults.layout.clone();
+            self.state.layout = self.config.layout.clone();
+        }
+        if reset_settings {
+            self.config.theme = defaults.theme;
+            self.config.language = defaults.language;
+            self.config.filmstrip = defaults.filmstrip;
+            self.config.remember_last_folder = defaults.remember_last_folder;
+            self.config.background_thumbnails = defaults.background_thumbnails;
+            self.config.hardware_acceleration = defaults.hardware_acceleration;
+            self.config.anti_aliasing = defaults.anti_aliasing;
+            self.config.ai = defaults.ai.clone();
+            self.state.theme = self.config.theme;
+            self.state.language = self.config.language;
+            self.state.filmstrip = self.config.filmstrip;
+            self.state.remember_last_folder = self.config.remember_last_folder;
+            self.state.background_thumbnails = self.config.background_thumbnails;
+            self.state.hardware_acceleration = self.config.hardware_acceleration;
+            self.state.anti_aliasing = self.config.anti_aliasing;
+            self.state.ai_settings = self.config.ai.clone();
+        }
+        if reset_favorites {
+            self.config.quick_access = defaults.quick_access.clone();
+            self.state.favorites = self.config.quick_access.clone();
+        }
+        self.save_config();
+        let code = if reset_settings || reset_favorites {
+            "config_reset_done"
+        } else {
+            "layout_reset_done"
+        };
+        let line = UiText::new(code);
+        self.state.status = line.clone();
+        Ok(Some(line))
     }
 
     /// Hide or show a whole side of the open workspace.

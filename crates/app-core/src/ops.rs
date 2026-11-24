@@ -130,6 +130,9 @@ pub fn list_folders(dir: &Path) -> Result<Vec<Entry>, String> {
 }
 
 pub fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    if crate::editor::is_archive_image_path(path) {
+        return crate::editor::read_zip_dimensions(path);
+    }
     image::ImageReader::open(path)
         .ok()?
         .with_guessed_format()
@@ -379,6 +382,12 @@ mod tests {
                     image::ImageFormat::from_extension("jpg"),
                     Some(image::ImageFormat::Jpeg)
                 );
+                continue;
+            }
+            if matches!(*extension, "ora" | "kra") {
+                assert!(crate::editor::is_archive_image_path(Path::new(&format!(
+                    "a.{extension}"
+                ))));
                 continue;
             }
             assert!(

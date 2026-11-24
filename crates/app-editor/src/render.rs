@@ -139,6 +139,44 @@ pub fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<
                 *saturation,
             ))
         }
+        EditOperation::AdjustCurves {
+            rgb,
+            red,
+            green,
+            blue,
+        } => Ok(pixels::adjust_curves(image, rgb, red, green, blue)),
+        EditOperation::AdjustHsv {
+            hue,
+            saturation,
+            value,
+        } => {
+            if !hue.is_finite() || !saturation.is_finite() || !value.is_finite() {
+                return Err(UiText::new("invalid_color_adjustment"));
+            }
+            Ok(pixels::adjust_hsv(image, *hue, *saturation, *value))
+        }
+        EditOperation::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+            preserve_luminosity,
+        } => {
+            if shadows
+                .iter()
+                .chain(midtones.iter())
+                .chain(highlights.iter())
+                .any(|v| !v.is_finite())
+            {
+                return Err(UiText::new("invalid_color_adjustment"));
+            }
+            Ok(pixels::color_balance(
+                image,
+                *shadows,
+                *midtones,
+                *highlights,
+                *preserve_luminosity,
+            ))
+        }
         EditOperation::Paint {
             points,
             color,
@@ -152,5 +190,6 @@ pub fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<
             ))
         }
         EditOperation::AiResult { pixels, .. } => Ok(pixels.as_ref().clone()),
+        EditOperation::Layer(_) => Ok(image.clone()),
     }
 }

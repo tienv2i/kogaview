@@ -21,6 +21,7 @@ pub enum SaveFormat {
     Bmp,
     Tga,
     Qoi,
+    Ora,
 }
 
 impl SaveFormat {
@@ -37,6 +38,7 @@ impl SaveFormat {
             "bmp" => Self::Bmp,
             "tga" => Self::Tga,
             "qoi" => Self::Qoi,
+            "ora" => Self::Ora,
             _ => return None,
         })
     }
@@ -68,11 +70,12 @@ impl SaveFormat {
             Self::Bmp => ".bmp",
             Self::Tga => ".tga",
             Self::Qoi => ".qoi",
+            Self::Ora => ".ora",
         }
     }
 
     /// The list every surface shows for "what can I save to".
-    pub const CHOICES: &'static str = ".png .jpg .webp .tiff .gif .bmp .tga .qoi";
+    pub const CHOICES: &'static str = ".png .jpg .webp .tiff .gif .bmp .tga .qoi .ora";
 }
 
 /// Encoded bytes for `image` in `format`. JPEG has no alpha, so it is
@@ -121,6 +124,10 @@ pub fn encode_with(
                 .map_err(|error| format!("could not encode GIF: {error}"))?;
             bytes = cursor.into_inner();
         }
+        SaveFormat::Ora => {
+            let stack = LayerStack::from_single(std::sync::Arc::new(image.clone()));
+            return ora::write_ora(&stack);
+        }
         other => {
             // `image` has no lossless WebP encoder, so that one is the
             // dedicated lossless encoder; the rest encode RGB(A) pixels
@@ -144,7 +151,9 @@ pub fn encode_with(
                 SaveFormat::Bmp => ImageFormat::Bmp,
                 SaveFormat::Tga => ImageFormat::Tga,
                 SaveFormat::Qoi => ImageFormat::Qoi,
-                SaveFormat::Jpeg | SaveFormat::Gif | SaveFormat::Webp => unreachable!(),
+                SaveFormat::Jpeg | SaveFormat::Gif | SaveFormat::Webp | SaveFormat::Ora => {
+                    unreachable!()
+                }
             };
             let mut cursor = std::io::Cursor::new(bytes);
             let encoded = match target {
@@ -210,6 +219,30 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
         return Err(format!("could not write {}: {error}", path.display()));
     }
     Ok(())
+}
+
+/// Save a layered [`LayerStack`] to `path`.
+///
+/// When `path` has a `.ora` extension, writes a lossless OpenRaster archive
+/// preserving every layer, blend mode, opacity, visibility, and offset. For all
+/// flat formats, composites the stack and delegates to [`save_pixels`].
+pub fn save_stack(source: &Path, stack: &LayerStack, path: &Path) -> Result<(), String> {
+    if SaveFormat::from_path(path) == Some(SaveFormat::Ora) {
+        let bytes = ora::write_ora(stack)?;
+        if path == source && path.is_file() {
+            let backup = backup_path(path);
+            std::fs::copy(path, &backup).map_err(|error| {
+                format!(
+                    "could not keep a backup of {} at {}: {error}",
+                    path.display(),
+                    backup.display()
+                )
+            })?;
+        }
+        return write_atomically(path, &bytes);
+    }
+    let pixels = composite_stack(stack);
+    save_pixels(source, &pixels, path)
 }
 
 /// Encode `pixels` and write them to `path`.
@@ -441,6 +474,9 @@ pub(crate) fn backup_path(path: &Path) -> PathBuf {
 /// for in this build. The extension decides what the browser lists; the bytes
 /// decide whether it can be decoded, so a mislabelled file says so plainly.
 pub fn has_decoder(path: &Path) -> bool {
+    if ora::has_archive_decoder(path) {
+        return true;
+    }
     match ImageReader::open(path).and_then(|reader| reader.with_guessed_format()) {
         // `format()` only says the bytes *look* like a known format. Building the
         // decoder is what proves this build carries one: `image`'s `avif`
@@ -457,6 +493,9 @@ pub fn has_decoder(path: &Path) -> bool {
 /// refuse the same oversized pictures and both need the same alpha handling, or
 /// a batch would edit a file the Editor calls too large.
 pub fn decode_rgba(path: &Path) -> Result<RgbaImage, String> {
+    if ora::is_archive_image_path(path) {
+        return ora::read_zip_merged_image(path);
+    }
     let reader = ImageReader::open(path)
         .map_err(|error| format!("could not open {}: {error}", path.display()))?
         .with_guessed_format()
@@ -480,6 +519,10 @@ pub fn decode_rgba(path: &Path) -> Result<RgbaImage, String> {
 
 /// Decode an image file into a working document. Runs on a worker thread.
 pub fn open_document(path: &Path) -> Result<EditorDocument, String> {
+    if ora::is_ora_path(path) {
+        let stack = ora::read_ora(path)?;
+        return Ok(EditorDocument::from_stack(path.to_path_buf(), stack));
+    }
     let image = decode_rgba(path)?;
     Ok(EditorDocument::from_image(path.to_path_buf(), image))
 }

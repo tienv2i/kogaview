@@ -2,25 +2,58 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// The operations applied to the document, oldest first.
+// Interactive Undo/Redo history list.
 //
-// Core owns the list and the undo/redo state; this panel only draws it. Each
-// row is a `{ code, args }` line, so the words come from `UiLines` in the
-// interface language rather than from Core.
+// Shows Original (step 0), all applied undo steps (1..N), and dimmed redo
+// steps (N+1..M). Clicking any row jumps directly to that exact step via
+// `jumpRequested(targetIndex)`.
 Item {
     id: panel
 
     property Theme theme: Theme {}
     property var history: []
+    property var redoHistory: []
     property bool hasDocument: false
     /// The interface language, so a row is re-worded when Settings changes it.
     property string language: ""
     property string listObjectName: "historyList"
 
-    /// The height the list needs to show every row. The Editor's reference dock
-    /// is content-sized, so its History page asks for this instead of the
-    /// viewport it happens to get; the dock clamps it to what the window can
-    /// give.
+    signal jumpRequested(int targetIndex)
+
+    readonly property var combinedRows: {
+        var rows = []
+        if (!panel.hasDocument) return rows
+        var applied = panel.history || []
+        var redo = panel.redoHistory || []
+        if (applied.length === 0 && redo.length === 0) return rows
+        rows.push({
+            targetIndex: 0,
+            label: qsTr("Original"),
+            isCurrent: applied.length === 0,
+            isRedo: false,
+            rawLine: null
+        })
+        for (var i = 0; i < applied.length; ++i) {
+            rows.push({
+                targetIndex: i + 1,
+                label: "",
+                isCurrent: i === applied.length - 1,
+                isRedo: false,
+                rawLine: applied[i]
+            })
+        }
+        for (var j = 0; j < redo.length; ++j) {
+            rows.push({
+                targetIndex: applied.length + j + 1,
+                label: "",
+                isCurrent: false,
+                isRedo: true,
+                rawLine: redo[j]
+            })
+        }
+        return rows
+    }
+
     implicitHeight: historyList.contentHeight + 6
                     + (historyEmpty.visible ? historyEmpty.implicitHeight : 0)
 
@@ -37,28 +70,51 @@ Item {
             objectName: panel.listObjectName
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.preferredHeight: 220
-            Layout.minimumHeight: 80
+            Layout.minimumHeight: 40
             clip: true
-            model: panel.history
+            model: panel.combinedRows
             spacing: 2
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
             delegate: Rectangle {
+                id: hRow
                 required property var modelData
                 required property int index
-                width: ListView.view.width
+                width: ListView.view ? ListView.view.width : 200
                 height: 26
                 radius: panel.theme.radius
-                color: "transparent"
+                color: modelData.isCurrent ? panel.theme.selection
+                     : hMouse.containsMouse ? panel.theme.hover
+                     : "transparent"
+                border.width: modelData.isCurrent ? 1 : 0
+                border.color: panel.theme.accent
+
+                MouseArea {
+                    id: hMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (!hRow.modelData.isCurrent) {
+                            panel.jumpRequested(hRow.modelData.targetIndex)
+                        }
+                    }
+                }
 
                 Label {
                     anchors.fill: parent
                     anchors.leftMargin: 6
+                    anchors.rightMargin: 6
                     objectName: "historyLine" + index
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
-                    color: panel.theme.text
+                    color: hRow.modelData.isRedo ? panel.theme.textMuted : panel.theme.text
+                    opacity: hRow.modelData.isRedo ? 0.65 : 1.0
                     font.pixelSize: 12
-                    text: (index + 1) + ". " + uiLines.text(modelData, panel.language)
+                    font.bold: hRow.modelData.isCurrent
+                    font.italic: hRow.modelData.isRedo
+                    text: hRow.modelData.rawLine
+                        ? (hRow.modelData.targetIndex + ". " + uiLines.text(hRow.modelData.rawLine, panel.language))
+                        : ("0. " + hRow.modelData.label)
                 }
             }
         }
@@ -66,7 +122,7 @@ Item {
         Label {
             id: historyEmpty
             Layout.fillWidth: true
-            visible: panel.history.length === 0
+            visible: panel.combinedRows.length === 0
             text: panel.hasDocument ? qsTr("No edits yet") : qsTr("No image open")
             color: panel.theme.textMuted
             font.pixelSize: 11

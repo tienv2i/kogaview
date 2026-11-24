@@ -649,3 +649,270 @@ pub(crate) fn adjust_color(
     }
     out
 }
+
+/// Build a 256-entry lookup table from normalized control points `[[x, y], ...]`
+/// in `0.0..=1.0` using Fritsch–Carlson monotone cubic Hermite interpolation
+/// (smooth Krita/Photoshop-style curves with zero overshoot).
+pub fn build_curve_lut(points: &[[f64; 2]]) -> [u8; 256] {
+    let mut identity = [0u8; 256];
+    for (i, slot) in identity.iter_mut().enumerate() {
+        *slot = i as u8;
+    }
+    if points.len() < 2 {
+        return identity;
+    }
+    let mut pts: Vec<(f64, f64)> = points
+        .iter()
+        .filter(|p| p[0].is_finite() && p[1].is_finite())
+        .map(|p| (p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)))
+        .collect();
+    if pts.len() < 2 {
+        return identity;
+    }
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Deduplicate points with nearly identical X so secant slopes stay finite.
+    let mut dedup: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for (x, y) in pts {
+        if let Some(last) = dedup.last_mut() {
+            if (x - last.0).abs() < 1e-4 {
+                last.1 = y;
+                continue;
+            }
+        }
+        dedup.push((x, y));
+    }
+    let n = dedup.len();
+    if n < 2 {
+        return identity;
+    }
+
+    // Secant slopes and intervals
+    let mut h = vec![0.0; n - 1];
+    let mut d = vec![0.0; n - 1];
+    for i in 0..(n - 1) {
+        h[i] = dedup[i + 1].0 - dedup[i].0;
+        d[i] = (dedup[i + 1].1 - dedup[i].1) / h[i].max(1e-6);
+    }
+
+    // Tangents via Fritsch–Carlson monotone cubic method
+    let mut m = vec![0.0; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..(n - 1) {
+        if d[i - 1] * d[i] <= 0.0 {
+            m[i] = 0.0;
+        } else {
+            let w1 = 2.0 * h[i] + h[i - 1];
+            let w2 = h[i] + 2.0 * h[i - 1];
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+        }
+    }
+    for i in 0..(n - 1) {
+        if d[i].abs() < 1e-9 {
+            m[i] = 0.0;
+            m[i + 1] = 0.0;
+        } else {
+            let alpha = m[i] / d[i];
+            let beta = m[i + 1] / d[i];
+            let s = alpha * alpha + beta * beta;
+            if s > 9.0 {
+                let tau = 3.0 / s.sqrt();
+                m[i] = tau * alpha * d[i];
+                m[i + 1] = tau * beta * d[i];
+            }
+        }
+    }
+
+    let mut lut = [0u8; 256];
+    let mut seg = 0usize;
+    for (i, slot) in lut.iter_mut().enumerate() {
+        let x = i as f64 / 255.0;
+        let y = if x <= dedup[0].0 {
+            dedup[0].1
+        } else if x >= dedup[n - 1].0 {
+            dedup[n - 1].1
+        } else {
+            while seg + 1 < n - 1 && x > dedup[seg + 1].0 {
+                seg += 1;
+            }
+            let hi = h[seg].max(1e-6);
+            let t = ((x - dedup[seg].0) / hi).clamp(0.0, 1.0);
+            let t2 = t * t;
+            let t3 = t2 * t;
+            let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            let h10 = t3 - 2.0 * t2 + t;
+            let h01 = -2.0 * t3 + 3.0 * t2;
+            let h11 = t3 - t2;
+            h00 * dedup[seg].1 + h10 * hi * m[seg] + h01 * dedup[seg + 1].1 + h11 * hi * m[seg + 1]
+        };
+        *slot = (y.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    lut
+}
+
+pub(crate) fn is_identity_lut(lut: &[u8; 256]) -> bool {
+    lut.iter().enumerate().all(|(i, &v)| v == i as u8)
+}
+
+/// Apply per-channel RGB + Master curves via O(N) 256-entry LUT lookups, preserving alpha.
+pub(crate) fn adjust_curves(
+    image: &RgbaImage,
+    rgb: &[[f64; 2]],
+    red: &[[f64; 2]],
+    green: &[[f64; 2]],
+    blue: &[[f64; 2]],
+) -> RgbaImage {
+    let lut_rgb = build_curve_lut(rgb);
+    let lut_r = build_curve_lut(red);
+    let lut_g = build_curve_lut(green);
+    let lut_b = build_curve_lut(blue);
+
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        px[0] = lut_rgb[usize::from(lut_r[usize::from(px[0])])];
+        px[1] = lut_rgb[usize::from(lut_g[usize::from(px[1])])];
+        px[2] = lut_rgb[usize::from(lut_b[usize::from(px[2])])];
+    }
+    out
+}
+
+/// Krita-style HSV adjustment (`hue_deg` in `-180..=180`, `saturation` & `value`
+/// in `-1.0..=1.0`, `0.0` = unchanged), preserving alpha untouched.
+pub(crate) fn adjust_hsv(
+    image: &RgbaImage,
+    hue_deg: f64,
+    saturation: f64,
+    value: f64,
+) -> RgbaImage {
+    let dh = hue_deg.clamp(-180.0, 180.0);
+    let ds = saturation.clamp(-1.0, 1.0);
+    let dv = value.clamp(-1.0, 1.0);
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        let r = f64::from(px[0]) / 255.0;
+        let g = f64::from(px[1]) / 255.0;
+        let b = f64::from(px[2]) / 255.0;
+
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+
+        let mut h = if delta < 1e-6 {
+            0.0
+        } else if (max - r).abs() < 1e-6 {
+            60.0 * (((g - b) / delta) % 6.0)
+        } else if (max - g).abs() < 1e-6 {
+            60.0 * (((b - r) / delta) + 2.0)
+        } else {
+            60.0 * (((r - g) / delta) + 4.0)
+        };
+        if h < 0.0 {
+            h += 360.0;
+        }
+        let mut s = if max < 1e-6 { 0.0 } else { delta / max };
+        let mut v = max;
+
+        h = (h + dh).rem_euclid(360.0);
+        s = if ds >= 0.0 {
+            (s + (1.0 - s) * ds).clamp(0.0, 1.0)
+        } else {
+            (s * (1.0 + ds)).clamp(0.0, 1.0)
+        };
+        v = if dv >= 0.0 {
+            (v + (1.0 - v) * dv).clamp(0.0, 1.0)
+        } else {
+            (v * (1.0 + dv)).clamp(0.0, 1.0)
+        };
+
+        let c = v * s;
+        let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+        let m = v - c;
+        let (nr, ng, nb) = if h < 60.0 {
+            (c, x, 0.0)
+        } else if h < 120.0 {
+            (x, c, 0.0)
+        } else if h < 180.0 {
+            (0.0, c, x)
+        } else if h < 240.0 {
+            (0.0, x, c)
+        } else if h < 300.0 {
+            (x, 0.0, c)
+        } else {
+            (c, 0.0, x)
+        };
+        px[0] = ((nr + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[1] = ((ng + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+        px[2] = ((nb + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    out
+}
+
+/// Krita/Photoshop-style Color Balance across Shadows, Midtones, and Highlights
+/// (`[cyan_red, magenta_green, yellow_blue]` each in `-1.0..=1.0`), optionally
+/// preserving Rec.709 perceived luminosity.
+pub(crate) fn color_balance(
+    image: &RgbaImage,
+    shadows: [f64; 3],
+    midtones: [f64; 3],
+    highlights: [f64; 3],
+    preserve_luminosity: bool,
+) -> RgbaImage {
+    let clamp3 = |v: [f64; 3]| {
+        [
+            v[0].clamp(-1.0, 1.0),
+            v[1].clamp(-1.0, 1.0),
+            v[2].clamp(-1.0, 1.0),
+        ]
+    };
+    let sh = clamp3(shadows);
+    let md = clamp3(midtones);
+    let hi = clamp3(highlights);
+
+    // Precompute smooth tonal weights for all 256 intensity levels (GIMP/Krita style).
+    let mut w_sh = [0.0f64; 256];
+    let mut w_md = [0.0f64; 256];
+    let mut w_hi = [0.0f64; 256];
+    for i in 0..256 {
+        let t = i as f64 / 255.0;
+        let a = 0.25;
+        let b = 0.333;
+        let scale = 0.7;
+        w_sh[i] = ((t - b) / -a + 0.5).clamp(0.0, 1.0) * scale;
+        w_md[i] = ((t - b) / a + 0.5).clamp(0.0, 1.0)
+            * ((t + b - 1.0) / -a + 0.5).clamp(0.0, 1.0)
+            * scale;
+        w_hi[i] = ((t + b - 1.0) / a + 0.5).clamp(0.0, 1.0) * scale;
+    }
+
+    let mut out = image.clone();
+    for px in out.pixels_mut() {
+        let r0 = f64::from(px[0]) / 255.0;
+        let g0 = f64::from(px[1]) / 255.0;
+        let b0 = f64::from(px[2]) / 255.0;
+
+        // Weight Shadows / Midtones / Highlights by pixel Rec.709 luminance (Krita/Photoshop standard).
+        let lum = (0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0).clamp(0.0, 1.0);
+        let li = (lum * 255.0).round() as usize;
+        let ws = w_sh[li];
+        let wm = w_md[li];
+        let wh = w_hi[li];
+
+        let mut r = (r0 + sh[0] * ws + md[0] * wm + hi[0] * wh).clamp(0.0, 1.0);
+        let mut g = (g0 + sh[1] * ws + md[1] * wm + hi[1] * wh).clamp(0.0, 1.0);
+        let mut b = (b0 + sh[2] * ws + md[2] * wm + hi[2] * wh).clamp(0.0, 1.0);
+
+        if preserve_luminosity {
+            let l0 = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0;
+            let l1 = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let diff = l0 - l1;
+            r = (r + diff).clamp(0.0, 1.0);
+            g = (g + diff).clamp(0.0, 1.0);
+            b = (b + diff).clamp(0.0, 1.0);
+        }
+
+        px[0] = (r * 255.0).round() as u8;
+        px[1] = (g * 255.0).round() as u8;
+        px[2] = (b * 255.0).round() as u8;
+    }
+    out
+}

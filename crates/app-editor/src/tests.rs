@@ -3,6 +3,7 @@
 //! two JPEG writers the preview tests need a real encoder for.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use image::imageops;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, RgbaImage};
@@ -1459,5 +1460,1195 @@ fn adjust_color_modifies_pixels_and_undoes() {
 
     assert!(document.undo());
     assert_eq!(*document.pixels().get_pixel(4, 4), before);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn single_layer_compositor_is_zero_copy_fast_path() {
+    let img = Arc::new(RgbaImage::from_pixel(
+        16,
+        16,
+        image::Rgba([40, 80, 120, 255]),
+    ));
+    let stack = LayerStack::from_single(Arc::clone(&img));
+    let out = composite_stack(&stack);
+    assert!(
+        Arc::ptr_eq(&img, &out),
+        "single-layer composite must be O(1) zero-copy"
+    );
+}
+
+#[test]
+fn multilayer_compositor_applies_offset_opacity_visibility_and_blend_modes() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(20, 20, image::Rgba([200, 100, 50, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("base.png"), bg);
+
+    // Add a 6x6 red square at offset (4, 5)
+    let top_px = Arc::new(RgbaImage::from_pixel(
+        6,
+        6,
+        image::Rgba([100, 200, 100, 255]),
+    ));
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddImage {
+            name: "Top".to_owned(),
+            offset_x: 4,
+            offset_y: 5,
+            pixels: top_px,
+        })
+        .unwrap());
+    let top_id = doc.active_layer_id();
+
+    // Normal blend at 100% replaces inside (4..10, 5..11) and keeps background outside
+    assert_eq!(
+        *doc.pixels().get_pixel(0, 0),
+        image::Rgba([200, 100, 50, 255])
+    );
+    assert_eq!(
+        *doc.pixels().get_pixel(5, 6),
+        image::Rgba([100, 200, 100, 255])
+    );
+
+    // Multiply blend: (200/255 * 100/255 * 255) ≈ 78, (100*200/255) ≈ 78, (50*100/255) ≈ 20
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetProps {
+            id: top_id,
+            name: None,
+            visible: None,
+            locked: None,
+            opacity: None,
+            blend_mode: Some(BlendMode::Multiply),
+            offset_x: None,
+            offset_y: None,
+        })
+        .unwrap());
+    let mul = *doc.pixels().get_pixel(5, 6);
+    assert!((mul[0] as i32 - 78).abs() <= 1 && (mul[1] as i32 - 78).abs() <= 1);
+
+    // Half opacity with Normal blend: 0.5 * 100 + 0.5 * 200 = 150
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetProps {
+            id: top_id,
+            name: None,
+            visible: None,
+            locked: None,
+            opacity: Some(0.5),
+            blend_mode: Some(BlendMode::Normal),
+            offset_x: None,
+            offset_y: None,
+        })
+        .unwrap());
+    let half = *doc.pixels().get_pixel(5, 6);
+    assert!((half[0] as i32 - 150).abs() <= 1 && (half[1] as i32 - 150).abs() <= 1);
+
+    // Hiding the top layer restores exact background pixel
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetProps {
+            id: top_id,
+            name: None,
+            visible: Some(false),
+            locked: None,
+            opacity: None,
+            blend_mode: None,
+            offset_x: None,
+            offset_y: None,
+        })
+        .unwrap());
+    assert_eq!(
+        *doc.pixels().get_pixel(5, 6),
+        image::Rgba([200, 100, 50, 255])
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn active_layer_target_respects_lock_visibility_and_offset_without_touching_siblings() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(32, 32, image::Rgba([20, 40, 60, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("bg.png"), bg);
+    let bg_ptr = Arc::as_ptr(&doc.layers()[0].pixels);
+
+    // Add an offset layer at (10, 10) of size 12x12
+    let patch = Arc::new(RgbaImage::from_pixel(
+        12,
+        12,
+        image::Rgba([100, 100, 100, 255]),
+    ));
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddImage {
+            name: "Sticker".to_owned(),
+            offset_x: 10,
+            offset_y: 10,
+            pixels: patch,
+        })
+        .unwrap());
+    let sticker_id = doc.active_layer_id();
+
+    // Paint in document coordinates (15, 15) -> local (5, 5) on Sticker
+    assert!(doc
+        .apply_with_target(
+            EditOperation::Paint {
+                points: vec![[15.0, 15.0]],
+                color: [255, 0, 0],
+                radius: 2.0,
+                opacity: 1.0,
+                erase: false,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    assert_eq!(doc.pixels().get_pixel(15, 15)[0], 255);
+    // Background layer buffer was NEVER copied or mutated!
+    assert_eq!(Arc::as_ptr(&doc.layers()[0].pixels), bg_ptr);
+
+    // AdjustColor with ActiveLayer modifies only Sticker, not Background
+    assert!(doc
+        .apply_with_target(
+            EditOperation::AdjustColor {
+                brightness: 0.3,
+                contrast: 0.0,
+                saturation: 0.0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    assert_eq!(Arc::as_ptr(&doc.layers()[0].pixels), bg_ptr);
+    assert_eq!(
+        *doc.pixels().get_pixel(2, 2),
+        image::Rgba([20, 40, 60, 255])
+    );
+
+    // Locking Sticker refuses further edits & deletion
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetProps {
+            id: sticker_id,
+            name: None,
+            visible: None,
+            locked: Some(true),
+            opacity: None,
+            blend_mode: None,
+            offset_x: None,
+            offset_y: None,
+        })
+        .unwrap());
+    let err = doc
+        .apply_with_target(
+            EditOperation::AdjustColor {
+                brightness: 0.1,
+                contrast: 0.0,
+                saturation: 0.0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "layer_locked");
+    let del_err = doc
+        .apply_layer_op(LayerOperation::Delete { id: sticker_id })
+        .unwrap_err();
+    assert_eq!(del_err.code, "layer_locked");
+
+    // Unlock and hide -> ActiveLayer edit refuses hidden layer
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetProps {
+            id: sticker_id,
+            name: None,
+            visible: Some(false),
+            locked: Some(false),
+            opacity: None,
+            blend_mode: None,
+            offset_x: None,
+            offset_y: None,
+        })
+        .unwrap());
+    let hid_err = doc
+        .apply_with_target(
+            EditOperation::AdjustColor {
+                brightness: 0.1,
+                contrast: 0.0,
+                saturation: 0.0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap_err();
+    assert_eq!(hid_err.code, "layer_hidden");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn whole_image_geometry_transforms_keep_multilayer_alignment_exact() {
+    let dir = temp_dir();
+    // 20x10 dark canvas with a 4x4 bright green block at top-left (0, 0)
+    let bg = RgbaImage::from_pixel(20, 10, image::Rgba([10, 10, 10, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("geom.png"), bg);
+    let block = Arc::new(RgbaImage::from_pixel(4, 4, image::Rgba([0, 255, 0, 255])));
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddImage {
+            name: "Corner".to_owned(),
+            offset_x: 0,
+            offset_y: 0,
+            pixels: block,
+        })
+        .unwrap());
+
+    // Rotate 90° CW: 20x10 -> 10x20, top-left (0,0) block moves to top-right (6..10, 0..4)
+    assert!(doc
+        .apply_with_target(
+            EditOperation::Rotate { degrees: 90 },
+            ApplyTarget::WholeImage
+        )
+        .unwrap());
+    assert_eq!(doc.dimensions(), (10, 20));
+    assert_eq!(*doc.pixels().get_pixel(8, 2), image::Rgba([0, 255, 0, 255]));
+    assert_eq!(
+        *doc.pixels().get_pixel(2, 2),
+        image::Rgba([10, 10, 10, 255])
+    );
+
+    // Flip horizontal: top-right (6..10, 0..4) moves back to top-left (0..4, 0..4)
+    assert!(doc
+        .apply_with_target(
+            EditOperation::Flip {
+                axis: FlipAxis::Horizontal,
+            },
+            ApplyTarget::WholeImage,
+        )
+        .unwrap());
+    assert_eq!(*doc.pixels().get_pixel(2, 2), image::Rgba([0, 255, 0, 255]));
+    assert_eq!(
+        *doc.pixels().get_pixel(8, 2),
+        image::Rgba([10, 10, 10, 255])
+    );
+
+    // Undo both restores exact 20x10 alignment
+    assert!(doc.undo());
+    assert!(doc.undo());
+    assert_eq!(doc.dimensions(), (20, 10));
+    assert_eq!(*doc.pixels().get_pixel(2, 2), image::Rgba([0, 255, 0, 255]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn new_layer_target_and_stack_ops_undo_redo_and_reset_cleanly() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(16, 16, image::Rgba([30, 30, 30, 255]));
+    let mut doc = EditorDocument::from_image(dir.join("stack.png"), bg);
+
+    // Cannot delete last remaining layer
+    let last_id = doc.active_layer_id();
+    assert_eq!(
+        doc.apply_layer_op(LayerOperation::Delete { id: last_id })
+            .unwrap_err()
+            .code,
+        "cannot_delete_last_layer"
+    );
+
+    // Apply AI result as NewLayer (non-destructive)
+    let ai_px = Arc::new(RgbaImage::from_pixel(
+        16,
+        16,
+        image::Rgba([255, 200, 0, 255]),
+    ));
+    assert!(doc
+        .apply_with_target(
+            EditOperation::AiResult {
+                label: UiText::new("remove_watermark"),
+                pixels: ai_px,
+            },
+            ApplyTarget::NewLayer,
+        )
+        .unwrap());
+    assert_eq!(doc.layers().len(), 2);
+    assert_eq!(
+        *doc.pixels().get_pixel(0, 0),
+        image::Rgba([255, 200, 0, 255])
+    );
+
+    // Duplicate -> 3 layers, MergeDown -> 2 layers, Flatten -> 1 layer
+    let top_id = doc.active_layer_id();
+    assert!(doc
+        .apply_layer_op(LayerOperation::Duplicate { id: top_id })
+        .unwrap());
+    assert_eq!(doc.layers().len(), 3);
+    let dup_id = doc.active_layer_id();
+    assert!(doc
+        .apply_layer_op(LayerOperation::MergeDown { id: dup_id })
+        .unwrap());
+    assert_eq!(doc.layers().len(), 2);
+    assert!(doc.apply_layer_op(LayerOperation::Flatten).unwrap());
+    assert_eq!(doc.layers().len(), 1);
+
+    // Undo Flatten -> 2 layers, Redo Flatten -> 1 layer
+    assert!(doc.undo());
+    assert_eq!(doc.layers().len(), 2);
+    assert!(doc.redo());
+    assert_eq!(doc.layers().len(), 1);
+
+    // Reset restores initial 1-layer original pixels
+    assert!(doc.reset());
+    assert_eq!(doc.layers().len(), 1);
+    assert_eq!(
+        *doc.pixels().get_pixel(0, 0),
+        image::Rgba([30, 30, 30, 255])
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn apply_target_active_layer_whole_image_and_new_layer_semantics() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(16, 16, image::Rgba([40, 40, 40, 255]));
+    let path = dir.join("targets.png");
+    bg.save(&path).unwrap();
+    let mut doc = EditorDocument::from_image(path, bg);
+
+    // Add a second layer with a bright red patch on the left half, transparent on the right.
+    let mut top_px = RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 0, 0]));
+    for y in 0..16 {
+        for x in 0..8 {
+            top_px.put_pixel(x, y, image::Rgba([200, 20, 20, 255]));
+        }
+    }
+    doc.apply_layer_op(LayerOperation::AddImage {
+        name: "RedLeft".into(),
+        offset_x: 0,
+        offset_y: 0,
+        pixels: Arc::new(top_px),
+    })
+    .unwrap();
+    let top_id = doc.active_layer_id();
+
+    // 1. Flip Horizontal with ApplyTarget::ActiveLayer moves RedLeft to the right half
+    //    without touching Background (still [40, 40, 40, 255] on left).
+    assert!(doc
+        .apply_with_target(
+            EditOperation::Flip {
+                axis: FlipAxis::Horizontal,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    assert_eq!(
+        *doc.pixels().get_pixel(12, 8),
+        image::Rgba([200, 20, 20, 255])
+    );
+    assert_eq!(
+        *doc.pixels().get_pixel(2, 8),
+        image::Rgba([40, 40, 40, 255])
+    );
+
+    // 2. AdjustColor with ApplyTarget::ActiveLayer brightens RedLeft only; Background stays 40.
+    assert!(doc
+        .apply_with_target(
+            EditOperation::AdjustColor {
+                brightness: 0.4,
+                contrast: 0.0,
+                saturation: 0.0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    assert_eq!(doc.layers()[0].pixels.get_pixel(2, 8).0[0], 40);
+    assert!(doc.active_layer().pixels.get_pixel(12, 8).0[0] > 200);
+
+    // 3. AdjustColor with ApplyTarget::WholeImage brightens BOTH layers.
+    assert!(doc
+        .apply_with_target(
+            EditOperation::AdjustColor {
+                brightness: 0.25,
+                contrast: 0.0,
+                saturation: 0.0,
+            },
+            ApplyTarget::WholeImage,
+        )
+        .unwrap());
+    assert!(doc.layers()[0].pixels.get_pixel(2, 8).0[0] > 40);
+
+    // 4. Locked active layer refuses ActiveLayer edit; hidden layer refuses ActiveLayer edit.
+    doc.apply_layer_op(LayerOperation::SetProps {
+        id: top_id,
+        name: None,
+        visible: None,
+        locked: Some(true),
+        opacity: None,
+        blend_mode: None,
+        offset_x: None,
+        offset_y: None,
+    })
+    .unwrap();
+    assert_eq!(
+        doc.apply_with_target(
+            EditOperation::Flip {
+                axis: FlipAxis::Vertical,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap_err()
+        .code,
+        "layer_locked"
+    );
+    doc.apply_layer_op(LayerOperation::SetProps {
+        id: top_id,
+        name: None,
+        visible: Some(false),
+        locked: Some(false),
+        opacity: None,
+        blend_mode: None,
+        offset_x: None,
+        offset_y: None,
+    })
+    .unwrap();
+    assert_eq!(
+        doc.apply_with_target(
+            EditOperation::Flip {
+                axis: FlipAxis::Vertical,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap_err()
+        .code,
+        "layer_hidden"
+    );
+
+    // 5. Remove Background with ApplyTarget::NewLayer creates a "Cutout" layer
+    //    and preserves the pre-cutout composited image as `layer.original`.
+    let before_cutout = doc.pixels();
+    let cutout = Arc::new(RgbaImage::from_pixel(16, 16, image::Rgba([0, 255, 0, 128])));
+    assert!(doc
+        .apply_with_target(
+            EditOperation::AiResult {
+                label: UiText::with("remove_background", ["u2net".to_owned()]),
+                pixels: cutout,
+            },
+            ApplyTarget::NewLayer,
+        )
+        .unwrap());
+    assert_eq!(doc.layers().len(), 3);
+    assert_eq!(doc.active_layer().name, "Cutout");
+    assert_eq!(
+        doc.active_layer_original_pixels().as_raw(),
+        before_cutout.as_raw()
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ora_round_trips_multilayer_stack_and_kra_preview_decodes() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(24, 16, image::Rgba([20, 40, 80, 255]));
+    let src_png = dir.join("base.png");
+    bg.save(&src_png).unwrap();
+
+    let mut doc = EditorDocument::from_image(src_png.clone(), bg);
+    let overlay_px = RgbaImage::from_pixel(10, 8, image::Rgba([200, 100, 50, 180]));
+    doc.apply_layer_op(LayerOperation::AddImage {
+        name: "Layer & \"Top\"".into(),
+        offset_x: 5,
+        offset_y: 3,
+        pixels: Arc::new(overlay_px),
+    })
+    .unwrap();
+    let top_id = doc.active_layer_id();
+    doc.apply_layer_op(LayerOperation::SetProps {
+        id: top_id,
+        name: None,
+        visible: Some(true),
+        locked: None,
+        opacity: Some(0.75),
+        blend_mode: Some(BlendMode::Multiply),
+        offset_x: None,
+        offset_y: None,
+    })
+    .unwrap();
+
+    // Save as OpenRaster (.ora)
+    let ora_path = dir.join("layered.ora");
+    save_stack(&src_png, doc.stack(), &ora_path).unwrap();
+    assert!(has_decoder(&ora_path));
+    assert_eq!(read_zip_dimensions(&ora_path), Some((24, 16)));
+
+    // Verify OpenRaster mimetype entry is first and stored uncompressed
+    let raw_file = std::fs::File::open(&ora_path).unwrap();
+    let mut zip = zip::ZipArchive::new(raw_file).unwrap();
+    {
+        let first = zip.by_index(0).unwrap();
+        assert_eq!(first.name(), "mimetype");
+        assert_eq!(first.compression(), zip::CompressionMethod::Stored);
+    }
+    assert!(zip.by_name("mergedimage.png").is_ok());
+    assert!(zip.by_name("Thumbnails/thumbnail.png").is_ok());
+    drop(zip);
+
+    // Re-open via open_document -> restores full 2-layer stack losslessly
+    let reopened = open_document(&ora_path).unwrap();
+    assert_eq!(reopened.dimensions(), (24, 16));
+    assert_eq!(reopened.layers().len(), 2);
+    assert_eq!(reopened.layers()[0].name, "Background");
+    assert_eq!(reopened.layers()[1].name, "Layer & \"Top\"");
+    assert_eq!(reopened.layers()[1].offset_x, 5);
+    assert_eq!(reopened.layers()[1].offset_y, 3);
+    assert!((reopened.layers()[1].opacity - 0.75).abs() < 0.01);
+    assert_eq!(reopened.layers()[1].blend_mode, BlendMode::Multiply);
+    assert_eq!(reopened.pixels().as_raw(), doc.pixels().as_raw());
+
+    // Copy .ora bytes to a .kra path (same ZIP + mergedimage.png structure) and
+    // verify Browser/Viewer preview decode works cleanly.
+    let kra_path = dir.join("artwork.kra");
+    std::fs::copy(&ora_path, &kra_path).unwrap();
+    assert!(has_decoder(&kra_path));
+    assert_eq!(read_zip_dimensions(&kra_path), Some((24, 16)));
+    let kra_img = decode_rgba(&kra_path).unwrap();
+    assert_eq!(kra_img.dimensions(), (24, 16));
+    assert_eq!(kra_img.as_raw(), doc.pixels().as_raw());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn paste_modes_and_active_layer_free_transform_resize_and_undo_cleanly() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(100, 80, image::Rgba([20, 20, 20, 255]));
+    let src_png = dir.join("canvas.png");
+    bg.save(&src_png).unwrap();
+
+    // Oversized pasted image (400 × 200 -> 2:1 aspect)
+    let big = RgbaImage::from_pixel(400, 200, image::Rgba([255, 0, 0, 255]));
+
+    // 1. FitToCanvas scales 400×200 down to 100×50 centered at (0, 15)
+    let mut doc_fit = EditorDocument::from_image(src_png.clone(), bg.clone());
+    assert!(doc_fit
+        .paste_image_with_mode(
+            "Fitted".into(),
+            big.clone(),
+            kogaview_protocol::PasteMode::FitToCanvas,
+        )
+        .unwrap());
+    assert_eq!(doc_fit.dimensions(), (100, 80));
+    assert_eq!(doc_fit.active_layer().dimensions(), (100, 50));
+    assert_eq!(doc_fit.active_layer().offset_x, 0);
+    assert_eq!(doc_fit.active_layer().offset_y, 15);
+
+    // 2. ExpandCanvas expands canvas to 400×200, centers old Background at (150, 60),
+    //    and 1 Undo restores both canvas size (100×80) and layer count (1)!
+    let mut doc_exp = EditorDocument::from_image(src_png.clone(), bg.clone());
+    assert!(doc_exp
+        .paste_image_with_mode(
+            "Expanded".into(),
+            big.clone(),
+            kogaview_protocol::PasteMode::ExpandCanvas,
+        )
+        .unwrap());
+    assert_eq!(doc_exp.dimensions(), (400, 200));
+    assert_eq!(doc_exp.layers()[0].offset_x, 150);
+    assert_eq!(doc_exp.layers()[0].offset_y, 60);
+    assert_eq!(doc_exp.active_layer().dimensions(), (400, 200));
+    assert!(doc_exp.undo());
+    assert_eq!(doc_exp.dimensions(), (100, 80));
+    assert_eq!(doc_exp.layers().len(), 1);
+    assert_eq!(doc_exp.layers()[0].offset_x, 0);
+    assert_eq!(doc_exp.layers()[0].offset_y, 0);
+
+    // 3. KeepOriginal keeps 400×200 at (-150, -60), and FreeTransform on ActiveLayer
+    //    shrinks it cleanly to 80×40 at (10, 20) without clipping overflow!
+    let mut doc_keep = EditorDocument::from_image(src_png, bg);
+    assert!(doc_keep
+        .paste_image_with_mode(
+            "Kept".into(),
+            big,
+            kogaview_protocol::PasteMode::KeepOriginal,
+        )
+        .unwrap());
+    assert_eq!(doc_keep.dimensions(), (100, 80));
+    assert_eq!(doc_keep.active_layer().dimensions(), (400, 200));
+    assert_eq!(doc_keep.active_layer().offset_x, -150);
+    assert_eq!(doc_keep.active_layer().offset_y, -60);
+
+    assert!(doc_keep
+        .apply_with_target(
+            EditOperation::FreeTransform {
+                x: 10,
+                y: 20,
+                width: 80,
+                height: 40,
+                rotation: 0.0,
+                fill: None,
+                fill_alpha: 0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    assert_eq!(doc_keep.active_layer().dimensions(), (80, 40));
+    assert_eq!(doc_keep.active_layer().offset_x, 10);
+    assert_eq!(doc_keep.active_layer().offset_y, 20);
+    // Pixel inside transformed layer is red; pixel outside (0,0) shows Background.
+    assert_eq!(
+        *doc_keep.pixels().get_pixel(50, 40),
+        image::Rgba([255, 0, 0, 255])
+    );
+    assert_eq!(
+        *doc_keep.pixels().get_pixel(0, 0),
+        image::Rgba([20, 20, 20, 255])
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn selection_mask_shapes_combine_paint_masking_and_actions() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(32, 32, image::Rgba([30, 40, 50, 255]));
+    let src = dir.join("sel.png");
+    bg.save(&src).unwrap();
+    let mut doc = EditorDocument::from_image(src, bg);
+
+    // 1. Rect selection [4..20, 4..20] -> Brush stroke across entire row y=10
+    //    must paint ONLY inside x in [4..20), leaving x=1 and x=28 untouched!
+    let rect = SelectionMask::rect(32, 32, 4, 4, 16, 16);
+    doc.apply_selection_mask(rect, kogaview_protocol::SelectionMode::Replace, 0);
+    assert_eq!(doc.selection_bounds(), Some([4, 4, 16, 16]));
+
+    doc.apply(EditOperation::Paint {
+        points: vec![[1.0, 10.0], [28.0, 10.0]],
+        color: [255, 0, 0],
+        radius: 3.0,
+        opacity: 1.0,
+        erase: false,
+    })
+    .unwrap();
+    assert_eq!(
+        *doc.pixels().get_pixel(10, 10),
+        image::Rgba([255, 0, 0, 255])
+    );
+    assert_eq!(
+        *doc.pixels().get_pixel(1, 10),
+        image::Rgba([30, 40, 50, 255])
+    );
+    assert_eq!(
+        *doc.pixels().get_pixel(28, 10),
+        image::Rgba([30, 40, 50, 255])
+    );
+
+    // 2. Duplicate selection to new layer (Ctrl+J) creates 16×16 layer at (4, 4)
+    assert!(doc.selection_duplicate_layer().unwrap());
+    assert_eq!(doc.layers().len(), 2);
+    assert_eq!(doc.active_layer().name, "Selection Copy");
+    assert_eq!(doc.active_layer().dimensions(), (16, 16));
+    assert_eq!(doc.active_layer().offset_x, 4);
+    assert_eq!(doc.active_layer().offset_y, 4);
+
+    // 3. Selection Fill paints blue inside selection on active layer
+    assert!(doc.selection_fill([0, 0, 255], 1.0).unwrap());
+    assert_eq!(
+        *doc.pixels().get_pixel(10, 10),
+        image::Rgba([0, 0, 255, 255])
+    );
+
+    // 4. Selection Delete clears alpha inside selection on active layer
+    assert!(doc.selection_delete().unwrap());
+    assert_eq!(doc.active_layer().pixels.get_pixel(6, 6).0[3], 0);
+
+    // 5. Lasso polygon + Feather + Overlay PNG
+    let tri = SelectionMask::polygon(32, 32, &[[2.0, 2.0], [30.0, 2.0], [16.0, 30.0]]);
+    doc.apply_selection_mask(tri, kogaview_protocol::SelectionMode::Replace, 2);
+    assert!(doc.selection().is_some());
+    let overlay_path = dir.join("sel-overlay.png");
+    doc.selection()
+        .unwrap()
+        .render_overlay_png(&overlay_path)
+        .unwrap();
+    assert!(overlay_path.is_file());
+
+    // 6. Crop to selection shrinks canvas and clears selection
+    let rect2 = SelectionMask::rect(32, 32, 8, 8, 12, 10);
+    doc.apply_selection_mask(rect2, kogaview_protocol::SelectionMode::Replace, 0);
+    assert!(doc.selection_crop().unwrap());
+    assert_eq!(doc.dimensions(), (12, 10));
+    assert!(doc.selection().is_none());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn magic_wand_selection_copy_and_adjust_color_masking() {
+    let dir = temp_dir();
+    // 20×10 image: left block [0..8) red, middle barrier [8..12) blue, right block [12..20) red.
+    let mut img = RgbaImage::from_pixel(20, 10, image::Rgba([200, 40, 40, 255]));
+    for y in 0..10 {
+        for x in 8..12 {
+            img.put_pixel(x, y, image::Rgba([30, 60, 220, 255]));
+        }
+    }
+    let src = dir.join("wand.png");
+    img.save(&src).unwrap();
+    let mut doc = EditorDocument::from_image(src, img);
+
+    // 1. Contiguous Magic Wand at (2, 5) selects ONLY left red block [0..8, 0..10]
+    doc.select_magic_wand(
+        2,
+        5,
+        10,
+        true,
+        true,
+        kogaview_protocol::SelectionMode::Replace,
+        0,
+    );
+    assert_eq!(doc.selection_bounds(), Some([0, 0, 8, 10]));
+
+    // 2. Non-contiguous Magic Wand at (2, 5) selects BOTH left & right red blocks [0..20, 0..10]
+    //    while skipping the blue barrier at x=10.
+    doc.select_magic_wand(
+        2,
+        5,
+        10,
+        false,
+        true,
+        kogaview_protocol::SelectionMode::Replace,
+        0,
+    );
+    assert_eq!(doc.selection_bounds(), Some([0, 0, 20, 10]));
+    assert_eq!(doc.selection().unwrap().alpha_at(10, 5), 0);
+    assert_eq!(doc.selection().unwrap().alpha_at(15, 5), 255);
+
+    // 3. Extract selection image for clipboard copy masks out the unselected blue barrier
+    let extracted = doc.extract_selection_image().unwrap();
+    assert_eq!(extracted.dimensions(), (20, 10));
+    assert_eq!(extracted.get_pixel(2, 5).0[3], 255);
+    assert_eq!(extracted.get_pixel(10, 5).0[3], 0);
+    assert_eq!(extracted.get_pixel(15, 5).0[3], 255);
+
+    // 4. AdjustColor respects active selection: brightens red blocks, leaves blue barrier untouched!
+    doc.apply(EditOperation::AdjustColor {
+        brightness: 0.4,
+        contrast: 0.0,
+        saturation: 0.0,
+    })
+    .unwrap();
+    assert!(
+        doc.pixels().get_pixel(2, 5).0[0] > 200,
+        "selected pixel should brighten"
+    );
+    assert_eq!(
+        *doc.pixels().get_pixel(10, 5),
+        image::Rgba([30, 60, 220, 255]),
+        "unselected pixel must remain untouched by AdjustColor"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn free_transform_with_selection_floats_rotates_composites_and_undoes() {
+    let dir = temp_dir();
+    let mut img = RgbaImage::from_pixel(32, 32, image::Rgba([40, 40, 40, 255]));
+    for y in 4..12 {
+        for x in 4..12 {
+            img.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+        }
+    }
+    let src = dir.join("sel-transform.png");
+    img.save(&src).unwrap();
+    let mut doc = EditorDocument::from_image(src, img);
+
+    let sel = SelectionMask::rect(32, 32, 4, 4, 8, 8);
+    doc.apply_selection_mask(sel, kogaview_protocol::SelectionMode::Replace, 0);
+
+    // Move + scale + rotate the selected red square to (16, 12, 10x10, 90 deg)
+    assert!(doc
+        .apply_with_target(
+            EditOperation::FreeTransform {
+                x: 16,
+                y: 12,
+                width: 10,
+                height: 10,
+                rotation: 90.0,
+                fill: None,
+                fill_alpha: 0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+
+    // Original spot was cut (transparent)
+    assert_eq!(doc.pixels().get_pixel(8, 8).0[3], 0);
+    // Destination spot received the red patch
+    assert_eq!(
+        *doc.pixels().get_pixel(20, 16),
+        image::Rgba([255, 0, 0, 255])
+    );
+    // Unselected background pixel is completely untouched
+    assert_eq!(
+        *doc.pixels().get_pixel(1, 1),
+        image::Rgba([40, 40, 40, 255])
+    );
+    // Selection mask moved to the new region
+    assert_eq!(doc.selection_bounds(), Some([16, 12, 10, 10]));
+
+    // 1 Undo restores the original red square at (8, 8)
+    assert!(doc.undo());
+    assert_eq!(*doc.pixels().get_pixel(8, 8), image::Rgba([255, 0, 0, 255]));
+    assert_eq!(
+        *doc.pixels().get_pixel(20, 16),
+        image::Rgba([40, 40, 40, 255])
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn paste_into_empty_layer_reuses_it_and_split_previews_isolate_active_layer() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(20, 20, image::Rgba([10, 20, 30, 255]));
+    let src = dir.join("split.png");
+    bg.save(&src).unwrap();
+    let mut doc = EditorDocument::from_image(src, bg);
+
+    // Add an empty layer (Layer 2) then paste a 10x10 red image: should reuse Layer 2
+    assert!(doc
+        .apply_layer_op(LayerOperation::AddEmpty {
+            name: String::new(),
+        })
+        .unwrap());
+    assert_eq!(doc.layers().len(), 2);
+    let red = RgbaImage::from_pixel(10, 10, image::Rgba([220, 40, 40, 255]));
+    assert!(doc
+        .paste_image_with_mode(
+            "Pasted Red".to_owned(),
+            red,
+            kogaview_protocol::PasteMode::KeepOriginal
+        )
+        .unwrap());
+    assert_eq!(
+        doc.layers().len(),
+        2,
+        "pasting onto an empty layer should fill it instead of spawning a stray layer"
+    );
+    assert_eq!(doc.active_layer().name, "Pasted Red");
+
+    // Add a third green layer on top so we have 3 layers: Background, Pasted Red (active), Green
+    let green = RgbaImage::from_pixel(6, 6, image::Rgba([40, 220, 40, 255]));
+    assert!(doc
+        .paste_image_with_mode(
+            "Pasted Green".to_owned(),
+            green,
+            kogaview_protocol::PasteMode::KeepOriginal
+        )
+        .unwrap());
+    assert_eq!(doc.layers().len(), 3);
+    let mid_id = doc.layers()[1].id;
+    doc.select_layer(mid_id).unwrap();
+
+    // Split previews for middle layer must isolate below (bg), active (red), above (green)
+    let (below, active, above) = doc.active_layer_split_previews();
+    assert_eq!(*below.get_pixel(0, 0), image::Rgba([10, 20, 30, 255]));
+    assert_eq!(active.dimensions(), (10, 10));
+    assert_eq!(*active.get_pixel(0, 0), image::Rgba([220, 40, 40, 255]));
+    assert_eq!(above.get_pixel(0, 0).0[3], 0);
+    assert_eq!(*above.get_pixel(10, 10), image::Rgba([40, 220, 40, 255]));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn multilayer_canvas_size_fills_bottom_layer_when_opaque_and_keeps_transparent_when_alpha_zero() {
+    let dir = temp_dir();
+    let bg = RgbaImage::from_pixel(10, 10, image::Rgba([20, 30, 40, 255]));
+    let src = dir.join("bg-expand.png");
+    bg.save(&src).unwrap();
+    let mut doc = EditorDocument::from_image(src, bg);
+
+    // Add a second layer on top
+    let top = RgbaImage::from_pixel(4, 4, image::Rgba([200, 50, 50, 255]));
+    doc.paste_image_with_mode(
+        "Top".to_owned(),
+        top,
+        kogaview_protocol::PasteMode::KeepOriginal,
+    )
+    .unwrap();
+    assert_eq!(doc.layers().len(), 2);
+
+    // 1. Expand canvas to 20x20 with opaque white fill -> corner (0, 0) becomes white, 2 layers preserved
+    doc.apply(EditOperation::CanvasSize {
+        width: 20,
+        height: 20,
+        anchor: "center".to_owned(),
+        fill: Some([255, 255, 255]),
+        fill_alpha: 255,
+    })
+    .unwrap();
+    assert_eq!(doc.layers().len(), 2);
+    assert_eq!(
+        *doc.pixels().get_pixel(0, 0),
+        image::Rgba([255, 255, 255, 255])
+    );
+    assert_eq!(
+        *doc.pixels().get_pixel(10, 10),
+        image::Rgba([200, 50, 50, 255])
+    );
+
+    // 2. Undo and expand with transparent fill_alpha=0 -> corner (0, 0) stays transparent
+    assert!(doc.undo());
+    doc.apply(EditOperation::CanvasSize {
+        width: 20,
+        height: 20,
+        anchor: "center".to_owned(),
+        fill: None,
+        fill_alpha: 0,
+    })
+    .unwrap();
+    assert_eq!(doc.pixels().get_pixel(0, 0).0[3], 0);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn canvas_background_toggles_between_transparent_and_solid_with_undo_and_split_previews() {
+    let dir = temp_dir();
+    let path = dir.join("sprite.png");
+    let mut img = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 0, 0]));
+    for y in 4..12 {
+        for x in 4..12 {
+            img.put_pixel(x, y, image::Rgba([220, 40, 40, 255]));
+        }
+    }
+    img.save(&path).unwrap();
+
+    let mut doc = EditorDocument::from_image(path, img);
+    assert_eq!(doc.canvas_background(), None);
+    assert_eq!(doc.pixels().get_pixel(0, 0).0, [0, 0, 0, 0]);
+    assert_eq!(doc.pixels().get_pixel(8, 8).0, [220, 40, 40, 255]);
+
+    // Enable solid white canvas background underneath the single layer.
+    assert!(doc
+        .apply_layer_op(LayerOperation::SetCanvasBackground {
+            color: Some([255, 255, 255]),
+        })
+        .unwrap());
+    assert_eq!(doc.canvas_background(), Some([255, 255, 255]));
+    assert_eq!(doc.pixels().get_pixel(0, 0).0, [255, 255, 255, 255]);
+    assert_eq!(doc.pixels().get_pixel(8, 8).0, [220, 40, 40, 255]);
+
+    // Split previews on a single-layer doc expose the solid background in `below`
+    // and the layer's own transparent pixels in `active`.
+    let (below, active, above) = doc.active_layer_split_previews();
+    assert_eq!(below.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    assert_eq!(active.get_pixel(0, 0).0, [0, 0, 0, 0]);
+    assert_eq!(active.get_pixel(8, 8).0, [220, 40, 40, 255]);
+    assert_eq!(above.get_pixel(0, 0).0[3], 0);
+
+    // Undo restores transparent canvas background.
+    assert!(doc.undo());
+    assert_eq!(doc.canvas_background(), None);
+    assert_eq!(doc.pixels().get_pixel(0, 0).0[3], 0);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn selection_split_previews_separate_base_and_floating_patch() {
+    let dir = temp_dir();
+    let path = dir.join("solid.png");
+    let img = image::RgbaImage::from_pixel(20, 20, image::Rgba([30, 120, 210, 255]));
+    img.save(&path).unwrap();
+
+    let mut doc = EditorDocument::from_image(path, img);
+    let mask = SelectionMask::rect(20, 20, 5, 6, 8, 7);
+    doc.apply_selection_mask(mask, kogaview_protocol::SelectionMode::Replace, 0);
+
+    let (base, floating) = doc.selection_split_previews().expect("selection split");
+    assert_eq!(floating.dimensions(), (8, 7));
+    assert_eq!(floating.get_pixel(0, 0).0, [30, 120, 210, 255]);
+    // Selected hole in base is punched out (transparent), outside remains opaque.
+    assert_eq!(base.get_pixel(6, 7).0[3], 0);
+    assert_eq!(base.get_pixel(0, 0).0, [30, 120, 210, 255]);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn rotate_and_flip_with_selection_transform_only_selected_region_and_mask() {
+    let dir = temp_dir();
+    let path = dir.join("sel-rot.png");
+    let mut img = image::RgbaImage::from_pixel(30, 20, image::Rgba([20, 20, 20, 255]));
+    // Paint a non-square 8x4 red bar at (10..18, 8..12) with bright green left half.
+    for y in 8..12 {
+        for x in 10..18 {
+            let px = if x < 14 {
+                image::Rgba([0, 255, 0, 255])
+            } else {
+                image::Rgba([255, 0, 0, 255])
+            };
+            img.put_pixel(x, y, px);
+        }
+    }
+    img.save(&path).unwrap();
+
+    let mut doc = EditorDocument::from_image(path, img);
+    doc.apply_selection_mask(
+        SelectionMask::rect(30, 20, 10, 8, 8, 4),
+        kogaview_protocol::SelectionMode::Replace,
+        0,
+    );
+
+    // 1. Flip horizontally: green (left) and red (right) swap inside (10..18, 8..12), canvas stays 30x20!
+    doc.apply_with_target(
+        EditOperation::Flip {
+            axis: FlipAxis::Horizontal,
+        },
+        ApplyTarget::WholeImage,
+    )
+    .unwrap();
+    assert_eq!(doc.dimensions(), (30, 20));
+    assert_eq!(doc.selection_bounds(), Some([10, 8, 8, 4]));
+    assert_eq!(doc.pixels().get_pixel(11, 9).0, [255, 0, 0, 255]);
+    assert_eq!(doc.pixels().get_pixel(16, 9).0, [0, 255, 0, 255]);
+
+    // 2. Rotate 90° CW: 8x4 selection becomes 4x8 centered at (12, 6), canvas still 30x20!
+    doc.apply_with_target(
+        EditOperation::Rotate { degrees: 90 },
+        ApplyTarget::WholeImage,
+    )
+    .unwrap();
+    assert_eq!(doc.dimensions(), (30, 20));
+    assert_eq!(doc.selection_bounds(), Some([12, 6, 4, 8]));
+    // Original left/right overhanging ends of 8x4 were punched out to transparent.
+    assert_eq!(doc.pixels().get_pixel(10, 9).0[3], 0);
+    // Top half of rotated 4x8 bar is now red (was left half before 90° CW).
+    assert_eq!(doc.pixels().get_pixel(13, 7).0, [255, 0, 0, 255]);
+
+    // 3. Clear selection and rotate 90° CW on WholeImage -> whole canvas swaps 30x20 -> 20x30!
+    doc.clear_selection();
+    doc.apply_with_target(
+        EditOperation::Rotate { degrees: 90 },
+        ApplyTarget::WholeImage,
+    )
+    .unwrap();
+    assert_eq!(doc.dimensions(), (20, 30));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn adjust_curves_respects_channels_active_layer_selection_and_preview() {
+    let dir = temp_dir();
+    let path = dir.join("curves.png");
+    let bg = image::RgbaImage::from_pixel(16, 16, image::Rgba([100, 100, 100, 255]));
+    bg.save(&path).unwrap();
+
+    let mut doc = EditorDocument::from_image(path, bg);
+    let top = image::RgbaImage::from_pixel(16, 16, image::Rgba([128, 128, 128, 255]));
+    doc.paste_image_with_mode(
+        "Top".to_owned(),
+        top,
+        kogaview_protocol::PasteMode::KeepOriginal,
+    )
+    .unwrap();
+    // Select left half (0..8, 0..16)
+    doc.apply_selection_mask(
+        SelectionMask::rect(16, 16, 0, 0, 8, 16),
+        kogaview_protocol::SelectionMode::Replace,
+        0,
+    );
+
+    // Boost red channel at midpoint (0.5 -> 0.85), leave green/blue linear.
+    let op = EditOperation::AdjustCurves {
+        rgb: vec![[0.0, 0.0], [1.0, 1.0]],
+        red: vec![[0.0, 0.0], [0.5, 0.85], [1.0, 1.0]],
+        green: vec![[0.0, 0.0], [1.0, 1.0]],
+        blue: vec![[0.0, 0.0], [1.0, 1.0]],
+    };
+
+    // 1. Live preview reflects boosted red ONLY inside selection without mutating doc
+    let prev = doc.preview_color_filter(&op, ApplyTarget::ActiveLayer);
+    assert!(prev.get_pixel(2, 2).0[0] > 200);
+    assert_eq!(prev.get_pixel(12, 2).0[0], 128);
+    assert_eq!(doc.pixels().get_pixel(2, 2).0[0], 128);
+
+    // 2. Apply on ActiveLayer modifies Top inside selection, leaves Background & outside untouched
+    assert!(doc.apply_with_target(op, ApplyTarget::ActiveLayer).unwrap());
+    assert!(doc.pixels().get_pixel(2, 2).0[0] > 200);
+    assert_eq!(doc.pixels().get_pixel(2, 2).0[1], 128);
+    assert_eq!(doc.pixels().get_pixel(12, 2).0[0], 128);
+    assert_eq!(doc.layers()[0].pixels.get_pixel(2, 2).0[0], 100);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn selection_move_and_intersect_work_without_mutating_pixels() {
+    let dir = temp_dir();
+    let path = dir.join("sel-move.png");
+    let img = image::RgbaImage::from_pixel(30, 30, image::Rgba([50, 100, 150, 255]));
+    img.save(&path).unwrap();
+
+    let mut doc = EditorDocument::from_image(path, img);
+    doc.apply_selection_mask(
+        SelectionMask::rect(30, 30, 4, 4, 10, 10),
+        kogaview_protocol::SelectionMode::Replace,
+        0,
+    );
+    assert_eq!(doc.selection_bounds(), Some([4, 4, 10, 10]));
+
+    // Move selection frame by (+6, +3) -> bounds shift to (10, 7, 10, 10), pixels untouched
+    assert!(doc.move_selection(6, 3));
+    assert_eq!(doc.selection_bounds(), Some([10, 7, 10, 10]));
+    assert!(!doc.can_undo());
+
+    // Intersect with (15, 10, 10, 10) -> overlap is (15..20, 10..17) => [15, 10, 5, 7]
+    doc.apply_selection_mask(
+        SelectionMask::rect(30, 30, 15, 10, 10, 10),
+        kogaview_protocol::SelectionMode::Intersect,
+        0,
+    );
+    assert_eq!(doc.selection_bounds(), Some([15, 10, 5, 7]));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn adjust_hsv_and_color_balance_respect_selection_and_layers() {
+    let dir = temp_dir();
+    let path = dir.join("hsv-cb.png");
+    let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([200, 50, 50, 255]));
+    img.save(&path).unwrap();
+
+    let mut doc = EditorDocument::from_image(path, img);
+    doc.apply_selection_mask(
+        SelectionMask::rect(16, 16, 0, 0, 8, 16),
+        kogaview_protocol::SelectionMode::Replace,
+        0,
+    );
+
+    // 1. HSV hue shift +120° turns red (200, 50, 50) into green inside selection only
+    assert!(doc
+        .apply_with_target(
+            EditOperation::AdjustHsv {
+                hue: 120.0,
+                saturation: 0.0,
+                value: 0.0,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    let inside = doc.pixels().get_pixel(2, 2).0;
+    let outside = doc.pixels().get_pixel(12, 2).0;
+    assert!(inside[1] > inside[0] && inside[1] > 180);
+    assert_eq!(outside, [200, 50, 50, 255]);
+
+    // 2. Color balance boosts blue in midtones inside selection only
+    assert!(doc
+        .apply_with_target(
+            EditOperation::ColorBalance {
+                shadows: [0.0, 0.0, 0.0],
+                midtones: [0.0, 0.0, 0.8],
+                highlights: [0.0, 0.0, 0.0],
+                preserve_luminosity: false,
+            },
+            ApplyTarget::ActiveLayer,
+        )
+        .unwrap());
+    assert!(doc.pixels().get_pixel(2, 2).0[2] > inside[2]);
+    assert_eq!(doc.pixels().get_pixel(12, 2).0, [200, 50, 50, 255]);
+
     std::fs::remove_dir_all(&dir).unwrap();
 }

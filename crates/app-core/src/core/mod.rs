@@ -26,8 +26,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 
 use kogaview_protocol::{
-    BatchOperation, BatchOutput, BatchSource, Command, Envelope, MoveDirection, ProtocolError,
-    Query, ResizeFilter, ResizeMode, Theme, Workspace,
+    ApplyTarget, BatchOperation, BatchOutput, BatchSource, Command, Envelope, MoveDirection,
+    ProtocolError, Query, ResizeFilter, ResizeMode, Theme, Workspace,
 };
 use serde_json::{json, Value};
 
@@ -174,6 +174,21 @@ pub struct Core {
     /// hide it after a tool switch instead of painting the other result.
     editor_draft_kind: String,
     editor_draft_generation: u64,
+    /// Marching-ants contour PNG for the active raster selection, if any.
+    editor_selection_overlay_path: Option<PathBuf>,
+    editor_selection_revision: u64,
+    /// Temporary PNG exported by `EditorSelectionCopy` for QML `Platform.copyImage`.
+    editor_clipboard_export_path: Option<PathBuf>,
+    editor_clipboard_export_revision: u64,
+    /// Split layer previews (`below`, `active`, `above`) for WYSIWYG per-layer Transform.
+    editor_active_layer_preview_path: Option<PathBuf>,
+    editor_below_active_preview_path: Option<PathBuf>,
+    editor_above_active_preview_path: Option<PathBuf>,
+    editor_layer_preview_revision: u64,
+    /// Monotonic in-RAM preview revisions for `image://editor/<kind>?rev=N`.
+    editor_ram_canvas_revision: u64,
+    editor_ram_layer_revision: u64,
+    editor_ram_selection_revision: u64,
     /// True while a save is being encoded and written on a worker.
     editor_saving: bool,
     /// Bumped for every save, so a result for a superseded save is dropped.
@@ -197,10 +212,16 @@ pub struct Core {
     /// When `Some`, the active AI inference is a Browser/Viewer Quick Action
     /// writing a new sibling file rather than editing the open Editor document.
     ai_quick_action_output: Option<PathBuf>,
+    /// Target layer mode (`ActiveLayer` / `WholeImage` / `NewLayer`) for the
+    /// active Editor AI inference task.
+    ai_apply_target: ApplyTarget,
     /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
-    /// listing on its own and only re-sends it when this changes, because it is
+    /// listing on its own and only re-ends it when this changes, because it is
     /// the one part of the snapshot that grows with the folder.
     listing_epoch: u64,
+    /// True when launched with `--safe-mode` (`KOGAVIEW_SAFE_MODE=1`):
+    /// in-memory factory defaults, no external plugins, never writes `config.json`.
+    safe_mode: bool,
 }
 
 mod ai;
@@ -217,15 +238,42 @@ impl Core {
         let identity = AppIdentity::current();
         let paths = AppPaths::for_identity(&identity);
         let config_path = paths.config_dir.join("config.json");
-        let (config, warning) = Config::load_or_create(&config_path);
+        let safe_mode = std::env::var("KOGAVIEW_SAFE_MODE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let reset_config = std::env::var("KOGAVIEW_RESET_CONFIG")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let reset_layout = std::env::var("KOGAVIEW_RESET_LAYOUT")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        let (config, warning) = if safe_mode {
+            let mut cfg = Config::factory_default();
+            cfg.hardware_acceleration = false;
+            cfg.remember_last_folder = false;
+            (
+                cfg,
+                Some(
+                    "safe mode active: using in-memory factory defaults (plugins & GPU disabled)"
+                        .to_owned(),
+                ),
+            )
+        } else if reset_config {
+            Config::reset_to_factory(&config_path)
+        } else if reset_layout {
+            Config::reset_layout_only(&config_path)
+        } else {
+            Config::load_or_create(&config_path)
+        };
         if let Some(warning) = &warning {
-            tracing::warn!(target: "kogaview::config", %warning, "configuration fallback");
+            tracing::warn!(target: "kogaview::config", %warning, "configuration startup mode");
         }
 
         let journal = Journal::new(&paths.journal_dir);
         let config_path_label = config_path.to_string_lossy().into_owned();
         let (editor_tx, editor_rx) = mpsc::channel();
-        let state = UiState::new(
+        let mut state = UiState::new(
             config.theme,
             config.language,
             config.quick_access.clone(),
@@ -237,6 +285,14 @@ impl Core {
             config.anti_aliasing,
             config_path_label,
         );
+        state.safe_mode = safe_mode;
+        if safe_mode {
+            state.status = UiText::new("safe_mode_active");
+        } else if reset_config {
+            state.status = UiText::new("config_reset_done");
+        } else if reset_layout {
+            state.status = UiText::new("layout_reset_done");
+        }
 
         let mut core = Self {
             paths,
@@ -261,6 +317,17 @@ impl Core {
             editor_draft_size: (0, 0),
             editor_draft_kind: String::new(),
             editor_draft_generation: 0,
+            editor_selection_overlay_path: None,
+            editor_selection_revision: 0,
+            editor_clipboard_export_path: None,
+            editor_clipboard_export_revision: 0,
+            editor_active_layer_preview_path: None,
+            editor_below_active_preview_path: None,
+            editor_above_active_preview_path: None,
+            editor_layer_preview_revision: 0,
+            editor_ram_canvas_revision: 0,
+            editor_ram_layer_revision: 0,
+            editor_ram_selection_revision: 0,
             editor_saving: false,
             editor_save_generation: 0,
             pending_save: None,
@@ -274,11 +341,15 @@ impl Core {
             ai_temp_input: None,
             ai_temp_output: None,
             ai_quick_action_output: None,
+            ai_apply_target: ApplyTarget::WholeImage,
             listing_epoch: 0,
+            safe_mode,
         };
 
-        core.refresh_ai_inventory();
-        core.restore_last_session();
+        if !safe_mode {
+            core.refresh_ai_inventory();
+            core.restore_last_session();
+        }
         core
     }
 
@@ -372,6 +443,17 @@ impl Core {
             editor_draft_size: (0, 0),
             editor_draft_kind: String::new(),
             editor_draft_generation: 0,
+            editor_selection_overlay_path: None,
+            editor_selection_revision: 0,
+            editor_clipboard_export_path: None,
+            editor_clipboard_export_revision: 0,
+            editor_active_layer_preview_path: None,
+            editor_below_active_preview_path: None,
+            editor_above_active_preview_path: None,
+            editor_layer_preview_revision: 0,
+            editor_ram_canvas_revision: 0,
+            editor_ram_layer_revision: 0,
+            editor_ram_selection_revision: 0,
             editor_saving: false,
             editor_save_generation: 0,
             pending_save: None,
@@ -385,7 +467,9 @@ impl Core {
             ai_temp_input: None,
             ai_temp_output: None,
             ai_quick_action_output: None,
+            ai_apply_target: ApplyTarget::WholeImage,
             listing_epoch: 0,
+            safe_mode: false,
         }
     }
 

@@ -301,6 +301,102 @@ Item {
     /// tool: it is a dialog (`ResizeDialog.qml`), because choosing a size is a
     /// question with a beginning and an end rather than a mode to stay in.
     property string tool: "pointer"
+    /// True when the open document has more than one raster layer.
+    readonly property bool hasMultipleLayers: !!(view.editor && view.editor.layers && view.editor.layers.length > 1)
+    /// Currently selected layer ID; switching active layer while Transform is
+    /// open automatically snaps the bounding box to the newly selected layer.
+    readonly property int activeLayerId: view.editor ? (view.editor.activeLayerId || 0) : 0
+    onActiveLayerIdChanged: {
+        if (view.tool === "transform") view.resetTransformCorners()
+    }
+    /// True when a raster selection mask is active on the open document.
+    readonly property bool hasSelection: !!(view.editor && view.editor.hasSelection)
+    /// Krita-style selection visualization: `"ants"` (animated fine marching ants)
+    /// or `"mask"` (translucent red overlay on unselected pixels).
+    property string selectionDisplayMode: "ants"
+    property bool selectionAntsPhase: false
+    readonly property bool isColorFilterTool:
+        view.tool === "adjust" || view.tool === "hsv"
+        || view.tool === "curves" || view.tool === "colorBalance"
+    /// True while any non-blocking Color Adjustment filter dialog is open:
+    /// canvas Pan/Zoom stays active while all buttons outside the dialog are locked.
+    readonly property bool filterDialogOpen:
+        (typeof hsvDialog !== "undefined" && hsvDialog && hsvDialog.opened)
+        || (typeof curvesDialog !== "undefined" && curvesDialog && curvesDialog.opened)
+        || (typeof colorBalanceDialog !== "undefined" && colorBalanceDialog && colorBalanceDialog.opened)
+
+    Timer {
+        interval: 380
+        repeat: true
+        running: view.visible && view.hasSelection && view.selectionDisplayMode === "ants"
+                 && !view.transformFrameShown && !view.rotateFrameShown
+                 && !view.resizeFrameShown && !view.canvasSizeFrameShown
+        onTriggered: view.selectionAntsPhase = !view.selectionAntsPhase
+    }
+
+    /// Krita-style K (darker) / L (lighter) quick foreground value nudge while painting.
+    function nudgeForegroundValue(deltaV) {
+        var bytes = view.foregroundBytes()
+        var r = bytes[0] / 255.0, g = bytes[1] / 255.0, b = bytes[2] / 255.0
+        var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+        var h = 0
+        if (d > 1e-6) {
+            if (max === r) h = 60 * (((g - b) / d) % 6)
+            else if (max === g) h = 60 * (((b - r) / d) + 2)
+            else h = 60 * (((r - g) / d) + 4)
+            if (h < 0) h += 360
+        }
+        var s = max > 1e-6 ? d / max : 0
+        var v = Math.max(0.0, Math.min(1.0, max + deltaV))
+        var c = v * s
+        var x = c * (1 - Math.abs((h / 60) % 2 - 1))
+        var m = v - c
+        var nr = 0, ng = 0, nb = 0
+        if (h < 60) { nr = c; ng = x }
+        else if (h < 120) { nr = x; ng = c }
+        else if (h < 180) { ng = c; nb = x }
+        else if (h < 240) { ng = x; nb = c }
+        else if (h < 300) { nr = x; nb = c }
+        else { nr = c; nb = x }
+        function hex2(u) {
+            var s2 = Math.max(0, Math.min(255, Math.round(u * 255))).toString(16)
+            return s2.length < 2 ? "0" + s2 : s2
+        }
+        view.setForegroundColor("#" + hex2(nr + m) + hex2(ng + m) + hex2(nb + m))
+    }
+    readonly property string selectionBoundsKey: {
+        var sb = view.editor ? view.editor.selectionBounds : null
+        return (sb && sb.length === 4) ? sb.join(",") : ""
+    }
+    onSelectionBoundsKeyChanged: {
+        if (view.tool === "transform") view.resetTransformCorners()
+    }
+    /// Selection tool shape (`"rect"` | `"ellipse"` | `"lasso"` | `"wand"`), combine mode, and feather radius (px).
+    property string selectShape: "rect"
+    property string selectMode: "replace"
+    property int selectFeather: 0
+    property int wandTolerance: 32
+    property bool wandContiguous: true
+    property bool wandSampleAllLayers: true
+    property int lastClipboardExportRev: 0
+    readonly property int clipboardExportRev: view.editor ? (view.editor.clipboardExportRevision || 0) : 0
+    onClipboardExportRevChanged: {
+        if (view.clipboardExportRev > view.lastClipboardExportRev
+                && view.editor && view.editor.clipboardExportPath) {
+            view.lastClipboardExportRev = view.clipboardExportRev
+            view.copyImage(view.editor.clipboardExportPath)
+        }
+    }
+    /// Target mode for layer-capable Editor tools (`"active_layer"` | `"whole_image"`).
+    property string toolApplyTarget: "active_layer"
+    /// Target mode for AI tools (`"active_layer"` | `"whole_image"` | `"new_layer"`).
+    property string aiApplyTarget: "active_layer"
+    function effectiveToolTarget() {
+        return view.hasMultipleLayers ? view.toolApplyTarget : "whole_image"
+    }
+    function effectiveAiTarget() {
+        return view.aiApplyTarget
+    }
     /// Crop's shape, as typed: a ratio such as `3:2`, or `free` when the two
     /// sides are independent. A text field rather than a table, so any shape
     /// the user needs is reachable; the presets below still write a concrete
@@ -360,7 +456,14 @@ Item {
     ///   background (`backgroundColor` / `backgroundTransparent`).
     /// - `scale`: Scale Canvas — drag the bounding box to resize the document's
     ///   own `W × H` dimensions directly while keeping the current viewport zoom.
+    /// Mode inside the unified Image Size tool (`"resize"` | `"canvasSize"`).
+    /// Document-level only: never affected by active layer or selection mask.
+    property string imageSizeMode: "resize"
     property string transformMode: "free"
+    /// Live rotation angle (degrees) for Transform Free mode.
+    property real transformRotation: 0
+    /// Keep aspect ratio when editing W/H in the Transform Each panel.
+    property bool transformLockRatio: true
     /// The transform bounding box as four clockwise corners in document pixels
     /// (`[[x, y], [x+w, y], [x+w, y+h], [x, y+h]]`). Identity is the document's
     /// own frame.
@@ -570,11 +673,35 @@ Item {
         canvasBgColorDialog.open()
     }
 
-    /// Krita's [ and ]: one pixel per press, ten with Shift.
+    /// Sample a `#rrggbb` colour directly from the open Editor canvas (in-RAM
+    /// when available, falling back to `previewPath`) at canvas-host `(hostX, hostY)`.
+    function pickCanvasColor(hostX, hostY) {
+        if (!view.documentReady || !view.editor) return ""
+        var samplePath = (view.editor.ramCanvasRevision || 0) > 0
+                         ? "ram://canvas"
+                         : (view.editor.previewPath || "")
+        if (!samplePath) return ""
+        if (view.documentWidth <= 0 || view.documentHeight <= 0) return ""
+        var docX = view.hostToDocX(hostX)
+        var docY = view.hostToDocY(hostY)
+        if (docX < 0 || docY < 0 || docX >= view.documentWidth || docY >= view.documentHeight)
+            return ""
+        var hex = Platform.sampleImageColor(
+            samplePath,
+            docX / Math.max(1, view.documentWidth),
+            docY / Math.max(1, view.documentHeight))
+        if (hex && hex.length === 7) {
+            view.setForegroundColor(hex)
+            return hex
+        }
+        return ""
+    }
+
+    /// Krita's [ and ]: smart step per press, 10 px with Shift.
     function stepPaintSize(delta) {
         view.paintSize = Math.max(view.minimumPaintSize,
                                   Math.min(view.maximumPaintSize,
-                                           view.paintSize + delta))
+                                           Math.round(view.paintSize + delta)))
     }
 
     /// Pick the paint tool and one of its two modes; the palette's Brush and
@@ -641,11 +768,75 @@ Item {
         strokePreview.requestPaint()
     }
 
+    // Global Editor shortcuts (disabled while a color filter dialog owns the session).
+    Shortcut {
+        sequence: "Ctrl+D"
+        enabled: view.visible && view.documentReady && view.hasSelection && !view.filterDialogOpen
+        onActivated: view.command({ type: "editor_select_clear" })
+    }
+    Shortcut {
+        sequence: "Ctrl+U"
+        enabled: view.visible && view.documentReady && !view.filterDialogOpen
+        onActivated: view.activateFilterTool("hsv")
+    }
+    Shortcut {
+        sequence: "Ctrl+M"
+        enabled: view.visible && view.documentReady && !view.filterDialogOpen
+        onActivated: view.activateFilterTool("curves")
+    }
+    Shortcut {
+        sequence: "Ctrl+B"
+        enabled: view.visible && view.documentReady && !view.filterDialogOpen
+        onActivated: view.activateFilterTool("colorBalance")
+    }
+
+    function activateFilterTool(toolKey) {
+        if (!view.documentReady) return
+        if (view.tool !== toolKey) {
+            view.tool = toolKey
+        }
+        inspector.topTab = "options"
+        inspector.topCollapsed = false
+        if (toolKey === "adjust") adjustOptionsPanel.reset()
+        else if (toolKey === "hsv") hsvOptionsPanel.reset()
+        else if (toolKey === "curves") curvesOptionsPanel.reset()
+        else if (toolKey === "colorBalance") colorBalanceOptionsPanel.reset()
+    }
+
+    Timer {
+        id: adjustPreviewTimer
+        interval: 35
+        onTriggered: {
+            if (view.tool === "adjust" && view.documentReady && adjustOptionsPanel.changed) {
+                view.command({
+                    type: "editor_preview_filter",
+                    clear: false,
+                    kind: "color",
+                    brightness: adjustOptionsPanel.brightness,
+                    contrast: adjustOptionsPanel.contrast,
+                    saturation: adjustOptionsPanel.saturation,
+                    target: view.effectiveToolTarget()
+                })
+            }
+        }
+    }
+
+    function scheduleAdjustPreview() {
+        if (view.tool !== "adjust" || !view.documentReady) return
+        if (!adjustOptionsPanel.changed) {
+            adjustPreviewTimer.stop()
+            view.command({ type: "editor_preview_filter", clear: true })
+            return
+        }
+        adjustPreviewTimer.restart()
+    }
+
     /// The Krita defaults this build maps. Plain keys belong to the view, so a
     /// text field that has focus consumes them first — typing "b" into X must
     /// not arm the brush. Ctrl+Z and Ctrl+Shift+Z are the undo pair; the rest
     /// are bare keys.
     Keys.onPressed: function(event) {
+        if (view.filterDialogOpen) return
         var control = (event.modifiers & Qt.ControlModifier) !== 0
         var alt = (event.modifiers & Qt.AltModifier) !== 0
         var shift = (event.modifiers & Qt.ShiftModifier) !== 0
@@ -709,10 +900,208 @@ Item {
                 var redo = event.key === Qt.Key_Y || shift
                 view.command({ type: redo ? "editor_redo" : "editor_undo" })
                 event.accepted = true
+            } else if (control && !alt && !shift && event.key === Qt.Key_A && view.documentReady) {
+                view.command({ type: "editor_select_all" })
+                event.accepted = true
+            } else if (control && !alt && !shift && event.key === Qt.Key_D && view.documentReady) {
+                view.command({ type: "editor_select_clear" })
+                event.accepted = true
+            } else if (control && !alt && shift && event.key === Qt.Key_I && view.documentReady) {
+                view.command({ type: "editor_select_invert" })
+                event.accepted = true
+            } else if (control && !alt && !shift && event.key === Qt.Key_J && view.documentReady) {
+                if (view.hasSelection) {
+                    view.command({ type: "editor_selection_duplicate_layer" })
+                } else if (view.activeLayerId > 0) {
+                    view.command({ type: "editor_layer_duplicate", id: view.activeLayerId })
+                }
+                event.accepted = true
+            } else if (control && !alt && !shift && event.key === Qt.Key_C && view.documentReady) {
+                view.command({ type: "editor_selection_copy", cut: false })
+                event.accepted = true
+            } else if (control && !alt && !shift && event.key === Qt.Key_X && view.documentReady) {
+                view.command({ type: "editor_selection_copy", cut: true })
+                event.accepted = true
+            } else if (control && !alt && !shift && event.key === Qt.Key_T && view.documentReady) {
+                if (view.tool === "transform") {
+                    view.tool = "pointer"
+                } else {
+                    view.tool = "transform"
+                    view.resetTransformCorners()
+                }
+                event.accepted = true
             }
             return
         }
+        if (view.tool === "transform" && view.documentReady) {
+            var nudge = shift ? 10 : 1
+            if (event.key === Qt.Key_Left || event.key === Qt.Key_Right
+                    || event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                var r = view.transformRect()
+                if (r) {
+                    var nx = r.x + (event.key === Qt.Key_Left ? -nudge : (event.key === Qt.Key_Right ? nudge : 0))
+                    var ny = r.y + (event.key === Qt.Key_Up ? -nudge : (event.key === Qt.Key_Down ? nudge : 0))
+                    view.setTransformFrame(nx, ny, r.width, r.height)
+                }
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (view.transformUsable() && view.transformChanged()) {
+                    view.applyTransform()
+                }
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_Escape) {
+                view.resetTransformCorners()
+                view.tool = "pointer"
+                event.accepted = true
+                return
+            }
+        }
+        if ((view.tool === "select" || view.tool === "pointer") && view.hasSelection && view.documentReady) {
+            var selNudge = shift ? 10 : 1
+            if (event.key === Qt.Key_Left || event.key === Qt.Key_Right
+                    || event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                var sdx = event.key === Qt.Key_Left ? -selNudge : (event.key === Qt.Key_Right ? selNudge : 0)
+                var sdy = event.key === Qt.Key_Up ? -selNudge : (event.key === Qt.Key_Down ? selNudge : 0)
+                view.command({ type: "editor_select_move", dx: sdx, dy: sdy })
+                event.accepted = true
+                return
+            }
+        }
+        if (view.tool === "select" && view.documentReady) {
+            if (selectOverlay.polyPoints.length > 0) {
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    selectOverlay.finishPolygon()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_Backspace) {
+                    selectOverlay.popPolygonPoint()
+                    event.accepted = true
+                    return
+                }
+                if (event.key === Qt.Key_Escape) {
+                    selectOverlay.cancelPolygon()
+                    event.accepted = true
+                    return
+                }
+            }
+            if (event.key === Qt.Key_R) {
+                view.selectMode = "replace"
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_A) {
+                view.selectMode = shift ? "intersect" : "add"
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_S) {
+                view.selectMode = "subtract"
+                event.accepted = true
+                return
+            }
+        }
+        if (view.tool === "paint" && view.documentReady) {
+            // Krita Paint brush color shortcuts:
+            // K = darker (-8% value), L = lighter (+8% value), C = quick color popup at cursor.
+            if (event.key === Qt.Key_K) {
+                view.nudgeForegroundValue(-0.08)
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_L) {
+                view.nudgeForegroundValue(0.08)
+                event.accepted = true
+                return
+            }
+            if (event.key === Qt.Key_C) {
+                quickBrushColorPopup.openAtCursor(paintArea.hoverInside ? paintArea.hoverX : canvasHost.width / 2,
+                                                  paintArea.hoverInside ? paintArea.hoverY : canvasHost.height / 2)
+                event.accepted = true
+                return
+            }
+        }
         switch (event.key) {
+        case Qt.Key_M:
+            if (view.documentReady) {
+                if (view.tool === "select") {
+                    view.selectShape = view.selectShape === "rect" ? "ellipse" : "rect"
+                } else {
+                    view.tool = "select"
+                    view.selectShape = "rect"
+                }
+                event.accepted = true
+            }
+            break
+        case Qt.Key_L:
+            if (view.documentReady) {
+                if (view.tool === "select") {
+                    view.selectShape = view.selectShape === "lasso" ? "polygon" : "lasso"
+                } else {
+                    view.tool = "select"
+                    view.selectShape = "lasso"
+                }
+                event.accepted = true
+            }
+            break
+        case Qt.Key_W:
+            if (view.documentReady) {
+                view.tool = "select"
+                view.selectShape = "wand"
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Delete:
+        case Qt.Key_Backspace:
+            if (view.documentReady && view.hasSelection) {
+                view.command({ type: "editor_selection_delete" })
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Escape:
+            if (view.documentReady && view.hasSelection) {
+                view.command({ type: "editor_select_clear" })
+                event.accepted = true
+            }
+            break
+        case Qt.Key_B:
+            if (view.documentReady) {
+                view.tool = "paint"
+                view.selectPaintMode("brush")
+                event.accepted = true
+            }
+            break
+        case Qt.Key_E:
+            if (view.documentReady) {
+                view.tool = "paint"
+                view.selectPaintMode("eraser")
+                event.accepted = true
+            }
+            break
+        case Qt.Key_I:
+            if (view.documentReady) {
+                view.tool = "eyedropper"
+                event.accepted = true
+            }
+            break
+        case Qt.Key_BracketLeft:
+            if (view.documentReady) {
+                var dec = shift ? 10 : (view.paintSize > 40 ? 5 : (view.paintSize > 12 ? 2 : 1))
+                view.stepPaintSize(-dec)
+                event.accepted = true
+            }
+            break
+        case Qt.Key_BracketRight:
+            if (view.documentReady) {
+                var inc = shift ? 10 : (view.paintSize >= 40 ? 5 : (view.paintSize >= 12 ? 2 : 1))
+                view.stepPaintSize(inc)
+                event.accepted = true
+            }
+            break
         case Qt.Key_H:
             view.tool = "hand"
             event.accepted = true
@@ -971,8 +1360,42 @@ Item {
         return { x: Math.round(nx), y: Math.round(ny) }
     }
 
-    /// The quad that changes nothing: the document's own frame.
+    /// The active layer's summary object (`{ id, name, offsetX, offsetY, width, height, ... }`), or null.
+    function activeLayerSummary() {
+        if (!view.editor || !view.editor.layers) return null
+        var aid = view.editor.activeLayerId
+        for (var i = 0; i < view.editor.layers.length; ++i) {
+            if (view.editor.layers[i].id === aid) return view.editor.layers[i]
+        }
+        return null
+    }
+
+    /// The quad that changes nothing:
+    /// 1. When a selection is active, hugs `selectionBounds` so Transform
+    ///    floats and transforms only the selected pixels.
+    /// 2. Otherwise, hugs the active layer's bounds when targeting `active_layer`.
+    /// 3. Otherwise, hugs the full document canvas.
     function identityCorners() {
+        if (view.hasSelection && view.editor && view.editor.selectionBounds
+                && view.editor.selectionBounds.length === 4) {
+            var sb = view.editor.selectionBounds
+            return [[sb[0], sb[1]],
+                    [sb[0] + sb[2], sb[1]],
+                    [sb[0] + sb[2], sb[1] + sb[3]],
+                    [sb[0], sb[1] + sb[3]]]
+        }
+        if (view.transformMode === "free"
+                && (!view.hasMultipleLayers || view.effectiveToolTarget() === "active_layer")) {
+            var layer = view.activeLayerSummary()
+            if (layer && layer.width > 0 && layer.height > 0) {
+                var ox = layer.offsetX || 0
+                var oy = layer.offsetY || 0
+                return [[ox, oy],
+                        [ox + layer.width, oy],
+                        [ox + layer.width, oy + layer.height],
+                        [ox, oy + layer.height]]
+            }
+        }
         return [[0, 0],
                 [view.documentWidth, 0],
                 [view.documentWidth, view.documentHeight],
@@ -981,6 +1404,20 @@ Item {
 
     function resetTransformCorners() {
         view.transformCorners = view.identityCorners()
+        view.transformRotation = 0
+    }
+
+    /// Proportionally fit the current Transform box inside the canvas and center it.
+    function fitTransformToCanvas() {
+        var r = view.transformRect()
+        if (!r || !view.documentReady || view.documentWidth <= 0 || view.documentHeight <= 0) return
+        var scale = Math.min(view.documentWidth / Math.max(1, r.width),
+                             view.documentHeight / Math.max(1, r.height))
+        var nw = Math.max(1, Math.round(r.width * scale))
+        var nh = Math.max(1, Math.round(r.height * scale))
+        var nx = Math.round((view.documentWidth - nw) / 2)
+        var ny = Math.round((view.documentHeight - nh) / 2)
+        view.setTransformFrame(nx, ny, nw, nh)
     }
 
     /// The transform bounding box in document pixels.
@@ -1024,18 +1461,78 @@ Item {
         var shift = (mods & Qt.ShiftModifier) !== 0
         var alt = (mods & Qt.AltModifier) !== 0
         var ctrl = (mods & Qt.ControlModifier) !== 0
-        var next = view.computeBoxHandleDrag(
-            base, column, row,
-            view.hostToDocX(hostX), view.hostToDocY(hostY),
-            {
-                keepAspect: shift,
-                aspect: base.height > 0 ? base.width / base.height : 1,
-                fromCenter: alt,
-                snap: ctrl,
-                clampToDoc: false,
-                maxDim: 16384
-            })
-        view.setTransformFrame(next.x, next.y, next.width, next.height)
+        var docX = view.hostToDocX(hostX)
+        var docY = view.hostToDocY(hostY)
+        var angleDeg = view.transformRotation || 0
+        if (Math.abs(angleDeg) < 0.05) {
+            var next = view.computeBoxHandleDrag(
+                base, column, row, docX, docY,
+                {
+                    keepAspect: shift,
+                    aspect: base.height > 0 ? base.width / base.height : 1,
+                    fromCenter: alt,
+                    snap: ctrl,
+                    clampToDoc: false,
+                    maxDim: 16384
+                })
+            view.setTransformFrame(next.x, next.y, next.width, next.height)
+            return
+        }
+        // Rotation-aware handle drag: project pointer into the rotated box's
+        // local axes, keep the opposite edge/corner pinned (or scale from
+        // center with Alt), then rotate the center shift back to canvas space.
+        var theta = angleDeg * Math.PI / 180.0
+        var cosT = Math.cos(theta)
+        var sinT = Math.sin(theta)
+        var startCx = base.x + base.width / 2.0
+        var startCy = base.y + base.height / 2.0
+        var relX = docX - startCx
+        var relY = docY - startCy
+        var locX = relX * cosT + relY * sinT
+        var locY = -relX * sinT + relY * cosT
+        var halfW = base.width / 2.0
+        var halfH = base.height / 2.0
+        var newL = -halfW
+        var newR = halfW
+        var newT = -halfH
+        var newB = halfH
+        if (column === 0) {
+            newL = Math.min(newR - 1, locX)
+            if (alt) newR = Math.max(1, -newL)
+        } else if (column === 2) {
+            newR = Math.max(newL + 1, locX)
+            if (alt) newL = Math.min(-1, -newR)
+        }
+        if (row === 0) {
+            newT = Math.min(newB - 1, locY)
+            if (alt) newB = Math.max(1, -newT)
+        } else if (row === 2) {
+            newB = Math.max(newT + 1, locY)
+            if (alt) newT = Math.min(-1, -newB)
+        }
+        var newW = Math.max(1, newR - newL)
+        var newH = Math.max(1, newB - newT)
+        if (shift && base.height > 0 && base.width > 0) {
+            var aspect = base.width / base.height
+            if (column !== 1 && row !== 1) {
+                if (newW / base.width >= newH / base.height) {
+                    newH = Math.max(1, newW / aspect)
+                } else {
+                    newW = Math.max(1, newH * aspect)
+                }
+                if (alt) {
+                    newL = -newW / 2; newR = newW / 2; newT = -newH / 2; newB = newH / 2
+                } else {
+                    if (column === 0) newL = newR - newW; else newR = newL + newW
+                    if (row === 0) newT = newB - newH; else newB = newT + newH
+                }
+            }
+        }
+        var shiftLocX = (newL + newR) / 2.0
+        var shiftLocY = (newT + newB) / 2.0
+        var newCx = startCx + shiftLocX * cosT - shiftLocY * sinT
+        var newCy = startCy + shiftLocX * sinT + shiftLocY * cosT
+        view.setTransformFrame(newCx - newW / 2.0, newCy - newH / 2.0, newW, newH)
     }
 
     function setTransformMode(mode) {
@@ -1087,10 +1584,16 @@ Item {
             return Math.round(rect.width) !== Math.round(view.documentWidth)
                     || Math.round(rect.height) !== Math.round(view.documentHeight)
         }
-        return Math.round(rect.x) !== 0
-                || Math.round(rect.y) !== 0
-                || Math.round(rect.width) !== Math.round(view.documentWidth)
-                || Math.round(rect.height) !== Math.round(view.documentHeight)
+        var base = view.identityCorners()
+        var bx = Math.round(base[0][0])
+        var by = Math.round(base[0][1])
+        var bw = Math.round(base[1][0] - base[0][0])
+        var bh = Math.round(base[2][1] - base[0][1])
+        return Math.round(rect.x) !== bx
+                || Math.round(rect.y) !== by
+                || Math.round(rect.width) !== bw
+                || Math.round(rect.height) !== bh
+                || Math.abs(view.transformRotation) >= 0.05
     }
 
     /// Commit the live Transform bounding box as one typed Core command.
@@ -1112,8 +1615,10 @@ Item {
                 y: Math.round(rect.y),
                 width: Math.round(rect.width),
                 height: Math.round(rect.height),
+                rotation: view.transformRotation,
                 fill: view.backgroundTransparent ? null : view.backgroundBytes(),
-                fill_alpha: view.backgroundAlpha()
+                fill_alpha: view.backgroundAlpha(),
+                target: view.hasMultipleLayers ? view.effectiveToolTarget() : "active_layer"
             })
         }
         view.resetTransformCorners()
@@ -2169,6 +2674,9 @@ Item {
     /// Raised by Save as…: Main owns the chooser, and the chosen path becomes an
     /// `editor_save_as` command. `view.saveAsPath` carries the suggestion.
     signal requestSaveAs()
+    signal requestSave()
+    signal requestNewImage()
+    signal requestPasteImage()
     /// Raised by Export's Browse button: Main owns the file chooser.
     signal requestExportPath()
     /// Raised by the Close editor button; Main checks unsaved changes first.
@@ -2182,6 +2690,7 @@ Item {
     /// Show a folder in the desktop's file manager. The shell owns the platform
     /// call, so the view only names the path.
     signal revealPath(string path)
+    signal copyImage(string path)
     signal command(var command)
 
     readonly property var editor: state.editor || null
@@ -2212,7 +2721,8 @@ Item {
         var current = editor.savePath || editor.path || ""
         var dot = current.lastIndexOf(".")
         var base = dot > current.lastIndexOf("/") ? current.slice(0, dot) : current
-        return base + (editor.format || ".png")
+        var ext = view.hasMultipleLayers ? ".ora" : (editor.format || ".png")
+        return base + ext
     }
 
     /// Whether this document's own file is a JPEG. The encoder composites alpha
@@ -2386,13 +2896,14 @@ Item {
             type: "editor_rotate_angle",
             degrees: view.rotateAngle,
             fill: view.backgroundTransparent ? null : view.backgroundBytes(),
-            fill_alpha: view.backgroundAlpha()
+            fill_alpha: view.backgroundAlpha(),
+            target: view.effectiveToolTarget()
         })
         view.rotateAngle = 0
     }
 
-    readonly property bool resizeFrameShown: view.tool === "resize" && view.documentReady && resizeOptionsPanel.valid
-    readonly property bool canvasSizeFrameShown: view.tool === "canvasSize" && view.documentReady && canvasSizeOptionsPanel.valid
+    readonly property bool resizeFrameShown: view.tool === "resize" && view.imageSizeMode === "resize" && view.documentReady && resizeOptionsPanel.valid
+    readonly property bool canvasSizeFrameShown: view.tool === "resize" && view.imageSizeMode === "canvasSize" && view.documentReady && canvasSizeOptionsPanel.valid
 
     function applyResizePanel() {
         if (!view.documentReady || !resizeOptionsPanel.changed) return
@@ -2411,14 +2922,30 @@ Item {
 
     function applyCanvasSizePanel() {
         if (!view.documentReady || !canvasSizeOptionsPanel.changed) return
-        view.command({
-            type: "editor_canvas_size",
-            width: canvasSizeOptionsPanel.targetWidth,
-            height: canvasSizeOptionsPanel.targetHeight,
-            anchor: canvasSizeOptionsPanel.anchor,
-            fill: view.backgroundTransparent ? null : view.backgroundBytes(),
-            fill_alpha: view.backgroundAlpha()
-        })
+        if (canvasSizeOptionsPanel.customOffset) {
+            var cx = -canvasSizeOptionsPanel.customOffsetX
+            var cy = -canvasSizeOptionsPanel.customOffsetY
+            var cw = canvasSizeOptionsPanel.targetWidth
+            var ch = canvasSizeOptionsPanel.targetHeight
+            view.command({
+                type: "editor_crop",
+                x: cx,
+                y: cy,
+                width: cw,
+                height: ch,
+                fill: view.backgroundTransparent ? [0, 0, 0] : view.backgroundBytes(),
+                fill_alpha: view.backgroundAlpha()
+            })
+        } else {
+            view.command({
+                type: "editor_canvas_size",
+                width: canvasSizeOptionsPanel.targetWidth,
+                height: canvasSizeOptionsPanel.targetHeight,
+                anchor: canvasSizeOptionsPanel.anchor,
+                fill: view.backgroundTransparent ? null : view.backgroundBytes(),
+                fill_alpha: view.backgroundAlpha()
+            })
+        }
         view.tool = "pointer"
     }
 
@@ -2428,7 +2955,8 @@ Item {
             type: "editor_adjust_color",
             brightness: adjustOptionsPanel.brightness,
             contrast: adjustOptionsPanel.contrast,
-            saturation: adjustOptionsPanel.saturation
+            saturation: adjustOptionsPanel.saturation,
+            target: view.effectiveToolTarget()
         })
         adjustOptionsPanel.reset()
     }
@@ -2436,14 +2964,16 @@ Item {
     function openResizeDialog() {
         if (!view.documentReady) return
         resizeOptionsPanel.reset()
+        canvasSizeOptionsPanel.reset()
         view.tool = view.tool === "resize" ? "pointer" : "resize"
         view.forceActiveFocus()
     }
 
     function openCanvasSizeDialog() {
         if (!view.documentReady) return
+        view.imageSizeMode = "canvasSize"
         canvasSizeOptionsPanel.reset()
-        view.tool = view.tool === "canvasSize" ? "pointer" : "canvasSize"
+        view.tool = "resize"
         view.forceActiveFocus()
     }
     /// What the canvas draws: the draft while Transform has one, the document
@@ -2562,6 +3092,15 @@ Item {
         if (view.tool === "transform") view.resetTransformCorners()
         if (view.tool === "crop") view.enterCropTool()
         if (view.tool === "rotate") view.rotateAngle = 0
+        if (typeof resizeCanvasLayer !== "undefined" && resizeCanvasLayer) {
+            resizeCanvasLayer.dragActive = false
+        }
+        if (typeof adjustPreviewTimer !== "undefined" && adjustPreviewTimer) {
+            adjustPreviewTimer.stop()
+        }
+        if (view.documentReady && !view.isColorFilterTool) {
+            view.command({ type: "editor_preview_filter", clear: true })
+        }
     }
     onCropRatioChanged: view.syncCropRatioField()
     // The document changing size (another edit, a new file, an applied crop)
@@ -2644,22 +3183,22 @@ Item {
         MenuItem {
             text: view.theme.menuEntries[23]
             enabled: view.documentReady
-            onTriggered: view.command({ type: "editor_rotate", degrees: -90 })
+            onTriggered: view.command({ type: "editor_rotate", degrees: -90, target: "whole_image" })
         }
         MenuItem {
             text: view.theme.menuEntries[24]
             enabled: view.documentReady
-            onTriggered: view.command({ type: "editor_rotate", degrees: 90 })
+            onTriggered: view.command({ type: "editor_rotate", degrees: 90, target: "whole_image" })
         }
         MenuItem {
             text: view.theme.menuEntries[25]
             enabled: view.documentReady
-            onTriggered: view.command({ type: "editor_flip", axis: "horizontal" })
+            onTriggered: view.command({ type: "editor_flip", axis: "horizontal", target: "whole_image" })
         }
         MenuItem {
             text: view.theme.menuEntries[26]
             enabled: view.documentReady
-            onTriggered: view.command({ type: "editor_flip", axis: "vertical" })
+            onTriggered: view.command({ type: "editor_flip", axis: "vertical", target: "whole_image" })
         }
         MenuSeparator {}
         MenuItem {
@@ -2673,7 +3212,18 @@ Item {
     property Component toolbar: Component {
         RowLayout {
             spacing: 2
+            enabled: !view.filterDialogOpen
+            opacity: view.filterDialogOpen ? 0.55 : 1.0
 
+            ToolbarButton {
+                objectName: "editorNewButton"
+                theme: view.theme
+                icon.name: "document-new-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("New image… (Ctrl+N)")
+                onClicked: view.requestNewImage()
+            }
             ToolbarButton {
                 objectName: "editorOpenButton"
                 theme: view.theme
@@ -2682,6 +3232,29 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Open an image for editing")
                 onClicked: view.requestOpen()
+            }
+            ToolbarButton {
+                objectName: "editorPasteButton"
+                theme: view.theme
+                icon.name: "edit-paste-symbolic"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Paste image as new layer (Ctrl+V)")
+                onClicked: view.requestPasteImage()
+            }
+            ToolbarSeparator {
+                theme: view.theme
+            }
+            ToolbarButton {
+                id: filterToolbarBtn
+                objectName: "editorFilterMenuButton"
+                theme: view.theme
+                text: qsTr("Filter") + " ▾"
+                display: AbstractButton.TextOnly
+                enabled: view.documentReady
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Image filters & color adjustments")
+                onClicked: filterMenu.popup(filterToolbarBtn, 0, filterToolbarBtn.height)
             }
             ToolbarSeparator {
                 theme: view.theme
@@ -2752,7 +3325,7 @@ Item {
                 enabled: view.documentReady && !view.saved && !view.saving
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Save (Ctrl+S)")
-                onClicked: view.command({ type: "editor_save" })
+                onClicked: view.requestSave()
             }
             ToolbarButton {
                 objectName: "editorToolbarSaveAs"
@@ -2839,46 +3412,6 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // --------------------------------------------------------- files (left)
-        // The same two panels the Browser and the Viewer show, in the same
-        // order. A folder click opens it in the Browser: re-rooting the file
-        // list would replace the document the Editor is holding.
-        LeftDock {
-            objectName: "editorLeftPanel"
-            visible: view.leftDockShown
-            Layout.preferredWidth: view.leftPanelWidth
-            Layout.fillHeight: true
-            theme: view.theme
-            state: view.state
-            quickAccessShown: view.quickAccessShown
-            explorerShown: view.explorerShown
-            listFolders: view.listFolders
-            onOpenFolder: function(path) { view.command({ type: "open_folder", path: path }) }
-            onNavigateTo: function(path) { view.command({ type: "open_folder", path: path }) }
-            onOpenMenu: function(path) { view.folderMenu.path = path; view.folderMenu.popup() }
-            onQuickMenu: function(path) { view.folderMenu.path = path; view.folderMenu.popup() }
-        }
-
-        PanelSplitter {
-            objectName: "editorLeftSplitter"
-            visible: view.leftDockShown
-            Layout.fillHeight: true
-            theme: view.theme
-            value: view.leftPanelWidth
-            defaultValue: 240
-            direction: 1
-            minimum: 180
-            maximum: 560
-            onMoved: function(width) {
-                view.leftDragging = true
-                view.leftPanelWidth = width
-            }
-            onReleased: function(width) {
-                view.leftDragging = false
-                view.layoutRequested({ leftWidth: Math.round(width) })
-            }
-        }
-
         // -------------------------------------------------------- tools (left)
         // An icon rail, the way Krita's toolbox and Photoshop's toolbar are: the
         // picture keeps the width, and a tool is a drawing with its sentence in
@@ -2895,6 +3428,8 @@ Item {
             Layout.preferredWidth: view.toolRailWidth
             Layout.fillHeight: true
             color: view.theme.sidebar
+            enabled: !view.filterDialogOpen
+            opacity: view.filterDialogOpen ? 0.55 : 1.0
             // The rail is a panel of its own: it is a column beside the
             // canvas, so Settings › Appearance can put it away, and the canvas
             // takes its width when it does.
@@ -2952,22 +3487,63 @@ Item {
                         }
                     }
                     ToolRailButton {
+                        objectName: "toolBrush"
+                        theme: view.theme
+                        iconSource: "icons/brush.svg"
+                        tooltip: qsTr("Brush (B)")
+                        active: view.tool === "paint" && view.paintMode === "brush"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = "paint"
+                            view.selectPaintMode("brush")
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolEraser"
+                        theme: view.theme
+                        iconSource: "icons/eraser.svg"
+                        tooltip: qsTr("Eraser (E)")
+                        active: view.tool === "paint" && view.paintMode === "eraser"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = "paint"
+                            view.selectPaintMode("eraser")
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolEyedropper"
+                        theme: view.theme
+                        iconSource: "icons/eyedropper.svg"
+                        tooltip: qsTr("Color picker / Eyedropper (I)")
+                        active: view.tool === "eyedropper"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "eyedropper" ? "pointer" : "eyedropper"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolSelect"
+                        theme: view.theme
+                        iconSource: "icons/select.svg"
+                        tooltip: qsTr("Select (M)")
+                        active: view.tool === "select"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "select" ? "pointer" : "select"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
                         objectName: "toolResize"
                         theme: view.theme
                         iconSource: "icons/resize.svg"
-                        tooltip: qsTr("Resize…")
+                        tooltip: qsTr("Image size — resize or canvas size")
                         active: view.tool === "resize"
                         enabled: view.documentReady
                         onClicked: view.openResizeDialog()
-                    }
-                    ToolRailButton {
-                        objectName: "toolCanvasSize"
-                        theme: view.theme
-                        iconSource: "icons/canvas-size.svg"
-                        tooltip: qsTr("Canvas size…")
-                        active: view.tool === "canvasSize"
-                        enabled: view.documentReady
-                        onClicked: view.openCanvasSizeDialog()
                     }
                     ToolRailButton {
                         objectName: "toolCrop"
@@ -2985,36 +3561,11 @@ Item {
                         objectName: "toolTransform"
                         theme: view.theme
                         iconSource: "icons/transform.svg"
-                        tooltip: qsTr("Straighten the picture by dragging the frame's corners and edges")
+                        tooltip: qsTr("Transform — move, scale, rotate and flip")
                         active: view.tool === "transform"
                         enabled: view.documentReady
                         onClicked: {
                             view.tool = view.tool === "transform" ? "pointer" : "transform"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolRotateAngle"
-                        theme: view.theme
-                        iconSource: "icons/rotate-angle.svg"
-                        tooltip: qsTr("Rotate by angle")
-                        active: view.tool === "rotate"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "rotate" ? "pointer" : "rotate"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolAdjust"
-                        theme: view.theme
-                        iconSource: "icons/adjust.svg"
-                        tooltip: qsTr("Color & light")
-                        active: view.tool === "adjust"
-                        enabled: view.documentReady
-                        onClicked: {
-                            adjustOptionsPanel.reset()
-                            view.tool = view.tool === "adjust" ? "pointer" : "adjust"
                             view.forceActiveFocus()
                         }
                     }
@@ -3080,7 +3631,7 @@ Item {
                         iconSource: "icons/rotate-left.svg"
                         tooltip: qsTr("Rotate left")
                         enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_rotate", degrees: -90 })
+                        onClicked: view.command({ type: "editor_rotate", degrees: -90, target: "whole_image" })
                     }
                     ToolRailButton {
                         objectName: "editsRotateRight"
@@ -3088,7 +3639,7 @@ Item {
                         iconSource: "icons/rotate-right.svg"
                         tooltip: qsTr("Rotate right")
                         enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_rotate", degrees: 90 })
+                        onClicked: view.command({ type: "editor_rotate", degrees: 90, target: "whole_image" })
                     }
                     ToolRailButton {
                         objectName: "editsFlipHorizontal"
@@ -3096,7 +3647,7 @@ Item {
                         iconSource: "icons/flip-horizontal.svg"
                         tooltip: qsTr("Flip horizontal")
                         enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_flip", axis: "horizontal" })
+                        onClicked: view.command({ type: "editor_flip", axis: "horizontal", target: "whole_image" })
                     }
                     ToolRailButton {
                         objectName: "editsFlipVertical"
@@ -3104,7 +3655,7 @@ Item {
                         iconSource: "icons/flip-vertical.svg"
                         tooltip: qsTr("Flip vertical")
                         enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_flip", axis: "vertical" })
+                        onClicked: view.command({ type: "editor_flip", axis: "vertical", target: "whole_image" })
                     }
                 }
 
@@ -3224,9 +3775,9 @@ Item {
                           || foregroundColorDialog.visible || backgroundColorDialog.visible
                           || canvasBgColorDialog.visible
             requireHoverToPan: true
-            allowLeftPan: view.tool === "hand" || view.spacePanning
+            allowLeftPan: view.filterDialogOpen || view.isColorFilterTool || view.tool === "hand" || view.spacePanning
             allowMiddlePan: true
-            allowDoubleTapZoom: (view.tool === "pointer" || view.tool === "hand") && !view.spacePanning
+            allowDoubleTapZoom: !view.filterDialogOpen && (view.tool === "pointer" || view.tool === "hand") && !view.spacePanning
 
             // Full-viewport checkerboard when the user explicitly selects
             // checkerboard as the canvas backdrop.
@@ -3279,40 +3830,50 @@ Item {
                 cache: false
                 smooth: view.state.antiAliasing !== false
                 mipmap: view.state.antiAliasing !== false
-                source: view.editor && view.editor.previewPath
-                        ? "file://" + view.editor.previewPath
-                        : ""
-                // Live 60 fps GPU preview when the Color & light tool is active.
-                layer.enabled: view.tool === "adjust" && adjustOptionsPanel.changed
-                layer.effect: MultiEffect {
-                    brightness: adjustOptionsPanel.brightness
-                    contrast: adjustOptionsPanel.contrast
-                    saturation: adjustOptionsPanel.saturation
+                source: {
+                    if (!view.editor) return ""
+                    if ((view.editor.ramCanvasRevision || 0) > 0) {
+                        return "image://editor/canvas?rev=" + view.editor.ramCanvasRevision
+                    }
+                    return view.editor.previewPath ? ("file://" + view.editor.previewPath) : ""
                 }
                 onStatusChanged: {
                     if (status === Image.Ready && view.autoFit && view.hostReady) {
                         view.fit()
                     }
                 }
-                opacity: view.rendering ? 0.65 : 1.0
-                Behavior on opacity {
-                    NumberAnimation { duration: 120 }
-                }
+                // Only dim while the initial full-resolution decode is still opening;
+                // synchronous edits update directly from RAM with zero flicker!
+                opacity: (view.editor && view.editor.opening) ? 0.65 : 1.0
             }
 
-            // Live 60 fps GPU preview for Resize (Stretch / Cover / Pad).
+            // Live 60 fps GPU preview for Resize (Stretch / Cover / Pad) with
+            // interactive 8-handle direct canvas resizing (anchors opposite edge/corner;
+            // hold Alt to resize symmetrically around center).
             Item {
                 id: resizeCanvasLayer
                 objectName: "resizeCanvasLayer"
                 anchors.fill: parent
                 visible: view.resizeFrameShown
 
+                property bool dragActive: false
+                property real dragDocX: 0
+                property real dragDocY: 0
+
                 readonly property real previewW: Math.max(1, resizeOptionsPanel.targetWidth * view.zoom)
                 readonly property real previewH: Math.max(1, resizeOptionsPanel.targetHeight * view.zoom)
+                readonly property real frameX: dragActive
+                                               ? Math.round(view.docToHostX(dragDocX))
+                                               : Math.round(canvasHost.width / 2 + canvasHost.offsetX - previewW / 2)
+                readonly property real frameY: dragActive
+                                               ? Math.round(view.docToHostY(dragDocY))
+                                               : Math.round(canvasHost.height / 2 + canvasHost.offsetY - previewH / 2)
+
+                onVisibleChanged: if (!visible) dragActive = false
 
                 Item {
-                    x: Math.round(canvasHost.width / 2 + canvasHost.offsetX - resizeCanvasLayer.previewW / 2)
-                    y: Math.round(canvasHost.height / 2 + canvasHost.offsetY - resizeCanvasLayer.previewH / 2)
+                    x: resizeCanvasLayer.frameX
+                    y: resizeCanvasLayer.frameY
                     width: resizeCanvasLayer.previewW
                     height: resizeCanvasLayer.previewH
                     clip: true
@@ -3352,25 +3913,126 @@ Item {
                         border.color: view.theme.accent
                     }
                 }
+
+                // 8 interactive drag handles (4 corners + 4 edges) for live Resize.
+                Repeater {
+                    model: [
+                        { col: -1, row: -1 }, { col: 0, row: -1 }, { col: 1, row: -1 },
+                        { col: 1, row: 0 },
+                        { col: 1, row: 1 }, { col: 0, row: 1 }, { col: -1, row: 1 },
+                        { col: -1, row: 0 }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 12
+                        height: 12
+                        radius: (modelData.col !== 0 && modelData.row !== 0) ? 2 : 6
+                        color: view.theme.accent
+                        border.width: 1
+                        border.color: view.theme.surface
+                        x: resizeCanvasLayer.frameX
+                           + (modelData.col === -1 ? 0 : (modelData.col === 1 ? resizeCanvasLayer.previewW : resizeCanvasLayer.previewW / 2))
+                           - width / 2
+                        y: resizeCanvasLayer.frameY
+                           + (modelData.row === -1 ? 0 : (modelData.row === 1 ? resizeCanvasLayer.previewH : resizeCanvasLayer.previewH / 2))
+                           - height / 2
+
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -3
+                            acceptedButtons: Qt.LeftButton
+                            cursorShape: modelData.col === 0
+                                         ? Qt.SizeVerCursor
+                                         : (modelData.row === 0
+                                            ? Qt.SizeHorCursor
+                                            : (modelData.col === modelData.row ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor))
+                            property real startHostX: 0
+                            property real startHostY: 0
+                            property real startLeftDoc: 0
+                            property real startTopDoc: 0
+                            property real startW: 1
+                            property real startH: 1
+                            onPressed: function(mouse) {
+                                var pt = mapToItem(resizeCanvasLayer, mouse.x, mouse.y)
+                                startHostX = pt.x
+                                startHostY = pt.y
+                                startW = Math.max(1, resizeOptionsPanel.targetWidth)
+                                startH = Math.max(1, resizeOptionsPanel.targetHeight)
+                                startLeftDoc = view.hostToDocX(resizeCanvasLayer.frameX)
+                                startTopDoc = view.hostToDocY(resizeCanvasLayer.frameY)
+                                resizeCanvasLayer.dragDocX = startLeftDoc
+                                resizeCanvasLayer.dragDocY = startTopDoc
+                                resizeCanvasLayer.dragActive = true
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                var pt = mapToItem(resizeCanvasLayer, mouse.x, mouse.y)
+                                var dxDoc = (pt.x - startHostX) / Math.max(0.01, view.zoom)
+                                var dyDoc = (pt.y - startHostY) / Math.max(0.01, view.zoom)
+                                var fromCenter = (mouse.modifiers & Qt.AltModifier) !== 0
+                                var mult = fromCenter ? 2.0 : 1.0
+                                var newW = Math.max(1, Math.min(16384, startW + modelData.col * mult * dxDoc))
+                                var newH = Math.max(1, Math.min(16384, startH + modelData.row * mult * dyDoc))
+                                var keepRatio = resizeOptionsPanel.constraint || ((mouse.modifiers & Qt.ShiftModifier) !== 0)
+                                if (keepRatio && startW > 0 && startH > 0) {
+                                    var ratio = startW / startH
+                                    if (modelData.col !== 0 && modelData.row !== 0) {
+                                        if (Math.abs(newW - startW) / startW >= Math.abs(newH - startH) / startH) {
+                                            newH = Math.max(1, Math.min(16384, newW / ratio))
+                                            newW = Math.max(1, Math.min(16384, newH * ratio))
+                                        } else {
+                                            newW = Math.max(1, Math.min(16384, newH * ratio))
+                                            newH = Math.max(1, Math.min(16384, newW / ratio))
+                                        }
+                                    } else if (modelData.col !== 0) {
+                                        newH = Math.max(1, Math.min(16384, newW / ratio))
+                                    } else if (modelData.row !== 0) {
+                                        newW = Math.max(1, Math.min(16384, newH * ratio))
+                                    }
+                                }
+                                newW = Math.round(newW)
+                                newH = Math.round(newH)
+                                // Keep the opposite edge/corner pinned on screen (or center when Alt is held).
+                                var nextLeft = startLeftDoc
+                                var nextTop = startTopDoc
+                                if (fromCenter) {
+                                    nextLeft = startLeftDoc + (startW - newW) / 2.0
+                                    nextTop = startTopDoc + (startH - newH) / 2.0
+                                } else {
+                                    if (modelData.col === -1) nextLeft = startLeftDoc + (startW - newW)
+                                    else if (modelData.col === 0) nextLeft = startLeftDoc + (startW - newW) / 2.0
+                                    if (modelData.row === -1) nextTop = startTopDoc + (startH - newH)
+                                    else if (modelData.row === 0) nextTop = startTopDoc + (startH - newH) / 2.0
+                                }
+                                resizeCanvasLayer.dragDocX = nextLeft
+                                resizeCanvasLayer.dragDocY = nextTop
+                                resizeOptionsPanel.setDimensions(newW, newH)
+                            }
+                        }
+                    }
+                }
             }
 
-            // Live 60 fps GPU preview for Canvas Size (anchor-positioned image
-            // inside the new canvas dimensions, using the shared background).
+            // Live 60 fps GPU preview for Canvas Size: original image stays
+            // fixed 1:1 while the outer canvas frame expands/shrinks with
+            // background fill and interactive 8-handle dragging.
             Item {
                 id: canvasSizeLayer
                 objectName: "canvasSizeLayer"
                 anchors.fill: parent
                 visible: view.canvasSizeFrameShown
 
+                readonly property real baseX: view.docToHostX(0)
+                readonly property real baseY: view.docToHostY(0)
                 readonly property real targetW: Math.max(1, canvasSizeOptionsPanel.targetWidth * view.zoom)
                 readonly property real targetH: Math.max(1, canvasSizeOptionsPanel.targetHeight * view.zoom)
-                readonly property real frameX: Math.round(canvasHost.width / 2 + canvasHost.offsetX - targetW / 2)
-                readonly property real frameY: Math.round(canvasHost.height / 2 + canvasHost.offsetY - targetH / 2)
+                readonly property real frameX: Math.round(baseX - canvasSizeOptionsPanel.effectiveOffsetX * view.zoom)
+                readonly property real frameY: Math.round(baseY - canvasSizeOptionsPanel.effectiveOffsetY * view.zoom)
 
                 // Dimmed ghost of original image so cropped edges stay visible when shrinking.
                 Image {
-                    x: canvasSizeLayer.frameX + canvasSizeOptionsPanel.imageOffsetX * view.zoom
-                    y: canvasSizeLayer.frameY + canvasSizeOptionsPanel.imageOffsetY * view.zoom
+                    x: canvasSizeLayer.baseX
+                    y: canvasSizeLayer.baseY
                     width: Math.max(1, view.displayedWidth * view.zoom)
                     height: Math.max(1, view.displayedHeight * view.zoom)
                     source: canvas.source
@@ -3398,8 +4060,8 @@ Item {
                         color: view.backgroundColor
                     }
                     Image {
-                        x: canvasSizeOptionsPanel.imageOffsetX * view.zoom
-                        y: canvasSizeOptionsPanel.imageOffsetY * view.zoom
+                        x: canvasSizeOptionsPanel.effectiveOffsetX * view.zoom
+                        y: canvasSizeOptionsPanel.effectiveOffsetY * view.zoom
                         width: Math.max(1, view.displayedWidth * view.zoom)
                         height: Math.max(1, view.displayedHeight * view.zoom)
                         source: canvas.source
@@ -3412,6 +4074,134 @@ Item {
                         color: "transparent"
                         border.width: 1.5
                         border.color: view.theme.accent
+                    }
+                }
+
+                // 8 interactive drag handles (4 corners + 4 edges) for Canvas Size.
+                Repeater {
+                    model: [
+                        { col: -1, row: -1 }, { col: 0, row: -1 }, { col: 1, row: -1 },
+                        { col: 1, row: 0 },
+                        { col: 1, row: 1 }, { col: 0, row: 1 }, { col: -1, row: 1 },
+                        { col: -1, row: 0 }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: 12
+                        height: 12
+                        radius: (modelData.col !== 0 && modelData.row !== 0) ? 2 : 6
+                        color: view.theme.accent
+                        border.width: 1
+                        border.color: view.theme.surface
+                        x: canvasSizeLayer.frameX
+                           + (modelData.col === -1 ? 0 : (modelData.col === 1 ? canvasSizeLayer.targetW : canvasSizeLayer.targetW / 2))
+                           - width / 2
+                        y: canvasSizeLayer.frameY
+                           + (modelData.row === -1 ? 0 : (modelData.row === 1 ? canvasSizeLayer.targetH : canvasSizeLayer.targetH / 2))
+                           - height / 2
+
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -3
+                            acceptedButtons: Qt.LeftButton
+                            cursorShape: modelData.col === 0
+                                         ? Qt.SizeVerCursor
+                                         : (modelData.row === 0
+                                            ? Qt.SizeHorCursor
+                                            : (modelData.col === modelData.row ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor))
+                            property real startHostX: 0
+                            property real startHostY: 0
+                            property real startLeft: 0
+                            property real startTop: 0
+                            property real startRight: 1
+                            property real startBottom: 1
+                            onPressed: function(mouse) {
+                                var pt = mapToItem(canvasSizeLayer, mouse.x, mouse.y)
+                                startHostX = pt.x
+                                startHostY = pt.y
+                                startLeft = -canvasSizeOptionsPanel.effectiveOffsetX
+                                startTop = -canvasSizeOptionsPanel.effectiveOffsetY
+                                startRight = startLeft + Math.max(1, canvasSizeOptionsPanel.targetWidth)
+                                startBottom = startTop + Math.max(1, canvasSizeOptionsPanel.targetHeight)
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                var pt = mapToItem(canvasSizeLayer, mouse.x, mouse.y)
+                                var dxDoc = (pt.x - startHostX) / Math.max(0.01, view.zoom)
+                                var dyDoc = (pt.y - startHostY) / Math.max(0.01, view.zoom)
+                                var fromCenter = (mouse.modifiers & Qt.AltModifier) !== 0
+                                var keepRatio = canvasSizeOptionsPanel.lockRatio || ((mouse.modifiers & Qt.ShiftModifier) !== 0)
+                                var startW = Math.max(1, startRight - startLeft)
+                                var startH = Math.max(1, startBottom - startTop)
+                                var left = startLeft
+                                var right = startRight
+                                var top = startTop
+                                var bottom = startBottom
+                                if (fromCenter) {
+                                    if (modelData.col === -1) {
+                                        left = Math.round(startLeft + dxDoc)
+                                        right = Math.round(startRight - dxDoc)
+                                    } else if (modelData.col === 1) {
+                                        right = Math.round(startRight + dxDoc)
+                                        left = Math.round(startLeft - dxDoc)
+                                    }
+                                    if (modelData.row === -1) {
+                                        top = Math.round(startTop + dyDoc)
+                                        bottom = Math.round(startBottom - dyDoc)
+                                    } else if (modelData.row === 1) {
+                                        bottom = Math.round(startBottom + dyDoc)
+                                        top = Math.round(startTop - dyDoc)
+                                    }
+                                    if (right <= left) { var mx = Math.round((startLeft + startRight) / 2); left = mx; right = mx + 1 }
+                                    if (bottom <= top) { var my = Math.round((startTop + startBottom) / 2); top = my; bottom = my + 1 }
+                                } else {
+                                    if (modelData.col === -1) left = Math.min(right - 1, Math.round(startLeft + dxDoc))
+                                    if (modelData.col === 1) right = Math.max(left + 1, Math.round(startRight + dxDoc))
+                                    if (modelData.row === -1) top = Math.min(bottom - 1, Math.round(startTop + dyDoc))
+                                    if (modelData.row === 1) bottom = Math.max(top + 1, Math.round(startBottom + dyDoc))
+                                }
+                                if (keepRatio && startW > 0 && startH > 0) {
+                                    var ratio = startW / startH
+                                    var w = Math.max(1, right - left)
+                                    var h = Math.max(1, bottom - top)
+                                    if (modelData.col !== 0 && modelData.row !== 0) {
+                                        if (Math.abs(w - startW) / startW >= Math.abs(h - startH) / startH) {
+                                            h = Math.max(1, Math.round(w / ratio))
+                                        } else {
+                                            w = Math.max(1, Math.round(h * ratio))
+                                        }
+                                    } else if (modelData.col !== 0) {
+                                        h = Math.max(1, Math.round(w / ratio))
+                                    } else if (modelData.row !== 0) {
+                                        w = Math.max(1, Math.round(h * ratio))
+                                    }
+                                    if (fromCenter) {
+                                        var cx = (startLeft + startRight) / 2.0
+                                        var cy = (startTop + startBottom) / 2.0
+                                        left = Math.round(cx - w / 2.0); right = left + w
+                                        top = Math.round(cy - h / 2.0); bottom = top + h
+                                    } else {
+                                        if (modelData.col === -1) left = right - w
+                                        else if (modelData.col === 1) right = left + w
+                                        else { var mcx = (startLeft + startRight) / 2.0; left = Math.round(mcx - w / 2.0); right = left + w }
+                                        if (modelData.row === -1) top = bottom - h
+                                        else if (modelData.row === 1) bottom = top + h
+                                        else { var mcy = (startTop + startBottom) / 2.0; top = Math.round(mcy - h / 2.0); bottom = top + h }
+                                    }
+                                }
+                                // Keep at least 1 px overlap with original document so Crop/Grow is always valid.
+                                if (left >= view.documentWidth) left = view.documentWidth - 1
+                                if (right <= 0) right = 1
+                                if (top >= view.documentHeight) top = view.documentHeight - 1
+                                if (bottom <= 0) bottom = 1
+                                canvasSizeOptionsPanel.setCustomFrame(
+                                    Math.max(1, right - left),
+                                    Math.max(1, bottom - top),
+                                    -left,
+                                    -top
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -3433,7 +4223,10 @@ Item {
 
                 // Free Transform: fixed document frame with background fill
                 // (or checkerboard) behind the transformed image, clipped to
-                // the document bounds.
+                // the document bounds. On multi-layer documents targeting
+                // `active_layer`, render exact 3-part split previews
+                // (below + moving active layer + above) so sibling layers
+                // stay rock-solid stationary while transforming!
                 Item {
                     id: freeTransformFrame
                     objectName: "freeTransformFrame"
@@ -3444,22 +4237,134 @@ Item {
                     width: Math.max(1, view.documentWidth * view.zoom)
                     height: Math.max(1, view.documentHeight * view.zoom)
 
+                    readonly property bool useSelectionSplitPreview:
+                        view.hasSelection
+                        && !!(view.editor && (view.editor.ramSelectionRevision || 0) > 0)
+                    readonly property bool useLayerSplitPreview:
+                        !view.hasSelection
+                        && (!view.hasMultipleLayers || view.effectiveToolTarget() === "active_layer")
+                        && !!(view.editor && ((view.editor.ramLayerRevision || 0) > 0 || view.editor.activeLayerPreviewPath))
+                    readonly property var activeSummary: view.activeLayerSummary()
+
                     Checkerboard {
                         anchors.fill: parent
-                        visible: view.backgroundTransparent
+                        visible: freeTransformFrame.useLayerSplitPreview
+                                 || freeTransformFrame.useSelectionSplitPreview
+                                 || !view.hasMultipleLayers
+                                 || view.backgroundTransparent
                     }
                     Rectangle {
                         anchors.fill: parent
-                        visible: !view.backgroundTransparent
+                        visible: !freeTransformFrame.useLayerSplitPreview
+                                 && !freeTransformFrame.useSelectionSplitPreview
+                                 && view.hasMultipleLayers
+                                 && !view.backgroundTransparent
                         color: view.backgroundColor
                     }
+
+                    // Selection Transform live 60 fps preview: stationary base (punched out)
+                    // + floating selected pixels moving/scaling/rotating live!
                     Image {
-                        id: freeTransformImage
-                        objectName: "freeTransformImage"
+                        visible: freeTransformFrame.useSelectionSplitPreview
+                        anchors.fill: parent
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: freeTransformFrame.useSelectionSplitPreview
+                                ? ("image://editor/sel_base?rev=" + view.editor.ramSelectionRevision)
+                                : ""
+                    }
+                    Image {
+                        id: selectionFloatTransformImage
+                        objectName: "selectionFloatTransformImage"
+                        visible: freeTransformFrame.useSelectionSplitPreview
                         x: transformCanvasLayer.activeRect.x * view.zoom
                         y: transformCanvasLayer.activeRect.y * view.zoom
                         width: Math.max(1, transformCanvasLayer.activeRect.width * view.zoom)
                         height: Math.max(1, transformCanvasLayer.activeRect.height * view.zoom)
+                        rotation: view.transformRotation
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: freeTransformFrame.useSelectionSplitPreview
+                                ? ("image://editor/sel_float?rev=" + view.editor.ramSelectionRevision)
+                                : ""
+                    }
+
+                    // 1. Layers strictly BELOW active layer + solid canvas background (stationary)
+                    Image {
+                        visible: freeTransformFrame.useLayerSplitPreview
+                                 && !!(view.editor && ((view.editor.ramLayerRevision || 0) > 0 || view.editor.belowActivePreviewPath))
+                        anchors.fill: parent
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: {
+                            if (!freeTransformFrame.useLayerSplitPreview || !view.editor) return ""
+                            if ((view.editor.ramLayerRevision || 0) > 0) {
+                                return "image://editor/below?rev=" + view.editor.ramLayerRevision
+                            }
+                            return view.editor.belowActivePreviewPath
+                                   ? "file://" + view.editor.belowActivePreviewPath + "?rev=" + (view.editor.layerPreviewRevision || 0)
+                                   : ""
+                        }
+                    }
+                    // 2. ONLY the active layer (moves, scales, and rotates live — works on 1-layer and multi-layer!)
+                    Image {
+                        id: activeLayerTransformImage
+                        objectName: "activeLayerTransformImage"
+                        visible: freeTransformFrame.useLayerSplitPreview
+                        x: transformCanvasLayer.activeRect.x * view.zoom
+                        y: transformCanvasLayer.activeRect.y * view.zoom
+                        width: Math.max(1, transformCanvasLayer.activeRect.width * view.zoom)
+                        height: Math.max(1, transformCanvasLayer.activeRect.height * view.zoom)
+                        rotation: view.transformRotation
+                        opacity: (freeTransformFrame.activeSummary && freeTransformFrame.activeSummary.visible === false)
+                                 ? 0.0
+                                 : (freeTransformFrame.activeSummary && freeTransformFrame.activeSummary.opacity !== undefined
+                                    ? freeTransformFrame.activeSummary.opacity : 1.0)
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: {
+                            if (!freeTransformFrame.useLayerSplitPreview || !view.editor) return ""
+                            if ((view.editor.ramLayerRevision || 0) > 0) {
+                                return "image://editor/active?rev=" + view.editor.ramLayerRevision
+                            }
+                            return view.editor.activeLayerPreviewPath
+                                   ? "file://" + view.editor.activeLayerPreviewPath + "?rev=" + (view.editor.layerPreviewRevision || 0)
+                                   : ""
+                        }
+                    }
+                    // 3. Layers strictly ABOVE active layer (stationary)
+                    Image {
+                        visible: freeTransformFrame.useLayerSplitPreview
+                                 && !!(view.editor && ((view.editor.ramLayerRevision || 0) > 0 || view.editor.aboveActivePreviewPath))
+                        anchors.fill: parent
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        source: {
+                            if (!freeTransformFrame.useLayerSplitPreview || !view.editor) return ""
+                            if ((view.editor.ramLayerRevision || 0) > 0) {
+                                return "image://editor/above?rev=" + view.editor.ramLayerRevision
+                            }
+                            return view.editor.aboveActivePreviewPath
+                                   ? "file://" + view.editor.aboveActivePreviewPath + "?rev=" + (view.editor.layerPreviewRevision || 0)
+                                   : ""
+                        }
+                    }
+
+                    // WholeImage / legacy fallback preview
+                    Image {
+                        id: freeTransformImage
+                        objectName: "freeTransformImage"
+                        visible: !freeTransformFrame.useLayerSplitPreview && !freeTransformFrame.useSelectionSplitPreview
+                        x: view.hasSelection ? 0 : transformCanvasLayer.activeRect.x * view.zoom
+                        y: view.hasSelection ? 0 : transformCanvasLayer.activeRect.y * view.zoom
+                        width: Math.max(1, (view.hasSelection ? view.documentWidth : transformCanvasLayer.activeRect.width) * view.zoom)
+                        height: Math.max(1, (view.hasSelection ? view.documentHeight : transformCanvasLayer.activeRect.height) * view.zoom)
+                        rotation: view.hasSelection ? 0 : view.transformRotation
                         fillMode: Image.Stretch
                         asynchronous: false
                         cache: false
@@ -3559,6 +4464,7 @@ Item {
                 objectName: "canvasOverlay"
                 anchors.fill: parent
                 z: 2
+                enabled: !view.filterDialogOpen
 
                 // ---------------------------------------------- interactive watermark region box
                 Item {
@@ -4242,6 +5148,10 @@ Item {
                 }
 
                 // ------------------------------------------- transform frame
+                // Unified rotated bounding box: outline, move area, 4 corners,
+                // 4 edge handles, and top rotate handle all share ONE rotated
+                // container (`transformOrigin: Item.Center`, `rotation: view.transformRotation`)
+                // so Move, Scale, and Rotate stay 100% synchronized at any angle.
                 Item {
                     id: transformOverlay
                     objectName: "transformOverlay"
@@ -4249,125 +5159,690 @@ Item {
                     visible: view.transformFrameShown
                     enabled: visible && !view.spacePanning
 
-                    // Inside-box drag repositions the image in Free Transform
-                    // mode (Shift locks axis, Ctrl snaps to edges/centre/10 px).
-                    MouseArea {
-                        id: transformMoveArea
-                        objectName: "transformMoveArea"
-                        visible: view.transformMode === "free"
-                        enabled: visible
-                        x: view.docToHostX(view.cornerX(0))
-                        y: view.docToHostY(view.cornerY(0))
-                        width: Math.max(1, view.docToHostX(view.cornerX(1)) - x)
-                        height: Math.max(1, view.docToHostY(view.cornerY(2)) - y)
-                        acceptedButtons: Qt.LeftButton
-                        cursorShape: Qt.SizeAllCursor
-                        property real startHostX: 0
-                        property real startHostY: 0
-                        property var startRect: null
+                    readonly property var box: view.transformRect()
+                                               || ({ x: 0, y: 0,
+                                                     width: view.documentWidth,
+                                                     height: view.documentHeight })
 
-                        onPressed: function(mouse) {
-                            var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                            startHostX = point.x
-                            startHostY = point.y
-                            startRect = view.transformRect()
-                        }
-                        onPositionChanged: function(mouse) {
-                            if (!pressed || !startRect) return
-                            var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                            view.moveTransformBox(startRect,
-                                                  (point.x - startHostX) / view.zoom,
-                                                  (point.y - startHostY) / view.zoom,
-                                                  mouse.modifiers)
-                        }
-                    }
+                    Item {
+                        id: transformBoxContainer
+                        objectName: "transformBoxContainer"
+                        x: view.docToHostX(transformOverlay.box.x)
+                        y: view.docToHostY(transformOverlay.box.y)
+                        width: Math.max(1, transformOverlay.box.width * view.zoom)
+                        height: Math.max(1, transformOverlay.box.height * view.zoom)
+                        transformOrigin: Item.Center
+                        rotation: view.transformRotation
 
-                    // The bounding box outline: one thin item per edge.
-                    Repeater {
-                        model: 4
+                        // Inside-box drag repositions the box in unrotated canvas space
+                        // (Shift locks axis, Ctrl snaps to edges/centre/10 px).
+                        MouseArea {
+                            id: transformMoveArea
+                            objectName: "transformMoveArea"
+                            anchors.fill: parent
+                            visible: view.transformMode === "free"
+                            enabled: visible
+                            acceptedButtons: Qt.LeftButton
+                            cursorShape: Qt.SizeAllCursor
+                            property real startHostX: 0
+                            property real startHostY: 0
+                            property var startRect: null
 
-                        Rectangle {
-                            required property int index
-                            x: view.docToHostX(view.cornerX(index))
-                            y: view.docToHostY(view.cornerY(index))
-                            width: Math.hypot(
-                                view.docToHostX(view.cornerX((index + 1) % 4)) - x,
-                                view.docToHostY(view.cornerY((index + 1) % 4)) - y)
-                            height: 1
-                            color: view.theme.accent
-                            transformOrigin: Item.Left
-                            rotation: Math.atan2(
-                                view.docToHostY(view.cornerY((index + 1) % 4)) - y,
-                                view.docToHostX(view.cornerX((index + 1) % 4)) - x)
-                                * 180 / Math.PI
-                        }
-                    }
-
-                    // Four corner handles.
-                    Repeater {
-                        model: 4
-
-                        Rectangle {
-                            required property int index
-                            objectName: "transformCorner_" + index
-                            width: 12
-                            height: 12
-                            radius: 2
-                            color: view.theme.accent
-                            border.width: 1
-                            border.color: view.theme.surface
-                            x: view.docToHostX(view.cornerX(index)) - width / 2
-                            y: view.docToHostY(view.cornerY(index)) - height / 2
-
-                            MouseArea {
-                                anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton
-                                cursorShape: (index === 0 || index === 2)
-                                             ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor
-                                property var startRect: null
-                                onPressed: startRect = view.transformRect()
-                                onPositionChanged: function(mouse) {
-                                    if (!pressed) return
-                                    var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                    view.dragTransformCorner(index, point.x, point.y,
-                                                             mouse.modifiers, startRect)
-                                }
+                            onPressed: function(mouse) {
+                                view.forceActiveFocus()
+                                var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                startHostX = point.x
+                                startHostY = point.y
+                                startRect = view.transformRect()
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed || !startRect) return
+                                var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                view.moveTransformBox(startRect,
+                                                      (point.x - startHostX) / view.zoom,
+                                                      (point.y - startHostY) / view.zoom,
+                                                      mouse.modifiers)
                             }
                         }
-                    }
 
-                    // Four edge handles, at each edge's midpoint.
-                    Repeater {
-                        model: 4
-
+                        // Bounding box outline.
                         Rectangle {
-                            required property int index
-                            objectName: "transformEdge_" + index
-                            width: 10
-                            height: 10
-                            radius: 5
+                            anchors.fill: parent
+                            color: "transparent"
+                            border.width: 1.5
+                            border.color: view.theme.accent
+                        }
+
+                        // Rotate handle stem + round knob above top-center.
+                        Rectangle {
+                            x: transformBoxContainer.width / 2 - 0.75
+                            y: -24
+                            width: 1.5
+                            height: 24
+                            color: view.theme.accent
+                        }
+                        Rectangle {
+                            id: transformRotateHandle
+                            objectName: "transformRotateHandle"
+                            x: transformBoxContainer.width / 2 - width / 2
+                            y: -32
+                            width: 14
+                            height: 14
+                            radius: 7
                             color: view.theme.surface
                             border.width: 2
                             border.color: view.theme.accent
-                            x: view.docToHostX((view.cornerX(index)
-                                                + view.cornerX((index + 1) % 4)) / 2) - width / 2
-                            y: view.docToHostY((view.cornerY(index)
-                                                + view.cornerY((index + 1) % 4)) / 2) - height / 2
 
                             MouseArea {
                                 anchors.fill: parent
+                                anchors.margins: -4
                                 acceptedButtons: Qt.LeftButton
-                                cursorShape: (index === 0 || index === 2)
-                                             ? Qt.SizeVerCursor : Qt.SizeHorCursor
-                                property var startRect: null
-                                onPressed: startRect = view.transformRect()
+                                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                property real centerHostX: 0
+                                property real centerHostY: 0
+                                property real startMouseAngle: 0
+                                property real startRotation: 0
+                                onPressed: function(mouse) {
+                                    view.forceActiveFocus()
+                                    var r = view.transformRect()
+                                    if (!r) return
+                                    centerHostX = view.docToHostX(r.x + r.width / 2.0)
+                                    centerHostY = view.docToHostY(r.y + r.height / 2.0)
+                                    var pt = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                    startMouseAngle = Math.atan2(pt.y - centerHostY, pt.x - centerHostX) * 180.0 / Math.PI
+                                    startRotation = view.transformRotation
+                                }
                                 onPositionChanged: function(mouse) {
                                     if (!pressed) return
-                                    var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
-                                    view.dragTransformEdge(index, point.x, point.y,
-                                                           mouse.modifiers, startRect)
+                                    var pt = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                    var curAngle = Math.atan2(pt.y - centerHostY, pt.x - centerHostX) * 180.0 / Math.PI
+                                    var next = startRotation + (curAngle - startMouseAngle)
+                                    while (next > 180) next -= 360
+                                    while (next < -180) next += 360
+                                    if ((mouse.modifiers & Qt.ShiftModifier) !== 0) {
+                                        next = Math.round(next / 15.0) * 15.0
+                                    } else {
+                                        next = Math.round(next * 2.0) / 2.0
+                                    }
+                                    view.transformRotation = next
                                 }
                             }
+                        }
+
+                        // Four corner handles.
+                        Repeater {
+                            model: [
+                                { idx: 0, rx: 0, ry: 0 },
+                                { idx: 1, rx: 1, ry: 0 },
+                                { idx: 2, rx: 1, ry: 1 },
+                                { idx: 3, rx: 0, ry: 1 }
+                            ]
+
+                            Rectangle {
+                                required property var modelData
+                                objectName: "transformCorner_" + modelData.idx
+                                width: 12
+                                height: 12
+                                radius: 2
+                                color: view.theme.accent
+                                border.width: 1
+                                border.color: view.theme.surface
+                                x: modelData.rx * transformBoxContainer.width - width / 2
+                                y: modelData.ry * transformBoxContainer.height - height / 2
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -3
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: (modelData.idx === 0 || modelData.idx === 2)
+                                                 ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor
+                                    property var startRect: null
+                                    onPressed: {
+                                        view.forceActiveFocus()
+                                        startRect = view.transformRect()
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (!pressed) return
+                                        var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                        view.dragTransformCorner(modelData.idx, point.x, point.y,
+                                                                 mouse.modifiers, startRect)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Four edge handles, at each edge's midpoint.
+                        Repeater {
+                            model: [
+                                { idx: 0, rx: 0.5, ry: 0 },
+                                { idx: 1, rx: 1,   ry: 0.5 },
+                                { idx: 2, rx: 0.5, ry: 1 },
+                                { idx: 3, rx: 0,   ry: 0.5 }
+                            ]
+
+                            Rectangle {
+                                required property var modelData
+                                objectName: "transformEdge_" + modelData.idx
+                                width: 10
+                                height: 10
+                                radius: 5
+                                color: view.theme.surface
+                                border.width: 2
+                                border.color: view.theme.accent
+                                x: modelData.rx * transformBoxContainer.width - width / 2
+                                y: modelData.ry * transformBoxContainer.height - height / 2
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -3
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: (modelData.idx === 0 || modelData.idx === 2)
+                                                 ? Qt.SizeVerCursor : Qt.SizeHorCursor
+                                    property var startRect: null
+                                    onPressed: {
+                                        view.forceActiveFocus()
+                                        startRect = view.transformRect()
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (!pressed) return
+                                        var point = mapToItem(canvasOverlay, mouse.x, mouse.y)
+                                        view.dragTransformEdge(modelData.idx, point.x, point.y,
+                                                               mouse.modifiers, startRect)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Left-click outside the image (on the matte) while Pointer tool
+                // is active quickly deselects any active selection.
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    enabled: view.documentReady && view.tool === "pointer" && view.hasSelection
+                    onTapped: function(eventPoint) {
+                        var dx = view.hostToDocX(eventPoint.position.x)
+                        var dy = view.hostToDocY(eventPoint.position.y)
+                        if (dx < 0 || dy < 0 || dx >= view.documentWidth || dy >= view.documentHeight) {
+                            view.command({ type: "editor_select_clear" })
+                        }
+                    }
+                }
+
+                // Right-click canvas context menu (clipboard, layer & selection actions).
+                // TapHandler on RightButton never steals left-button drags.
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    enabled: view.documentReady
+                    onTapped: function(eventPoint) {
+                        canvasContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
+                    }
+                }
+
+                AppMenu {
+                    id: canvasContextMenu
+                    objectName: "editorCanvasContextMenu"
+                    theme: view.theme
+                    implicitWidth: 220
+
+                    MenuItem {
+                        text: qsTr("Copy")
+                        enabled: view.documentReady
+                        onTriggered: view.command({ type: "editor_selection_copy", cut: false })
+                    }
+                    MenuItem {
+                        text: qsTr("Cut")
+                        enabled: view.documentReady
+                        onTriggered: view.command({ type: "editor_selection_copy", cut: true })
+                    }
+                    MenuItem {
+                        text: qsTr("Paste")
+                        enabled: view.documentReady
+                        onTriggered: view.requestPasteImage()
+                    }
+                    MenuItem {
+                        text: view.hasSelection ? qsTr("To new layer") : qsTr("Duplicate layer")
+                        enabled: view.documentReady
+                        onTriggered: {
+                            if (view.hasSelection) {
+                                view.command({ type: "editor_selection_duplicate_layer" })
+                            } else if (view.activeLayerId > 0) {
+                                view.command({ type: "editor_layer_duplicate", id: view.activeLayerId })
+                            }
+                        }
+                    }
+                    MenuSeparator {}
+                    MenuItem {
+                        text: qsTr("Transform")
+                        enabled: view.documentReady
+                        onTriggered: {
+                            view.tool = "transform"
+                            view.resetTransformCorners()
+                        }
+                    }
+                    MenuItem {
+                        text: qsTr("Select all")
+                        enabled: view.documentReady
+                        onTriggered: view.command({ type: "editor_select_all" })
+                    }
+                    MenuItem {
+                        text: qsTr("Deselect")
+                        enabled: view.documentReady && view.hasSelection
+                        onTriggered: view.command({ type: "editor_select_clear" })
+                    }
+                    MenuItem {
+                        text: qsTr("Invert")
+                        enabled: view.documentReady && view.hasSelection
+                        onTriggered: view.command({ type: "editor_select_invert" })
+                    }
+                    MenuSeparator {}
+                    MenuItem {
+                        text: qsTr("Fill")
+                        enabled: view.documentReady && view.hasSelection
+                        onTriggered: view.command({
+                            type: "editor_selection_fill",
+                            color: view.foregroundBytes(),
+                            opacity: Math.max(0.01, view.paintOpacity / 100)
+                        })
+                    }
+                    MenuItem {
+                        text: qsTr("Delete")
+                        enabled: view.documentReady && view.hasSelection
+                        onTriggered: view.command({ type: "editor_selection_delete" })
+                    }
+                    MenuItem {
+                        text: qsTr("Crop")
+                        enabled: view.documentReady && view.hasSelection
+                        onTriggered: view.command({ type: "editor_selection_crop" })
+                    }
+                }
+
+                // ------------------------------------------------ active selection overlay
+                // Marching-ants contour rendered by Core, visible across every tool
+                // (so Brush/Eraser clearly show the exact masked boundary).
+                Image {
+                    id: selectionOverlayImage
+                    objectName: "selectionOverlayImage"
+                    visible: view.hasSelection && view.editor
+                             && ((view.editor.ramSelectionRevision || 0) > 0 || !!view.editor.selectionOverlayPath)
+                             && !view.transformFrameShown && !view.rotateFrameShown
+                             && !view.resizeFrameShown && !view.canvasSizeFrameShown
+                    x: view.docToHostX(0) + selectOverlay.moveDx * view.zoom
+                    y: view.docToHostY(0) + selectOverlay.moveDy * view.zoom
+                    width: Math.max(1, view.displayedWidth * view.zoom)
+                    height: Math.max(1, view.displayedHeight * view.zoom)
+                    fillMode: Image.Stretch
+                    asynchronous: false
+                    cache: false
+                    smooth: true
+                    mipmap: true
+                    source: {
+                        if (!view.editor) return ""
+                        if ((view.editor.ramSelectionRevision || 0) > 0) {
+                            if (view.selectionDisplayMode === "mask") {
+                                return "image://editor/sel_red?rev=" + view.editor.ramSelectionRevision
+                            }
+                            return (view.selectionAntsPhase
+                                    ? "image://editor/selection2?rev="
+                                    : "image://editor/selection?rev=")
+                                   + view.editor.ramSelectionRevision
+                        }
+                        return view.editor.selectionOverlayPath
+                               ? "file://" + view.editor.selectionOverlayPath + "?rev=" + (view.editor.selectionRevision || 0)
+                               : ""
+                    }
+                }
+
+                // ------------------------------------------------ selection tool drag
+                Item {
+                    id: selectOverlay
+                    objectName: "selectOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "select" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    property bool dragging: false
+                    property bool movingSelection: false
+                    property real moveStartDocX: 0
+                    property real moveStartDocY: 0
+                    property real moveDx: 0
+                    property real moveDy: 0
+                    property string activeDragMode: "replace"
+                    property real startDocX: 0
+                    property real startDocY: 0
+                    property real curDocX: 0
+                    property real curDocY: 0
+                    property var lassoPoints: []
+                    property var polyPoints: []
+                    property real polyHoverDocX: 0
+                    property real polyHoverDocY: 0
+                    property bool polyHoveringClose: false
+                    property string polyDragMode: "replace"
+
+                    onVisibleChanged: if (!visible && polyPoints.length > 0) cancelPolygon()
+                    Connections {
+                        target: view
+                        function onSelectShapeChanged() {
+                            if (selectOverlay.polyPoints.length > 0) selectOverlay.cancelPolygon()
+                        }
+                    }
+
+                    function finishPolygon() {
+                        var pts = selectOverlay.polyPoints
+                        selectOverlay.polyPoints = []
+                        selectOverlay.polyHoveringClose = false
+                        selectDragCanvas.requestPaint()
+                        if (pts.length >= 3) {
+                            view.command({
+                                type: "editor_select_lasso",
+                                points: pts,
+                                mode: selectOverlay.polyDragMode,
+                                feather: view.selectFeather
+                            })
+                        }
+                    }
+
+                    function cancelPolygon() {
+                        selectOverlay.polyPoints = []
+                        selectOverlay.polyHoveringClose = false
+                        selectDragCanvas.requestPaint()
+                    }
+
+                    function popPolygonPoint() {
+                        if (selectOverlay.polyPoints.length === 0) return
+                        var pts = selectOverlay.polyPoints.slice(0, selectOverlay.polyPoints.length - 1)
+                        selectOverlay.polyPoints = pts
+                        selectOverlay.polyHoveringClose = false
+                        selectDragCanvas.requestPaint()
+                    }
+
+                    function pointInSelectionBounds(docX, docY) {
+                        var sb = view.editor ? view.editor.selectionBounds : null
+                        if (!sb || sb.length !== 4) return false
+                        return docX >= sb[0] && docY >= sb[1]
+                               && docX <= sb[0] + sb[2] && docY <= sb[1] + sb[3]
+                    }
+
+                    Canvas {
+                        id: selectDragCanvas
+                        anchors.fill: parent
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            if (view.selectShape === "polygon" && selectOverlay.polyPoints.length > 0) {
+                                var ppts = selectOverlay.polyPoints
+                                ctx.save()
+                                ctx.lineWidth = 1.5
+                                ctx.beginPath()
+                                ctx.moveTo(view.docToHostX(ppts[0][0]), view.docToHostY(ppts[0][1]))
+                                for (var pi = 1; pi < ppts.length; ++pi) {
+                                    ctx.lineTo(view.docToHostX(ppts[pi][0]), view.docToHostY(ppts[pi][1]))
+                                }
+                                ctx.lineTo(view.docToHostX(selectOverlay.polyHoverDocX),
+                                           view.docToHostY(selectOverlay.polyHoverDocY))
+                                ctx.strokeStyle = "#d0000000"
+                                ctx.stroke()
+                                ctx.setLineDash([5, 5])
+                                ctx.strokeStyle = "#f0ffffff"
+                                ctx.stroke()
+                                ctx.setLineDash([])
+                                for (var vi = 0; vi < ppts.length; ++vi) {
+                                    var vx = view.docToHostX(ppts[vi][0])
+                                    var vy = view.docToHostY(ppts[vi][1])
+                                    var isFirstClose = vi === 0 && ppts.length >= 3 && selectOverlay.polyHoveringClose
+                                    ctx.beginPath()
+                                    ctx.arc(vx, vy, isFirstClose ? 6 : 3.5, 0, Math.PI * 2)
+                                    ctx.fillStyle = isFirstClose ? view.theme.accent : "#ffffff"
+                                    ctx.fill()
+                                    ctx.strokeStyle = "#111111"
+                                    ctx.lineWidth = 1.2
+                                    ctx.stroke()
+                                }
+                                ctx.restore()
+                                return
+                            }
+                            if (!selectOverlay.dragging) return
+                            ctx.save()
+                            ctx.lineWidth = 1.5
+                            if (view.selectShape === "lasso") {
+                                var pts = selectOverlay.lassoPoints
+                                if (!pts || pts.length < 2) { ctx.restore(); return }
+                                ctx.beginPath()
+                                ctx.moveTo(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]))
+                                for (var i = 1; i < pts.length; ++i) {
+                                    ctx.lineTo(view.docToHostX(pts[i][0]), view.docToHostY(pts[i][1]))
+                                }
+                                ctx.closePath()
+                                ctx.strokeStyle = "#d0000000"
+                                ctx.stroke()
+                                ctx.setLineDash([5, 5])
+                                ctx.strokeStyle = "#f0ffffff"
+                                ctx.stroke()
+                            } else {
+                                var x0 = view.docToHostX(Math.min(selectOverlay.startDocX, selectOverlay.curDocX))
+                                var y0 = view.docToHostY(Math.min(selectOverlay.startDocY, selectOverlay.curDocY))
+                                var rw = Math.abs(view.docToHostX(selectOverlay.curDocX) - view.docToHostX(selectOverlay.startDocX))
+                                var rh = Math.abs(view.docToHostY(selectOverlay.curDocY) - view.docToHostY(selectOverlay.startDocY))
+                                ctx.beginPath()
+                                if (view.selectShape === "ellipse") {
+                                    ctx.ellipse(x0, y0, Math.max(1, rw), Math.max(1, rh))
+                                } else {
+                                    ctx.rect(x0, y0, Math.max(1, rw), Math.max(1, rh))
+                                }
+                                ctx.strokeStyle = "#d0000000"
+                                ctx.stroke()
+                                ctx.setLineDash([5, 5])
+                                ctx.strokeStyle = "#f0ffffff"
+                                ctx.stroke()
+                            }
+                            ctx.restore()
+                        }
+                    }
+
+                    MouseArea {
+                        id: selectArea
+                        objectName: "selectArea"
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        hoverEnabled: true
+                        property bool hoverInsideSelection: false
+                        cursorShape: (selectOverlay.movingSelection
+                                      || (hoverInsideSelection
+                                          && view.hasSelection
+                                          && view.selectShape !== "wand"
+                                          && view.selectMode === "replace"))
+                                     ? Qt.SizeAllCursor : Qt.CrossCursor
+                        onExited: hoverInsideSelection = false
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            var rawDx = view.hostToDocX(mouse.x)
+                            var rawDy = view.hostToDocY(mouse.y)
+                            var dx = Math.max(0, Math.min(view.documentWidth - 1, rawDx))
+                            var dy = Math.max(0, Math.min(view.documentHeight - 1, rawDy))
+                            var shift = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                            var alt = (mouse.modifiers & Qt.AltModifier) !== 0
+                            var mode = (shift && alt)
+                                     ? "intersect"
+                                     : (alt
+                                        ? "subtract"
+                                        : ((shift && view.hasSelection) ? "add" : view.selectMode))
+                            if (view.selectShape === "wand") {
+                                if (rawDx < 0 || rawDy < 0 || rawDx >= view.documentWidth || rawDy >= view.documentHeight) {
+                                    if (view.hasSelection) view.command({ type: "editor_select_clear" })
+                                    return
+                                }
+                                view.command({
+                                    type: "editor_select_magic_wand",
+                                    x: Math.floor(dx),
+                                    y: Math.floor(dy),
+                                    tolerance: view.wandTolerance,
+                                    contiguous: view.wandContiguous,
+                                    sample_all_layers: view.wandSampleAllLayers,
+                                    mode: mode,
+                                    feather: view.selectFeather
+                                })
+                                return
+                            }
+                            if (view.selectShape === "polygon") {
+                                // Starting a new polygon captures the active combine mode; clicking
+                                // near the first vertex (>= 3 points) closes the polygon cleanly.
+                                if (selectOverlay.polyPoints.length === 0) {
+                                    // Still allow dragging inside an existing selection to move its frame
+                                    // if the user drags, or clicking to start a polygon vertex.
+                                    selectOverlay.polyDragMode = mode
+                                }
+                                var ppts = selectOverlay.polyPoints.slice()
+                                if (ppts.length >= 3) {
+                                    var fx = view.docToHostX(ppts[0][0])
+                                    var fy = view.docToHostY(ppts[0][1])
+                                    if (Math.hypot(mouse.x - fx, mouse.y - fy) <= 10) {
+                                        selectOverlay.finishPolygon()
+                                        return
+                                    }
+                                }
+                                ppts.push([dx, dy])
+                                selectOverlay.polyPoints = ppts
+                                selectOverlay.polyHoverDocX = dx
+                                selectOverlay.polyHoverDocY = dy
+                                selectDragCanvas.requestPaint()
+                                return
+                            }
+                            // Dragging inside an existing selection in Replace mode (no Shift/Alt)
+                            // moves the selection boundary itself at 60 fps without moving pixels.
+                            if (mode === "replace" && !shift && !alt && view.hasSelection
+                                    && selectOverlay.pointInSelectionBounds(rawDx, rawDy)) {
+                                selectOverlay.movingSelection = true
+                                selectOverlay.moveStartDocX = rawDx
+                                selectOverlay.moveStartDocY = rawDy
+                                selectOverlay.moveDx = 0
+                                selectOverlay.moveDy = 0
+                                return
+                            }
+                            selectOverlay.activeDragMode = mode
+                            selectOverlay.dragging = true
+                            selectOverlay.startDocX = dx
+                            selectOverlay.startDocY = dy
+                            selectOverlay.curDocX = dx
+                            selectOverlay.curDocY = dy
+                            selectOverlay.lassoPoints = [[dx, dy]]
+                            selectDragCanvas.requestPaint()
+                        }
+                        onDoubleClicked: function(mouse) {
+                            if (view.selectShape === "polygon" && selectOverlay.polyPoints.length >= 3) {
+                                selectOverlay.finishPolygon()
+                            }
+                        }
+                        onPositionChanged: function(mouse) {
+                            var rawDx = view.hostToDocX(mouse.x)
+                            var rawDy = view.hostToDocY(mouse.y)
+                            if (view.selectShape === "polygon" && selectOverlay.polyPoints.length > 0) {
+                                selectOverlay.polyHoverDocX = Math.max(0, Math.min(view.documentWidth, rawDx))
+                                selectOverlay.polyHoverDocY = Math.max(0, Math.min(view.documentHeight, rawDy))
+                                var firstPt = selectOverlay.polyPoints[0]
+                                selectOverlay.polyHoveringClose = selectOverlay.polyPoints.length >= 3
+                                    && Math.hypot(mouse.x - view.docToHostX(firstPt[0]),
+                                                  mouse.y - view.docToHostY(firstPt[1])) <= 10
+                                selectDragCanvas.requestPaint()
+                                return
+                            }
+                            if (!pressed) {
+                                hoverInsideSelection = view.hasSelection
+                                                       && selectOverlay.pointInSelectionBounds(rawDx, rawDy)
+                                return
+                            }
+                            if (selectOverlay.movingSelection) {
+                                var mdx = Math.round(rawDx - selectOverlay.moveStartDocX)
+                                var mdy = Math.round(rawDy - selectOverlay.moveStartDocY)
+                                if ((mouse.modifiers & Qt.ShiftModifier) !== 0) {
+                                    if (Math.abs(mdx) >= Math.abs(mdy)) mdy = 0
+                                    else mdx = 0
+                                }
+                                selectOverlay.moveDx = mdx
+                                selectOverlay.moveDy = mdy
+                                return
+                            }
+                            if (!selectOverlay.dragging) return
+                            var dx = Math.max(0, Math.min(view.documentWidth, rawDx))
+                            var dy = Math.max(0, Math.min(view.documentHeight, rawDy))
+                            if (view.selectShape === "lasso") {
+                                var pts = selectOverlay.lassoPoints
+                                var last = pts[pts.length - 1]
+                                if (!last || Math.hypot(dx - last[0], dy - last[1]) >= 2.0) {
+                                    pts.push([dx, dy])
+                                    selectOverlay.lassoPoints = pts
+                                }
+                            } else {
+                                if ((mouse.modifiers & Qt.ShiftModifier) !== 0) {
+                                    var side = Math.max(Math.abs(dx - selectOverlay.startDocX),
+                                                        Math.abs(dy - selectOverlay.startDocY))
+                                    dx = selectOverlay.startDocX + (dx >= selectOverlay.startDocX ? side : -side)
+                                    dy = selectOverlay.startDocY + (dy >= selectOverlay.startDocY ? side : -side)
+                                }
+                                selectOverlay.curDocX = dx
+                                selectOverlay.curDocY = dy
+                            }
+                            selectDragCanvas.requestPaint()
+                        }
+                        onReleased: function(mouse) {
+                            if (selectOverlay.movingSelection) {
+                                selectOverlay.movingSelection = false
+                                var mdx = Math.round(selectOverlay.moveDx)
+                                var mdy = Math.round(selectOverlay.moveDy)
+                                selectOverlay.moveDx = 0
+                                selectOverlay.moveDy = 0
+                                if (Math.abs(mdx) >= 1 || Math.abs(mdy) >= 1) {
+                                    view.command({ type: "editor_select_move", dx: mdx, dy: mdy })
+                                } else if (view.hasSelection) {
+                                    view.command({ type: "editor_select_clear" })
+                                }
+                                return
+                            }
+                            if (!selectOverlay.dragging) return
+                            selectOverlay.dragging = false
+                            selectDragCanvas.requestPaint()
+                            var mode = selectOverlay.activeDragMode
+                            if (view.selectShape === "lasso") {
+                                var pts = selectOverlay.lassoPoints
+                                selectOverlay.lassoPoints = []
+                                if (pts.length >= 3) {
+                                    view.command({
+                                        type: "editor_select_lasso",
+                                        points: pts,
+                                        mode: mode,
+                                        feather: view.selectFeather
+                                    })
+                                } else if (mode === "replace" && view.hasSelection) {
+                                    view.command({ type: "editor_select_clear" })
+                                }
+                                return
+                            }
+                            var x = Math.round(Math.min(selectOverlay.startDocX, selectOverlay.curDocX))
+                            var y = Math.round(Math.min(selectOverlay.startDocY, selectOverlay.curDocY))
+                            var w = Math.round(Math.abs(selectOverlay.curDocX - selectOverlay.startDocX))
+                            var h = Math.round(Math.abs(selectOverlay.curDocY - selectOverlay.startDocY))
+                            if (w < 2 || h < 2) {
+                                if (mode === "replace" && view.hasSelection) {
+                                    view.command({ type: "editor_select_clear" })
+                                }
+                                return
+                            }
+                            view.command({
+                                type: view.selectShape === "ellipse" ? "editor_select_ellipse" : "editor_select_rect",
+                                x: x,
+                                y: y,
+                                width: w,
+                                height: h,
+                                mode: mode,
+                                feather: view.selectFeather
+                            })
+                        }
+                        onCanceled: {
+                            selectOverlay.movingSelection = false
+                            selectOverlay.moveDx = 0
+                            selectOverlay.moveDy = 0
+                            selectOverlay.dragging = false
+                            selectOverlay.lassoPoints = []
+                            selectDragCanvas.requestPaint()
                         }
                     }
                 }
@@ -4384,39 +5859,124 @@ Item {
                     visible: view.tool === "paint" && view.documentReady
                     enabled: visible && !view.spacePanning
 
-                    Canvas {
-                        id: strokePreview
-                        objectName: "strokePreview"
-                        anchors.fill: parent
+                    // Visible intersection of the document frame with the viewport.
+                    // Sizing the preview canvas & mask FBOs to this intersection keeps
+                    // GPU textures <= viewport size even at 3200% zoom while strictly
+                    // clipping live strokes to the exact image boundaries.
+                    readonly property real imgLeft: view.docToHostX(0)
+                    readonly property real imgTop: view.docToHostY(0)
+                    readonly property real imgRight: view.docToHostX(view.displayedWidth)
+                    readonly property real imgBottom: view.docToHostY(view.displayedHeight)
+                    readonly property real clipX: Math.max(0, Math.floor(imgLeft))
+                    readonly property real clipY: Math.max(0, Math.floor(imgTop))
+                    readonly property real clipRight: Math.min(width, Math.ceil(imgRight))
+                    readonly property real clipBottom: Math.min(height, Math.ceil(imgBottom))
+                    readonly property bool imgVisible: clipRight > clipX && clipBottom > clipY
+                    readonly property real clipW: Math.max(1, clipRight - clipX)
+                    readonly property real clipH: Math.max(1, clipBottom - clipY)
 
-                        onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.clearRect(0, 0, width, height)
-                            var points = view.paintStroke
-                            if (!points || points.length === 0) return
-                            ctx.globalAlpha = Math.max(0.05, view.paintOpacity / 100)
-                            ctx.strokeStyle = view.paintMode === "eraser"
-                                    ? view.theme.thumb : view.foregroundColor
-                            ctx.fillStyle = ctx.strokeStyle
-                            ctx.lineCap = "round"
-                            ctx.lineJoin = "round"
-                            var radius = Math.max(0.5, view.paintSize * view.zoom / 2)
-                            ctx.lineWidth = radius * 2
-                            if (points.length === 1) {
+                    Item {
+                        id: strokeClipBox
+                        objectName: "strokeClipBox"
+                        visible: paintOverlay.imgVisible
+                        x: paintOverlay.clipX
+                        y: paintOverlay.clipY
+                        width: paintOverlay.clipW
+                        height: paintOverlay.clipH
+                        clip: true
+
+                        // Selection alpha mask aligned 1:1 with strokeClipBox.
+                        // Keeping sourceItem visible while hideSource: true on
+                        // ShaderEffectSource is the official Qt 6 pattern so the
+                        // mask texture is always rendered for MultiEffect.
+                        Item {
+                            id: paintMaskContainer
+                            anchors.fill: parent
+                            clip: true
+                            visible: view.hasSelection
+
+                            Image {
+                                id: paintMaskImage
+                                x: paintOverlay.imgLeft - paintOverlay.clipX
+                                y: paintOverlay.imgTop - paintOverlay.clipY
+                                width: Math.max(1, view.displayedWidth * view.zoom)
+                                height: Math.max(1, view.displayedHeight * view.zoom)
+                                fillMode: Image.Stretch
+                                asynchronous: false
+                                cache: false
+                                source: (view.hasSelection && view.editor && (view.editor.ramSelectionRevision || 0) > 0)
+                                        ? ("image://editor/sel_mask?rev=" + view.editor.ramSelectionRevision)
+                                        : ""
+                            }
+                        }
+
+                        ShaderEffectSource {
+                            id: paintMaskSource
+                            anchors.fill: parent
+                            sourceItem: paintMaskContainer
+                            hideSource: true
+                            live: true
+                            visible: false
+                        }
+
+                        Canvas {
+                            id: strokePreview
+                            objectName: "strokePreview"
+                            anchors.fill: parent
+                            onWidthChanged: if (view.paintStroking) requestPaint()
+                            onHeightChanged: if (view.paintStroking) requestPaint()
+
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                var points = view.paintStroke
+                                if (!points || points.length === 0) return
+                                var ox = paintOverlay.clipX
+                                var oy = paintOverlay.clipY
+                                ctx.globalAlpha = Math.max(0.05, view.paintOpacity / 100)
+                                ctx.strokeStyle = view.paintMode === "eraser"
+                                        ? view.theme.thumb : view.foregroundColor
+                                ctx.fillStyle = ctx.strokeStyle
+                                ctx.lineCap = "round"
+                                ctx.lineJoin = "round"
+                                var radius = Math.max(0.5, view.paintSize * view.zoom / 2)
+                                ctx.lineWidth = radius * 2
+                                if (points.length === 1) {
+                                    ctx.beginPath()
+                                    ctx.arc(view.docToHostX(points[0][0]) - ox,
+                                            view.docToHostY(points[0][1]) - oy, radius, 0, 2 * Math.PI)
+                                    ctx.fill()
+                                    return
+                                }
                                 ctx.beginPath()
-                                ctx.arc(view.docToHostX(points[0][0]),
-                                        view.docToHostY(points[0][1]), radius, 0, 2 * Math.PI)
-                                ctx.fill()
-                                return
+                                ctx.moveTo(view.docToHostX(points[0][0]) - ox,
+                                           view.docToHostY(points[0][1]) - oy)
+                                for (var index = 1; index < points.length; ++index) {
+                                    ctx.lineTo(view.docToHostX(points[index][0]) - ox,
+                                               view.docToHostY(points[index][1]) - oy)
+                                }
+                                ctx.stroke()
                             }
-                            ctx.beginPath()
-                            ctx.moveTo(view.docToHostX(points[0][0]),
-                                       view.docToHostY(points[0][1]))
-                            for (var index = 1; index < points.length; ++index) {
-                                ctx.lineTo(view.docToHostX(points[index][0]),
-                                           view.docToHostY(points[index][1]))
-                            }
-                            ctx.stroke()
+                        }
+
+                        ShaderEffectSource {
+                            id: strokePreviewSource
+                            anchors.fill: parent
+                            sourceItem: strokePreview
+                            hideSource: view.hasSelection
+                            live: true
+                            visible: false
+                        }
+
+                        MultiEffect {
+                            id: strokeMaskedOutput
+                            anchors.fill: parent
+                            visible: view.hasSelection
+                            source: strokePreviewSource
+                            maskEnabled: true
+                            maskSource: paintMaskSource
+                            maskThresholdMin: 0.004
+                            maskSpreadAtMin: 0.996
                         }
                     }
 
@@ -4425,17 +5985,284 @@ Item {
                         objectName: "paintArea"
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton
-                        cursorShape: Qt.CrossCursor
+                        hoverEnabled: true
+                        property bool hoverInside: false
+                        property real hoverX: 0
+                        property real hoverY: 0
+                        property bool shiftResizing: false
+                        property real resizeStartX: 0
+                        property real resizeStartSize: 24
+                        property real resizeAnchorX: 0
+                        property real resizeAnchorY: 0
+                        property bool altPicking: false
+                        property string pickedHex: ""
+                        property string prevFgHex: "#000000"
+
+                        readonly property real cursorDiameter: Math.max(4, view.paintSize * view.zoom)
+                        cursorShape: altPicking ? Qt.CrossCursor
+                                   : (cursorDiameter >= 12 ? Qt.BlankCursor : Qt.CrossCursor)
+
+                        onEntered: hoverInside = true
+                        onExited: {
+                            hoverInside = false
+                            altPicking = false
+                        }
                         onPressed: function(mouse) {
                             view.forceActiveFocus()
+                            hoverInside = true
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            // Krita Paint: Ctrl+Click (and Alt+Click) samples color directly from canvas!
+                            if ((mouse.modifiers & (Qt.ControlModifier | Qt.AltModifier)) !== 0) {
+                                altPicking = true
+                                prevFgHex = view.foregroundColor
+                                pickedHex = view.pickCanvasColor(mouse.x, mouse.y)
+                                return
+                            }
+                            if ((mouse.modifiers & Qt.ShiftModifier) !== 0) {
+                                shiftResizing = true
+                                resizeStartX = mouse.x
+                                resizeStartSize = view.paintSize
+                                resizeAnchorX = mouse.x
+                                resizeAnchorY = mouse.y
+                                return
+                            }
                             view.beginPaintStroke(mouse.x, mouse.y)
                         }
                         onPositionChanged: function(mouse) {
+                            hoverInside = true
+                            hoverX = mouse.x
+                            hoverY = mouse.y
                             if (!pressed) return
+                            if (altPicking) {
+                                pickedHex = view.pickCanvasColor(mouse.x, mouse.y)
+                                return
+                            }
+                            if (shiftResizing) {
+                                var delta = (mouse.x - resizeStartX) / Math.max(0.25, view.zoom)
+                                view.paintSize = Math.max(view.minimumPaintSize,
+                                                          Math.min(view.maximumPaintSize,
+                                                                   Math.round(resizeStartSize + delta)))
+                                return
+                            }
                             view.extendPaintStroke(mouse.x, mouse.y)
                         }
-                        onReleased: view.finishPaintStroke()
-                        onCanceled: view.cancelPaintStroke()
+                        onReleased: {
+                            if (altPicking) {
+                                altPicking = false
+                                pickedHex = ""
+                                return
+                            }
+                            if (shiftResizing) {
+                                shiftResizing = false
+                                return
+                            }
+                            view.finishPaintStroke()
+                        }
+                        onCanceled: {
+                            altPicking = false
+                            shiftResizing = false
+                            pickedHex = ""
+                            view.cancelPaintStroke()
+                        }
+                    }
+
+                    // Dual-ring brush/eraser outline showing exact scaled size & shape.
+                    Item {
+                        id: brushCursor
+                        objectName: "brushCursor"
+                        visible: (paintArea.hoverInside || paintArea.shiftResizing) && !paintArea.altPicking
+                        readonly property real cx: paintArea.shiftResizing ? paintArea.resizeAnchorX : paintArea.hoverX
+                        readonly property real cy: paintArea.shiftResizing ? paintArea.resizeAnchorY : paintArea.hoverY
+                        readonly property real diameter: Math.max(4, view.paintSize * view.zoom)
+                        x: Math.round(cx - diameter / 2)
+                        y: Math.round(cy - diameter / 2)
+                        width: Math.round(diameter)
+                        height: Math.round(diameter)
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: width / 2
+                            color: "transparent"
+                            border.width: 1
+                            border.color: "#d0000000"
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 1
+                            radius: width / 2
+                            color: "transparent"
+                            border.width: 1
+                            border.color: view.paintMode === "eraser" ? "#f0ff9f9f" : "#f0ffffff"
+                        }
+                        // Center pixel crosshair dot when the ring is wide enough.
+                        Rectangle {
+                            visible: brushCursor.diameter >= 12
+                            anchors.centerIn: parent
+                            width: 3
+                            height: 3
+                            radius: 1.5
+                            color: "#f0ffffff"
+                            border.width: 0.75
+                            border.color: "#d0000000"
+                        }
+                    }
+
+                    // Live size badge while Shift+Dragging to resize brush.
+                    Rectangle {
+                        visible: paintArea.shiftResizing
+                        x: Math.min(parent.width - width - 8, paintArea.resizeAnchorX + brushCursor.diameter / 2 + 10)
+                        y: Math.max(8, paintArea.resizeAnchorY - height / 2)
+                        width: shiftSizeLabel.implicitWidth + 14
+                        height: shiftSizeLabel.implicitHeight + 8
+                        radius: 4
+                        color: view.theme.surfaceAlt
+                        border.width: 1
+                        border.color: view.theme.border
+                        Label {
+                            id: shiftSizeLabel
+                            anchors.centerIn: parent
+                            text: Math.round(view.paintSize) + " px"
+                            color: view.theme.text
+                            font.pixelSize: 11
+                            font.bold: true
+                        }
+                    }
+
+                    // Krita-style dual-half color comparison ring while Ctrl/Alt-sampling color.
+                    Item {
+                        visible: paintArea.altPicking && paintArea.pickedHex !== ""
+                        x: Math.round(paintArea.hoverX - 22)
+                        y: Math.round(paintArea.hoverY - 22)
+                        width: 44
+                        height: 44
+
+                        Canvas {
+                            anchors.fill: parent
+                            property string newCol: paintArea.pickedHex
+                            property string oldCol: paintArea.prevFgHex
+                            onNewColChanged: requestPaint()
+                            onOldColChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                // Top half = newly sampled color; bottom half = previous foreground color
+                                ctx.lineWidth = 6
+                                ctx.beginPath()
+                                ctx.arc(22, 22, 18, Math.PI, 0, false)
+                                ctx.strokeStyle = newCol || "#000000"
+                                ctx.stroke()
+                                ctx.beginPath()
+                                ctx.arc(22, 22, 18, 0, Math.PI, false)
+                                ctx.strokeStyle = oldCol || "#000000"
+                                ctx.stroke()
+                                ctx.lineWidth = 1
+                                ctx.beginPath()
+                                ctx.arc(22, 22, 21, 0, Math.PI * 2)
+                                ctx.strokeStyle = "rgba(0,0,0,0.75)"
+                                ctx.stroke()
+                            }
+                        }
+                    }
+
+                    // Live color swatch badge while Ctrl/Alt+Click/Dragging to pick color.
+                    Rectangle {
+                        visible: paintArea.altPicking && paintArea.pickedHex !== ""
+                        x: Math.min(parent.width - width - 8, paintArea.hoverX + 16)
+                        y: Math.max(8, paintArea.hoverY - height - 10)
+                        width: altPickRow.implicitWidth + 14
+                        height: altPickRow.implicitHeight + 8
+                        radius: 4
+                        color: view.theme.surfaceAlt
+                        border.width: 1
+                        border.color: view.theme.border
+                        RowLayout {
+                            id: altPickRow
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Rectangle {
+                                width: 14
+                                height: 14
+                                radius: 3
+                                color: paintArea.pickedHex || "#000000"
+                                border.width: 1
+                                border.color: view.theme.border
+                            }
+                            Label {
+                                text: (paintArea.pickedHex || "").toUpperCase()
+                                color: view.theme.text
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                        }
+                    }
+                }
+
+                // ------------------------------------------------ eyedropper tool
+                Item {
+                    id: eyedropperOverlay
+                    objectName: "eyedropperOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "eyedropper" && view.documentReady
+                    enabled: visible && !view.spacePanning
+
+                    MouseArea {
+                        id: eyedropperArea
+                        objectName: "eyedropperArea"
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        hoverEnabled: true
+                        cursorShape: Qt.CrossCursor
+                        property real hoverX: 0
+                        property real hoverY: 0
+                        property string sampledHex: ""
+
+                        onPressed: function(mouse) {
+                            view.forceActiveFocus()
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            sampledHex = view.pickCanvasColor(mouse.x, mouse.y)
+                        }
+                        onPositionChanged: function(mouse) {
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            if (pressed) {
+                                sampledHex = view.pickCanvasColor(mouse.x, mouse.y)
+                            }
+                        }
+                        onReleased: sampledHex = ""
+                        onCanceled: sampledHex = ""
+                    }
+
+                    Rectangle {
+                        visible: eyedropperArea.pressed && eyedropperArea.sampledHex !== ""
+                        x: Math.min(parent.width - width - 8, eyedropperArea.hoverX + 16)
+                        y: Math.max(8, eyedropperArea.hoverY - height - 10)
+                        width: eyedropperPill.implicitWidth + 14
+                        height: eyedropperPill.implicitHeight + 8
+                        radius: 4
+                        color: view.theme.surfaceAlt
+                        border.width: 1
+                        border.color: view.theme.border
+                        RowLayout {
+                            id: eyedropperPill
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Rectangle {
+                                width: 14
+                                height: 14
+                                radius: 3
+                                color: eyedropperArea.sampledHex || "#000000"
+                                border.width: 1
+                                border.color: view.theme.border
+                            }
+                            Label {
+                                text: (eyedropperArea.sampledHex || "").toUpperCase()
+                                color: view.theme.text
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                        }
                     }
                 }
             }
@@ -4467,6 +6294,68 @@ Item {
                     text: qsTr("Open an image…")
                     objectName: "editorOpenButton"
                     onClicked: view.requestOpen()
+                }
+            }
+
+            // Floating compact selection pill at top-center of canvas so the user
+            // can switch Krita Ants / Red Mask mode and Deselect (Ctrl+D) from any tool.
+            Rectangle {
+                id: selectionFloatingBar
+                objectName: "selectionFloatingBar"
+                visible: view.documentReady && view.hasSelection && !view.filterDialogOpen
+                z: 4
+                anchors.top: parent.top
+                anchors.topMargin: 10
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: selBarRow.implicitWidth + 16
+                height: 28
+                radius: 14
+                color: view.theme.surfaceAlt
+                border.width: 1
+                border.color: view.theme.border
+                opacity: 0.94
+
+                RowLayout {
+                    id: selBarRow
+                    anchors.centerIn: parent
+                    spacing: 6
+
+                    Label {
+                        text: {
+                            var sb = view.editor ? view.editor.selectionBounds : null
+                            return (sb && sb.length === 4)
+                                   ? (sb[2] + " × " + sb[3] + " px")
+                                   : qsTr("Selection")
+                        }
+                        color: view.theme.textMuted
+                        font.pixelSize: 11
+                    }
+
+                    ToolButton {
+                        objectName: "selectionDisplayModeBtn"
+                        implicitHeight: 22
+                        leftPadding: 7
+                        rightPadding: 7
+                        topPadding: 0
+                        bottomPadding: 0
+                        focusPolicy: Qt.NoFocus
+                        text: view.selectionDisplayMode === "mask" ? qsTr("Mask") : qsTr("Ants")
+                        font.pixelSize: 11
+                        onClicked: view.selectionDisplayMode = view.selectionDisplayMode === "mask" ? "ants" : "mask"
+                    }
+
+                    ToolButton {
+                        objectName: "selectionQuickDeselectBtn"
+                        implicitHeight: 22
+                        leftPadding: 8
+                        rightPadding: 8
+                        topPadding: 0
+                        bottomPadding: 0
+                        focusPolicy: Qt.NoFocus
+                        text: qsTr("Deselect") + " (Ctrl+D)"
+                        font.pixelSize: 11
+                        onClicked: view.command({ type: "editor_select_clear" })
+                    }
                 }
             }
 
@@ -4521,36 +6410,76 @@ Item {
             Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
             color: view.theme.surface
-            visible: view.sidebarShown
+            visible: view.sidebarShown && !(inspector.topDetached && inspector.bottomDetached)
+            enabled: !view.filterDialogOpen
+            opacity: view.filterDialogOpen ? 0.55 : 1.0
 
             /// The heading row is the tool zone's minimum.
             readonly property int headerHeight: 34
-            /// Height the pinned action row adds, so the options can be capped
-            /// before the tabs lose their floor. A hidden tool zone or a tool
-            /// with no verbs adds nothing.
-            readonly property int actionRowHeight:
-                view.toolOptionsVisible
-                && (view.tool === "crop" || view.tool === "transform" || view.tool === "rotate"
-                    || view.tool === "resize" || view.tool === "canvasSize" || view.tool === "adjust")
-                ? cropActions.implicitHeight + 10 : 0
-            /// What the reference dock is offered: its page's own height
-            /// unless the user dragged the divider, and never more than the
-            /// dock can give while the tool frame keeps its room.
-            readonly property real referenceCap: Math.max(140, height - 240)
-            readonly property real referenceShownHeight: {
-                var wanted = view.referenceHeight > 0
-                             ? view.referenceHeight : referenceDock.contentHeight
-                return Math.max(140, Math.min(wanted, referenceCap))
+            readonly property int collapsedRowHeight: 38
+            readonly property int rowGap: 10
+            readonly property int minExpandedTop: 96
+            readonly property int minExpandedBottom: 110
+            property bool topCollapsed: false
+            property bool bottomCollapsed: false
+            property bool topDetached: false
+            property bool bottomDetached: false
+
+            function setTopDetached(detached) {
+                if (topDetached === detached) return
+                topDetached = detached
+                if (detached) {
+                    topCollapsed = false
+                    floatingToolDialog.open()
+                } else if (floatingToolDialog.opened) {
+                    floatingToolDialog.close()
+                }
             }
-            /// How tall the options may be: their own content, unless the
-            /// frame cannot also keep the action row and 140 px of reference.
-            /// Only then do they scroll.
+
+            function setBottomDetached(detached) {
+                if (bottomDetached === detached) return
+                bottomDetached = detached
+                if (detached) {
+                    bottomCollapsed = false
+                    floatingLayersDialog.open()
+                } else if (floatingLayersDialog.opened) {
+                    floatingLayersDialog.close()
+                }
+            }
+            /// Action buttons (Apply / Reset / Clear) now live inside the
+            /// options ScrollView right below each tool's fields, so no extra
+            /// pinned footer height needs to be subtracted from `optionsCap`.
+            readonly property int actionRowHeight: 0
+            /// Maximum height Row 2 may grow to while Row 1 keeps its scrollable floor.
+            readonly property real referenceCap:
+                Math.max(minExpandedBottom, height - minExpandedTop - rowGap - 8)
+            /// Effective height of Row 2 (Layers or Reference):
+            /// - Collapsed -> title bar only (`collapsedRowHeight`), Row 1 expands to max.
+            /// - Row 1 collapsed -> Row 2 expands to fill the rest of the sidebar.
+            /// - Both expanded -> user-dragged height (or 42% default), clamped so neither covers the other.
+            readonly property real referenceShownHeight: {
+                if (view.shownReferenceCount <= 0) return 0
+                if (inspector.bottomCollapsed) return inspector.collapsedRowHeight
+                if (inspector.topCollapsed) {
+                    return Math.max(inspector.minExpandedBottom,
+                                    inspector.height - inspector.collapsedRowHeight - inspector.rowGap - 8)
+                }
+                var wanted = view.referenceHeight > 0
+                             ? view.referenceHeight
+                             : Math.max(220, Math.round(inspector.height * 0.42))
+                return Math.max(inspector.minExpandedBottom, Math.min(wanted, referenceCap))
+            }
+            /// Remaining scrollable height inside Row 1 above the divider.
             readonly property real optionsCap: Math.max(
                 40,
-                Math.max(0, height - referenceShownHeight - headerHeight
-                            - actionRowHeight - 10))
+                Math.max(0, height - referenceShownHeight - headerHeight - 40
+                            - actionRowHeight - rowGap - 8))
             readonly property bool toolOptionsShown:
-                view.tool !== "pointer" && view.tool !== "hand" && view.toolOptionsVisible
+                view.tool !== "pointer" && view.tool !== "hand" && view.tool !== "eyedropper" && view.toolOptionsVisible
+            /// Top row active tab: `"options"` (Tool options) or `"history"` (Interactive History).
+            property string topTab: "options"
+            /// Bottom row active panel: `"layers"` (default dedicated Layers panel) or `"reference"` (Info / Original).
+            property string bottomPanel: "layers"
             /// The tool's name for the heading. The sentence is "… options", so
             /// the heading says whose column this is whether or not a tool is
             /// armed.
@@ -4571,13 +6500,21 @@ Item {
                                   ? qsTr("Canvas size")
                                   : (view.tool === "adjust"
                                      ? qsTr("Color & light")
-                                     : (view.tool === "removeBg"
-                                        ? qsTr("Remove background")
-                                        : (view.tool === "watermark"
-                                           ? qsTr("Remove watermark")
-                                           : (view.tool === "caption"
-                                              ? qsTr("Caption & tags")
-                                              : qsTr("Resize")))))))))))
+                                     : (view.tool === "hsv"
+                                        ? qsTr("HSV Adjustment")
+                                        : (view.tool === "curves"
+                                           ? qsTr("Curves")
+                                           : (view.tool === "colorBalance"
+                                              ? qsTr("Color balance")
+                                              : (view.tool === "removeBg"
+                                                 ? qsTr("Remove background")
+                                                 : (view.tool === "watermark"
+                                                    ? qsTr("Remove watermark")
+                                                    : (view.tool === "caption"
+                                                       ? qsTr("Caption & tags")
+                                                       : (view.tool === "select"
+                                                          ? qsTr("Selection")
+                                                          : qsTr("Image size")))))))))))))))
             /// Under this width the tab labels no longer fit in two languages;
             /// the icons and their tooltips carry the tab instead.
             readonly property bool tabsCompact: width < 240
@@ -4587,28 +6524,81 @@ Item {
                 spacing: 0
 
                 // ------------------------------------------ tool zone (top)
-                // One frame for every tool. Its height is a property of the
-                // dock, not of the tool, so arming Crop, Brush or the pointer
-                // never moves the reference pages below it. The options and
-                // their verbs start at the top of the frame; whatever height
-                // the tool does not need stays blank under the verbs, and the
-                // divider at the frame's bottom lets the user trade that blank
-                // space for reference room.
+                // Dock slot in the Right Sidebar; when `inspector.topDetached`
+                // is true, `toolZone` reparents seamlessly into `floatingToolDialog`
+                // (a resizable `DialogFrame`).
+                Item {
+                    id: topDockSlot
+                    Layout.fillWidth: true
+                    visible: view.toolOptionsVisible && !inspector.topDetached
+                    clip: true
+                    Layout.fillHeight: !inspector.topCollapsed
+                    Layout.preferredHeight: inspector.topCollapsed ? inspector.collapsedRowHeight : -1
+                    Layout.minimumHeight: inspector.topCollapsed ? inspector.collapsedRowHeight : inspector.minExpandedTop
+                    Layout.maximumHeight: inspector.topCollapsed ? inspector.collapsedRowHeight : 100000
+
                 ColumnLayout {
                     id: toolZone
                     objectName: "editorToolZone"
-                    Layout.fillWidth: true
-                    // Settings › Appearance hides this panel like any other; the
-                    // reference pages then take the whole dock.
+                    parent: inspector.topDetached ? floatingToolHost : topDockSlot
+                    anchors.fill: parent
                     visible: view.toolOptionsVisible
-                    // The reference dock below is content-sized and pinned to
-                    // the bottom, so this frame takes the rest: one height for
-                    // every tool, and the divider is where the user moves it.
-                    Layout.fillHeight: true
-                    Layout.minimumHeight: inspector.headerHeight
+                    clip: true
                     spacing: 0
 
+                    // Row 1 header: [Tool options | History] tabs + popout + collapse
                     RowLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 8
+                        Layout.rightMargin: 6
+                        Layout.topMargin: 6
+                        Layout.bottomMargin: 2
+                        spacing: 4
+
+                        PanelTabs {
+                            id: topZoneTabs
+                            objectName: "editorTopTabs"
+                            Layout.fillWidth: true
+                            theme: view.theme
+                            compact: inspector.tabsCompact
+                            keyPrefix: "editorTopTab"
+                            currentKey: inspector.topTab
+                            tabs: [
+                                { key: "options", label: qsTr("Tool options"), icon: "icons/preferences.svg", shown: true },
+                                { key: "history", label: qsTr("History"), icon: "icons/history.svg", shown: true }
+                            ]
+                            onActivated: function(key) {
+                                inspector.topTab = key
+                                if (inspector.topCollapsed) inspector.topCollapsed = false
+                            }
+                        }
+
+                        ToolButton {
+                            objectName: "topRowPopoutBtn"
+                            Layout.preferredWidth: 26
+                            Layout.preferredHeight: 26
+                            padding: 0
+                            focusPolicy: Qt.NoFocus
+                            text: inspector.topDetached ? "↙" : "↗"
+                            ToolTip.visible: hovered
+                            ToolTip.text: inspector.topDetached ? qsTr("Dock panel") : qsTr("Pop out panel")
+                            onClicked: inspector.setTopDetached(!inspector.topDetached)
+                        }
+
+                        ToolButton {
+                            objectName: "topRowCollapseBtn"
+                            visible: !inspector.topDetached
+                            Layout.preferredWidth: 26
+                            Layout.preferredHeight: 26
+                            padding: 0
+                            focusPolicy: Qt.NoFocus
+                            text: inspector.topCollapsed ? "▸" : "▾"
+                            onClicked: inspector.topCollapsed = !inspector.topCollapsed
+                        }
+                    }
+
+                    RowLayout {
+                        visible: !inspector.topCollapsed && inspector.topTab === "options"
                         Layout.fillWidth: true
                         Layout.leftMargin: 10
                         Layout.rightMargin: 4
@@ -4630,6 +6620,25 @@ Item {
                         }
                     }
 
+                    // Interactive History directly in Row 1 (click any step to Undo/Redo jump)
+                    HistoryPanel {
+                        id: topHistoryPanel
+                        objectName: "editorTopHistoryPanel"
+                        visible: !inspector.topCollapsed && inspector.topTab === "history"
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.margins: 10
+                        theme: view.theme
+                        history: view.history
+                        redoHistory: view.editor ? (view.editor.redoHistory || []) : []
+                        hasDocument: view.hasDocument
+                        language: view.state.language || ""
+                        listObjectName: "topHistoryList"
+                        onJumpRequested: function(targetIndex) {
+                            view.command({ type: "editor_history_jump", target_index: targetIndex })
+                        }
+                    }
+
                     // The pointer is a tool with nothing to configure. Saying
                     // so is better than an empty column that reads as a panel
                     // that failed to load.
@@ -4639,7 +6648,7 @@ Item {
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
                         Layout.bottomMargin: 10
-                        visible: view.tool === "pointer" || view.tool === "hand"
+                        visible: !inspector.topCollapsed && inspector.topTab === "options" && (view.tool === "pointer" || view.tool === "hand")
                         text: qsTr("This tool has no options.")
                         color: view.theme.textMuted
                         font.pixelSize: 11
@@ -4655,20 +6664,11 @@ Item {
                     Item {
                         id: toolOptionsHost
                         objectName: "toolOptionsHost"
-                        visible: inspector.toolOptionsShown
+                        visible: !inspector.topCollapsed && inspector.topTab === "options" && inspector.toolOptionsShown
                         Layout.fillWidth: true
+                        Layout.fillHeight: true
                         Layout.leftMargin: 12
                         Layout.rightMargin: 12
-                        // Natural height, capped by the frame's own room for
-                        // options. The 10 px is the gap under the last field,
-                        // which a content layout's own margin does not add
-                        // inside a ScrollView.
-                        Layout.preferredHeight: {
-                            if (!visible) return 0
-                            return Math.max(40, Math.min(toolOptionsColumn.implicitHeight + 10,
-                                                         inspector.optionsCap))
-                        }
-                        Layout.maximumHeight: Layout.preferredHeight
                         clip: true
 
                         ScrollView {
@@ -4677,11 +6677,228 @@ Item {
                             anchors.fill: parent
                             clip: true
                             contentWidth: availableWidth
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
                             ColumnLayout {
                                 id: toolOptionsColumn
                                 width: toolOptionsScroll.availableWidth
                                 spacing: 10
+
+                            // ------------------------------- selection options
+                            ColumnLayout {
+                                objectName: "selectOptionsPanel"
+                                Layout.fillWidth: true
+                                visible: view.tool === "select"
+                                spacing: 8
+
+                                Label {
+                                    text: qsTr("Shape")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 4
+                                    rowSpacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Rect")
+                                        primary: view.selectShape === "rect"
+                                        onClicked: view.selectShape = "rect"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Ellipse")
+                                        primary: view.selectShape === "ellipse"
+                                        onClicked: view.selectShape = "ellipse"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Lasso")
+                                        primary: view.selectShape === "lasso"
+                                        onClicked: view.selectShape = "lasso"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Polygon")
+                                        primary: view.selectShape === "polygon"
+                                        onClicked: view.selectShape = "polygon"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        Layout.columnSpan: 2
+                                        theme: view.theme
+                                        text: qsTr("Magic Wand")
+                                        primary: view.selectShape === "wand"
+                                        onClicked: view.selectShape = "wand"
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: view.selectShape === "wand"
+                                    spacing: 4
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { text: qsTr("Tolerance"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: String(view.wandTolerance); color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        from: 0; to: 255; stepSize: 1
+                                        value: view.wandTolerance
+                                        onMoved: view.wandTolerance = Math.round(value)
+                                    }
+                                    CheckBox {
+                                        text: qsTr("Contiguous")
+                                        focusPolicy: Qt.NoFocus
+                                        checked: view.wandContiguous
+                                        onToggled: view.wandContiguous = checked
+                                    }
+                                    CheckBox {
+                                        text: qsTr("Sample all layers")
+                                        focusPolicy: Qt.NoFocus
+                                        checked: view.wandSampleAllLayers
+                                        onToggled: view.wandSampleAllLayers = checked
+                                    }
+                                }
+
+                                Label {
+                                    text: qsTr("Mode")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 4
+                                    rowSpacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Replace")
+                                        primary: view.selectMode === "replace"
+                                        onClicked: view.selectMode = "replace"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Add")
+                                        primary: view.selectMode === "add"
+                                        onClicked: view.selectMode = "add"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Subtract")
+                                        primary: view.selectMode === "subtract"
+                                        onClicked: view.selectMode = "subtract"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Intersect")
+                                        primary: view.selectMode === "intersect"
+                                        onClicked: view.selectMode = "intersect"
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 10
+                                    text: qsTr("R/A/S: mode · Shift: Add · Alt: Subtract · Shift+Alt: Intersect · Drag inside / Arrows: move frame")
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("Feather"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: view.selectFeather + " px"; color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    focusPolicy: Qt.NoFocus
+                                    from: 0; to: 40; stepSize: 1
+                                    value: view.selectFeather
+                                    onMoved: view.selectFeather = Math.round(value)
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 6
+                                    rowSpacing: 6
+
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Invert")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({ type: "editor_select_invert" })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Clear")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({ type: "editor_select_clear" })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Fill")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({
+                                            type: "editor_selection_fill",
+                                            color: view.foregroundBytes(),
+                                            opacity: Math.max(0.01, view.paintOpacity / 100)
+                                        })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Delete")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({ type: "editor_selection_delete" })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("To new layer")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({ type: "editor_selection_duplicate_layer" })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Crop")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({ type: "editor_selection_crop" })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Copy")
+                                        enabled: view.documentReady
+                                        onClicked: view.command({ type: "editor_selection_copy", cut: false })
+                                    }
+                                    Button {
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        text: qsTr("Cut")
+                                        enabled: view.documentReady && view.hasSelection
+                                        onClicked: view.command({ type: "editor_selection_copy", cut: true })
+                                    }
+                                }
+                            }
 
                             // ------------------------------- paint: brush and eraser
                             // One engine, two modes. A stroke changes pixels only when
@@ -5203,53 +7420,136 @@ Item {
                                 color: view.theme.border
                             }
 
-                            // Transform: Krita-style icon mode selector (Free
-                            // Transform vs Scale Canvas), live bounding-box
-                            // dimensions, and background fill for Free mode.
+                            // Unified Transform (Illustrator/CorelDRAW Transform Each style):
+                            // numeric X/Y/W/H + Lock ratio + Scale % + Angle + Quick Rotate/Flip.
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 visible: view.tool === "transform"
                                 spacing: 8
 
-                                RowLayout {
-                                    objectName: "transformModeSwitch"
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    ToolRailButton {
-                                        objectName: "transformModeFree"
-                                        theme: view.theme
-                                        iconSource: "icons/transform-free.svg"
-                                        active: view.transformMode === "free"
-                                        enabled: view.documentReady
-                                        tooltip: qsTr("Free transform — scale and move inside the canvas")
-                                        onClicked: view.setTransformMode("free")
-                                    }
-                                    ToolRailButton {
-                                        objectName: "transformModeScale"
-                                        theme: view.theme
-                                        iconSource: "icons/transform-scale.svg"
-                                        active: view.transformMode === "scale"
-                                        enabled: view.documentReady
-                                        tooltip: qsTr("Scale canvas — resize image dimensions directly")
-                                        onClicked: view.setTransformMode("scale")
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                }
+                                readonly property var curRect: view.transformRect()
+                                                               || ({ x: 0, y: 0, width: 1, height: 1 })
 
                                 Label {
                                     objectName: "transformSizeReadout"
                                     Layout.fillWidth: true
-                                    color: view.theme.text
-                                    font.pixelSize: 12
-                                    text: {
-                                        var r = view.transformRect()
-                                        if (!r) return "—"
-                                        var size = Math.round(r.width) + " × " + Math.round(r.height) + " px"
-                                        if (view.transformMode === "free") {
-                                            return size + "  (" + Math.round(r.x) + ", " + Math.round(r.y) + ")"
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    visible: view.hasSelection
+                                    text: qsTr("Transforming active selection")
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 4
+                                    columnSpacing: 4
+                                    rowSpacing: 6
+
+                                    Label { text: "X"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                    TextField {
+                                        objectName: "transformFieldX"
+                                        Layout.fillWidth: true
+                                        validator: IntValidator { bottom: -16384; top: 16384 }
+                                        text: activeFocus ? text : String(Math.round(parent.parent.curRect.x))
+                                        onEditingFinished: {
+                                            var r = view.transformRect()
+                                            var v = parseInt(text, 10)
+                                            if (r && !isNaN(v)) view.setTransformFrame(v, r.y, r.width, r.height)
+                                            view.forceActiveFocus()
                                         }
-                                        return size
+                                    }
+                                    Label { text: "Y"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                    TextField {
+                                        objectName: "transformFieldY"
+                                        Layout.fillWidth: true
+                                        validator: IntValidator { bottom: -16384; top: 16384 }
+                                        text: activeFocus ? text : String(Math.round(parent.parent.curRect.y))
+                                        onEditingFinished: {
+                                            var r = view.transformRect()
+                                            var v = parseInt(text, 10)
+                                            if (r && !isNaN(v)) view.setTransformFrame(r.x, v, r.width, r.height)
+                                            view.forceActiveFocus()
+                                        }
+                                    }
+
+                                    Label { text: "W"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                    TextField {
+                                        objectName: "transformFieldW"
+                                        Layout.fillWidth: true
+                                        validator: IntValidator { bottom: 1; top: 16384 }
+                                        text: activeFocus ? text : String(Math.round(parent.parent.curRect.width))
+                                        onEditingFinished: {
+                                            var r = view.transformRect()
+                                            var v = parseInt(text, 10)
+                                            if (r && !isNaN(v) && v >= 1) {
+                                                var newH = view.transformLockRatio && r.width > 0
+                                                         ? Math.max(1, Math.round(r.height * v / r.width))
+                                                         : r.height
+                                                view.setTransformFrame(r.x, r.y, v, newH)
+                                            }
+                                            view.forceActiveFocus()
+                                        }
+                                    }
+                                    Label { text: "H"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                    TextField {
+                                        objectName: "transformFieldH"
+                                        Layout.fillWidth: true
+                                        validator: IntValidator { bottom: 1; top: 16384 }
+                                        text: activeFocus ? text : String(Math.round(parent.parent.curRect.height))
+                                        onEditingFinished: {
+                                            var r = view.transformRect()
+                                            var v = parseInt(text, 10)
+                                            if (r && !isNaN(v) && v >= 1) {
+                                                var newW = view.transformLockRatio && r.height > 0
+                                                         ? Math.max(1, Math.round(r.width * v / r.height))
+                                                         : r.width
+                                                view.setTransformFrame(r.x, r.y, newW, v)
+                                            }
+                                            view.forceActiveFocus()
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    CheckBox {
+                                        text: qsTr("Keep aspect ratio")
+                                        focusPolicy: Qt.NoFocus
+                                        checked: view.transformLockRatio
+                                        onToggled: view.transformLockRatio = checked
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Repeater {
+                                        model: [
+                                            { label: "50%", factor: 0.5 },
+                                            { label: "100%", factor: 1.0 },
+                                            { label: "150%", factor: 1.5 },
+                                            { label: "200%", factor: 2.0 }
+                                        ]
+                                        delegate: Button {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            text: modelData.label
+                                            focusPolicy: Qt.NoFocus
+                                            padding: 4
+                                            onClicked: {
+                                                var base = view.identityCorners()
+                                                var r = view.transformRect()
+                                                if (!base || !r) return
+                                                var bw = Math.max(1, base[1][0] - base[0][0])
+                                                var bh = Math.max(1, base[2][1] - base[0][1])
+                                                var nw = Math.max(1, Math.round(bw * modelData.factor))
+                                                var nh = Math.max(1, Math.round(bh * modelData.factor))
+                                                var cx = r.x + r.width / 2.0
+                                                var cy = r.y + r.height / 2.0
+                                                view.setTransformFrame(cx - nw / 2.0, cy - nh / 2.0, nw, nh)
+                                            }
+                                        }
                                     }
                                 }
 
@@ -5258,7 +7558,102 @@ Item {
                                     wrapMode: Text.WordWrap
                                     color: view.theme.textMuted
                                     font.pixelSize: 11
-                                    text: qsTr("Shift: ratio · Alt: center · Ctrl: snap")
+                                    text: qsTr("Shift: ratio / 15° · Alt: center · Arrows: nudge")
+                                }
+
+                                Button {
+                                    objectName: "transformFitToCanvas"
+                                    Layout.fillWidth: true
+                                    enabled: view.documentReady
+                                    focusPolicy: Qt.NoFocus
+                                    text: qsTr("Fit to canvas")
+                                    onClicked: view.fitTransformToCanvas()
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    Label {
+                                        text: qsTr("Angle")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        objectName: "transformAngleValue"
+                                        text: view.transformRotation.toFixed(1) + "°"
+                                        color: view.theme.text
+                                        font.bold: true
+                                    }
+                                }
+
+                                Slider {
+                                    objectName: "transformAngleSlider"
+                                    Layout.fillWidth: true
+                                    from: -180
+                                    to: 180
+                                    stepSize: 0.5
+                                    value: view.transformRotation
+                                    focusPolicy: Qt.NoFocus
+                                    onMoved: view.transformRotation = Math.round(value * 2) / 2
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Repeater {
+                                        model: [-45, -15, 15, 45]
+                                        delegate: Button {
+                                            required property int modelData
+                                            Layout.fillWidth: true
+                                            text: (modelData > 0 ? "+" : "") + modelData + "°"
+                                            focusPolicy: Qt.NoFocus
+                                            padding: 4
+                                            onClicked: {
+                                                var next = view.transformRotation + modelData
+                                                while (next > 180) next -= 360
+                                                while (next < -180) next += 360
+                                                view.transformRotation = next
+                                            }
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    ToolRailButton {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        iconSource: "icons/rotate-left.svg"
+                                        tooltip: qsTr("Rotate left")
+                                        enabled: view.documentReady
+                                        onClicked: view.command({ type: "editor_rotate", degrees: -90, target: "active_layer" })
+                                    }
+                                    ToolRailButton {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        iconSource: "icons/rotate-right.svg"
+                                        tooltip: qsTr("Rotate right")
+                                        enabled: view.documentReady
+                                        onClicked: view.command({ type: "editor_rotate", degrees: 90, target: "active_layer" })
+                                    }
+                                    ToolRailButton {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        iconSource: "icons/flip-horizontal.svg"
+                                        tooltip: qsTr("Flip horizontal")
+                                        enabled: view.documentReady
+                                        onClicked: view.command({ type: "editor_flip", axis: "horizontal", target: "active_layer" })
+                                    }
+                                    ToolRailButton {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        iconSource: "icons/flip-vertical.svg"
+                                        tooltip: qsTr("Flip vertical")
+                                        enabled: view.documentReady
+                                        onClicked: view.command({ type: "editor_flip", axis: "vertical", target: "active_layer" })
+                                    }
                                 }
                             }
 
@@ -5338,22 +7733,54 @@ Item {
                                 }
                             }
 
-                            EditorResizePanel {
-                                id: resizeOptionsPanel
+                            // Unified Image Size panel: Resize (scale pixels) vs
+                            // Canvas size (expand/crop frame with background fill).
+                            // Document-level only: immune to selection and active layer.
+                            ColumnLayout {
+                                objectName: "imageSizeOptionsPanel"
                                 Layout.fillWidth: true
                                 visible: view.tool === "resize"
-                                theme: view.theme
-                                sourceWidth: view.documentWidth
-                                sourceHeight: view.documentHeight
-                            }
+                                spacing: 10
 
-                            EditorCanvasSizePanel {
-                                id: canvasSizeOptionsPanel
-                                Layout.fillWidth: true
-                                visible: view.tool === "canvasSize"
-                                theme: view.theme
-                                sourceWidth: view.documentWidth
-                                sourceHeight: view.documentHeight
+                                RowLayout {
+                                    objectName: "imageSizeModeSwitch"
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    PanelAction {
+                                        objectName: "imageSizeModeResize"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Resize")
+                                        primary: view.imageSizeMode === "resize"
+                                        onClicked: view.imageSizeMode = "resize"
+                                    }
+                                    PanelAction {
+                                        objectName: "imageSizeModeCanvas"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Canvas size")
+                                        primary: view.imageSizeMode === "canvasSize"
+                                        onClicked: view.imageSizeMode = "canvasSize"
+                                    }
+                                }
+
+                                EditorResizePanel {
+                                    id: resizeOptionsPanel
+                                    Layout.fillWidth: true
+                                    visible: view.imageSizeMode === "resize"
+                                    theme: view.theme
+                                    sourceWidth: view.documentWidth
+                                    sourceHeight: view.documentHeight
+                                }
+
+                                EditorCanvasSizePanel {
+                                    id: canvasSizeOptionsPanel
+                                    Layout.fillWidth: true
+                                    visible: view.imageSizeMode === "canvasSize"
+                                    theme: view.theme
+                                    sourceWidth: view.documentWidth
+                                    sourceHeight: view.documentHeight
+                                }
                             }
 
                             ColorAdjustPanel {
@@ -5364,6 +7791,121 @@ Item {
                                 theme: view.theme
                                 viewOnly: false
                                 showReset: false
+                                onBrightnessChanged: view.scheduleAdjustPreview()
+                                onContrastChanged: view.scheduleAdjustPreview()
+                                onSaturationChanged: view.scheduleAdjustPreview()
+                            }
+
+                            HsvAdjustPanel {
+                                id: hsvOptionsPanel
+                                Layout.fillWidth: true
+                                visible: view.tool === "hsv"
+                                theme: view.theme
+                                hasMultipleLayers: view.hasMultipleLayers
+                                hasSelection: view.hasSelection
+                                applyTarget: view.toolApplyTarget
+                                onPreviewRequested: function(h, s, v, target) {
+                                    view.command({
+                                        type: "editor_preview_filter",
+                                        clear: false,
+                                        kind: "hsv",
+                                        hue: h,
+                                        saturation: s,
+                                        value: v,
+                                        target: target
+                                    })
+                                }
+                                onPreviewCleared: {
+                                    if (view.documentReady) {
+                                        view.command({ type: "editor_preview_filter", clear: true })
+                                    }
+                                }
+                                onApplyRequested: function(h, s, v, target) {
+                                    view.command({
+                                        type: "editor_adjust_hsv",
+                                        hue: h,
+                                        saturation: s,
+                                        value: v,
+                                        target: target
+                                    })
+                                }
+                                onCancelRequested: view.tool = "pointer"
+                            }
+
+                            CurvesPanel {
+                                id: curvesOptionsPanel
+                                Layout.fillWidth: true
+                                visible: view.tool === "curves"
+                                theme: view.theme
+                                hasMultipleLayers: view.hasMultipleLayers
+                                hasSelection: view.hasSelection
+                                applyTarget: view.toolApplyTarget
+                                onPreviewRequested: function(rgb, red, green, blue, target) {
+                                    view.command({
+                                        type: "editor_preview_filter",
+                                        clear: false,
+                                        kind: "curves",
+                                        rgb: rgb,
+                                        red: red,
+                                        green: green,
+                                        blue: blue,
+                                        target: target
+                                    })
+                                }
+                                onPreviewCleared: {
+                                    if (view.documentReady) {
+                                        view.command({ type: "editor_preview_filter", clear: true })
+                                    }
+                                }
+                                onApplyRequested: function(rgb, red, green, blue, target) {
+                                    view.command({
+                                        type: "editor_adjust_curves",
+                                        rgb: rgb,
+                                        red: red,
+                                        green: green,
+                                        blue: blue,
+                                        target: target
+                                    })
+                                }
+                                onCancelRequested: view.tool = "pointer"
+                            }
+
+                            ColorBalancePanel {
+                                id: colorBalanceOptionsPanel
+                                Layout.fillWidth: true
+                                visible: view.tool === "colorBalance"
+                                theme: view.theme
+                                hasMultipleLayers: view.hasMultipleLayers
+                                hasSelection: view.hasSelection
+                                applyTarget: view.toolApplyTarget
+                                onPreviewRequested: function(sh, md, hi, preserveLum, target) {
+                                    view.command({
+                                        type: "editor_preview_filter",
+                                        clear: false,
+                                        kind: "color_balance",
+                                        shadows: sh,
+                                        midtones: md,
+                                        highlights: hi,
+                                        preserve_luminosity: preserveLum,
+                                        target: target
+                                    })
+                                }
+                                onPreviewCleared: {
+                                    if (view.documentReady) {
+                                        view.command({ type: "editor_preview_filter", clear: true })
+                                    }
+                                }
+                                onApplyRequested: function(sh, md, hi, preserveLum, target) {
+                                    view.command({
+                                        type: "editor_color_balance",
+                                        shadows: sh,
+                                        midtones: md,
+                                        highlights: hi,
+                                        preserve_luminosity: preserveLum,
+                                        target: target
+                                    })
+                                }
+                                onCancelRequested: view.tool = "pointer"
                             }
 
                             ColumnLayout {
@@ -5492,6 +8034,28 @@ Item {
                                 }
 
                                 RowLayout {
+                                    objectName: "rembgApplyTargetRow"
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Label {
+                                        text: qsTr("Apply to")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    ComboBox {
+                                        objectName: "rembgApplyTargetCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["active_layer", "whole_image", "new_layer"]
+                                        model: [qsTr("Active layer"), qsTr("Whole image"), qsTr("New layer")]
+                                        currentIndex: Math.max(0, keys.indexOf(view.aiApplyTarget))
+                                        onActivated: function(idx) {
+                                            view.aiApplyTarget = keys[idx] || "active_layer"
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 6
 
@@ -5509,7 +8073,8 @@ Item {
                                                 view.command({
                                                     type: "editor_ai_remove_background",
                                                     model_id: removeBgOptionsPanel.selectedModel.id,
-                                                    feather: Math.round(rembgFeatherSlider.value)
+                                                    feather: Math.round(rembgFeatherSlider.value),
+                                                    target: view.effectiveAiTarget()
                                                 })
                                             }
                                         }
@@ -5640,6 +8205,28 @@ Item {
                                         text: qsTr("Region")
                                         primary: watermarkOptionsPanel.wmMode === "region"
                                         onClicked: watermarkOptionsPanel.wmMode = "region"
+                                    }
+                                }
+
+                                RowLayout {
+                                    objectName: "watermarkApplyTargetRow"
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Label {
+                                        text: qsTr("Apply to")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    ComboBox {
+                                        objectName: "watermarkApplyTargetCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["active_layer", "whole_image", "new_layer"]
+                                        model: [qsTr("Active layer"), qsTr("Whole image"), qsTr("New layer")]
+                                        currentIndex: Math.max(0, keys.indexOf(view.aiApplyTarget))
+                                        onActivated: function(idx) {
+                                            view.aiApplyTarget = keys[idx] || "active_layer"
+                                        }
                                     }
                                 }
 
@@ -5858,7 +8445,8 @@ Item {
                                                 region_y: view.wmRegionY,
                                                 region_width: Math.max(8, view.wmRegionW),
                                                 region_height: Math.max(8, view.wmRegionH),
-                                                brush_strokes: view.wmBrushStrokes || []
+                                                brush_strokes: view.wmBrushStrokes || [],
+                                                target: view.effectiveAiTarget()
                                             })
                                         }
                                     }
@@ -5950,7 +8538,8 @@ Item {
                                                 logo_value: geminiLogoSlider.value,
                                                 force: geminiForceCheck.checked,
                                                 offset_x: parseInt(geminiOffX.text) || 0,
-                                                offset_y: parseInt(geminiOffY.text) || 0
+                                                offset_y: parseInt(geminiOffY.text) || 0,
+                                                target: view.effectiveAiTarget()
                                             })
                                         }
                                     }
@@ -6045,7 +8634,8 @@ Item {
                                                 y: view.wmRegionY,
                                                 width: Math.max(8, view.wmRegionW),
                                                 height: Math.max(8, view.wmRegionH),
-                                                feather: Math.round(inpaintFeatherSlider.value)
+                                                feather: Math.round(inpaintFeatherSlider.value),
+                                                target: view.effectiveAiTarget()
                                             })
                                         }
                                     }
@@ -6292,162 +8882,192 @@ Item {
                                     }
                                 }
                             }
+
+                            RowLayout {
+                                objectName: "toolApplyTargetRow"
+                                visible: !inspector.topCollapsed && inspector.topTab === "options"
+                                         && view.hasMultipleLayers && !view.hasSelection
+                                         && ((view.tool === "transform" && view.transformMode === "free")
+                                             || view.tool === "rotate"
+                                             || view.tool === "adjust")
+                                         && view.toolOptionsVisible
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label {
+                                    text: qsTr("Apply to")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                ComboBox {
+                                    objectName: "toolApplyTargetCombo"
+                                    Layout.fillWidth: true
+                                    focusPolicy: Qt.NoFocus
+                                    readonly property var keys: ["active_layer", "whole_image"]
+                                    model: [qsTr("Active layer"), qsTr("Whole image")]
+                                    currentIndex: Math.max(0, keys.indexOf(view.toolApplyTarget))
+                                    onActivated: function(idx) {
+                                        view.toolApplyTarget = keys[idx] || "active_layer"
+                                        if (view.tool === "transform") view.resetTransformCorners()
+                                    }
+                                }
+                            }
+
+                            GridLayout {
+                                id: cropActions
+                                objectName: "cropActions"
+                                visible: !inspector.topCollapsed && inspector.topTab === "options"
+                                         && (view.tool === "crop" || view.tool === "transform" || view.tool === "rotate"
+                                             || view.tool === "resize" || view.tool === "canvasSize"
+                                             || view.tool === "adjust")
+                                         && view.toolOptionsVisible
+                                Layout.fillWidth: true
+                                Layout.topMargin: 2
+                                Layout.bottomMargin: 8
+                                columns: (view.tool === "transform" || view.tool === "rotate"
+                                          || view.tool === "resize" || view.tool === "canvasSize"
+                                          || view.tool === "adjust")
+                                         ? 2
+                                         : (view.cropActionsStack ? 2 : 3)
+                                columnSpacing: 6
+                                rowSpacing: 6
+
+                                Button {
+                                    id: applyCropButton
+                                    objectName: "applyCrop"
+                                    text: qsTr("Apply")
+                                    Layout.fillWidth: true
+                                    Layout.columnSpan: view.cropActionsStack ? 2 : 1
+                                    visible: view.tool === "crop"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.cropCanApply()
+                                    onClicked: view.applyCrop()
+                                }
+                                Button {
+                                    id: resetCropButton
+                                    objectName: "resetCropOptions"
+                                    text: qsTr("Reset")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "crop"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady
+                                    onClicked: view.resetCropOptions()
+                                }
+                                Button {
+                                    id: clearCropButton
+                                    objectName: "clearCrop"
+                                    text: qsTr("Clear")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "crop"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady
+                                    onClicked: view.clearCropFrame()
+                                }
+                                Button {
+                                    objectName: "applyTransform"
+                                    text: qsTr("Apply")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "transform"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.transformUsable() && view.transformChanged()
+                                    onClicked: view.applyTransform()
+                                }
+                                Button {
+                                    objectName: "resetTransformFields"
+                                    text: qsTr("Reset")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "transform"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady
+                                    onClicked: view.resetTransformCorners()
+                                }
+                                Button {
+                                    objectName: "applyRotateAngle"
+                                    text: qsTr("Apply")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "rotate"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && view.rotateHasChange()
+                                    onClicked: view.applyRotateAngle()
+                                }
+                                Button {
+                                    objectName: "resetRotateAngle"
+                                    text: qsTr("Reset")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "rotate"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && view.rotateHasChange()
+                                    onClicked: view.rotateAngle = 0
+                                }
+                                Button {
+                                    objectName: "applyResizePanel"
+                                    text: qsTr("Apply")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "resize" && view.imageSizeMode === "resize"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && resizeOptionsPanel.changed
+                                    onClicked: view.applyResizePanel()
+                                }
+                                Button {
+                                    objectName: "resetResizePanel"
+                                    text: qsTr("Reset")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "resize" && view.imageSizeMode === "resize"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && resizeOptionsPanel.changed
+                                    onClicked: resizeOptionsPanel.reset()
+                                }
+                                Button {
+                                    objectName: "applyCanvasSizePanel"
+                                    text: qsTr("Apply")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "resize" && view.imageSizeMode === "canvasSize"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && canvasSizeOptionsPanel.changed
+                                    onClicked: view.applyCanvasSizePanel()
+                                }
+                                Button {
+                                    objectName: "resetCanvasSizePanel"
+                                    text: qsTr("Reset")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "resize" && view.imageSizeMode === "canvasSize"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && canvasSizeOptionsPanel.changed
+                                    onClicked: canvasSizeOptionsPanel.reset()
+                                }
+                                Button {
+                                    objectName: "applyColorAdjust"
+                                    text: qsTr("Apply")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "adjust"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && adjustOptionsPanel.changed
+                                    onClicked: view.applyColorAdjust()
+                                }
+                                Button {
+                                    objectName: "resetColorAdjust"
+                                    text: qsTr("Reset")
+                                    Layout.fillWidth: true
+                                    visible: view.tool === "adjust"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: view.documentReady && adjustOptionsPanel.changed
+                                    onClicked: adjustOptionsPanel.reset()
+                                }
+                            }
                         }
                     }
                     }
 
-                    GridLayout {
-                        id: cropActions
-                        objectName: "cropActions"
-                        visible: (view.tool === "crop" || view.tool === "transform" || view.tool === "rotate"
-                                  || view.tool === "resize" || view.tool === "canvasSize"
-                                  || view.tool === "adjust")
-                                 && view.toolOptionsVisible
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 12
-                        Layout.rightMargin: 12
-                        Layout.topMargin: 6
-                        Layout.bottomMargin: 10
-                        columns: (view.tool === "transform" || view.tool === "rotate"
-                                  || view.tool === "resize" || view.tool === "canvasSize"
-                                  || view.tool === "adjust")
-                                 ? 2
-                                 : (view.cropActionsStack ? 2 : 3)
-                        columnSpacing: 6
-                        rowSpacing: 6
-
-                        Button {
-                            id: applyCropButton
-                            objectName: "applyCrop"
-                            text: qsTr("Apply")
-                            Layout.fillWidth: true
-                            Layout.columnSpan: view.cropActionsStack ? 2 : 1
-                            visible: view.tool === "crop"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.cropCanApply()
-                            onClicked: view.applyCrop()
-                        }
-                        Button {
-                            id: resetCropButton
-                            objectName: "resetCropOptions"
-                            text: qsTr("Reset")
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady
-                            onClicked: view.resetCropOptions()
-                        }
-                        Button {
-                            id: clearCropButton
-                            objectName: "clearCrop"
-                            text: qsTr("Clear")
-                            Layout.fillWidth: true
-                            visible: view.tool === "crop"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady
-                            onClicked: view.clearCropFrame()
-                        }
-                        Button {
-                            objectName: "applyTransform"
-                            text: qsTr("Apply")
-                            Layout.fillWidth: true
-                            visible: view.tool === "transform"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.transformUsable() && view.transformChanged()
-                            onClicked: view.applyTransform()
-                        }
-                        Button {
-                            objectName: "resetTransformFields"
-                            text: qsTr("Reset")
-                            Layout.fillWidth: true
-                            visible: view.tool === "transform"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady
-                            onClicked: view.resetTransformCorners()
-                        }
-                        Button {
-                            objectName: "applyRotateAngle"
-                            text: qsTr("Apply")
-                            Layout.fillWidth: true
-                            visible: view.tool === "rotate"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && view.rotateHasChange()
-                            onClicked: view.applyRotateAngle()
-                        }
-                        Button {
-                            objectName: "resetRotateAngle"
-                            text: qsTr("Reset")
-                            Layout.fillWidth: true
-                            visible: view.tool === "rotate"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && view.rotateHasChange()
-                            onClicked: view.rotateAngle = 0
-                        }
-                        Button {
-                            objectName: "applyResizePanel"
-                            text: qsTr("Apply")
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && resizeOptionsPanel.changed
-                            onClicked: view.applyResizePanel()
-                        }
-                        Button {
-                            objectName: "resetResizePanel"
-                            text: qsTr("Reset")
-                            Layout.fillWidth: true
-                            visible: view.tool === "resize"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && resizeOptionsPanel.changed
-                            onClicked: resizeOptionsPanel.reset()
-                        }
-                        Button {
-                            objectName: "applyCanvasSizePanel"
-                            text: qsTr("Apply")
-                            Layout.fillWidth: true
-                            visible: view.tool === "canvasSize"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && canvasSizeOptionsPanel.changed
-                            onClicked: view.applyCanvasSizePanel()
-                        }
-                        Button {
-                            objectName: "resetCanvasSizePanel"
-                            text: qsTr("Reset")
-                            Layout.fillWidth: true
-                            visible: view.tool === "canvasSize"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && canvasSizeOptionsPanel.changed
-                            onClicked: canvasSizeOptionsPanel.reset()
-                        }
-                        Button {
-                            objectName: "applyColorAdjust"
-                            text: qsTr("Apply")
-                            Layout.fillWidth: true
-                            visible: view.tool === "adjust"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && adjustOptionsPanel.changed
-                            onClicked: view.applyColorAdjust()
-                        }
-                        Button {
-                            objectName: "resetColorAdjust"
-                            text: qsTr("Reset")
-                            Layout.fillWidth: true
-                            visible: view.tool === "adjust"
-                            focusPolicy: Qt.NoFocus
-                            enabled: view.documentReady && adjustOptionsPanel.changed
-                            onClicked: adjustOptionsPanel.reset()
-                        }
-                    }
-
-                    // Whatever the frame leaves after the fields and their
-                    // verbs is blank, above the divider and the reference
-                    // pages. A short tool therefore keeps its buttons under its
-                    // own options instead of against the bottom edge.
+                    // Only fill remaining height when no scrollable body is
+                    // shown (e.g. Pointer / Hand "This tool has no options."),
+                    // so neither `toolOptionsHost` nor `topHistoryPanel` ever
+                    // splits height 50/50 with this spacer.
                     Item {
                         objectName: "toolZoneSpacer"
+                        visible: !inspector.topCollapsed && inspector.topTab === "options" && !inspector.toolOptionsShown
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                     }
+                }
                 }
 
                 // The handle between the two halves of the dock. It writes the
@@ -6459,33 +9079,72 @@ Item {
                 PanelSplitter {
                     objectName: "editorToolZoneDivider"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: implicitHeight
+                    Layout.preferredHeight: Math.max(8, implicitHeight)
+                    Layout.topMargin: 4
+                    Layout.bottomMargin: 4
                     orientation: Qt.Vertical
-                    // Nothing to divide against when the tool frame is hidden
-                    // or every reference page is hidden.
                     visible: view.toolOptionsVisible && view.shownReferenceCount > 0
-                    value: view.referenceHeight
-                    defaultValue: 0
+                             && !inspector.topDetached && !inspector.bottomDetached
+                    enabled: !inspector.topCollapsed && !inspector.bottomCollapsed
+                    value: inspector.referenceShownHeight
+                    defaultValue: Math.max(220, Math.round(inspector.height * 0.42))
                     direction: -1
-                    minimum: 0
-                    maximum: Math.max(0, inspector.height - 240)
+                    minimum: inspector.minExpandedBottom
+                    maximum: inspector.referenceCap
                     onMoved: function(height) {
                         view.referenceDragging = true
-                        view.referenceHeight = Math.max(0, Math.round(height))
+                        view.referenceHeight = Math.max(inspector.minExpandedBottom, Math.round(height))
                     }
                     onReleased: function(height) {
                         view.referenceDragging = false
-                        view.layoutRequested({ editorReferenceHeight: Math.max(0, Math.round(height)) })
+                        view.layoutRequested({ editorReferenceHeight: Math.max(inspector.minExpandedBottom, Math.round(height)) })
                     }
                 }
 
-                // -------------------------------------- reference zone (tabs)
-                // The shared dock: a strip and one page at a time. It takes
-                // only the height of the page it is showing (or the height the
-                // divider remembers) and sits at the bottom of the column, so a
-                // short Info page does not grow into the tool frame above it. A
-                // hidden page keeps its slot inside the dock, so the checklist
-                // never renumbers the other pages.
+                // -------------------------------------- Row 2: Dedicated Layers panel (default)
+                Item {
+                    id: bottomDockSlot
+                    Layout.fillWidth: true
+                    Layout.fillHeight: (inspector.topCollapsed || inspector.topDetached) && !inspector.bottomCollapsed
+                    Layout.alignment: inspector.bottomCollapsed ? Qt.AlignTop : Qt.AlignBottom
+                    Layout.preferredHeight: inspector.referenceShownHeight
+                    Layout.minimumHeight: inspector.bottomCollapsed ? inspector.collapsedRowHeight : inspector.minExpandedBottom
+                    Layout.maximumHeight: ((inspector.topCollapsed || inspector.topDetached) && !inspector.bottomCollapsed) ? 100000 : inspector.referenceShownHeight
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
+                    Layout.topMargin: 4
+                    Layout.bottomMargin: 8
+                    clip: true
+                    visible: view.shownReferenceCount > 0 && inspector.bottomPanel === "layers" && !inspector.bottomDetached
+
+                LayersPanel {
+                    id: layersZone
+                    objectName: "editorLayersPanel"
+                    parent: inspector.bottomDetached ? floatingLayersHost : bottomDockSlot
+                    anchors.fill: parent
+                    clip: true
+                    visible: view.shownReferenceCount > 0 && (inspector.bottomDetached || inspector.bottomPanel === "layers")
+                    collapsed: !inspector.bottomDetached && inspector.bottomCollapsed
+                    detached: inspector.bottomDetached
+                    theme: view.theme
+                    layers: view.editor ? (view.editor.layers || []) : []
+                    activeLayerId: view.editor ? (view.editor.activeLayerId || 0) : 0
+                    canvasBackground: view.editor ? (view.editor.canvasBackground || null) : null
+                    hasDocument: view.hasDocument
+                    onCommandRequested: function(cmd) { view.command(cmd) }
+                    onPasteRequested: view.requestPasteImage()
+                    onCanvasBackgroundPopupRequested: function(anchor) {
+                        var bg = view.editor ? view.editor.canvasBackground : null
+                        docCanvasBgPopup.transparent = !(bg && bg.length === 3)
+                        docCanvasBgPopup.colour = layersZone.bgColorHex()
+                        docCanvasBgPopup.showBelow(anchor)
+                    }
+                    onToggleCollapsed: inspector.bottomCollapsed = !inspector.bottomCollapsed
+                    onToggleDetached: inspector.setBottomDetached(!inspector.bottomDetached)
+                }
+                }
+
+                // -------------------------------------- Secondary reference zone (Info / Original on demand)
                 RightDock {
                     id: referenceDock
                     objectName: "editorReferenceDock"
@@ -6496,7 +9155,7 @@ Item {
                     Layout.alignment: Qt.AlignBottom
                     Layout.preferredHeight: inspector.referenceShownHeight
                     Layout.minimumHeight: Math.min(140, inspector.referenceShownHeight)
-                    visible: view.shownReferenceCount > 0
+                    visible: view.shownReferenceCount > 0 && inspector.bottomPanel === "reference"
                     theme: view.theme
                     backgroundColor: "transparent"
                     borderColor: "transparent"
@@ -6543,8 +9202,12 @@ Item {
                             anchors.fill: parent
                             theme: view.theme
                             history: view.history
+                            redoHistory: view.editor ? (view.editor.redoHistory || []) : []
                             hasDocument: view.hasDocument
                             language: view.state.language || ""
+                            onJumpRequested: function(targetIndex) {
+                                view.command({ type: "editor_history_jump", target_index: targetIndex })
+                            }
                         }
                     }
 
@@ -6581,6 +9244,15 @@ Item {
                         }
                     }
                 }
+
+                // When both rows are collapsed, push both title bars consecutively
+                // to the top instead of letting ColumnLayout spread them vertically.
+                Item {
+                    objectName: "inspectorCollapsedSpacer"
+                    visible: inspector.topCollapsed && inspector.bottomCollapsed
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                }
             }
         }
 
@@ -6593,54 +9265,64 @@ Item {
                        || view.historyVisible || view.originalVisible
             entries: [
                 { key: "options", label: qsTr("Tool options"), icon: "icons/preferences.svg",
-                  active: view.toolOptionsVisible },
+                  active: view.toolOptionsVisible && inspector.topTab === "options" },
+                { key: "history", label: qsTr("History"), icon: "icons/history.svg",
+                  active: view.toolOptionsVisible && inspector.topTab === "history" },
+                { key: "layers", label: qsTr("Layers"), icon: "icons/view-details.svg",
+                  separatorBefore: true,
+                  active: view.shownReferenceCount > 0 && inspector.bottomPanel === "layers" },
                 { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
                   separatorBefore: true,
-                  active: view.infoVisible && view.rightTabIndex === 0 },
-                { key: "history", label: qsTr("History"), icon: "icons/history.svg",
-                  active: view.historyVisible && view.rightTabIndex === 1 },
+                  active: view.shownReferenceCount > 0 && inspector.bottomPanel === "reference" && view.rightTabIndex === 0 },
                 { key: "original", label: qsTr("Original"), icon: "icons/original.svg",
-                  active: view.originalVisible && view.rightTabIndex === 2 }
+                  active: view.shownReferenceCount > 0 && inspector.bottomPanel === "reference" && view.rightTabIndex === 2 }
             ]
             onToggled: function(key) {
-                if (key === "options") {
-                    view.setPanelVisible("options", !view.toolOptionsVisible)
+                if (key === "options" || key === "history") {
+                    if (!view.toolOptionsVisible) {
+                        inspector.topTab = key
+                        view.setPanelVisible("options", true)
+                    } else if (inspector.topTab !== key) {
+                        inspector.topTab = key
+                    } else {
+                        view.setPanelVisible("options", false)
+                    }
                     return
                 }
-                var shown = (key === "info" && view.infoVisible)
-                    || (key === "history" && view.historyVisible)
-                    || (key === "original" && view.originalVisible)
-                var isCurrent = (key === "info" && view.rightTabIndex === 0)
-                    || (key === "history" && view.rightTabIndex === 1)
-                    || (key === "original" && view.rightTabIndex === 2)
-                if (shown && isCurrent) {
-                    // Clicking the already-active reference icon collapses the
-                    // whole Info / History / Original dock in one click instead
-                    // of deleting tabs one by one.
-                    view.layoutRequested({
-                        panels: {
-                            "editor.info": false,
-                            "editor.history": false,
-                            "editor.original": false
-                        }
-                    })
-                } else if (view.shownReferenceCount === 0) {
-                    // Bringing the reference dock back from collapsed state
-                    // restores the full 3-tab strip focused on `key`.
-                    view.layoutRequested({
-                        panels: {
-                            "editor.info": true,
-                            "editor.history": true,
-                            "editor.original": true
-                        },
-                        editorReferenceTab: key
-                    })
-                } else if (!shown) {
+                if (key === "layers") {
+                    if (view.shownReferenceCount === 0) {
+                        inspector.bottomPanel = "layers"
+                        view.layoutRequested({
+                            panels: {
+                                "editor.info": true,
+                                "editor.history": true,
+                                "editor.original": true
+                            }
+                        })
+                    } else if (inspector.bottomPanel !== "layers") {
+                        inspector.bottomPanel = "layers"
+                    } else {
+                        view.layoutRequested({
+                            panels: {
+                                "editor.info": false,
+                                "editor.history": false,
+                                "editor.original": false
+                            }
+                        })
+                    }
+                    return
+                }
+                // Secondary reference panels (Info / Original)
+                var isCurrentRef = inspector.bottomPanel === "reference"
+                    && ((key === "info" && view.rightTabIndex === 0)
+                        || (key === "original" && view.rightTabIndex === 2))
+                if (isCurrentRef && view.shownReferenceCount > 0) {
+                    inspector.bottomPanel = "layers"
+                } else {
+                    inspector.bottomPanel = "reference"
                     var panels = {}
                     panels["editor." + key] = true
                     view.layoutRequested({ panels: panels, editorReferenceTab: key })
-                } else {
-                    view.showRightTab(key)
                 }
             }
             onHideAll: view.layoutRequested({
@@ -6786,6 +9468,418 @@ Item {
             view.canvasBgUseTheme = false
             view.canvasBgChecker = false
             view.canvasBgColor = view.colorText(selectedColor)
+            view.forceActiveFocus()
+        }
+    }
+
+    // Krita-style quick pop-up color selector triggered by pressing `C` while painting.
+    Popup {
+        id: quickBrushColorPopup
+        objectName: "quickBrushColorPopup"
+        parent: canvasHost
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        padding: 10
+        width: 230
+
+        property real selH: 0
+        property real selS: 1
+        property real selV: 1
+
+        function syncFromForeground() {
+            var b = view.foregroundBytes()
+            var r = b[0] / 255.0, g = b[1] / 255.0, bl = b[2] / 255.0
+            var max = Math.max(r, g, bl), min = Math.min(r, g, bl), d = max - min
+            var h = 0
+            if (d > 1e-6) {
+                if (max === r) h = 60 * (((g - bl) / d) % 6)
+                else if (max === g) h = 60 * (((bl - r) / d) + 2)
+                else h = 60 * (((r - g) / d) + 4)
+                if (h < 0) h += 360
+            }
+            selH = h
+            selS = max > 1e-6 ? d / max : 0
+            selV = max
+        }
+
+        function applyHsv() {
+            var c = selV * selS
+            var x = c * (1 - Math.abs((selH / 60) % 2 - 1))
+            var m = selV - c
+            var nr = 0, ng = 0, nb = 0
+            if (selH < 60) { nr = c; ng = x }
+            else if (selH < 120) { nr = x; ng = c }
+            else if (selH < 180) { ng = c; nb = x }
+            else if (selH < 240) { ng = x; nb = c }
+            else if (selH < 300) { nr = x; nb = c }
+            else { nr = c; nb = x }
+            function hex2(u) {
+                var s2 = Math.max(0, Math.min(255, Math.round(u * 255))).toString(16)
+                return s2.length < 2 ? "0" + s2 : s2
+            }
+            view.setForegroundColor("#" + hex2(nr + m) + hex2(ng + m) + hex2(nb + m))
+        }
+
+        function openAtCursor(cx, cy) {
+            syncFromForeground()
+            x = Math.max(8, Math.min(canvasHost.width - width - 8, Math.round(cx - width / 2)))
+            y = Math.max(8, Math.min(canvasHost.height - 240, Math.round(cy - 110)))
+            open()
+        }
+
+        background: Rectangle {
+            color: view.theme.surface
+            border.width: 1
+            border.color: view.theme.border
+            radius: 8
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 8
+
+            // Saturation-Value square
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 140
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 4
+                    color: Qt.hsva(quickBrushColorPopup.selH / 360.0, 1.0, 1.0, 1.0)
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 4
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: "#ffffffff" }
+                            GradientStop { position: 1.0; color: "#00ffffff" }
+                        }
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 4
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: "#00000000" }
+                            GradientStop { position: 1.0; color: "#ff000000" }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 12; height: 12; radius: 6
+                    x: quickBrushColorPopup.selS * parent.width - 6
+                    y: (1.0 - quickBrushColorPopup.selV) * parent.height - 6
+                    color: "transparent"
+                    border.width: 2
+                    border.color: "#ffffff"
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onPressed: function(m) {
+                        quickBrushColorPopup.selS = Math.max(0, Math.min(1, m.x / Math.max(1, width)))
+                        quickBrushColorPopup.selV = Math.max(0, Math.min(1, 1.0 - m.y / Math.max(1, height)))
+                        quickBrushColorPopup.applyHsv()
+                    }
+                    onPositionChanged: function(m) {
+                        if (!pressed) return
+                        quickBrushColorPopup.selS = Math.max(0, Math.min(1, m.x / Math.max(1, width)))
+                        quickBrushColorPopup.selV = Math.max(0, Math.min(1, 1.0 - m.y / Math.max(1, height)))
+                        quickBrushColorPopup.applyHsv()
+                    }
+                }
+            }
+
+            // Hue spectrum bar
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 16
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 4
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.00; color: "#ff0000" }
+                        GradientStop { position: 0.17; color: "#ffff00" }
+                        GradientStop { position: 0.33; color: "#00ff00" }
+                        GradientStop { position: 0.50; color: "#00ffff" }
+                        GradientStop { position: 0.67; color: "#0000ff" }
+                        GradientStop { position: 0.83; color: "#ff00ff" }
+                        GradientStop { position: 1.00; color: "#ff0000" }
+                    }
+                }
+                Rectangle {
+                    width: 6; height: 18; radius: 2
+                    x: (quickBrushColorPopup.selH / 360.0) * parent.width - 3
+                    y: -1
+                    color: "#ffffff"
+                    border.width: 1
+                    border.color: "#111111"
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onPressed: function(m) {
+                        quickBrushColorPopup.selH = Math.max(0, Math.min(359.9, (m.x / Math.max(1, width)) * 360.0))
+                        quickBrushColorPopup.applyHsv()
+                    }
+                    onPositionChanged: function(m) {
+                        if (!pressed) return
+                        quickBrushColorPopup.selH = Math.max(0, Math.min(359.9, (m.x / Math.max(1, width)) * 360.0))
+                        quickBrushColorPopup.applyHsv()
+                    }
+                }
+            }
+
+            // Quick swatches
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+                Repeater {
+                    model: view.paintSwatches
+                    delegate: Rectangle {
+                        required property string modelData
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 20
+                        radius: 3
+                        color: modelData
+                        border.width: view.foregroundColor === modelData ? 2 : 1
+                        border.color: view.foregroundColor === modelData ? view.theme.accent : view.theme.border
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                view.setForegroundColor(modelData)
+                                quickBrushColorPopup.close()
+                                view.forceActiveFocus()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ filter menu
+    AppMenu {
+        id: filterMenu
+        objectName: "editorFilterMenu"
+        theme: view.theme
+        implicitWidth: 245
+
+        MenuItem {
+            objectName: "filterColorLightItem"
+            text: qsTr("Color & light…")
+            enabled: view.documentReady
+            onTriggered: view.activateFilterTool("adjust")
+        }
+        MenuItem {
+            objectName: "filterHsvItem"
+            text: qsTr("HSV Adjustment… (Ctrl+U)")
+            enabled: view.documentReady
+            onTriggered: view.activateFilterTool("hsv")
+        }
+        MenuItem {
+            objectName: "filterCurvesItem"
+            text: qsTr("Curves… (Ctrl+M)")
+            enabled: view.documentReady
+            onTriggered: view.activateFilterTool("curves")
+        }
+        MenuItem {
+            objectName: "filterColorBalanceItem"
+            text: qsTr("Color balance… (Ctrl+B)")
+            enabled: view.documentReady
+            onTriggered: view.activateFilterTool("colorBalance")
+        }
+    }
+
+    // Resizable floating DialogFrames for popped-out Right Sidebar panels
+    // (reuses the app's shared `DialogFrame` + `DialogFooter` chrome).
+    DialogFrame {
+        id: floatingToolDialog
+        objectName: "floatingToolDialog"
+        namePrefix: "floatingTool"
+        title: inspector.topTab === "history" ? qsTr("History") : qsTr("%1 options").arg(inspector.toolName)
+        theme: view.theme
+        modal: false
+        dim: false
+        showFooter: false
+        resizable: true
+        fitToContent: false
+        preferredWidth: 360
+        preferredHeight: 540
+        minWidth: 280
+        minHeight: 280
+        onCloseRequested: inspector.setTopDetached(false)
+        onClosed: if (inspector.topDetached) inspector.topDetached = false
+
+        Item {
+            id: floatingToolHost
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.max(200, floatingToolDialog.bodyRoom() - 2 * floatingToolDialog.bodyPadding)
+        }
+    }
+
+    DialogFrame {
+        id: floatingLayersDialog
+        objectName: "floatingLayersDialog"
+        namePrefix: "floatingLayers"
+        title: qsTr("Layers")
+        theme: view.theme
+        modal: false
+        dim: false
+        showFooter: false
+        resizable: true
+        fitToContent: false
+        preferredWidth: 320
+        preferredHeight: 420
+        minWidth: 260
+        minHeight: 240
+        onCloseRequested: inspector.setBottomDetached(false)
+        onClosed: if (inspector.bottomDetached) inspector.bottomDetached = false
+
+        Item {
+            id: floatingLayersHost
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.max(160, floatingLayersDialog.bodyRoom() - 2 * floatingLayersDialog.bodyPadding)
+        }
+    }
+
+    HsvAdjustDialog {
+        id: hsvDialog
+        theme: view.theme
+        hasMultipleLayers: view.hasMultipleLayers
+        hasSelection: view.hasSelection
+        onPreviewRequested: function(h, s, v, target) {
+            view.command({
+                type: "editor_preview_filter",
+                clear: false,
+                kind: "hsv",
+                hue: h,
+                saturation: s,
+                value: v,
+                target: target
+            })
+        }
+        onPreviewCleared: {
+            if (view.documentReady) {
+                view.command({ type: "editor_preview_filter", clear: true })
+            }
+        }
+        onApplyRequested: function(h, s, v, target) {
+            view.command({
+                type: "editor_adjust_hsv",
+                hue: h,
+                saturation: s,
+                value: v,
+                target: target
+            })
+        }
+    }
+
+    CurvesDialog {
+        id: curvesDialog
+        theme: view.theme
+        hasMultipleLayers: view.hasMultipleLayers
+        hasSelection: view.hasSelection
+        onPreviewRequested: function(rgb, red, green, blue, target) {
+            view.command({
+                type: "editor_preview_filter",
+                clear: false,
+                kind: "curves",
+                rgb: rgb,
+                red: red,
+                green: green,
+                blue: blue,
+                target: target
+            })
+        }
+        onPreviewCleared: {
+            if (view.documentReady) {
+                view.command({ type: "editor_preview_filter", clear: true })
+            }
+        }
+        onApplyRequested: function(rgb, red, green, blue, target) {
+            view.command({
+                type: "editor_adjust_curves",
+                rgb: rgb,
+                red: red,
+                green: green,
+                blue: blue,
+                target: target
+            })
+        }
+    }
+
+    ColorBalanceDialog {
+        id: colorBalanceDialog
+        theme: view.theme
+        hasMultipleLayers: view.hasMultipleLayers
+        hasSelection: view.hasSelection
+        onPreviewRequested: function(sh, md, hi, preserveLum, target) {
+            view.command({
+                type: "editor_preview_filter",
+                clear: false,
+                kind: "color_balance",
+                shadows: sh,
+                midtones: md,
+                highlights: hi,
+                preserve_luminosity: preserveLum,
+                target: target
+            })
+        }
+        onPreviewCleared: {
+            if (view.documentReady) {
+                view.command({ type: "editor_preview_filter", clear: true })
+            }
+        }
+        onApplyRequested: function(sh, md, hi, preserveLum, target) {
+            view.command({
+                type: "editor_color_balance",
+                shadows: sh,
+                midtones: md,
+                highlights: hi,
+                preserve_luminosity: preserveLum,
+                target: target
+            })
+        }
+    }
+
+    /// Document-wide Canvas Background popup (Krita / Affinity style, from LayersPanel).
+    BackgroundPopup {
+        id: docCanvasBgPopup
+        objectName: "docCanvasBgPopup"
+        theme: view.theme
+        transparent: !(view.editor && view.editor.canvasBackground && view.editor.canvasBackground.length === 3)
+        colour: layersZone.bgColorHex()
+        alphaLostWarning: view.documentIsJpeg
+        onTransparentPicked: view.command({
+            type: "editor_set_canvas_background",
+            transparent: true
+        })
+        onColourPicked: function(value) {
+            view.command({
+                type: "editor_set_canvas_background",
+                transparent: false,
+                color: view.colorBytes(value)
+            })
+        }
+        onCustomPicked: {
+            docCanvasBgColorDialog.selectedColor = layersZone.bgColorHex()
+            docCanvasBgColorDialog.open()
+        }
+    }
+
+    ColorPickerDialog {
+        id: docCanvasBgColorDialog
+        objectName: "docCanvasBgColorDialog"
+        theme: view.theme
+        title: qsTr("Canvas background")
+        selectedColor: "#ffffff"
+        onAccepted: {
+            view.command({
+                type: "editor_set_canvas_background",
+                transparent: false,
+                color: view.colorBytes(view.colorText(selectedColor))
+            })
             view.forceActiveFocus()
         }
     }

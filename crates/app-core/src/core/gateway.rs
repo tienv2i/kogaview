@@ -26,12 +26,16 @@ impl Core {
         match &result {
             Ok(_) => {
                 self.state.bump();
-                self.journal.record(JournalEntry {
-                    command_id: &envelope.id,
-                    command: &command,
-                    revision: self.state.revision,
-                    result: &result,
-                });
+                // Ephemeral in-RAM filter previews never mutate the document or undo
+                // history; skipping journal disk writes keeps live curve dragging at 60 fps.
+                if !matches!(command, Command::EditorPreviewFilter { .. }) {
+                    self.journal.record(JournalEntry {
+                        command_id: &envelope.id,
+                        command: &command,
+                        revision: self.state.revision,
+                        result: &result,
+                    });
+                }
                 tracing::debug!(
                     target: "kogaview::command",
                     id = %envelope.id,
@@ -478,15 +482,19 @@ impl Core {
                 rotation,
                 fill,
                 fill_alpha,
-            } => self.editor_apply(EditOperation::FreeTransform {
-                x,
-                y,
-                width,
-                height,
-                rotation,
-                fill,
-                fill_alpha,
-            }),
+                target,
+            } => self.editor_apply_with_target(
+                EditOperation::FreeTransform {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rotation,
+                    fill,
+                    fill_alpha,
+                },
+                target,
+            ),
             Command::EditorTransformPreview { corners } => self.editor_transform_preview(corners),
             Command::EditorCanvasSize {
                 width,
@@ -505,24 +513,112 @@ impl Core {
                 degrees,
                 fill,
                 fill_alpha,
-            } => self.editor_apply(EditOperation::RotateAngle {
-                degrees,
-                fill,
-                fill_alpha,
-            }),
+                target,
+            } => self.editor_apply_with_target(
+                EditOperation::RotateAngle {
+                    degrees,
+                    fill,
+                    fill_alpha,
+                },
+                target,
+            ),
             Command::EditorAdjustColor {
                 brightness,
                 contrast,
                 saturation,
-            } => self.editor_apply(EditOperation::AdjustColor {
+                target,
+            } => self.editor_apply_with_target(
+                EditOperation::AdjustColor {
+                    brightness,
+                    contrast,
+                    saturation,
+                },
+                target,
+            ),
+            Command::EditorAdjustCurves {
+                rgb,
+                red,
+                green,
+                blue,
+                target,
+            } => self.editor_apply_with_target(
+                EditOperation::AdjustCurves {
+                    rgb,
+                    red,
+                    green,
+                    blue,
+                },
+                target,
+            ),
+            Command::EditorAdjustHsv {
+                hue,
+                saturation,
+                value,
+                target,
+            } => self.editor_apply_with_target(
+                EditOperation::AdjustHsv {
+                    hue,
+                    saturation,
+                    value,
+                },
+                target,
+            ),
+            Command::EditorColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+                target,
+            } => self.editor_apply_with_target(
+                EditOperation::ColorBalance {
+                    shadows,
+                    midtones,
+                    highlights,
+                    preserve_luminosity,
+                },
+                target,
+            ),
+            Command::EditorPreviewFilter {
+                clear,
+                kind,
                 brightness,
                 contrast,
+                hue,
                 saturation,
-            }),
-            Command::EditorRotate { degrees } => {
-                self.editor_apply(EditOperation::Rotate { degrees })
+                value,
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+                rgb,
+                red,
+                green,
+                blue,
+                target,
+            } => self.editor_preview_filter(
+                clear,
+                &kind,
+                brightness,
+                contrast,
+                hue,
+                saturation,
+                value,
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+                rgb,
+                red,
+                green,
+                blue,
+                target,
+            ),
+            Command::EditorRotate { degrees, target } => {
+                self.editor_apply_with_target(EditOperation::Rotate { degrees }, target)
             }
-            Command::EditorFlip { axis } => self.editor_apply(EditOperation::Flip { axis }),
+            Command::EditorFlip { axis, target } => {
+                self.editor_apply_with_target(EditOperation::Flip { axis }, target)
+            }
             Command::EditorPaintStroke {
                 points,
                 color,
@@ -564,9 +660,11 @@ impl Core {
                 self.ai_set_custom_model(&model_id, &path)
             }
             Command::AiCancel => self.ai_cancel(),
-            Command::EditorAiRemoveBackground { model_id, feather } => {
-                self.editor_ai_remove_background(&model_id, feather)
-            }
+            Command::EditorAiRemoveBackground {
+                model_id,
+                feather,
+                target,
+            } => self.editor_ai_remove_background(&model_id, feather, target),
             Command::QuickActionRun {
                 plugin_id,
                 action_id,
@@ -589,14 +687,18 @@ impl Core {
                 force,
                 offset_x,
                 offset_y,
-            } => self.editor_dewatermark_gemini(&size, logo_value, force, offset_x, offset_y),
+                target,
+            } => {
+                self.editor_dewatermark_gemini(&size, logo_value, force, offset_x, offset_y, target)
+            }
             Command::EditorInpaintRegion {
                 x,
                 y,
                 width,
                 height,
                 feather,
-            } => self.editor_inpaint_region(x, y, width, height, feather),
+                target,
+            } => self.editor_inpaint_region(x, y, width, height, feather, target),
             Command::EditorAiInpaint {
                 detector_model,
                 inpainter_model,
@@ -607,6 +709,7 @@ impl Core {
                 region_width,
                 region_height,
                 brush_strokes,
+                target,
             } => self.editor_ai_inpaint(
                 &detector_model,
                 &inpainter_model,
@@ -617,6 +720,7 @@ impl Core {
                 region_width,
                 region_height,
                 &brush_strokes,
+                target,
             ),
             Command::EditorRefineAlpha {
                 erase_strokes,
@@ -641,6 +745,121 @@ impl Core {
                 &exclude_tags,
             ),
             Command::EditorSaveCaption { text } => self.editor_save_caption(&text),
+            Command::EditorHistoryJump { target_index } => self.editor_history_jump(target_index),
+            Command::EditorLayerAdd { name } => {
+                self.editor_layer_op(crate::editor::LayerOperation::AddEmpty { name })
+            }
+            Command::EditorLayerDuplicate { id } => {
+                self.editor_layer_op(crate::editor::LayerOperation::Duplicate { id })
+            }
+            Command::EditorLayerDelete { id } => {
+                self.editor_layer_op(crate::editor::LayerOperation::Delete { id })
+            }
+            Command::EditorLayerSelect { id } => self.editor_layer_select(id),
+            Command::EditorLayerReorder { id, new_index } => {
+                self.editor_layer_op(crate::editor::LayerOperation::Reorder { id, new_index })
+            }
+            Command::EditorLayerSetProps {
+                id,
+                name,
+                visible,
+                locked,
+                opacity,
+                blend_mode,
+                offset_x,
+                offset_y,
+            } => self.editor_layer_op(crate::editor::LayerOperation::SetProps {
+                id,
+                name,
+                visible,
+                locked,
+                opacity,
+                blend_mode: blend_mode
+                    .as_deref()
+                    .map(crate::editor::BlendMode::from_key),
+                offset_x,
+                offset_y,
+            }),
+            Command::EditorLayerMergeDown { id } => {
+                self.editor_layer_op(crate::editor::LayerOperation::MergeDown { id })
+            }
+            Command::EditorLayerFlatten => {
+                self.editor_layer_op(crate::editor::LayerOperation::Flatten)
+            }
+            Command::EditorSetCanvasBackground { color, transparent } => {
+                let next = if transparent {
+                    None
+                } else {
+                    Some(color.unwrap_or([255, 255, 255]))
+                };
+                self.editor_layer_op(crate::editor::LayerOperation::SetCanvasBackground {
+                    color: next,
+                })
+            }
+            Command::EditorNew {
+                width,
+                height,
+                fill,
+                fill_alpha,
+                name,
+            } => self.editor_new(width, height, fill, fill_alpha, &name),
+            Command::EditorPasteImage { path, name, mode } => {
+                self.editor_paste_image(&path, &name, mode)
+            }
+            Command::EditorSelectRect {
+                x,
+                y,
+                width,
+                height,
+                mode,
+                feather,
+            } => self.editor_select_rect(x, y, width, height, mode, feather),
+            Command::EditorSelectEllipse {
+                x,
+                y,
+                width,
+                height,
+                mode,
+                feather,
+            } => self.editor_select_ellipse(x, y, width, height, mode, feather),
+            Command::EditorSelectLasso {
+                points,
+                mode,
+                feather,
+            } => self.editor_select_lasso(&points, mode, feather),
+            Command::EditorSelectMagicWand {
+                x,
+                y,
+                tolerance,
+                contiguous,
+                sample_all_layers,
+                mode,
+                feather,
+            } => self.editor_select_magic_wand(
+                x,
+                y,
+                tolerance,
+                contiguous,
+                sample_all_layers,
+                mode,
+                feather,
+            ),
+            Command::EditorSelectAll => self.editor_select_all(),
+            Command::EditorSelectClear => self.editor_select_clear(),
+            Command::EditorSelectInvert => self.editor_select_invert(),
+            Command::EditorSelectMove { dx, dy } => self.editor_select_move(dx, dy),
+            Command::EditorSelectionDelete => self.editor_selection_delete(),
+            Command::EditorSelectionFill { color, opacity } => {
+                self.editor_selection_fill(color, opacity)
+            }
+            Command::EditorSelectionDuplicateLayer => self.editor_selection_duplicate_layer(),
+            Command::EditorSelectionCopy { cut } => self.editor_selection_copy(cut),
+            Command::EditorSelectionCrop => self.editor_selection_crop(),
+            Command::ResetConfig {
+                reset_layout,
+                reset_settings,
+                reset_favorites,
+            } => self.reset_config(reset_layout, reset_settings, reset_favorites),
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {

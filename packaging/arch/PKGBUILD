@@ -1,6 +1,6 @@
 # Maintainer: KogaView Contributors
 pkgname=kogaview
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc="Fast native desktop photo manager, viewer, and non-destructive editor"
 arch=('x86_64')
@@ -34,9 +34,10 @@ package() {
   install -Dm644 "$src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   python3 -c "
 import pathlib
-tpl = pathlib.Path('$src/packaging/linux/io.github.tienv2i.KogaView.desktop.in').read_text()
-out = tpl.replace('@EXEC@', '/usr/bin/kogaview').replace('@ICON@', 'io.github.tienv2i.KogaView').replace('@NAME@', 'KogaView').replace('@MIME_TYPES@', 'image/png;image/jpeg;image/webp;image/gif;image/bmp;image/tiff;image/avif;image/x-tga;image/qoi;')
-pathlib.Path('$pkgdir/usr/share/applications').mkdir(parents=True, exist_ok=True)
-pathlib.Path('$pkgdir/usr/share/applications/io.github.tienv2i.KogaView.desktop').write_text(out)
+apps = pathlib.Path('$pkgdir/usr/share/applications')
+apps.mkdir(parents=True, exist_ok=True)
+for name in ('io.github.tienv2i.KogaView.desktop', 'io.github.tienv2i.KogaView.Editor.desktop'):
+    tpl = pathlib.Path('$src/packaging/linux/' + name + '.in').read_text()
+    (apps / name).write_text(tpl.replace('@BINDIR@', '/usr/bin'))
 "
 }

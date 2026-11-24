@@ -1,6 +1,7 @@
 #include "platform.h"
 #include "translations.h"
 
+#include <QBuffer>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDBusArgument>
@@ -23,14 +24,22 @@
 #include <QImageReader>
 #include <QPalette>
 #include <QProcess>
+#include <QStandardPaths>
 #include <QStyleHints>
 #include <QTimer>
 #include <QUrl>
 #include <QWindow>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <cstddef>
+#include <cstdint>
 #include <fcntl.h>
 #include <unistd.h>
+
+extern "C" {
+__attribute__((weak)) bool kogaview_extract_archive_preview(const char* path, uint8_t** out_ptr, size_t* out_len);
+__attribute__((weak)) void kogaview_free_buffer(uint8_t* ptr, size_t len);
+}
 
 namespace {
 constexpr auto kPortalService = "org.freedesktop.portal.Desktop";
@@ -89,6 +98,7 @@ struct SaveFilter
 constexpr SaveFilter kSaveFilters[] = {{"PNG image", "*.png"},
                                        {"JPEG image", "*.jpg *.jpeg"},
                                        {"WebP image", "*.webp"},
+                                       {"OpenRaster image", "*.ora"},
                                        {"TIFF image", "*.tiff"},
                                        {"GIF image", "*.gif"},
                                        {"BMP image", "*.bmp"},
@@ -650,6 +660,80 @@ void PlatformHelper::copyText(const QString& text)
   emit info(tr("Copied to the clipboard."));
 }
 
+QSize PlatformHelper::clipboardImageSize() const
+{
+  const QImage image = QGuiApplication::clipboard()->image();
+  return image.isNull() ? QSize() : image.size();
+}
+
+QString PlatformHelper::saveClipboardImageToTemp() const
+{
+  const QImage image = QGuiApplication::clipboard()->image();
+  if (image.isNull()) {
+    return QString();
+  }
+  static quint64 counter = 0;
+  const QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+  QDir().mkpath(tempDir);
+  const QString path = tempDir + QStringLiteral("/kogaview-clipboard-%1-%2.png")
+                                   .arg(QCoreApplication::applicationPid())
+                                   .arg(++counter);
+  if (!image.save(path, "PNG")) {
+    return QString();
+  }
+  return path;
+}
+
+extern "C" {
+__attribute__((weak)) bool kogaview_sample_editor_canvas(double norm_x, double norm_y,
+                                                         uint8_t* out_r, uint8_t* out_g,
+                                                         uint8_t* out_b);
+}
+
+QString PlatformHelper::sampleImageColor(const QString& path, double normX, double normY) const
+{
+  if (path.isEmpty()) {
+    return QString();
+  }
+  if (path == QStringLiteral("ram://canvas") && kogaview_sample_editor_canvas != nullptr) {
+    uint8_t r = 0, g = 0, b = 0;
+    if (kogaview_sample_editor_canvas(normX, normY, &r, &g, &b)) {
+      return QColor(r, g, b).name(QColor::HexRgb);
+    }
+    return QString();
+  }
+  const QFileInfo info(path);
+  if (!info.isFile()) {
+    return QString();
+  }
+  static QString cachedPath;
+  static qint64 cachedMsec = -1;
+  static qint64 cachedSize = -1;
+  static QImage cachedImage;
+
+  const qint64 msec = info.lastModified().toMSecsSinceEpoch();
+  const qint64 sz = info.size();
+  if (cachedPath != path || cachedMsec != msec || cachedSize != sz || cachedImage.isNull()) {
+    QImage loaded(path);
+    if (loaded.isNull()) {
+      return QString();
+    }
+    cachedPath = path;
+    cachedMsec = msec;
+    cachedSize = sz;
+    cachedImage = loaded.convertToFormat(QImage::Format_RGBA8888);
+  }
+  if (cachedImage.width() <= 0 || cachedImage.height() <= 0) {
+    return QString();
+  }
+  const int px = qBound(0, static_cast<int>(qRound(normX * (cachedImage.width() - 1))),
+                        cachedImage.width() - 1);
+  const int py = qBound(0, static_cast<int>(qRound(normY * (cachedImage.height() - 1))),
+                        cachedImage.height() - 1);
+  const QColor c = cachedImage.pixelColor(px, py);
+  return c.name(QColor::HexRgb);
+}
+
 QVariantList PlatformHelper::textWidths(const QStringList& labels, const QFont& font)
 {
   const QFontMetricsF metrics(font);
@@ -671,6 +755,25 @@ QSize PlatformHelper::imageSize(const QString& path) const
   if (path.isEmpty()) {
     return {};
   }
+  if (path.endsWith(QLatin1String(".ora"), Qt::CaseInsensitive)
+      || path.endsWith(QLatin1String(".kra"), Qt::CaseInsensitive)) {
+    if (kogaview_extract_archive_preview == nullptr || kogaview_free_buffer == nullptr) {
+      return {};
+    }
+    uint8_t* raw = nullptr;
+    size_t len = 0;
+    const QByteArray utf8 = path.toUtf8();
+    if (!kogaview_extract_archive_preview(utf8.constData(), &raw, &len) || raw == nullptr || len == 0) {
+      return {};
+    }
+    QByteArray data(reinterpret_cast<const char*>(raw), static_cast<qsizetype>(len));
+    kogaview_free_buffer(raw, len);
+    QBuffer buffer(&data);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer);
+    const QSize size = reader.size();
+    return size.isValid() && !size.isEmpty() ? size : QSize();
+  }
   QImageReader reader(path);
   reader.setAutoTransform(true);
   const QSize size = reader.size();
@@ -689,7 +792,7 @@ QString PlatformHelper::imageNameFilter() const
   static const char* const extensions[] = {
     "jpg", "jpeg", "jpe", "jfif", "png", "webp", "gif", "bmp", "tif", "tiff", "avif",
     "heic", "heif", "dds", "exr", "hdr", "ico", "pnm", "pbm", "pgm", "ppm",
-    "qoi", "tga", "ff", nullptr,
+    "qoi", "tga", "ff", "ora", "kra", nullptr,
   };
   QStringList patterns;
   for (const char* const* extension = extensions; *extension != nullptr; ++extension) {

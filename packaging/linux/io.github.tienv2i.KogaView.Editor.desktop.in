@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=KogaView (Editor)
+GenericName=Image Editor
+Comment=Open image directly in KogaView Editor
+# `edit %f` opens the chosen image directly in the non-destructive Editor
+# workspace while keeping its folder loaded for Browser/Viewer navigation.
+Exec=@BINDIR@/kogaview edit %f
+TryExec=@BINDIR@/kogaview
+Icon=io.github.tienv2i.KogaView
+Terminal=false
+# Hidden from the application launcher so KogaView does not appear twice in the
+# app grid, while still appearing in "Open With" dialogs and file manager
+# right-click menus for image files.
+NoDisplay=true
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+Keywords=photo;image;picture;editor;edit;layers;retouch;
+MimeType=image/jpeg;image/png;image/webp;image/gif;image/tiff;image/bmp;image/avif;image/vnd.ms-dds;image/x-exr;image/vnd.radiance;image/x-hdr;image/vnd.microsoft.icon;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/qoi;image/x-tga;image/x-farbfeld;image/openraster;application/x-krita;
+StartupWMClass=KogaView
+StartupNotify=true

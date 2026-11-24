@@ -35,6 +35,8 @@ image = { version = "0.25", default-features = false, features = [
 jpeg-decoder = { version = "0.3", default-features = false }
 kogaview-protocol = { path = "../app-protocol" }
 serde.workspace = true
+# Pure-Rust ZIP reader/writer for OpenRaster (.ora) and Krita (.kra) previews.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # A failed preview write is logged where it happens rather than only returned:
 # the edit itself still succeeded.
 tracing.workspace = true

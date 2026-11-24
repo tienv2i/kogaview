@@ -72,8 +72,9 @@ Dialog {
     /// does not scroll with the body. `null` for a plain form.
     property Component headerStrip: null
 
+    property bool showFooter: true
     readonly property int headerHeight: 52
-    readonly property int footerHeight: 60
+    readonly property int footerHeight: showFooter ? 60 : 0
     /// Space the body keeps around its column, on all four sides.
     readonly property int bodyPadding: 20
     /// The width of a row's label column. A form passes this to every `FormRow`,
@@ -450,6 +451,7 @@ Dialog {
     footer: DialogFooter {
         namePrefix: frame.namePrefix
         theme: frame.theme
+        visible: frame.showFooter
         height: frame.footerHeight
     }
 }
