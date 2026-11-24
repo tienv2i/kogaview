@@ -627,6 +627,10 @@ pub struct AiTaskState {
     pub percent: u8,
     pub stage: String,
     pub error: Option<String>,
+    /// Optional text produced by a text-output plugin (e.g. OCR) for the shell
+    /// to copy to the system clipboard.
+    #[serde(default)]
+    pub clipboard_text: Option<String>,
 }
 
 fn default_true() -> bool {

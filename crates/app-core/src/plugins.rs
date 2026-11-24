@@ -164,6 +164,7 @@ pub enum AiWorkerEvent {
         model_id: String,
         output_path: PathBuf,
         device_used: String,
+        clipboard_text: Option<String>,
     },
     Failed {
         message: String,
@@ -656,6 +657,7 @@ pub fn run_plugin_inference(
     let mut completed = false;
     let mut failed_msg: Option<String> = None;
     let mut device_used = device.as_str().to_owned();
+    let mut clipboard_text: Option<String> = None;
 
     for line in reader.lines() {
         if cancel.load(Ordering::SeqCst) {
@@ -685,12 +687,13 @@ pub fn run_plugin_inference(
                 });
             }
             "done" => {
-                if let Some(dev) = msg
-                    .get("meta")
-                    .and_then(|m| m.get("device"))
-                    .and_then(Value::as_str)
-                {
-                    device_used = dev.to_owned();
+                if let Some(meta) = msg.get("meta") {
+                    if let Some(dev) = meta.get("device").and_then(Value::as_str) {
+                        device_used = dev.to_owned();
+                    }
+                    if let Some(text) = meta.get("clipboardText").and_then(Value::as_str) {
+                        clipboard_text = Some(text.to_owned());
+                    }
                 }
                 completed = true;
                 break;
@@ -724,7 +727,7 @@ pub fn run_plugin_inference(
 
     if let Some(message) = failed_msg {
         let _ = tx.send(AiWorkerEvent::Failed { message });
-    } else if completed && output_path.is_file() {
+    } else if completed && (output_path.is_file() || clipboard_text.is_some()) {
         tracing::info!(
             target: "kogaview::plugins",
             plugin = %plugin.manifest.id,
@@ -737,6 +740,7 @@ pub fn run_plugin_inference(
             model_id: model_id.to_owned(),
             output_path: output_path.to_path_buf(),
             device_used,
+            clipboard_text,
         });
     } else {
         let mut stderr_text = String::new();

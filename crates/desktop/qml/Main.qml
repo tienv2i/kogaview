@@ -348,11 +348,18 @@ ApplicationWindow {
         target: bridge
         function onLanguageChanged() { root.applyInterfaceLanguage(bridge.language); }
     }
+    property string _lastCopiedAiText: ""
     Connections {
         target: snapshot
         function onStateChanged() {
             root.syncInterfaceLanguage();
             root.completePostSaveLeave();
+            var task = root.state && root.state.aiTask;
+            if (task && !task.running && task.clipboardText
+                    && task.clipboardText !== root._lastCopiedAiText) {
+                root._lastCopiedAiText = task.clipboardText;
+                Platform.copyText(task.clipboardText);
+            }
         }
     }
     /// True while the file chooser was opened from the Editor, so a chosen

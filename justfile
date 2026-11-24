@@ -56,3 +56,16 @@ build-plugin-rembg:
 build-plugin-upscale:
     cargo build --manifest-path plugins/kogaview-plugin-upscale/Cargo.toml --release
     @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-upscale"); rel = src / "target/release"; bin_src = rel / "kogaview-plugin-upscale"; libs = list(rel.glob("libonnxruntime*.so*")) + list(rel.glob("onnxruntime*.dll")); [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-upscale"), [shutil.copy2(l, d/"bin"/l.name) for l in libs]) for d in [data/"kogaview-dev/plugins/kogaview-upscale-onnx", data/"kogaview/plugins/kogaview-upscale-onnx"] ]; print("Installed kogaview-plugin-upscale +", len(libs), "runtime lib(s) to", data/"kogaview[-dev]/plugins/kogaview-upscale-onnx")'
+
+# Optional non-AI plugin: Strip EXIF/GPS & Optimize file size.
+build-plugin-utils:
+    cargo build --manifest-path plugins/kogaview-plugin-utils/Cargo.toml --release
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-utils"); bin_src = src / "target/release/kogaview-plugin-utils"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-utils")) for d in [data/"kogaview-dev/plugins/kogaview-utils", data/"kogaview/plugins/kogaview-utils"] ]; print("Installed kogaview-plugin-utils to", data/"kogaview[-dev]/plugins/kogaview-utils")'
+
+# Optional OCR plugin: Copy Text from Image (Tesseract + on-demand language packs).
+build-plugin-ocr:
+    cargo build --manifest-path plugins/kogaview-plugin-ocr/Cargo.toml --release
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-ocr"); bin_src = src / "target/release/kogaview-plugin-ocr"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-ocr")) for d in [data/"kogaview-dev/plugins/kogaview-ocr-tesseract", data/"kogaview/plugins/kogaview-ocr-tesseract"] ]; print("Installed kogaview-plugin-ocr to", data/"kogaview[-dev]/plugins/kogaview-ocr-tesseract")'
+
+# Build & install all optional plugins at once.
+build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr

@@ -80,6 +80,7 @@ impl Core {
             percent: 0,
             stage: format!("Downloading {}…", spec.name),
             error: None,
+            clipboard_text: None,
         });
         self.state.status = UiText::with("ai_downloading_model", [spec.name.clone()]);
 
@@ -254,6 +255,7 @@ impl Core {
             percent: 5,
             stage: "Starting Remove Background…".to_owned(),
             error: None,
+            clipboard_text: None,
         });
         self.state.status = UiText::new("ai_removing_background");
 
@@ -354,21 +356,26 @@ impl Core {
             .params
             .get("modelId")
             .and_then(|v| v.as_str())
-            .unwrap_or("rmbg-1.4")
+            .unwrap_or("")
             .to_owned();
-        let Some(model_status) = self.state.ai_models.iter().find(|m| m.id == model_id) else {
-            return Err(ProtocolError::with_line(
-                "not_found",
-                format!("unknown AI model: {model_id}"),
-                UiText::with("ai_model_unknown", [model_id]),
-            ));
-        };
-        let Some(model_path_str) = model_status.effective_path.clone() else {
-            return Err(ProtocolError::with_line(
-                "model_missing",
-                format!("AI model '{model_id}' is not downloaded yet"),
-                UiText::with("ai_model_not_installed", [model_status.name.clone()]),
-            ));
+        let model_path = if model_id.is_empty() {
+            PathBuf::new()
+        } else {
+            let Some(model_status) = self.state.ai_models.iter().find(|m| m.id == model_id) else {
+                return Err(ProtocolError::with_line(
+                    "not_found",
+                    format!("unknown AI model: {model_id}"),
+                    UiText::with("ai_model_unknown", [model_id]),
+                ));
+            };
+            let Some(model_path_str) = model_status.effective_path.clone() else {
+                return Err(ProtocolError::with_line(
+                    "model_missing",
+                    format!("AI model '{model_id}' is not downloaded yet"),
+                    UiText::with("ai_model_not_installed", [model_status.name.clone()]),
+                ));
+            };
+            PathBuf::from(model_path_str)
         };
 
         fs::create_dir_all(&self.paths.ai_ipc_dir).map_err(|error| {
@@ -399,13 +406,19 @@ impl Core {
             percent: 5,
             stage: format!("{}…", qa.label),
             error: None,
+            clipboard_text: None,
         });
         self.state.status = UiText::new("ai_removing_background");
 
         let device = self.config.ai.device;
-        let model_path = PathBuf::from(model_path_str);
         let action_name = qa.action.clone();
-        let params = qa.params.clone();
+        let mut params = qa.params.clone();
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert(
+                "modelsDir".to_owned(),
+                json!(self.paths.models_dir.display().to_string()),
+            );
+        }
 
         std::thread::spawn(move || {
             plugins::run_plugin_inference(
@@ -468,9 +481,22 @@ impl Core {
                     model_id,
                     output_path,
                     device_used,
+                    clipboard_text,
                 } => {
                     finished = true;
-                    if let Some(target_path) = self.ai_quick_action_output.take() {
+                    if let Some(text) = clipboard_text {
+                        self.ai_quick_action_output = None;
+                        let chars = text.chars().count();
+                        if let Some(task) = self.state.ai_task.as_mut() {
+                            task.running = false;
+                            task.percent = 100;
+                            task.stage = format!("Copied {chars} characters");
+                            task.error = None;
+                            task.clipboard_text = Some(text);
+                        }
+                        self.state.status =
+                            UiText::with("ai_quick_action_copied", [chars.to_string()]);
+                    } else if let Some(target_path) = self.ai_quick_action_output.take() {
                         match backup_and_overwrite(&target_path, &output_path) {
                             Ok(backup_path) => {
                                 let out_name = target_path
