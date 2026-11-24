@@ -441,8 +441,10 @@ impl Core {
         Ok(Some(UiText::new("ai_removing_background")))
     }
 
-    /// Translate an entire image or a cropped `[x, y, w, h]` region in Viewer
-    /// using the `viewer.translate` plugin (OCR + Google Translate).
+    /// Translate or OCR-only an entire image or a cropped `[x, y, w, h]` region
+    /// in Viewer. When `target_lang` is empty, routes to the offline
+    /// `viewer.ocr_copy` plugin (`kogaview-plugin-ocr`); otherwise routes to
+    /// `viewer.translate` (`kogaview-plugin-translate`).
     pub(super) fn viewer_translate(
         &mut self,
         path: &str,
@@ -468,6 +470,13 @@ impl Core {
 
         self.refresh_ai_inventory();
 
+        let ocr_only = target_lang.trim().is_empty();
+        let wanted_action = if ocr_only {
+            "viewer.ocr_copy"
+        } else {
+            "viewer.translate"
+        };
+
         let Some(plugin) = self
             .ai_plugins
             .iter()
@@ -476,13 +485,17 @@ impl Core {
                     && p.manifest
                         .capabilities
                         .iter()
-                        .any(|c| c.action == "viewer.translate")
+                        .any(|c| c.action == wanted_action)
             })
             .cloned()
         else {
             return Err(ProtocolError::with_line(
                 "plugin_missing",
-                "Read & Translate plugin is not installed (run: just build-plugin-translate)",
+                if ocr_only {
+                    "OCR plugin is not installed (run: just build-plugin-ocr)"
+                } else {
+                    "Read & Translate plugin is not installed (run: just build-plugin-translate)"
+                },
                 UiText::new("ai_translate_plugin_missing"),
             ));
         };
@@ -500,7 +513,11 @@ impl Core {
             target: path.to_owned(),
             running: true,
             percent: 10,
-            stage: "Translating…".to_owned(),
+            stage: if ocr_only {
+                "Scanning text (OCR)…".to_owned()
+            } else {
+                "Translating…".to_owned()
+            },
             error: None,
             clipboard_text: None,
             translation: None,
@@ -509,21 +526,30 @@ impl Core {
 
         let device = self.config.ai.device;
         let models_dir = self.paths.models_dir.display().to_string();
-        let mut params = json!({
-            "sourceLang": source_lang,
-            "targetLang": target_lang,
-            "modelsDir": models_dir,
-        });
+        let mut params = if ocr_only {
+            json!({
+                "lang": source_lang,
+                "modelsDir": models_dir,
+                "returnTranslation": true,
+            })
+        } else {
+            json!({
+                "sourceLang": source_lang,
+                "targetLang": target_lang,
+                "modelsDir": models_dir,
+            })
+        };
         if let Some([x, y, w, h]) = region {
             params["region"] = json!({ "x": x, "y": y, "width": w, "height": h });
         }
 
+        let action_owned = wanted_action.to_owned();
         std::thread::spawn(move || {
             let empty_out = PathBuf::new();
             let empty_model = PathBuf::new();
             plugins::run_plugin_inference(
                 &plugin,
-                "viewer.translate",
+                &action_owned,
                 "",
                 &empty_model,
                 device,

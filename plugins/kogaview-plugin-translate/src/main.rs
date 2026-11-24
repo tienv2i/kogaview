@@ -10,7 +10,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use image::imageops;
+use image::{imageops, GrayImage, Luma, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -118,7 +118,72 @@ fn google_translate(text: &str, sl: &str, tl: &str) -> Result<String, String> {
     Ok(translated.trim().to_owned())
 }
 
-fn run_tesseract_args(img_path: &Path, lang: &str, models_dir: &str, tsv: bool) -> Command {
+/// Tier-1 preprocessing for manga / complex backgrounds:
+/// - Upscale small crops 2x with Lanczos3 so small Kanji/Kana/Hangul stay crisp
+/// - Convert to grayscale and stretch contrast between the 2nd and 98th percentiles
+/// - Return `(normal, inverted, mean_luma)` for automatic dark-background polarity retry.
+fn preprocess_region(crop: &RgbaImage) -> (GrayImage, GrayImage, f32) {
+    let scaled = if crop.width() < 420 || crop.height() < 140 {
+        imageops::resize(
+            crop,
+            (crop.width() * 2).min(2400),
+            (crop.height() * 2).min(2400),
+            imageops::FilterType::Lanczos3,
+        )
+    } else {
+        crop.clone()
+    };
+
+    let gray = imageops::grayscale(&scaled);
+    let mut hist = [0u32; 256];
+    let mut sum: u64 = 0;
+    for p in gray.pixels() {
+        let v = p[0];
+        hist[v as usize] += 1;
+        sum += v as u64;
+    }
+    let total = (gray.width() as u64 * gray.height() as u64).max(1);
+    let mean = (sum as f64 / total as f64) as f32;
+
+    let lo_target = (total as f64 * 0.02) as u64;
+    let hi_target = (total as f64 * 0.98) as u64;
+    let mut acc = 0u64;
+    let mut lo = 0u8;
+    let mut hi = 255u8;
+    for (i, &c) in hist.iter().enumerate() {
+        acc += c as u64;
+        if acc >= lo_target {
+            lo = i as u8;
+            break;
+        }
+    }
+    acc = 0;
+    for (i, &c) in hist.iter().enumerate() {
+        acc += c as u64;
+        if acc >= hi_target {
+            hi = i as u8;
+            break;
+        }
+    }
+    let span = (hi.saturating_sub(lo)).max(1) as f32;
+
+    let mut normal = GrayImage::new(gray.width(), gray.height());
+    let mut inverted = GrayImage::new(gray.width(), gray.height());
+    for (x, y, p) in gray.enumerate_pixels() {
+        let v = (((p[0].saturating_sub(lo)) as f32 / span) * 255.0).clamp(0.0, 255.0) as u8;
+        normal.put_pixel(x, y, Luma([v]));
+        inverted.put_pixel(x, y, Luma([255u8.saturating_sub(v)]));
+    }
+    (normal, inverted, mean)
+}
+
+fn run_tesseract_args(
+    img_path: &Path,
+    lang: &str,
+    models_dir: &str,
+    tsv: bool,
+    single_region: bool,
+) -> Command {
     let mut cmd = Command::new("tesseract");
     cmd.arg(img_path).arg("stdout").arg("-l").arg(lang);
     if !models_dir.is_empty() {
@@ -127,10 +192,38 @@ fn run_tesseract_args(img_path: &Path, lang: &str, models_dir: &str, tsv: bool) 
             cmd.arg("--tessdata-dir").arg(models_dir);
         }
     }
+    if single_region {
+        let psm = if lang == "jpn_vert" { "5" } else { "6" };
+        cmd.arg("--psm").arg(psm);
+    }
     if tsv {
         cmd.arg("tsv");
     }
     cmd
+}
+
+fn ocr_crop_file(img_path: &Path, lang: &str, models_dir: &str) -> Result<String, (String, String)> {
+    let ocr_out = run_tesseract_args(img_path, lang, models_dir, false, true)
+        .output()
+        .map_err(|e| {
+            (
+                "tesseract_missing".to_owned(),
+                format!("cannot run tesseract: {e}"),
+            )
+        })?;
+    if !ocr_out.status.success() {
+        let err = String::from_utf8_lossy(&ocr_out.stderr);
+        return Err((
+            "ocr_failed".to_owned(),
+            err.lines().last().unwrap_or("OCR failed").trim().to_owned(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&ocr_out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" "))
 }
 
 fn run_translate(req: &Request) -> Result<Value, (String, String)> {
@@ -173,34 +266,33 @@ fn run_translate(req: &Request) -> Result<Value, (String, String)> {
         }
 
         let cropped = imageops::crop_imm(&img, cx, cy, cw, ch).to_image();
-        let tmp_crop: PathBuf = std::env::temp_dir().join(format!(
-            "kogaview-translate-crop-{}.png",
-            std::process::id()
-        ));
-        cropped
-            .save(&tmp_crop)
+        let (normal, inverted, mean_luma) = preprocess_region(&cropped);
+        let pid = std::process::id();
+        let tmp_a: PathBuf = std::env::temp_dir().join(format!("kogaview-translate-a-{pid}.png"));
+        let tmp_b: PathBuf = std::env::temp_dir().join(format!("kogaview-translate-b-{pid}.png"));
+        let (first, second) = if mean_luma < 110.0 {
+            (&inverted, &normal)
+        } else {
+            (&normal, &inverted)
+        };
+        first
+            .save(&tmp_a)
             .map_err(|e| ("io_error".to_owned(), format!("cannot write crop PNG: {e}")))?;
 
         emit_progress(&req.id, 45, &format!("Running OCR ({src_lang})…"));
-        let ocr_out = run_tesseract_args(&tmp_crop, src_lang, models_dir, false)
-            .output()
-            .map_err(|e| ("tesseract_missing".to_owned(), format!("cannot run tesseract: {e}")))?;
-        let _ = fs::remove_file(&tmp_crop);
+        let mut original = ocr_crop_file(&tmp_a, src_lang, models_dir)?;
+        let _ = fs::remove_file(&tmp_a);
 
-        if !ocr_out.status.success() {
-            let err = String::from_utf8_lossy(&ocr_out.stderr);
-            return Err((
-                "ocr_failed".to_owned(),
-                err.lines().last().unwrap_or("OCR failed").trim().to_owned(),
-            ));
+        // Retry with opposite polarity if dark/complex manga background yielded empty text.
+        if original.trim().is_empty() {
+            if second.save(&tmp_b).is_ok() {
+                if let Ok(alt) = ocr_crop_file(&tmp_b, src_lang, models_dir) {
+                    original = alt;
+                }
+                let _ = fs::remove_file(&tmp_b);
+            }
         }
 
-        let original = String::from_utf8_lossy(&ocr_out.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
         if original.is_empty() {
             return Err((
                 "ocr_empty".to_owned(),
@@ -235,7 +327,7 @@ fn run_translate(req: &Request) -> Result<Value, (String, String)> {
 
     // Case 2: Full-page translation — group Tesseract TSV word boxes by (block_num, par_num).
     emit_progress(&req.id, 30, &format!("Scanning full page ({src_lang})…"));
-    let tsv_out = run_tesseract_args(input_path, src_lang, models_dir, true)
+    let tsv_out = run_tesseract_args(input_path, src_lang, models_dir, true, false)
         .output()
         .map_err(|e| ("tesseract_missing".to_owned(), format!("cannot run tesseract: {e}")))?;
     if !tsv_out.status.success() {

@@ -1115,10 +1115,32 @@ Item {
             text: qsTr("Read & translate")
             icon.source: "icons/ai-rembg.svg"
             checkable: true
-            checked: view.translateMode
+            checked: view.translateMode && translateOverlay.overlayMode === "translate"
             enabled: !!view.currentPath
-            onTriggered: view.translateMode = !view.translateMode
+            onTriggered: {
+                if (view.translateMode && translateOverlay.overlayMode === "translate") {
+                    view.translateMode = false
+                } else {
+                    translateOverlay.overlayMode = "translate"
+                    view.translateMode = true
+                }
+            }
             MenuShortcut { text: "L" }
+        }
+        MenuItem {
+            text: qsTr("Scan text region (OCR)")
+            icon.name: "edit-find-symbolic"
+            checkable: true
+            checked: view.translateMode && translateOverlay.overlayMode === "ocr"
+            enabled: !!view.currentPath
+            onTriggered: {
+                if (view.translateMode && translateOverlay.overlayMode === "ocr") {
+                    view.translateMode = false
+                } else {
+                    translateOverlay.overlayMode = "ocr"
+                    view.translateMode = true
+                }
+            }
         }
         MenuItem {
             text: qsTr("Open with…")

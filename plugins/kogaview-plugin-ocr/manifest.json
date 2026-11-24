@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "kogaview.ocr.tesseract",
   "name": "OCR — Copy Text (Tesseract)",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "entry": {
     "command": "bin/kogaview-plugin-ocr",
     "args": [],
@@ -32,6 +32,15 @@
       "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/main/jpn.traineddata"
     },
     {
+      "id": "ocr-jpn_vert",
+      "name": "Tesseract OCR — Japanese Vertical / Manga (jpn_vert)",
+      "tier": "ocr",
+      "file": "jpn_vert.traineddata",
+      "sizeBytes": 2860000,
+      "sha256": "",
+      "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/main/jpn_vert.traineddata"
+    },
+    {
       "id": "ocr-chi_sim",
       "name": "Tesseract OCR — Chinese Simplified (chi_sim)",
       "tier": "ocr",
@@ -39,6 +48,15 @@
       "sizeBytes": 2450000,
       "sha256": "",
       "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata"
+    },
+    {
+      "id": "ocr-kor",
+      "name": "Tesseract OCR — Korean (kor)",
+      "tier": "ocr",
+      "file": "kor.traineddata",
+      "sizeBytes": 1680000,
+      "sha256": "",
+      "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/main/kor.traineddata"
     }
   ],
   "capabilities": [
@@ -70,6 +88,20 @@
       "action": "viewer.ocr_copy",
       "workspaces": ["browser", "viewer"],
       "params": { "lang": "jpn", "modelId": "ocr-jpn" }
+    },
+    {
+      "id": "ocr-copy-zh",
+      "label": "Copy text (OCR — Chinese)",
+      "action": "viewer.ocr_copy",
+      "workspaces": ["browser", "viewer"],
+      "params": { "lang": "chi_sim", "modelId": "ocr-chi_sim" }
+    },
+    {
+      "id": "ocr-copy-ko",
+      "label": "Copy text (OCR — Korean)",
+      "action": "viewer.ocr_copy",
+      "workspaces": ["browser", "viewer"],
+      "params": { "lang": "kor", "modelId": "ocr-kor" }
     }
   ]
 }

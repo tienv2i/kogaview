@@ -740,9 +740,54 @@ DialogFrame {
         }
 
         FormSection {
+            id: modelsSection
             theme: dialog.theme
-            title: qsTr("Remove Background models (On-demand)")
+            title: qsTr("Models & language packs (On-demand)")
             Layout.fillWidth: true
+
+            property string modelCategory: "all"
+
+            readonly property var filteredModels: {
+                var all = dialog.aiModels || []
+                if (modelCategory === "all") return all
+                var out = []
+                for (var i = 0; i < all.length; ++i) {
+                    var m = all[i]
+                    var tier = (m.tier || "").toLowerCase()
+                    var id = (m.id || "").toLowerCase()
+                    if (modelCategory === "ocr") {
+                        if (tier === "ocr" || id.indexOf("ocr") === 0) out.push(m)
+                    } else if (modelCategory === "upscale") {
+                        if (tier === "upscale" || id.indexOf("upscale") === 0 || id.indexOf("esrgan") >= 0) out.push(m)
+                    } else if (modelCategory === "rembg") {
+                        if (tier !== "ocr" && tier !== "upscale" && id.indexOf("ocr") !== 0 && id.indexOf("upscale") !== 0) out.push(m)
+                    }
+                }
+                return out
+            }
+
+            // Category filter pills so RemBG, Upscale, and OCR language packs
+            // are cleanly separated instead of one long mixed list.
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: [
+                        { key: "all", label: qsTr("All") },
+                        { key: "rembg", label: qsTr("Background") },
+                        { key: "upscale", label: qsTr("Upscale") },
+                        { key: "ocr", label: qsTr("OCR languages") }
+                    ]
+                    delegate: PanelAction {
+                        required property var modelData
+                        theme: dialog.theme
+                        text: modelData.label
+                        primary: modelsSection.modelCategory === modelData.key
+                        onClicked: modelsSection.modelCategory = modelData.key
+                    }
+                }
+            }
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -773,63 +818,96 @@ DialogFrame {
                 }
             }
 
-            Repeater {
-                model: dialog.aiModels || []
-                delegate: Rectangle {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    implicitHeight: modelRow.implicitHeight + 14
-                    radius: dialog.theme.radius
-                    color: dialog.theme.surfaceAlt
-                    border.width: 1
-                    border.color: dialog.theme.border
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
 
-                    RowLayout {
-                        id: modelRow
-                        anchors.fill: parent
-                        anchors.margins: 7
-                        spacing: 8
+                Repeater {
+                    model: modelsSection.filteredModels
+                    delegate: Rectangle {
+                        required property var modelData
+                        readonly property bool isOcrPack: (modelData.tier || "") === "ocr"
+                        Layout.fillWidth: true
+                        implicitHeight: modelRow.implicitHeight + 24
+                        radius: dialog.theme.radius
+                        color: dialog.theme.surfaceAlt
+                        border.width: 1
+                        border.color: modelData.installed ? dialog.theme.accent : dialog.theme.border
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-                            Label {
-                                text: modelData.name
-                                color: dialog.theme.text
-                                font.pixelSize: 13
-                                font.bold: true
-                                elide: Text.ElideRight
+                        RowLayout {
+                            id: modelRow
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 10
+
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                            }
-                            Label {
-                                text: (modelData.installed ? qsTr("Installed") : qsTr("Not downloaded"))
-                                      + " · " + (modelData.tier || "general")
-                                      + " · " + dialog.theme.formatBytes(modelData.sizeBytes || 0)
-                                      + (modelData.customPath ? " (" + qsTr("Custom file") + ")" : "")
-                                color: modelData.installed ? dialog.theme.accent : dialog.theme.textMuted
-                                font.pixelSize: 11
-                                elide: Text.ElideMiddle
-                                Layout.fillWidth: true
-                            }
-                        }
+                                spacing: 4
 
-                        PanelAction {
-                            theme: dialog.theme
-                            text: qsTr("Local .onnx…")
-                            enabled: !(dialog.aiTask && dialog.aiTask.running)
-                            onClicked: dialog.aiBrowseModelRequested(modelData.id)
-                        }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Label {
+                                        text: modelData.name
+                                        color: dialog.theme.text
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    Rectangle {
+                                        implicitWidth: modelBadgeLabel.implicitWidth + 14
+                                        implicitHeight: modelBadgeLabel.implicitHeight + 6
+                                        radius: 9
+                                        color: modelData.installed
+                                               ? Qt.rgba(dialog.theme.accent.r, dialog.theme.accent.g, dialog.theme.accent.b, 0.16)
+                                               : dialog.theme.surface
+                                        border.width: 1
+                                        border.color: modelData.installed ? dialog.theme.accent : dialog.theme.border
+                                        Label {
+                                            id: modelBadgeLabel
+                                            anchors.centerIn: parent
+                                            text: modelData.installed ? qsTr("Installed") : qsTr("Not downloaded")
+                                            color: modelData.installed ? dialog.theme.accent : dialog.theme.textMuted
+                                            font.pixelSize: 10
+                                            font.bold: modelData.installed
+                                        }
+                                    }
+                                }
 
-                        PanelAction {
-                            theme: dialog.theme
-                            text: modelData.installed ? qsTr("Delete") : qsTr("Download")
-                            primary: !modelData.installed
-                            enabled: !(dialog.aiTask && dialog.aiTask.running)
-                            onClicked: {
-                                if (modelData.installed) {
-                                    dialog.aiDeleteModelRequested(modelData.id)
-                                } else {
-                                    dialog.aiDownloadModelRequested(modelData.id)
+                                Label {
+                                    text: (modelData.tier || "general")
+                                          + " · " + dialog.theme.formatBytes(modelData.sizeBytes || 0)
+                                          + (modelData.customPath ? " · " + qsTr("Custom file") : "")
+                                    color: dialog.theme.textMuted
+                                    font.pixelSize: 11
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: 6
+                                PanelAction {
+                                    theme: dialog.theme
+                                    visible: !isOcrPack
+                                    text: qsTr("Local file…")
+                                    enabled: !(dialog.aiTask && dialog.aiTask.running)
+                                    onClicked: dialog.aiBrowseModelRequested(modelData.id)
+                                }
+
+                                PanelAction {
+                                    theme: dialog.theme
+                                    text: modelData.installed ? qsTr("Delete") : qsTr("Download")
+                                    primary: !modelData.installed
+                                    enabled: !(dialog.aiTask && dialog.aiTask.running)
+                                    onClicked: {
+                                        if (modelData.installed) {
+                                            dialog.aiDeleteModelRequested(modelData.id)
+                                        } else {
+                                            dialog.aiDownloadModelRequested(modelData.id)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -851,64 +929,88 @@ DialogFrame {
                 Layout.fillWidth: true
             }
 
-            Repeater {
-                model: dialog.aiPlugins || []
-                delegate: Rectangle {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    implicitHeight: pluginCardCol.implicitHeight + 16
-                    radius: dialog.theme.radius
-                    color: dialog.theme.surfaceAlt
-                    border.width: 1
-                    border.color: dialog.theme.border
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
 
-                    ColumnLayout {
-                        id: pluginCardCol
-                        anchors.fill: parent
-                        anchors.margins: 8
-                        spacing: 4
+                Repeater {
+                    model: dialog.aiPlugins || []
+                    delegate: Rectangle {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        implicitHeight: pluginCardCol.implicitHeight + 24
+                        radius: dialog.theme.radius
+                        color: dialog.theme.surfaceAlt
+                        border.width: 1
+                        border.color: dialog.theme.border
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
+                        ColumnLayout {
+                            id: pluginCardCol
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 6
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label {
+                                    text: modelData.name + " v" + modelData.version
+                                    color: dialog.theme.text
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                Rectangle {
+                                    implicitWidth: pluginStatusLbl.implicitWidth + 14
+                                    implicitHeight: pluginStatusLbl.implicitHeight + 6
+                                    radius: 9
+                                    color: modelData.available
+                                           ? Qt.rgba(dialog.theme.accent.r, dialog.theme.accent.g, dialog.theme.accent.b, 0.16)
+                                           : dialog.theme.surface
+                                    border.width: 1
+                                    border.color: modelData.available ? dialog.theme.accent : dialog.theme.border
+                                    Label {
+                                        id: pluginStatusLbl
+                                        anchors.centerIn: parent
+                                        text: modelData.available ? qsTr("Ready") : qsTr("Unavailable")
+                                        color: modelData.available ? dialog.theme.accent : dialog.theme.textMuted
+                                        font.pixelSize: 10
+                                        font.bold: modelData.available
+                                    }
+                                }
+                            }
+
                             Label {
-                                text: modelData.name + " v" + modelData.version
-                                color: dialog.theme.text
-                                font.pixelSize: 13
-                                font.bold: true
+                                text: qsTr("ID: %1").arg(modelData.id)
+                                color: dialog.theme.textMuted
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
+
                             Label {
-                                text: modelData.available
-                                      ? qsTr("Ready")
-                                      : qsTr("Not built (just build-plugin-rembg)")
-                                color: modelData.available ? dialog.theme.accent : dialog.theme.textMuted
+                                visible: (modelData.quickActions || []).length > 0
+                                text: qsTr("Quick actions: %1").arg((modelData.quickActions || []).join(", "))
+                                color: dialog.theme.textMuted
                                 font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
                             }
-                        }
-
-                        Label {
-                            text: qsTr("ID: %1").arg(modelData.id)
-                            color: dialog.theme.textMuted
-                            font.pixelSize: 11
-                        }
-
-                        Label {
-                            visible: (modelData.quickActions || []).length > 0
-                            text: qsTr("Quick actions: %1").arg((modelData.quickActions || []).join(", "))
-                            color: dialog.theme.textMuted
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                            Layout.fillWidth: true
                         }
                     }
                 }
             }
 
-            PanelAction {
-                theme: dialog.theme
-                text: qsTr("Refresh plugins")
-                onClicked: dialog.aiRefreshPluginsRequested()
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 4
+                Item { Layout.fillWidth: true }
+                PanelAction {
+                    theme: dialog.theme
+                    text: qsTr("Refresh plugins")
+                    onClicked: dialog.aiRefreshPluginsRequested()
+                }
             }
         }
     }

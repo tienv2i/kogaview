@@ -2,21 +2,22 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-/// Interactive Read & Translate overlay for Viewer (`L` shortcut or menu).
+/// Interactive Read & Translate / Region OCR overlay for Viewer (`L` shortcut or menu).
 ///
-/// Designed for manga / comics / documents with multiple text bubbles per page:
-/// - Drag anywhere on the image to crop & translate a single speech bubble,
-///   then immediately click "Next bubble" (or drag again) for the next frame.
-/// - Click "Translate page" to scan & translate all text blocks on the page.
-/// - Every translated bubble is kept in `bubbles` (cached per `imagePath`) and
-///   drawn in-place over the canvas, with individual remove (`×`), Clear all,
-///   Copy, Next bubble (`+`), and Close (`✕`) buttons.
+/// Follows `docs/UI-DESIGN-SYSTEM.md`:
+/// - `12 px` outer panel inset, `8–10 px` section spacing, `6 px` row spacing
+/// - Zero hardcoded colors (all bound to `overlay.theme.*`)
+/// - `focusPolicy: Qt.NoFocus` on buttons/combos so Viewer keyboard shortcuts stay intact
+/// - Supports 2 modes: `translate` (OCR + Google Translate) and `ocr` (100% offline OCR)
+/// - Supports 5 languages: English, Japanese (horizontal + vertical manga), Vietnamese,
+///   Chinese, and Korean with explicit Input / Output ComboBoxes and quick swap (`⇄`).
 Item {
     id: overlay
     objectName: "viewerTranslateOverlay"
 
     property Theme theme: Theme {}
     property bool active: false
+    property string overlayMode: "translate" // "translate" | "ocr"
     property string imagePath: ""
     property Item canvasItem: null
     property real zoom: 1.0
@@ -34,13 +35,37 @@ Item {
     z: 18
 
     property bool showOverlayBoxes: true
+    property bool translucentBubbles: false
     property var bubblesByPath: ({})
     property var currentBubbles: []
     property var latestResult: null
+    property var lastRegion: null
     property bool cardVisible: false
     property string _lastResultKey: ""
 
+    readonly property bool isOcrMode: overlay.overlayMode === "ocr"
     readonly property bool busy: !!(overlay.aiTask && overlay.aiTask.running && overlay.aiTask.kind === "translate")
+
+    // Language tables (5 languages: EN, JA + JA Vertical Manga, VI, ZH, KO)
+    readonly property var sourceLangCodes: ["eng", "jpn", "jpn_vert", "vie", "chi_sim", "kor"]
+    readonly property var targetLangCodes: ["vi", "en", "ja", "zh-CN", "ko"]
+
+    function sourceCode() {
+        return overlay.sourceLangCodes[sourceLangCombo.currentIndex] || "eng"
+    }
+    function targetCode() {
+        return overlay.isOcrMode ? "" : (overlay.targetLangCodes[targetLangCombo.currentIndex] || "vi")
+    }
+    function swapLanguages() {
+        var srcToTgt = { "eng": 1, "jpn": 2, "jpn_vert": 2, "vie": 0, "chi_sim": 3, "kor": 4 }
+        var tgtToSrc = { "vi": 3, "en": 0, "ja": 1, "zh-CN": 4, "ko": 5 }
+        var curSrc = overlay.sourceCode()
+        var curTgt = overlay.targetLangCodes[targetLangCombo.currentIndex] || "vi"
+        var nextSrcIdx = tgtToSrc[curTgt]
+        var nextTgtIdx = srcToTgt[curSrc]
+        if (nextSrcIdx !== undefined) sourceLangCombo.currentIndex = nextSrcIdx
+        if (nextTgtIdx !== undefined) targetLangCombo.currentIndex = nextTgtIdx
+    }
 
     function syncBubblesForPath() {
         var list = overlay.bubblesByPath[overlay.imagePath]
@@ -54,6 +79,7 @@ Item {
         overlay.bubblesByPath = map
         overlay.currentBubbles = []
         overlay.latestResult = null
+        overlay.lastRegion = null
         overlay.cardVisible = false
     }
 
@@ -74,7 +100,7 @@ Item {
         if (!task || task.running || !task.translation) return
         var tr = task.translation
         if (tr.path !== overlay.imagePath) return
-        var key = tr.path + "|" + tr.translatedText + "|" + (tr.blocks ? tr.blocks.length : 0)
+        var key = tr.path + "|" + (tr.originalText || "") + "|" + (tr.translatedText || "") + "|" + (tr.blocks ? tr.blocks.length : 0)
         if (key === overlay._lastResultKey) return
         overlay._lastResultKey = key
 
@@ -134,7 +160,8 @@ Item {
             var w = Math.round(Math.abs(p2.x - p1.x))
             var h = Math.round(Math.abs(p2.y - p1.y))
             if (w < 4 || h < 4) return
-            overlay.translateRequested(sourceLangCombo.currentCode(), targetLangCombo.currentCode(), [x, y, w, h])
+            overlay.lastRegion = [x, y, w, h]
+            overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion)
         }
         onCanceled: overlay.dragging = false
     }
@@ -146,13 +173,13 @@ Item {
         y: overlay.selY
         width: overlay.selW
         height: overlay.selH
-        color: Qt.rgba(overlay.theme.accent.r, overlay.theme.accent.g, overlay.theme.accent.b, 0.18)
+        color: Qt.rgba(overlay.theme.accent.r, overlay.theme.accent.g, overlay.theme.accent.b, 0.16)
         border.width: 2
         border.color: overlay.theme.accent
-        radius: 4
+        radius: 6
     }
 
-    // --------------------------------------------------- In-place translated bubbles
+    // --------------------------------------------------- In-place translated / OCR bubbles
     Repeater {
         model: overlay.showOverlayBoxes ? overlay.currentBubbles : []
 
@@ -160,7 +187,6 @@ Item {
             required property var modelData
             required property int index
 
-            // Depend on zoom & offsetX/offsetY so boxes track pan/zoom live.
             readonly property var mapped: {
                 var _z = overlay.zoom
                 var _ox = overlay.offsetX
@@ -171,48 +197,52 @@ Item {
                 return {
                     x: Math.min(tl.x, br.x),
                     y: Math.min(tl.y, br.y),
-                    w: Math.max(48, Math.abs(br.x - tl.x)),
-                    h: Math.max(24, Math.abs(br.y - tl.y))
+                    w: Math.max(64, Math.abs(br.x - tl.x)),
+                    h: Math.max(32, Math.abs(br.y - tl.y))
                 }
             }
 
             x: mapped.x
             y: mapped.y
             width: mapped.w
-            height: Math.max(mapped.h, bubbleText.implicitHeight + 10)
-            radius: 6
-            color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.94)
+            height: Math.max(mapped.h, bubbleText.implicitHeight + 20)
+            radius: 8
+            color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b,
+                           overlay.translucentBubbles ? 0.78 : 0.95)
             border.width: 1
             border.color: overlay.theme.accent
 
             Label {
                 id: bubbleText
                 anchors.fill: parent
-                anchors.margins: 5
-                anchors.rightMargin: 18
+                anchors.leftMargin: 10
+                anchors.topMargin: 10
+                anchors.bottomMargin: 10
+                anchors.rightMargin: 28
                 text: modelData.translated || modelData.original || ""
                 color: overlay.theme.text
-                font.pixelSize: Math.max(10, Math.min(15, Math.round(mapped.h * 0.22)))
+                font.pixelSize: Math.max(11, Math.min(15, Math.round(mapped.h * 0.22)))
                 wrapMode: Text.WordWrap
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
 
-            // Individual remove button for this bubble
             Rectangle {
                 anchors.top: parent.top
                 anchors.right: parent.right
-                anchors.margins: 2
-                width: 16
-                height: 16
-                radius: 8
+                anchors.margins: 5
+                width: 18
+                height: 18
+                radius: 9
                 color: removeHover.hovered ? overlay.theme.danger : overlay.theme.surfaceAlt
+                border.width: 1
+                border.color: removeHover.hovered ? overlay.theme.danger : overlay.theme.border
                 HoverHandler { id: removeHover }
                 Text {
                     anchors.centerIn: parent
                     text: "×"
-                    color: removeHover.hovered ? "#ffffff" : overlay.theme.textMuted
-                    font.pixelSize: 11
+                    color: removeHover.hovered ? overlay.theme.surface : overlay.theme.textMuted
+                    font.pixelSize: 12
                     font.bold: true
                 }
                 MouseArea {
@@ -224,88 +254,190 @@ Item {
         }
     }
 
-    // --------------------------------------------------- Top floating translate bar
+    // --------------------------------------------------- Top floating bar (12 px inset, responsive Flow)
     Rectangle {
         id: topBar
         anchors.top: parent.top
         anchors.topMargin: 12
         anchors.horizontalCenter: parent.horizontalCenter
-        width: Math.min(parent.width - 24, barRow.implicitWidth + 20)
-        height: 44
+        width: Math.min(parent.width - 24, barFlow.implicitWidth + 24)
+        height: barFlow.implicitHeight + 16
         radius: 10
-        color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.95)
+        color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.96)
         border.width: 1
         border.color: overlay.theme.border
         z: 5
 
         MouseArea { anchors.fill: parent; preventStealing: true; z: -1 }
 
-        RowLayout {
-            id: barRow
-            anchors.centerIn: parent
-            spacing: 6
+        Flow {
+            id: barFlow
+            anchors.fill: parent
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            anchors.topMargin: 8
+            anchors.bottomMargin: 8
+            spacing: 8
 
-            ComboBox {
-                id: sourceLangCombo
-                implicitWidth: 92
-                readonly property var codes: ["eng", "jpn", "chi_sim", "vie"]
-                model: ["EN", "JA (Manga)", "ZH", "VI"]
-                currentIndex: 0
-                function currentCode() { return codes[currentIndex] || "eng" }
+            // Group 1: Mode switcher (Translate vs Offline OCR)
+            Row {
+                spacing: 4
+                height: 30
+                PanelAction {
+                    objectName: "translateModeBtn"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Translate")
+                    primary: !overlay.isOcrMode
+                    onClicked: overlay.overlayMode = "translate"
+                }
+                PanelAction {
+                    objectName: "ocrModeBtn"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("OCR only")
+                    primary: overlay.isOcrMode
+                    onClicked: overlay.overlayMode = "ocr"
+                }
             }
 
-            Label {
-                text: "→"
-                color: overlay.theme.textMuted
+            Rectangle {
+                width: 1
+                height: 24
+                color: overlay.theme.border
             }
 
-            ComboBox {
-                id: targetLangCombo
-                implicitWidth: 74
-                readonly property var codes: ["vi", "en", "ja"]
-                model: ["VI", "EN", "JA"]
-                currentIndex: 0
-                function currentCode() { return codes[currentIndex] || "vi" }
+            // Group 2: Explicit Input & Output language ComboBoxes + Swap
+            Row {
+                spacing: 6
+                height: 30
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("From:")
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                ComboBox {
+                    id: sourceLangCombo
+                    objectName: "translateSourceLang"
+                    anchors.verticalCenter: parent.verticalCenter
+                    focusPolicy: Qt.NoFocus
+                    implicitWidth: 136
+                    model: [
+                        qsTr("English"),
+                        qsTr("Japanese"),
+                        qsTr("Japanese (Vertical)"),
+                        qsTr("Vietnamese"),
+                        qsTr("Chinese"),
+                        qsTr("Korean")
+                    ]
+                    currentIndex: 0
+                }
+
+                PanelAction {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: !overlay.isOcrMode
+                    theme: overlay.theme
+                    text: "⇄"
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Swap languages")
+                    onClicked: overlay.swapLanguages()
+                }
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: !overlay.isOcrMode
+                    text: qsTr("To:")
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 12
+                }
+
+                ComboBox {
+                    id: targetLangCombo
+                    objectName: "translateTargetLang"
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: !overlay.isOcrMode
+                    focusPolicy: Qt.NoFocus
+                    implicitWidth: 112
+                    model: [
+                        qsTr("Vietnamese"),
+                        qsTr("English"),
+                        qsTr("Japanese"),
+                        qsTr("Chinese"),
+                        qsTr("Korean")
+                    ]
+                    currentIndex: 0
+                }
             }
 
-            PanelAction {
-                theme: overlay.theme
-                text: qsTr("Translate page")
-                enabled: !overlay.busy && !!overlay.imagePath
-                onClicked: overlay.translateRequested(sourceLangCombo.currentCode(), targetLangCombo.currentCode(), null)
+            Rectangle {
+                width: 1
+                height: 24
+                color: overlay.theme.border
             }
 
-            PanelAction {
-                theme: overlay.theme
-                text: overlay.showOverlayBoxes ? qsTr("Hide overlay") : qsTr("Show overlay")
-                visible: overlay.currentBubbles.length > 0
-                onClicked: overlay.showOverlayBoxes = !overlay.showOverlayBoxes
-            }
+            // Group 3: Page action, overlay controls, and Close
+            Row {
+                spacing: 6
+                height: 30
 
-            PanelAction {
-                theme: overlay.theme
-                text: qsTr("Clear")
-                visible: overlay.currentBubbles.length > 0
-                onClicked: overlay.clearPageBubbles()
-            }
+                PanelAction {
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: overlay.isOcrMode ? qsTr("Scan page") : qsTr("Translate page")
+                    enabled: !overlay.busy && !!overlay.imagePath
+                    onClicked: {
+                        overlay.lastRegion = null
+                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), null)
+                    }
+                }
 
-            PanelAction {
-                theme: overlay.theme
-                text: qsTr("Cancel")
-                visible: overlay.busy
-                onClicked: overlay.cancelRequested()
-            }
+                PanelAction {
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: overlay.showOverlayBoxes ? qsTr("Hide overlay") : qsTr("Show overlay")
+                    visible: overlay.currentBubbles.length > 0
+                    onClicked: overlay.showOverlayBoxes = !overlay.showOverlayBoxes
+                }
 
-            PanelAction {
-                objectName: "translateCloseButton"
-                theme: overlay.theme
-                text: qsTr("Close")
-                onClicked: overlay.closeRequested()
+                PanelAction {
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: overlay.translucentBubbles ? qsTr("Solid") : qsTr("Frosted")
+                    visible: overlay.currentBubbles.length > 0 && overlay.showOverlayBoxes
+                    onClicked: overlay.translucentBubbles = !overlay.translucentBubbles
+                }
+
+                PanelAction {
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Clear")
+                    visible: overlay.currentBubbles.length > 0
+                    onClicked: overlay.clearPageBubbles()
+                }
+
+                PanelAction {
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Cancel")
+                    visible: overlay.busy
+                    onClicked: overlay.cancelRequested()
+                }
+
+                PanelAction {
+                    objectName: "translateCloseButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Close")
+                    onClicked: overlay.closeRequested()
+                }
             }
         }
     }
 
-    // --------------------------------------------------- Bottom floating result card
+    // --------------------------------------------------- Bottom floating result card (12 px padding)
     Rectangle {
         id: resultCard
         visible: overlay.cardVisible || overlay.busy
@@ -313,10 +445,10 @@ Item {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 14
         anchors.horizontalCenter: parent.horizontalCenter
-        width: Math.min(parent.width - 32, 540)
-        implicitHeight: cardCol.implicitHeight + 20
+        width: Math.min(parent.width - 24, 580)
+        implicitHeight: cardCol.implicitHeight + 24
         radius: 10
-        color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.96)
+        color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.97)
         border.width: 1
         border.color: overlay.theme.border
         z: 5
@@ -326,13 +458,14 @@ Item {
         ColumnLayout {
             id: cardCol
             anchors.fill: parent
-            anchors.margins: 10
-            spacing: 6
+            anchors.margins: 12
+            spacing: 10
 
+            // Busy progress row
             RowLayout {
                 Layout.fillWidth: true
                 visible: overlay.busy
-                spacing: 8
+                spacing: 10
                 Label {
                     text: overlay.aiTask ? overlay.aiTask.stage : qsTr("Translating…")
                     color: overlay.theme.text
@@ -340,54 +473,122 @@ Item {
                     Layout.fillWidth: true
                 }
                 ProgressBar {
-                    implicitWidth: 120
+                    implicitWidth: 140
                     from: 0
                     to: 100
                     value: overlay.aiTask ? overlay.aiTask.percent : 0
                 }
             }
 
-            Label {
+            // Error banner
+            Rectangle {
                 visible: !!(overlay.aiTask && !overlay.busy && overlay.aiTask.kind === "translate" && overlay.aiTask.error)
-                text: overlay.aiTask && overlay.aiTask.error ? overlay.aiTask.error : ""
-                color: overlay.theme.danger
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
                 Layout.fillWidth: true
+                implicitHeight: errLbl.implicitHeight + 16
+                radius: 6
+                color: Qt.rgba(overlay.theme.danger.r, overlay.theme.danger.g, overlay.theme.danger.b, 0.12)
+                border.width: 1
+                border.color: overlay.theme.danger
+                Label {
+                    id: errLbl
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    text: overlay.aiTask && overlay.aiTask.error ? overlay.aiTask.error : ""
+                    color: overlay.theme.danger
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
             }
 
-            Label {
+            // Original / OCR text box
+            Rectangle {
                 visible: !overlay.busy && !!(overlay.latestResult && overlay.latestResult.originalText)
-                text: overlay.latestResult ? overlay.latestResult.originalText : ""
-                color: overlay.theme.textMuted
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-                maximumLineCount: 3
-                elide: Text.ElideRight
                 Layout.fillWidth: true
+                implicitHeight: Math.min(96, origText.implicitHeight + 16)
+                radius: 6
+                color: overlay.theme.surfaceAlt
+                border.width: 1
+                border.color: overlay.theme.border
+                clip: true
+
+                Flickable {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    contentWidth: width
+                    contentHeight: origText.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    Label {
+                        id: origText
+                        width: parent.width
+                        text: overlay.latestResult ? overlay.latestResult.originalText : ""
+                        color: (overlay.latestResult && overlay.latestResult.translatedText)
+                               ? overlay.theme.textMuted : overlay.theme.text
+                        font.pixelSize: (overlay.latestResult && overlay.latestResult.translatedText) ? 12 : 14
+                        wrapMode: Text.WordWrap
+                    }
+                }
             }
 
-            Label {
+            // Translated text box
+            Rectangle {
                 visible: !overlay.busy && !!(overlay.latestResult && overlay.latestResult.translatedText)
-                text: overlay.latestResult ? overlay.latestResult.translatedText : ""
-                color: overlay.theme.text
-                font.pixelSize: 14
-                wrapMode: Text.WordWrap
                 Layout.fillWidth: true
+                implicitHeight: Math.min(140, transText.implicitHeight + 20)
+                radius: 6
+                color: overlay.theme.surfaceAlt
+                border.width: 1
+                border.color: overlay.theme.accent
+                clip: true
+
+                Flickable {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    contentWidth: width
+                    contentHeight: transText.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    Label {
+                        id: transText
+                        width: parent.width
+                        text: overlay.latestResult ? overlay.latestResult.translatedText : ""
+                        color: overlay.theme.text
+                        font.pixelSize: 14
+                        wrapMode: Text.WordWrap
+                    }
+                }
             }
 
+            // Divider before actions
+            Rectangle {
+                visible: !overlay.busy && !!overlay.latestResult
+                Layout.fillWidth: true
+                height: 1
+                color: overlay.theme.border
+            }
+
+            // Action row
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 6
+                spacing: 8
                 visible: !overlay.busy && !!overlay.latestResult
 
                 PanelAction {
                     theme: overlay.theme
                     text: qsTr("Copy")
                     onClicked: {
-                        if (overlay.latestResult && overlay.latestResult.translatedText) {
-                            overlay.copyTextRequested(overlay.latestResult.translatedText)
-                        }
+                        if (!overlay.latestResult) return
+                        var txt = overlay.latestResult.translatedText || overlay.latestResult.originalText || ""
+                        if (txt) overlay.copyTextRequested(txt)
+                    }
+                }
+
+                // In OCR-only mode, allow 1-click forwarding of the scanned region to Google Translate
+                PanelAction {
+                    theme: overlay.theme
+                    visible: !(overlay.latestResult && overlay.latestResult.translatedText)
+                    text: qsTr("Translate this")
+                    onClicked: {
+                        overlay.overlayMode = "translate"
+                        overlay.translateRequested(overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion)
                     }
                 }
 
