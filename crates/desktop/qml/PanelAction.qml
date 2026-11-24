@@ -30,15 +30,17 @@ AbstractButton {
     activeFocusOnTab: false
 
     background: Rectangle {
-        radius: root.theme.radius
+        radius: root.theme ? root.theme.radius : 4
         scale: root.down && root.enabled ? 0.97 : 1.0
-        color: !root.enabled ? "transparent"
+        color: !root.theme ? "transparent"
+             : !root.enabled ? "transparent"
              : root.primary ? (root.hovered ? Qt.lighter(root.theme.accent, 1.1)
                                             : root.theme.accent)
              : root.hovered ? root.theme.hover
              : root.theme.surface
         border.width: 1
-        border.color: root.enabled ? (root.primary ? root.theme.accent : root.theme.border)
+        border.color: !root.theme ? "transparent"
+                    : root.enabled ? (root.primary ? root.theme.accent : root.theme.border)
                                    : Qt.rgba(root.theme.border.r, root.theme.border.g,
                                              root.theme.border.b, 0.5)
         Behavior on color { ColorAnimation { duration: 110; easing.type: Easing.OutQuad } }
@@ -47,7 +49,8 @@ AbstractButton {
 
     contentItem: Text {
         text: root.text
-        color: !root.enabled ? root.theme.textMuted
+        color: !root.theme ? "#ffffff"
+             : !root.enabled ? root.theme.textMuted
              : root.primary ? root.theme.accentText
              : root.theme.text
         opacity: root.enabled ? 1.0 : 0.7

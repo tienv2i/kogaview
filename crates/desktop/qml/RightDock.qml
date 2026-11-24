@@ -77,6 +77,12 @@ Item {
         }
         return -1
     }
+    /// The key of the page actually shown in `stack`, after falling back past
+    /// any hidden tab. Passed to `PanelTabs` so the highlighted tab button
+    /// never disagrees with the visible page.
+    readonly property string effectiveKey:
+        dock.currentIndex >= 0 && dock.currentIndex < dock.tabs.length
+            ? dock.tabs[dock.currentIndex].key : ""
     readonly property int shownTabCount: {
         var count = 0
         for (var index = 0; index < dock.tabs.length; ++index) {
@@ -109,7 +115,7 @@ Item {
             visible: dock.stripShown
             theme: dock.theme
             tabs: dock.tabs
-            currentKey: dock.currentKey
+            currentKey: dock.effectiveKey
             compact: dock.compact
             keyPrefix: dock.tabKeyPrefix
             onActivated: function(key) { dock.activated(key) }

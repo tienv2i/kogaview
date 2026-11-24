@@ -221,6 +221,11 @@ QtObject {
         case "ai_model_not_installed": return qsTr("Model %1 is not downloaded yet").arg(args[0]);
         case "ai_removing_background": return qsTr("Removing background…");
         case "ai_remove_background_done": return qsTr("Background removed");
+        case "ai_removing_watermark": return qsTr("Removing watermark…");
+        case "ai_remove_watermark_done": return qsTr("Watermark removed");
+        case "remove_watermark": return qsTr("Remove watermark");
+        case "refine_alpha_mask": return qsTr("Refine mask");
+        case "ai_mask_refined": return qsTr("Mask refined");
         case "ai_quick_action_saved": return qsTr("Saved %1").arg(args[0]);
         case "ai_quick_action_copied": return qsTr("Copied %1 characters to clipboard").arg(args[0]);
         case "ai_translating": return qsTr("Translating…");

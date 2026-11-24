@@ -73,6 +73,11 @@ impl EditorDocument {
         &self.source_path
     }
 
+    /// Original decoded pixels as opened (immutable baseline for Reset / Restore brush).
+    pub fn original_pixels(&self) -> Arc<RgbaImage> {
+        Arc::clone(&self.original)
+    }
+
     /// Where a save would write, and whether the pixels are already there.
     pub fn save_target(&self) -> (&Path, bool) {
         (&self.saved_path, self.saved)

@@ -706,9 +706,23 @@ impl Core {
                             }
                         }
                     } else {
+                        let is_watermark = self
+                            .state
+                            .ai_task
+                            .as_ref()
+                            .map(|t| {
+                                t.target.starts_with("editor.dewatermark")
+                                    || t.target.starts_with("editor.inpaint")
+                                    || t.target.starts_with("editor.ai_inpaint")
+                            })
+                            .unwrap_or(false);
                         match image::open(&output_path).map(|img| img.into_rgba8()) {
                             Ok(rgba) => {
-                                let label = UiText::with("remove_background", [model_id]);
+                                let label = if is_watermark {
+                                    UiText::new("remove_watermark")
+                                } else {
+                                    UiText::with("remove_background", [model_id])
+                                };
                                 let op = EditOperation::AiResult {
                                     label,
                                     pixels: Arc::new(rgba),
@@ -721,8 +735,11 @@ impl Core {
                                             task.stage = format!("Done ({device_used})");
                                             task.error = None;
                                         }
-                                        self.state.status =
-                                            UiText::new("ai_remove_background_done");
+                                        self.state.status = if is_watermark {
+                                            UiText::new("ai_remove_watermark_done")
+                                        } else {
+                                            UiText::new("ai_remove_background_done")
+                                        };
                                     }
                                     Err(err) => {
                                         if let Some(task) = self.state.ai_task.as_mut() {
@@ -1041,6 +1058,172 @@ impl Core {
         )
     }
 
+    /// Run AI Watermark Detector (YOLO26/YOLO11) + Inpainter (MI-GAN/LaMa) on
+    /// the open Editor document (non-destructive, pushes `EditOperation::AiResult`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn editor_ai_inpaint(
+        &mut self,
+        detector_model: &str,
+        inpainter_model: &str,
+        confidence: f32,
+        mask_padding: u32,
+        region_x: i32,
+        region_y: i32,
+        region_width: i32,
+        region_height: i32,
+        brush_strokes: &[kogaview_protocol::AiMaskStroke],
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let models_dir = self.paths.models_dir.display().to_string();
+        self.run_editor_image_plugin(
+            "editor.ai_inpaint",
+            "Detecting & removing watermark (AI)…",
+            json!({
+                "modelsDir": models_dir,
+                "detectorModel": detector_model,
+                "inpainterModel": inpainter_model,
+                "confidence": confidence,
+                "maskPadding": mask_padding,
+                "regionX": region_x,
+                "regionY": region_y,
+                "regionWidth": region_width,
+                "regionHeight": region_height,
+                "brushStrokes": brush_strokes,
+            }),
+            "AI Watermark Remover plugin is not installed (run: just build-plugin-ai-inpaint)",
+        )
+    }
+
+    /// Refine alpha transparency on the open Editor document natively in Core:
+    /// - `erase_strokes`: smoothly lowers alpha toward 0 (removes leftover BG)
+    /// - `restore_strokes`: blends pixels back from `doc.original_pixels()`
+    ///   (restores foreground accidentally cut by AI Remove Background)
+    pub(super) fn editor_refine_alpha(
+        &mut self,
+        erase_strokes: &[kogaview_protocol::AiMaskStroke],
+        restore_strokes: &[kogaview_protocol::AiMaskStroke],
+        softness: f32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if erase_strokes.is_empty() && restore_strokes.is_empty() {
+            return Ok(None);
+        }
+        let (working, original) = {
+            let doc = self.editor.as_ref().ok_or_else(no_editor_document)?;
+            (doc.pixels(), doc.original_pixels())
+        };
+        let (w, h) = working.dimensions();
+        let softness = softness.clamp(0.0, 1.0);
+        let mut out = (*working).clone();
+
+        let stamp_strokes = |strokes: &[kogaview_protocol::AiMaskStroke]| -> Vec<f32> {
+            let mut map = vec![0.0f32; (w as usize) * (h as usize)];
+            for stroke in strokes {
+                let r = stroke.radius.clamp(2.0, 240.0);
+                let inner = r * (1.0 - softness);
+                let mut stamp_disk = |cx: f32, cy: f32| {
+                    let x0 = ((cx - r).floor() as i32).clamp(0, w as i32 - 1);
+                    let y0 = ((cy - r).floor() as i32).clamp(0, h as i32 - 1);
+                    let x1 = ((cx + r).ceil() as i32).clamp(0, w as i32 - 1);
+                    let y1 = ((cy + r).ceil() as i32).clamp(0, h as i32 - 1);
+                    for y in y0..=y1 {
+                        let dy = y as f32 - cy;
+                        let row = (y as usize) * (w as usize);
+                        for x in x0..=x1 {
+                            let dx = x as f32 - cx;
+                            let d = dx.hypot(dy);
+                            if d > r {
+                                continue;
+                            }
+                            let weight = if d <= inner || r <= inner + 1e-4 {
+                                1.0
+                            } else {
+                                let t = ((r - d) / (r - inner)).clamp(0.0, 1.0);
+                                t * t * (3.0 - 2.0 * t)
+                            };
+                            let idx = row + x as usize;
+                            if weight > map[idx] {
+                                map[idx] = weight;
+                            }
+                        }
+                    }
+                };
+                if stroke.points.len() == 1 {
+                    stamp_disk(stroke.points[0][0], stroke.points[0][1]);
+                } else {
+                    for win in stroke.points.windows(2) {
+                        let (x0, y0) = (win[0][0], win[0][1]);
+                        let (x1, y1) = (win[1][0], win[1][1]);
+                        let dist = (x1 - x0).hypot(y1 - y0).max(1.0);
+                        let step = (r * 0.30).max(1.5);
+                        let steps = (dist / step).ceil() as usize;
+                        for i in 0..=steps {
+                            let t = i as f32 / steps.max(1) as f32;
+                            stamp_disk(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+                        }
+                    }
+                }
+            }
+            map
+        };
+
+        if !restore_strokes.is_empty() {
+            let restore_map = stamp_strokes(restore_strokes);
+            let (ow, oh) = original.dimensions();
+            for y in 0..h {
+                let row = (y as usize) * (w as usize);
+                let sy = if oh == h {
+                    y
+                } else {
+                    ((y as u64 * oh as u64) / h.max(1) as u64).min(oh.saturating_sub(1) as u64)
+                        as u32
+                };
+                for x in 0..w {
+                    let alpha_w = restore_map[row + x as usize];
+                    if alpha_w <= 0.001 {
+                        continue;
+                    }
+                    let sx = if ow == w {
+                        x
+                    } else {
+                        ((x as u64 * ow as u64) / w.max(1) as u64).min(ow.saturating_sub(1) as u64)
+                            as u32
+                    };
+                    let cur = out.get_pixel(x, y);
+                    let src = original.get_pixel(sx, sy);
+                    let inv = 1.0 - alpha_w;
+                    let r = (cur[0] as f32 * inv + src[0] as f32 * alpha_w).round() as u8;
+                    let g = (cur[1] as f32 * inv + src[1] as f32 * alpha_w).round() as u8;
+                    let b = (cur[2] as f32 * inv + src[2] as f32 * alpha_w).round() as u8;
+                    let a = (cur[3] as f32 * inv + src[3] as f32 * alpha_w).round() as u8;
+                    out.put_pixel(x, y, image::Rgba([r, g, b, a]));
+                }
+            }
+        }
+
+        if !erase_strokes.is_empty() {
+            let erase_map = stamp_strokes(erase_strokes);
+            for y in 0..h {
+                let row = (y as usize) * (w as usize);
+                for x in 0..w {
+                    let ew = erase_map[row + x as usize];
+                    if ew <= 0.001 {
+                        continue;
+                    }
+                    let cur = out.get_pixel(x, y);
+                    let new_a = ((cur[3] as f32) * (1.0 - ew)).round().clamp(0.0, 255.0) as u8;
+                    out.put_pixel(x, y, image::Rgba([cur[0], cur[1], cur[2], new_a]));
+                }
+            }
+        }
+
+        let op = EditOperation::AiResult {
+            label: UiText::new("refine_alpha_mask"),
+            pixels: Arc::new(out),
+        };
+        self.editor_apply(op)?;
+        self.state.status = UiText::new("ai_mask_refined");
+        Ok(Some(UiText::new("ai_mask_refined")))
+    }
+
     /// Shared helper to run an image-output plugin on the open Editor document
     /// non-destructively (renders current working image -> temp PNG -> plugin -> `AiResult`).
     fn run_editor_image_plugin(
@@ -1116,7 +1299,7 @@ impl Core {
             translation: None,
             caption_text: None,
         });
-        self.state.status = UiText::new("ai_removing_background");
+        self.state.status = UiText::new("ai_removing_watermark");
 
         let device = self.config.ai.device;
         let action_owned = action.to_owned();
@@ -1135,7 +1318,7 @@ impl Core {
                 &tx,
             );
         });
-        Ok(Some(UiText::new("ai_removing_background")))
+        Ok(Some(UiText::new("ai_removing_watermark")))
     }
 
     /// Generate AI tags/caption for the open Editor image via `kogaview-plugin-caption`.

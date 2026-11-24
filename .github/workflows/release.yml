@@ -32,9 +32,9 @@ jobs:
         run: |
           cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DKOGAVIEW_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build/release --target kogaview kogaview_translations -j"$(nproc)"
-      - name: Build all 8 standalone plugins
+      - name: Build all 9 standalone plugins
         run: |
-          for p in rembg upscale utils ocr translate ai-ocr dewatermark caption; do
+          for p in rembg upscale utils ocr translate ai-ocr dewatermark caption ai-inpaint; do
             cargo build --manifest-path "plugins/kogaview-plugin-$p/Cargo.toml" --release
           done
       - name: Package .tar.gz, plugins .tar.gz, .deb, and .AppImage
@@ -61,7 +61,7 @@ jobs:
           install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$STAGE/share/icons/hicolor/scalable/apps/"
           tar -C dist -czf "dist/kogaview-${VER}-linux-x86_64.tar.gz" "kogaview-${VER}-linux-x86_64"
 
-          # 2. All 8 Plugins Bundle .tar.gz
+          # 2. All 9 Plugins Bundle .tar.gz
           PSTAGE="dist/kogaview-plugins-${VER}-linux-x86_64"
           declare -A PDIRS=(
             [rembg]=kogaview-rmbg-onnx
@@ -72,6 +72,7 @@ jobs:
             [ai-ocr]=kogaview-ocr-ai
             [dewatermark]=kogaview-dewatermark
             [caption]=kogaview-caption-onnx
+            [ai-inpaint]=kogaview-ai-inpaint-onnx
           )
           for p in "${!PDIRS[@]}"; do
             d="$PSTAGE/${PDIRS[$p]}"

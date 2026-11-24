@@ -1277,6 +1277,38 @@ pub enum Command {
         #[serde(default = "default_inpaint_feather")]
         feather: u32,
     },
+    /// Detect & remove watermarks from the open Editor document using selectable
+    /// YOLO detector + MI-GAN / LaMa ONNX inpainter (`kogaview-plugin-ai-inpaint`).
+    EditorAiInpaint {
+        #[serde(default = "default_ai_detector")]
+        detector_model: String,
+        #[serde(default = "default_ai_inpainter")]
+        inpainter_model: String,
+        #[serde(default = "default_ai_confidence")]
+        confidence: f32,
+        #[serde(default = "default_ai_mask_padding")]
+        mask_padding: u32,
+        #[serde(default)]
+        region_x: i32,
+        #[serde(default)]
+        region_y: i32,
+        #[serde(default)]
+        region_width: i32,
+        #[serde(default)]
+        region_height: i32,
+        #[serde(default)]
+        brush_strokes: Vec<AiMaskStroke>,
+    },
+    /// Refine transparency mask on the open Editor document using freehand
+    /// Erase (alpha -> 0) and/or Restore (copy from original) brush strokes.
+    EditorRefineAlpha {
+        #[serde(default)]
+        erase_strokes: Vec<AiMaskStroke>,
+        #[serde(default)]
+        restore_strokes: Vec<AiMaskStroke>,
+        #[serde(default = "default_refine_softness")]
+        softness: f32,
+    },
     /// Generate AI tags/caption for the open Editor document with custom parameters
     /// (`kogaview-plugin-caption`).
     EditorGenerateCaption {
@@ -1302,11 +1334,33 @@ pub enum Command {
     CancelOperation,
 }
 
+/// One freehand brush stroke in document pixel coordinates for AI inpainting masks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiMaskStroke {
+    pub radius: f32,
+    pub points: Vec<[f32; 2]>,
+}
+
 fn default_wm_size() -> String {
     "auto".to_owned()
 }
 fn default_wm_logo_value() -> f32 {
     255.0
+}
+fn default_ai_detector() -> String {
+    "watermark-yolo26".to_owned()
+}
+fn default_ai_inpainter() -> String {
+    "migan-pipeline-v2".to_owned()
+}
+fn default_ai_confidence() -> f32 {
+    0.35
+}
+fn default_ai_mask_padding() -> u32 {
+    8
+}
+fn default_refine_softness() -> f32 {
+    0.30
 }
 fn default_inpaint_feather() -> u32 {
     4
@@ -1402,6 +1456,8 @@ impl Command {
             Self::ViewerDeleteTranslation { .. } => "viewer_delete_translation",
             Self::EditorDewatermarkGemini { .. } => "editor_dewatermark_gemini",
             Self::EditorInpaintRegion { .. } => "editor_inpaint_region",
+            Self::EditorAiInpaint { .. } => "editor_ai_inpaint",
+            Self::EditorRefineAlpha { .. } => "editor_refine_alpha",
             Self::EditorGenerateCaption { .. } => "editor_generate_caption",
             Self::EditorSaveCaption { .. } => "editor_save_caption",
         }

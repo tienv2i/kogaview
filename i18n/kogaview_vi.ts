@@ -1370,13 +1370,148 @@
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="5138"/>
-        <source>Gemini logo</source>
-        <translation>Logo Gemini</translation>
+        <source>AI Auto</source>
+        <translation>AI Tự động</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="5145"/>
-        <source>General region</source>
-        <translation>Vùng tuỳ chọn</translation>
+        <source>Gemini</source>
+        <translation>Gemini</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5152"/>
+        <source>Region</source>
+        <translation>Vùng chọn</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5167"/>
+        <source>Detector model</source>
+        <translation>Mô hình phát hiện (Detector)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5178"/>
+        <source>YOLO26 Watermark (Fast, 9.8 MB)</source>
+        <translation>YOLO26 Watermark (Nhanh, 9.8 MB)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5179"/>
+        <source>YOLO11 Watermark (Balanced, 11 MB)</source>
+        <translation>YOLO11 Watermark (Cân bằng, 11 MB)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5180"/>
+        <source>Manual region (No detector)</source>
+        <translation>Vùng thủ công (Không dùng detector)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5186"/>
+        <source>Inpainter model</source>
+        <translation>Mô hình xoá nền (Inpainter)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5197"/>
+        <source>MI-GAN v2 (Fast CPU, 28 MB)</source>
+        <translation>MI-GAN v2 (Nhanh trên CPU, 28 MB)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5198"/>
+        <source>LaMa FFC (High Quality, 208 MB)</source>
+        <translation>LaMa FFC (Chất lượng cao, 208 MB)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5207"/>
+        <source>Confidence</source>
+        <translation>Ngưỡng tin cậy</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5233"/>
+        <source>Mask padding</source>
+        <translation>Mở rộng vùng mask</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5304"/>
+        <source>Inpaint region (AI)</source>
+        <translation>Xoá vùng bằng AI</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5304"/>
+        <source>Detect &amp; remove watermark (AI)</source>
+        <translation>Tự phát hiện &amp; xoá watermark (AI)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5400"/>
+        <source>Drag on the image to mark the watermark area</source>
+        <translation>Kéo chuột trực tiếp trên ảnh để khoanh vùng watermark</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5700"/>
+        <source>Working…</source>
+        <translation>Đang xử lý…</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5380"/>
+        <source>Brush mask (Paint on image)</source>
+        <translation>Cọ tô mask (Vẽ trực tiếp lên ảnh)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5450"/>
+        <source>Paint directly over the watermark on the image</source>
+        <translation>Tô cọ trực tiếp lên vùng watermark trên ảnh</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5460"/>
+        <source>Mask brush size</source>
+        <translation>Cỡ cọ mask</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5485"/>
+        <source>Clear mask</source>
+        <translation>Xoá mask</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5540"/>
+        <source>Inpaint painted mask (AI)</source>
+        <translation>Xoá vùng đã tô bằng AI</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5425"/>
+        <source>Refine mask (Brush)</source>
+        <translation>Tinh chỉnh mask (Cọ vẽ)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5436"/>
+        <source>Off</source>
+        <translation>Tắt</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5443"/>
+        <source>Erase BG</source>
+        <translation>Xoá nền</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5450"/>
+        <source>Restore FG</source>
+        <translation>Khôi phục</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5460"/>
+        <source>Paint on the image to restore cut subject pixels from original (Ctrl+Z to undo)</source>
+        <translation>Tô lên ảnh để khôi phục phần chủ thể bị AI cắt nhầm từ ảnh gốc (Ctrl+Z để hoàn tác)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5461"/>
+        <source>Paint on the image to erase leftover background to transparent (Ctrl+Z to undo)</source>
+        <translation>Tô lên ảnh để xoá phần nền sót thành trong suốt (Ctrl+Z để hoàn tác)</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="5485"/>
+        <source>Brush softness</source>
+        <translation>Độ mềm cọ</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/EditorView.qml" line="4579"/>
+        <source>Caption &amp; tags</source>
+        <translation>Mô tả &amp; thẻ</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/EditorView.qml" line="5158"/>
@@ -3594,6 +3729,31 @@
         <location filename="../crates/desktop/qml/UiLines.qml" line="223"/>
         <source>Background removed</source>
         <translation>Đã xoá nền</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="224"/>
+        <source>Removing watermark…</source>
+        <translation>Đang xoá watermark…</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="225"/>
+        <source>Watermark removed</source>
+        <translation>Đã xoá watermark</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="226"/>
+        <source>Remove watermark</source>
+        <translation>Xoá watermark</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="227"/>
+        <source>Refine mask</source>
+        <translation>Tinh chỉnh mask</translation>
+    </message>
+    <message>
+        <location filename="../crates/desktop/qml/UiLines.qml" line="228"/>
+        <source>Mask refined</source>
+        <translation>Đã tinh chỉnh mask</translation>
     </message>
     <message>
         <location filename="../crates/desktop/qml/UiLines.qml" line="225"/>

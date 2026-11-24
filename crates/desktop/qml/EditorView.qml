@@ -248,11 +248,13 @@ Item {
     /// The pages are measured here because the view owns them and knows which
     /// one the stack is drawing.
     readonly property real referencePageHeight: {
-        if (view.rightTab === "history" && view.historyVisible)
+        if (view.rightTabIndex === 1)
             return historyPage ? historyPage.implicitHeight : 0
-        if (view.rightTab === "original" && view.originalVisible)
+        if (view.rightTabIndex === 2)
             return originalPage ? originalPage.implicitHeight : 0
-        return infoPage ? infoPage.implicitHeight : 0
+        if (view.rightTabIndex === 0)
+            return infoPage ? infoPage.implicitHeight : 0
+        return 0
     }
     /// The first reference tab the checklist leaves visible once `hidden` is
     /// taken away. Hiding the open page needs the answer *after* the toggle,
@@ -2458,6 +2460,54 @@ Item {
     function hostToDocX(value) { return canvasHost.hostToDocX(value) }
     function hostToDocY(value) { return canvasHost.hostToDocY(value) }
 
+    // Interactive watermark region rectangle (document pixel coordinates),
+    // shared between the on-canvas overlay, the Region tab, and AI Manual mode.
+    property int wmRegionX: 0
+    property int wmRegionY: 0
+    property int wmRegionW: 0
+    property int wmRegionH: 0
+    // Freehand brush mask strokes for AI Inpainting: [{ radius, points: [[x,y], ...] }]
+    property var wmBrushStrokes: []
+    property int wmBrushRadius: 24
+
+    function clearWmBrushMask() {
+        view.wmBrushStrokes = []
+        if (typeof wmBrushCanvas !== "undefined" && wmBrushCanvas) {
+            wmBrushCanvas.requestPaint()
+        }
+    }
+
+    function setWmRegion(x, y, w, h) {
+        var dw = Math.max(1, Math.round(view.documentWidth))
+        var dh = Math.max(1, Math.round(view.documentHeight))
+        var nw = Math.max(8, Math.min(dw, Math.round(w)))
+        var nh = Math.max(8, Math.min(dh, Math.round(h)))
+        var nx = Math.max(0, Math.min(dw - nw, Math.round(x)))
+        var ny = Math.max(0, Math.min(dh - nh, Math.round(y)))
+        view.wmRegionX = nx
+        view.wmRegionY = ny
+        view.wmRegionW = nw
+        view.wmRegionH = nh
+    }
+
+    function setWmCornerPreset(corner) {
+        var dw = Math.max(1, Math.round(view.documentWidth))
+        var dh = Math.max(1, Math.round(view.documentHeight))
+        var rw = Math.max(24, Math.round(dw * 0.18))
+        var rh = Math.max(24, Math.round(dh * 0.10))
+        var pad = Math.min(16, Math.floor(Math.min(dw, dh) * 0.03))
+        if (corner === "br") view.setWmRegion(dw - rw - pad, dh - rh - pad, rw, rh)
+        else if (corner === "bl") view.setWmRegion(pad, dh - rh - pad, rw, rh)
+        else if (corner === "tr") view.setWmRegion(dw - rw - pad, pad, rw, rh)
+        else view.setWmRegion(pad, pad, rw, rh)
+    }
+
+    function ensureWmRegionInitialized() {
+        if (view.documentWidth > 0 && view.documentHeight > 0 && (view.wmRegionW <= 0 || view.wmRegionH <= 0)) {
+            view.setWmCornerPreset("br")
+        }
+    }
+
     function sizeLabel() {
         if (!hasDocument) return "—"
         return editor.width + " × " + editor.height
@@ -2481,6 +2531,10 @@ Item {
         view.offsetY = 0
         // A different document is not the result of the crop that was pending.
         view.pendingCropResult = null
+        view.wmRegionW = 0
+        view.wmRegionH = 0
+        view.clearWmBrushMask()
+        if (watermarkRegionOverlay.visible) view.ensureWmRegionInitialized()
         if (view.hostReady && view.hasDocument) {
             view.fit()
             Qt.callLater(view.fit)
@@ -2979,7 +3033,7 @@ Item {
                     ToolRailButton {
                         objectName: "toolWatermark"
                         theme: view.theme
-                        iconSource: "icons/reset-edits.svg"
+                        iconSource: "icons/eraser.svg"
                         tooltip: qsTr("Remove watermark (Gemini / Region)")
                         active: view.tool === "watermark"
                         enabled: view.documentReady
@@ -3505,6 +3559,350 @@ Item {
                 objectName: "canvasOverlay"
                 anchors.fill: parent
                 z: 2
+
+                // ---------------------------------------------- interactive watermark region box
+                Item {
+                    id: watermarkRegionOverlay
+                    objectName: "watermarkRegionOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "watermark" && view.documentReady
+                             && (watermarkOptionsPanel.wmMode === "region"
+                                 || (watermarkOptionsPanel.wmMode === "ai"
+                                     && aiDetectorCombo.keys[aiDetectorCombo.currentIndex] === "none"))
+                    enabled: visible && !view.spacePanning
+
+                    onVisibleChanged: {
+                        if (visible) view.ensureWmRegionInitialized()
+                    }
+
+                    // Drag anywhere on the canvas to draw a new watermark region.
+                    MouseArea {
+                        id: wmDrawArea
+                        anchors.fill: parent
+                        cursorShape: Qt.CrossCursor
+                        property real startDocX: 0
+                        property real startDocY: 0
+                        onPressed: function(mouse) {
+                            startDocX = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(mouse.x)))
+                            startDocY = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(mouse.y)))
+                            view.setWmRegion(startDocX, startDocY, 8, 8)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return
+                            var curX = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(mouse.x)))
+                            var curY = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(mouse.y)))
+                            var x1 = Math.min(startDocX, curX)
+                            var y1 = Math.min(startDocY, curY)
+                            var x2 = Math.max(startDocX, curX)
+                            var y2 = Math.max(startDocY, curY)
+                            view.setWmRegion(x1, y1, Math.max(8, x2 - x1), Math.max(8, y2 - y1))
+                        }
+                    }
+
+                    // Visual watermark selection box with move & 4-corner resize handles.
+                    Rectangle {
+                        id: wmBox
+                        objectName: "watermarkRegionBox"
+                        visible: view.wmRegionW > 0 && view.wmRegionH > 0
+                        x: view.docToHostX(view.wmRegionX)
+                        y: view.docToHostY(view.wmRegionY)
+                        width: Math.max(12, view.wmRegionW * view.zoom)
+                        height: Math.max(12, view.wmRegionH * view.zoom)
+                        color: "#38ef4444"
+                        border.color: "#ef4444"
+                        border.width: 2
+
+                        // Size badge above the box
+                        Rectangle {
+                            x: 0
+                            y: Math.max(-wmBox.y + 4, -height - 4)
+                            width: wmBadgeLabel.implicitWidth + 10
+                            height: wmBadgeLabel.implicitHeight + 4
+                            radius: 3
+                            color: "#d9ef4444"
+                            Label {
+                                id: wmBadgeLabel
+                                anchors.centerIn: parent
+                                text: view.wmRegionW + " × " + view.wmRegionH + " px"
+                                color: "#ffffff"
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                        }
+
+                        // Drag inside box to move it
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: 6
+                            cursorShape: Qt.SizeAllCursor
+                            property real dragStartX: 0
+                            property real dragStartY: 0
+                            property int origX: 0
+                            property int origY: 0
+                            onPressed: function(mouse) {
+                                var p = mapToItem(watermarkRegionOverlay, mouse.x, mouse.y)
+                                dragStartX = view.hostToDocX(p.x)
+                                dragStartY = view.hostToDocY(p.y)
+                                origX = view.wmRegionX
+                                origY = view.wmRegionY
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                var p = mapToItem(watermarkRegionOverlay, mouse.x, mouse.y)
+                                var dx = view.hostToDocX(p.x) - dragStartX
+                                var dy = view.hostToDocY(p.y) - dragStartY
+                                view.setWmRegion(origX + dx, origY + dy, view.wmRegionW, view.wmRegionH)
+                            }
+                        }
+
+                        // 4 corner resize handles
+                        Repeater {
+                            model: [
+                                { corner: "tl", cx: 0, cy: 0, cursor: Qt.SizeFDiagCursor },
+                                { corner: "tr", cx: 1, cy: 0, cursor: Qt.SizeBDiagCursor },
+                                { corner: "bl", cx: 0, cy: 1, cursor: Qt.SizeBDiagCursor },
+                                { corner: "br", cx: 1, cy: 1, cursor: Qt.SizeFDiagCursor }
+                            ]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 12
+                                height: 12
+                                radius: 2
+                                x: modelData.cx === 0 ? -6 : wmBox.width - 6
+                                y: modelData.cy === 0 ? -6 : wmBox.height - 6
+                                color: "#ffffff"
+                                border.color: "#ef4444"
+                                border.width: 2
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -4
+                                    cursorShape: modelData.cursor
+                                    property int anchorX: 0
+                                    property int anchorY: 0
+                                    onPressed: {
+                                        anchorX = modelData.cx === 0 ? (view.wmRegionX + view.wmRegionW) : view.wmRegionX
+                                        anchorY = modelData.cy === 0 ? (view.wmRegionY + view.wmRegionH) : view.wmRegionY
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (!pressed) return
+                                        var p = mapToItem(watermarkRegionOverlay, mouse.x, mouse.y)
+                                        var curX = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(p.x)))
+                                        var curY = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(p.y)))
+                                        var x1 = Math.min(anchorX, curX)
+                                        var y1 = Math.min(anchorY, curY)
+                                        var x2 = Math.max(anchorX, curX)
+                                        var y2 = Math.max(anchorY, curY)
+                                        view.setWmRegion(x1, y1, Math.max(8, x2 - x1), Math.max(8, y2 - y1))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---------------------------------------------- interactive watermark brush mask
+                Item {
+                    id: watermarkBrushOverlay
+                    objectName: "watermarkBrushOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "watermark" && view.documentReady
+                             && watermarkOptionsPanel.wmMode === "ai"
+                             && aiDetectorCombo.keys[aiDetectorCombo.currentIndex] === "brush"
+                    enabled: visible && !view.spacePanning
+
+                    Canvas {
+                        id: wmBrushCanvas
+                        anchors.fill: parent
+                        renderStrategy: Canvas.Threaded
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var strokes = view.wmBrushStrokes || []
+                            if (strokes.length === 0) return
+                            ctx.strokeStyle = "rgba(239, 68, 68, 0.50)"
+                            ctx.fillStyle = "rgba(239, 68, 68, 0.50)"
+                            ctx.lineCap = "round"
+                            ctx.lineJoin = "round"
+                            for (var i = 0; i < strokes.length; ++i) {
+                                var s = strokes[i]
+                                var pts = s.points || []
+                                if (pts.length === 0) continue
+                                var r = Math.max(1, s.radius * view.zoom)
+                                if (pts.length === 1) {
+                                    ctx.beginPath()
+                                    ctx.arc(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]), r, 0, Math.PI * 2)
+                                    ctx.fill()
+                                } else {
+                                    ctx.lineWidth = r * 2
+                                    ctx.beginPath()
+                                    ctx.moveTo(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]))
+                                    for (var j = 1; j < pts.length; ++j) {
+                                        ctx.lineTo(view.docToHostX(pts[j][0]), view.docToHostY(pts[j][1]))
+                                    }
+                                    ctx.stroke()
+                                }
+                            }
+                        }
+                    }
+
+                    Connections {
+                        target: view
+                        function onZoomChanged() { if (watermarkBrushOverlay.visible) wmBrushCanvas.requestPaint() }
+                        function onOffsetXChanged() { if (watermarkBrushOverlay.visible) wmBrushCanvas.requestPaint() }
+                        function onOffsetYChanged() { if (watermarkBrushOverlay.visible) wmBrushCanvas.requestPaint() }
+                        function onWmBrushStrokesChanged() { if (watermarkBrushOverlay.visible) wmBrushCanvas.requestPaint() }
+                    }
+
+                    onVisibleChanged: if (visible) wmBrushCanvas.requestPaint()
+
+                    MouseArea {
+                        id: wmBrushArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: containsMouse ? Qt.BlankCursor : Qt.ArrowCursor
+                        property real hoverX: -1000
+                        property real hoverY: -1000
+
+                        onPressed: function(mouse) {
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            var dx = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(mouse.x)))
+                            var dy = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(mouse.y)))
+                            var next = (view.wmBrushStrokes || []).slice()
+                            next.push({ radius: view.wmBrushRadius, points: [[dx, dy]] })
+                            view.wmBrushStrokes = next
+                            wmBrushCanvas.requestPaint()
+                        }
+                        onPositionChanged: function(mouse) {
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            if (!pressed) return
+                            var strokes = view.wmBrushStrokes || []
+                            if (strokes.length === 0) return
+                            var dx = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(mouse.x)))
+                            var dy = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(mouse.y)))
+                            strokes[strokes.length - 1].points.push([dx, dy])
+                            wmBrushCanvas.requestPaint()
+                        }
+                        onExited: {
+                            hoverX = -1000
+                            hoverY = -1000
+                        }
+                    }
+
+                    // Live circular brush cursor preview
+                    Rectangle {
+                        visible: wmBrushArea.containsMouse
+                        width: Math.max(6, view.wmBrushRadius * 2 * view.zoom)
+                        height: width
+                        radius: width / 2
+                        x: wmBrushArea.hoverX - width / 2
+                        y: wmBrushArea.hoverY - height / 2
+                        color: "#22ef4444"
+                        border.color: "#ef4444"
+                        border.width: 1.5
+                    }
+                }
+
+                // ---------------------------------------------- interactive Remove-BG refine brush (Erase BG / Restore FG)
+                Item {
+                    id: rembgBrushOverlay
+                    objectName: "rembgBrushOverlay"
+                    anchors.fill: parent
+                    visible: view.tool === "removeBg" && view.documentReady
+                             && removeBgOptionsPanel.rembgBrushMode !== "off"
+                    enabled: visible && !view.spacePanning
+
+                    property var activePoints: []
+                    readonly property bool isRestore: removeBgOptionsPanel.rembgBrushMode === "restore"
+
+                    Canvas {
+                        id: rembgBrushCanvas
+                        anchors.fill: parent
+                        renderStrategy: Canvas.Threaded
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            var pts = rembgBrushOverlay.activePoints || []
+                            if (pts.length === 0) return
+                            var col = rembgBrushOverlay.isRestore ? "rgba(34, 197, 94, 0.50)" : "rgba(239, 68, 68, 0.50)"
+                            ctx.strokeStyle = col
+                            ctx.fillStyle = col
+                            ctx.lineCap = "round"
+                            ctx.lineJoin = "round"
+                            var r = Math.max(1, removeBgOptionsPanel.rembgBrushRadius * view.zoom)
+                            if (pts.length === 1) {
+                                ctx.beginPath()
+                                ctx.arc(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]), r, 0, Math.PI * 2)
+                                ctx.fill()
+                            } else {
+                                ctx.lineWidth = r * 2
+                                ctx.beginPath()
+                                ctx.moveTo(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]))
+                                for (var j = 1; j < pts.length; ++j) {
+                                    ctx.lineTo(view.docToHostX(pts[j][0]), view.docToHostY(pts[j][1]))
+                                }
+                                ctx.stroke()
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: rembgBrushArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: containsMouse ? Qt.BlankCursor : Qt.ArrowCursor
+                        property real hoverX: -1000
+                        property real hoverY: -1000
+
+                        onPressed: function(mouse) {
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            var dx = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(mouse.x)))
+                            var dy = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(mouse.y)))
+                            rembgBrushOverlay.activePoints = [[dx, dy]]
+                            rembgBrushCanvas.requestPaint()
+                        }
+                        onPositionChanged: function(mouse) {
+                            hoverX = mouse.x
+                            hoverY = mouse.y
+                            if (!pressed) return
+                            var dx = Math.max(0, Math.min(view.documentWidth, view.hostToDocX(mouse.x)))
+                            var dy = Math.max(0, Math.min(view.documentHeight, view.hostToDocY(mouse.y)))
+                            rembgBrushOverlay.activePoints.push([dx, dy])
+                            rembgBrushCanvas.requestPaint()
+                        }
+                        onReleased: {
+                            var pts = rembgBrushOverlay.activePoints || []
+                            rembgBrushOverlay.activePoints = []
+                            rembgBrushCanvas.requestPaint()
+                            if (pts.length === 0) return
+                            var stroke = [{ radius: removeBgOptionsPanel.rembgBrushRadius, points: pts }]
+                            view.command({
+                                type: "editor_refine_alpha",
+                                erase_strokes: rembgBrushOverlay.isRestore ? [] : stroke,
+                                restore_strokes: rembgBrushOverlay.isRestore ? stroke : [],
+                                softness: removeBgOptionsPanel.rembgBrushSoftness
+                            })
+                        }
+                        onExited: {
+                            hoverX = -1000
+                            hoverY = -1000
+                        }
+                    }
+
+                    Rectangle {
+                        visible: rembgBrushArea.containsMouse
+                        width: Math.max(6, removeBgOptionsPanel.rembgBrushRadius * 2 * view.zoom)
+                        height: width
+                        radius: width / 2
+                        x: rembgBrushArea.hoverX - width / 2
+                        y: rembgBrushArea.hoverY - height / 2
+                        color: rembgBrushOverlay.isRestore ? "#2222c55e" : "#22ef4444"
+                        border.color: rembgBrushOverlay.isRestore ? "#22c55e" : "#ef4444"
+                        border.width: 1.5
+                    }
+                }
 
                 // ---------------------------------------------- crop frame
                 Item {
@@ -4173,7 +4571,13 @@ Item {
                                   ? qsTr("Canvas size")
                                   : (view.tool === "adjust"
                                      ? qsTr("Color & light")
-                                     : qsTr("Resize"))))))))
+                                     : (view.tool === "removeBg"
+                                        ? qsTr("Remove background")
+                                        : (view.tool === "watermark"
+                                           ? qsTr("Remove watermark")
+                                           : (view.tool === "caption"
+                                              ? qsTr("Caption & tags")
+                                              : qsTr("Resize")))))))))))
             /// Under this width the tab labels no longer fit in two languages;
             /// the icons and their tooltips carry the tab instead.
             readonly property bool tabsCompact: width < 240
@@ -4974,10 +5378,14 @@ Item {
                                     var out = []
                                     for (var i = 0; i < all.length; ++i) {
                                         var t = (all[i].tier || "").toLowerCase()
-                                        if (t !== "ocr" && t !== "upscale" && t !== "caption") out.push(all[i])
+                                        if (t !== "ocr" && t !== "upscale" && t !== "caption"
+                                            && t !== "detector" && t !== "inpaint") out.push(all[i])
                                     }
                                     return out
                                 }
+                                property string rembgBrushMode: "off" // "off" | "erase" | "restore"
+                                property int rembgBrushRadius: 24
+                                property real rembgBrushSoftness: 0.30
                                 readonly property var activeTask: (view.state && view.state.aiTask) || null
                                 readonly property bool aiBusy: !!(activeTask && activeTask.running)
                                 readonly property var selectedModel: {
@@ -5115,6 +5523,86 @@ Item {
                                         onClicked: view.command({ type: "ai_cancel" })
                                     }
                                 }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 1
+                                    Layout.topMargin: 4
+                                    Layout.bottomMargin: 2
+                                    color: view.theme.border
+                                }
+
+                                Label {
+                                    text: qsTr("Refine mask (Brush)")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Off")
+                                        primary: removeBgOptionsPanel.rembgBrushMode === "off"
+                                        onClicked: removeBgOptionsPanel.rembgBrushMode = "off"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Erase BG")
+                                        primary: removeBgOptionsPanel.rembgBrushMode === "erase"
+                                        onClicked: removeBgOptionsPanel.rembgBrushMode = "erase"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Restore FG")
+                                        primary: removeBgOptionsPanel.rembgBrushMode === "restore"
+                                        onClicked: removeBgOptionsPanel.rembgBrushMode = "restore"
+                                    }
+                                }
+
+                                Label {
+                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
+                                    text: removeBgOptionsPanel.rembgBrushMode === "restore"
+                                        ? qsTr("Paint on the image to restore cut subject pixels from original (Ctrl+Z to undo)")
+                                        : qsTr("Paint on the image to erase leftover background to transparent (Ctrl+Z to undo)")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
+                                    Label { text: qsTr("Mask brush size"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: removeBgOptionsPanel.rembgBrushRadius + " px"; color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
+                                    focusPolicy: Qt.NoFocus
+                                    from: 6; to: 120; stepSize: 2
+                                    value: removeBgOptionsPanel.rembgBrushRadius
+                                    onMoved: removeBgOptionsPanel.rembgBrushRadius = Math.round(value)
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
+                                    Label { text: qsTr("Brush softness"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: Math.round(removeBgOptionsPanel.rembgBrushSoftness * 100) + "%"; color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    Layout.fillWidth: true
+                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
+                                    focusPolicy: Qt.NoFocus
+                                    from: 0.0; to: 1.0; stepSize: 0.05
+                                    value: removeBgOptionsPanel.rembgBrushSoftness
+                                    onMoved: removeBgOptionsPanel.rembgBrushSoftness = value
+                                }
                             }
 
                             // ------------------------------------------- Watermark Remover (Gemini + General Region)
@@ -5125,26 +5613,254 @@ Item {
                                 spacing: 10
                                 visible: view.tool === "watermark"
 
-                                property string wmMode: "gemini" // "gemini" | "region"
+                                property string wmMode: "ai" // "ai" | "gemini" | "region"
                                 readonly property var activeTask: (view.state && view.state.aiTask) || null
                                 readonly property bool wmBusy: !!(activeTask && activeTask.running)
 
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 6
+                                    spacing: 4
                                     PanelAction {
                                         Layout.fillWidth: true
                                         theme: view.theme
-                                        text: qsTr("Gemini logo")
+                                        text: qsTr("AI Auto")
+                                        primary: watermarkOptionsPanel.wmMode === "ai"
+                                        onClicked: watermarkOptionsPanel.wmMode = "ai"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Gemini")
                                         primary: watermarkOptionsPanel.wmMode === "gemini"
                                         onClicked: watermarkOptionsPanel.wmMode = "gemini"
                                     }
                                     PanelAction {
                                         Layout.fillWidth: true
                                         theme: view.theme
-                                        text: qsTr("General region")
+                                        text: qsTr("Region")
                                         primary: watermarkOptionsPanel.wmMode === "region"
                                         onClicked: watermarkOptionsPanel.wmMode = "region"
+                                    }
+                                }
+
+                                // Mode 0: AI Watermark Detector (YOLO26 / YOLO11) + Inpainter (MI-GAN / LaMa)
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    visible: watermarkOptionsPanel.wmMode === "ai"
+
+                                    readonly property string detKey: aiDetectorCombo.keys[aiDetectorCombo.currentIndex] || "watermark-yolo26"
+                                    readonly property bool manualMode: detKey === "none"
+                                    readonly property bool brushMode: detKey === "brush"
+                                    readonly property bool autoDetectMode: !manualMode && !brushMode
+
+                                    Label {
+                                        text: qsTr("Detector model")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    ComboBox {
+                                        id: aiDetectorCombo
+                                        objectName: "editorAiDetectorCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["watermark-yolo26", "watermark-yolo11", "brush", "none"]
+                                        model: [
+                                            qsTr("YOLO26 Watermark (Fast, 9.8 MB)"),
+                                            qsTr("YOLO11 Watermark (Balanced, 11 MB)"),
+                                            qsTr("Brush mask (Paint on image)"),
+                                            qsTr("Manual region (No detector)")
+                                        ]
+                                        currentIndex: 0
+                                    }
+
+                                    Label {
+                                        text: qsTr("Inpainter model")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    ComboBox {
+                                        id: aiInpainterCombo
+                                        objectName: "editorAiInpainterCombo"
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["migan-pipeline-v2", "lama-fp32"]
+                                        model: [
+                                            qsTr("MI-GAN v2 (Fast CPU, 28 MB)"),
+                                            qsTr("LaMa FFC (High Quality, 208 MB)")
+                                        ]
+                                        currentIndex: 0
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: parent.autoDetectMode
+                                        Label {
+                                            text: qsTr("Confidence")
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 12
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: Math.round(aiConfSlider.value * 100) + "%"
+                                            color: view.theme.text
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                    Slider {
+                                        id: aiConfSlider
+                                        Layout.fillWidth: true
+                                        visible: parent.autoDetectMode
+                                        focusPolicy: Qt.NoFocus
+                                        from: 0.15
+                                        to: 0.90
+                                        stepSize: 0.05
+                                        value: 0.45
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: parent.autoDetectMode
+                                        Label {
+                                            text: qsTr("Mask padding")
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 12
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: Math.round(aiPadSlider.value) + " px"
+                                            color: view.theme.text
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                    Slider {
+                                        id: aiPadSlider
+                                        Layout.fillWidth: true
+                                        visible: parent.autoDetectMode
+                                        focusPolicy: Qt.NoFocus
+                                        from: 0
+                                        to: 32
+                                        stepSize: 2
+                                        value: 8
+                                    }
+
+                                    // Freehand brush mask controls when detector == "brush"
+                                    Label {
+                                        visible: parent.brushMode
+                                        text: qsTr("Paint directly over the watermark on the image")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: parent.brushMode
+                                        Label {
+                                            text: qsTr("Mask brush size")
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 12
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: view.wmBrushRadius + " px"
+                                            color: view.theme.text
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                    Slider {
+                                        id: aiBrushRadiusSlider
+                                        Layout.fillWidth: true
+                                        visible: parent.brushMode
+                                        focusPolicy: Qt.NoFocus
+                                        from: 6
+                                        to: 120
+                                        stepSize: 2
+                                        value: view.wmBrushRadius
+                                        onMoved: view.wmBrushRadius = Math.round(value)
+                                    }
+                                    PanelAction {
+                                        visible: parent.brushMode
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Clear mask")
+                                        enabled: (view.wmBrushStrokes || []).length > 0
+                                        onClicked: view.clearWmBrushMask()
+                                    }
+
+                                    // Manual region inputs when detector == "none"
+                                    Label {
+                                        visible: parent.manualMode
+                                        text: qsTr("Drag on the image to mark the watermark area")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        visible: parent.manualMode
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↘"; onClicked: view.setWmCornerPreset("br") }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↙"; onClicked: view.setWmCornerPreset("bl") }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↗"; onClicked: view.setWmCornerPreset("tr") }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↖"; onClicked: view.setWmCornerPreset("tl") }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6; visible: parent.manualMode
+                                        Label { text: "X"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionX)
+                                            onEditingFinished: view.setWmRegion(parseInt(text) || 0, view.wmRegionY, view.wmRegionW, view.wmRegionH)
+                                            Keys.onEscapePressed: focus = false
+                                        }
+                                        Label { text: "Y"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionY)
+                                            onEditingFinished: view.setWmRegion(view.wmRegionX, parseInt(text) || 0, view.wmRegionW, view.wmRegionH)
+                                            Keys.onEscapePressed: focus = false
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6; visible: parent.manualMode
+                                        Label { text: "W"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionW)
+                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, parseInt(text) || 24, view.wmRegionH)
+                                            Keys.onEscapePressed: focus = false
+                                        }
+                                        Label { text: "H"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionH)
+                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, view.wmRegionW, parseInt(text) || 24)
+                                            Keys.onEscapePressed: focus = false
+                                        }
+                                    }
+
+                                    PanelAction {
+                                        objectName: "editorAiInpaintRunBtn"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        primary: true
+                                        text: parent.brushMode ? qsTr("Inpaint painted mask (AI)")
+                                            : parent.manualMode ? qsTr("Inpaint region (AI)")
+                                            : qsTr("Detect & remove watermark (AI)")
+                                        enabled: view.documentReady && !watermarkOptionsPanel.wmBusy
+                                                 && (!parent.brushMode || (view.wmBrushStrokes || []).length > 0)
+                                        onClicked: {
+                                            view.command({
+                                                type: "editor_ai_inpaint",
+                                                detector_model: aiDetectorCombo.keys[aiDetectorCombo.currentIndex] || "watermark-yolo26",
+                                                inpainter_model: aiInpainterCombo.keys[aiInpainterCombo.currentIndex] || "migan-pipeline-v2",
+                                                confidence: aiConfSlider.value,
+                                                mask_padding: Math.round(aiPadSlider.value),
+                                                region_x: view.wmRegionX,
+                                                region_y: view.wmRegionY,
+                                                region_width: Math.max(8, view.wmRegionW),
+                                                region_height: Math.max(8, view.wmRegionH),
+                                                brush_strokes: view.wmBrushStrokes || []
+                                            })
+                                        }
                                     }
                                 }
 
@@ -5247,6 +5963,13 @@ Item {
                                     visible: watermarkOptionsPanel.wmMode === "region"
 
                                     Label {
+                                        text: qsTr("Drag on the image to mark the watermark area")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
                                         text: qsTr("Quick corner presets")
                                         color: view.theme.textMuted
                                         font.pixelSize: 12
@@ -5254,75 +5977,43 @@ Item {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 4
-                                        PanelAction {
-                                            Layout.fillWidth: true
-                                            theme: view.theme
-                                            text: "↘"
-                                            onClicked: {
-                                                var rw = Math.round(view.docWidth * 0.18)
-                                                var rh = Math.round(view.docHeight * 0.10)
-                                                inpaintX.text = String(Math.max(0, view.docWidth - rw - 16))
-                                                inpaintY.text = String(Math.max(0, view.docHeight - rh - 16))
-                                                inpaintW.text = String(Math.max(24, rw))
-                                                inpaintH.text = String(Math.max(24, rh))
-                                            }
-                                        }
-                                        PanelAction {
-                                            Layout.fillWidth: true
-                                            theme: view.theme
-                                            text: "↙"
-                                            onClicked: {
-                                                var rw = Math.round(view.docWidth * 0.18)
-                                                var rh = Math.round(view.docHeight * 0.10)
-                                                inpaintX.text = "16"
-                                                inpaintY.text = String(Math.max(0, view.docHeight - rh - 16))
-                                                inpaintW.text = String(Math.max(24, rw))
-                                                inpaintH.text = String(Math.max(24, rh))
-                                            }
-                                        }
-                                        PanelAction {
-                                            Layout.fillWidth: true
-                                            theme: view.theme
-                                            text: "↗"
-                                            onClicked: {
-                                                var rw = Math.round(view.docWidth * 0.18)
-                                                var rh = Math.round(view.docHeight * 0.10)
-                                                inpaintX.text = String(Math.max(0, view.docWidth - rw - 16))
-                                                inpaintY.text = "16"
-                                                inpaintW.text = String(Math.max(24, rw))
-                                                inpaintH.text = String(Math.max(24, rh))
-                                            }
-                                        }
-                                        PanelAction {
-                                            Layout.fillWidth: true
-                                            theme: view.theme
-                                            text: "↖"
-                                            onClicked: {
-                                                var rw = Math.round(view.docWidth * 0.18)
-                                                var rh = Math.round(view.docHeight * 0.10)
-                                                inpaintX.text = "16"
-                                                inpaintY.text = "16"
-                                                inpaintW.text = String(Math.max(24, rw))
-                                                inpaintH.text = String(Math.max(24, rh))
-                                            }
-                                        }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↘"; onClicked: view.setWmCornerPreset("br") }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↙"; onClicked: view.setWmCornerPreset("bl") }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↗"; onClicked: view.setWmCornerPreset("tr") }
+                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↖"; onClicked: view.setWmCornerPreset("tl") }
                                     }
 
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 6
                                         Label { text: "X"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField { id: inpaintX; Layout.fillWidth: true; text: "0"; Keys.onEscapePressed: focus = false }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionX)
+                                            onEditingFinished: view.setWmRegion(parseInt(text) || 0, view.wmRegionY, view.wmRegionW, view.wmRegionH)
+                                            Keys.onEscapePressed: focus = false
+                                        }
                                         Label { text: "Y"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField { id: inpaintY; Layout.fillWidth: true; text: "0"; Keys.onEscapePressed: focus = false }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionY)
+                                            onEditingFinished: view.setWmRegion(view.wmRegionX, parseInt(text) || 0, view.wmRegionW, view.wmRegionH)
+                                            Keys.onEscapePressed: focus = false
+                                        }
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 6
                                         Label { text: "W"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField { id: inpaintW; Layout.fillWidth: true; text: "120"; Keys.onEscapePressed: focus = false }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionW)
+                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, parseInt(text) || 24, view.wmRegionH)
+                                            Keys.onEscapePressed: focus = false
+                                        }
                                         Label { text: "H"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField { id: inpaintH; Layout.fillWidth: true; text: "60"; Keys.onEscapePressed: focus = false }
+                                        TextField {
+                                            Layout.fillWidth: true; text: String(view.wmRegionH)
+                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, view.wmRegionW, parseInt(text) || 24)
+                                            Keys.onEscapePressed: focus = false
+                                        }
                                     }
 
                                     RowLayout {
@@ -5350,12 +6041,40 @@ Item {
                                         onClicked: {
                                             view.command({
                                                 type: "editor_inpaint_region",
-                                                x: parseInt(inpaintX.text) || 0,
-                                                y: parseInt(inpaintY.text) || 0,
-                                                width: Math.max(4, parseInt(inpaintW.text) || 64),
-                                                height: Math.max(4, parseInt(inpaintH.text) || 32),
+                                                x: view.wmRegionX,
+                                                y: view.wmRegionY,
+                                                width: Math.max(8, view.wmRegionW),
+                                                height: Math.max(8, view.wmRegionH),
                                                 feather: Math.round(inpaintFeatherSlider.value)
                                             })
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    visible: watermarkOptionsPanel.wmBusy
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: watermarkOptionsPanel.activeTask && watermarkOptionsPanel.activeTask.stage
+                                            ? watermarkOptionsPanel.activeTask.stage : qsTr("Working…")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        ProgressBar {
+                                            Layout.fillWidth: true
+                                            from: 0; to: 100
+                                            value: watermarkOptionsPanel.activeTask ? watermarkOptionsPanel.activeTask.percent : 0
+                                        }
+                                        Button {
+                                            text: qsTr("Cancel")
+                                            focusPolicy: Qt.NoFocus
+                                            onClicked: view.command({ type: "ai_cancel" })
                                         }
                                     }
                                 }
@@ -5492,12 +6211,32 @@ Item {
                                     }
                                 }
 
-                                ProgressBar {
+                                ColumnLayout {
                                     Layout.fillWidth: true
+                                    spacing: 4
                                     visible: captionOptionsPanel.capBusy
-                                    from: 0
-                                    to: 100
-                                    value: captionOptionsPanel.activeTask ? captionOptionsPanel.activeTask.percent : 0
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: captionOptionsPanel.activeTask && captionOptionsPanel.activeTask.stage
+                                            ? captionOptionsPanel.activeTask.stage : qsTr("Working…")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        ProgressBar {
+                                            Layout.fillWidth: true
+                                            from: 0; to: 100
+                                            value: captionOptionsPanel.activeTask ? captionOptionsPanel.activeTask.percent : 0
+                                        }
+                                        Button {
+                                            text: qsTr("Cancel")
+                                            focusPolicy: Qt.NoFocus
+                                            onClicked: view.command({ type: "ai_cancel" })
+                                        }
+                                    }
                                 }
 
                                 Label {
@@ -5874,14 +6613,34 @@ Item {
                 var isCurrent = (key === "info" && view.rightTabIndex === 0)
                     || (key === "history" && view.rightTabIndex === 1)
                     || (key === "original" && view.rightTabIndex === 2)
-                if (!shown) {
+                if (shown && isCurrent) {
+                    // Clicking the already-active reference icon collapses the
+                    // whole Info / History / Original dock in one click instead
+                    // of deleting tabs one by one.
+                    view.layoutRequested({
+                        panels: {
+                            "editor.info": false,
+                            "editor.history": false,
+                            "editor.original": false
+                        }
+                    })
+                } else if (view.shownReferenceCount === 0) {
+                    // Bringing the reference dock back from collapsed state
+                    // restores the full 3-tab strip focused on `key`.
+                    view.layoutRequested({
+                        panels: {
+                            "editor.info": true,
+                            "editor.history": true,
+                            "editor.original": true
+                        },
+                        editorReferenceTab: key
+                    })
+                } else if (!shown) {
                     var panels = {}
                     panels["editor." + key] = true
                     view.layoutRequested({ panels: panels, editorReferenceTab: key })
-                } else if (!isCurrent) {
-                    view.showRightTab(key)
                 } else {
-                    view.setPanelVisible(key, false)
+                    view.showRightTab(key)
                 }
             }
             onHideAll: view.layoutRequested({
