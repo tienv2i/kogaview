@@ -203,19 +203,20 @@ jobs:
   build-flatpak:
     name: Flatpak (.flatpak)
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
-      options: --privileged
     steps:
       - uses: actions/checkout@v4
+      - name: Install Flatpak builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
       - name: Build Flatpak bundle
         env:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          dbus-uuidgen --ensure=/etc/machine-id || true
-          flatpak-builder --force-clean --disable-rofiles-fuse --install-deps-from=flathub --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --install-deps-from=flathub --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
           flatpak build-bundle flatpak-repo "dist/KogaView-${VER}-x86_64.flatpak" io.github.tienv2i.KogaView
       - uses: actions/upload-artifact@v4
         with:
