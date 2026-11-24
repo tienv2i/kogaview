@@ -30,6 +30,8 @@ Item {
     property real contrast: 0
     property real saturation: 0
     property bool inputBlocked: false
+    property bool allowLeftPan: true
+    readonly property bool panning: webtoonPanHandler.active
 
     /// Emitted (debounced at 150 ms) when the page at the viewport centre
     /// changes during scrolling so Core's `viewerIndex` stays in sync.
@@ -424,15 +426,16 @@ Item {
         }
     }
 
-    // 2D mouse drag-to-scroll (up/down always + horizontal pan when zoomed)
+    // 2D mouse drag-to-scroll (up/down always + horizontal pan when zoomed).
+    // Middle mouse always pans even when left-drag is reserved for OCR region selection.
     DragHandler {
         id: webtoonPanHandler
         objectName: "webtoonPanHandler"
         enabled: !webtoon.inputBlocked
         target: null
         acceptedDevices: PointerDevice.AllDevices
-        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
-        cursorShape: active ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        acceptedButtons: webtoon.allowLeftPan ? (Qt.LeftButton | Qt.MiddleButton) : Qt.MiddleButton
+        cursorShape: active ? Qt.ClosedHandCursor : (webtoon.allowLeftPan ? Qt.OpenHandCursor : Qt.ArrowCursor)
         property real startPanX: 0
         property real startContentY: 0
         onActiveChanged: {

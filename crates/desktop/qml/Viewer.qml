@@ -420,9 +420,9 @@ Item {
             event.accepted = true;
             break;
         case Qt.Key_Space:
-            // In Read & Translate / OCR mode, holding Space temporarily switches
-            // to hand-pan (Photoshop/Krita style) instead of advancing the page.
-            if (view.translateMode) {
+            // In Read & Translate / OCR edit mode, holding Space temporarily switches
+            // to hand-pan (Photoshop/Krita style). In Review mode, Space advances page.
+            if (view.translateMode && !translateOverlay.reviewMode) {
                 if (!event.isAutoRepeat) {
                     view.spacePanning = true;
                 }
@@ -601,9 +601,9 @@ Item {
                 rotationAngle: view.rotationAngle
                 flipH: view.flipH
                 flipV: view.flipV
-                allowLeftPan: !view.translateMode || translateOverlay.effectivePanMode
+                allowLeftPan: !view.translateMode || translateOverlay.effectivePanMode || translateOverlay.reviewMode
                 allowMiddlePan: true
-                allowDoubleTapZoom: !view.translateMode || translateOverlay.effectivePanMode
+                allowDoubleTapZoom: !view.translateMode || translateOverlay.effectivePanMode || translateOverlay.reviewMode
 
                 Checkerboard {
                     objectName: "viewerViewportCheckerboard"
@@ -776,7 +776,8 @@ Item {
                         brightness: viewerAdjustPanel.brightness
                         contrast: viewerAdjustPanel.contrast
                         saturation: viewerAdjustPanel.saturation
-                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || (view.translateMode && !translateOverlay.effectivePanMode)
+                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
+                        allowLeftPan: !view.translateMode || translateOverlay.effectivePanMode || translateOverlay.reviewMode
                         onPageCentered: function(idx) {
                             view.openImageAt(idx)
                         }
@@ -793,6 +794,7 @@ Item {
                     theme: view.theme
                     active: view.translateMode && !!view.currentPath
                     spacePanning: view.spacePanning
+                    canvasPanning: viewport.panning || webtoonView.panning
                     imagePath: view.currentPath
                     canvasItem: canvas
                     zoom: view.zoom

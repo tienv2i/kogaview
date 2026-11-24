@@ -46,7 +46,12 @@ Item {
     property bool translucentBubbles: false
     property bool panMode: false
     property bool spacePanning: false
+    property bool canvasPanning: false
+    property bool reviewMode: false
     readonly property bool effectivePanMode: overlay.panMode || overlay.spacePanning
+    /// Hide the two floating popups (`topBar` & `resultCard`) during Review mode
+    /// or while actively panning with Space / middle-mouse / drag.
+    readonly property bool popupsHidden: overlay.reviewMode || overlay.spacePanning || overlay.canvasPanning
     readonly property bool hasSavedFile: !!(overlay.savedTranslation
                                             && overlay.savedTranslation.path === overlay.imagePath
                                             && overlay.savedTranslation.blocks
@@ -232,7 +237,7 @@ Item {
         cursorShape: Qt.CrossCursor
         preventStealing: true
         visible: enabled
-        enabled: overlay.active && !overlay.busy && !overlay.effectivePanMode
+        enabled: overlay.active && !overlay.busy && !overlay.effectivePanMode && !overlay.reviewMode
 
         onPressed: function(mouse) {
             overlay.dragging = true
@@ -335,22 +340,23 @@ Item {
             x: mapped.x + dragDx
             y: mapped.y + dragDy
             width: mapped.w
-            height: Math.max(mapped.h, bubbleText.implicitHeight + 44)
+            height: Math.max(mapped.h, bubbleText.implicitHeight + (overlay.reviewMode ? 20 : 44))
             z: moving ? 4 : 2
             radius: 8
             color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b,
                            overlay.translucentBubbles ? 0.80 : 0.95)
             border.width: moving ? 2 : 1
-            border.color: overlay.theme.accent
+            border.color: overlay.reviewMode ? overlay.theme.border : overlay.theme.accent
             clip: true
 
-            // Top drag-handle bar: drag here to move bubble without blocking text selection below
+            // Top drag-handle bar: hidden in Review mode for clean manga reading
             Rectangle {
                 id: bubbleHeader
+                visible: !overlay.reviewMode
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                height: 24
+                height: visible ? 24 : 0
                 color: Qt.rgba(overlay.theme.surfaceAlt.r, overlay.theme.surfaceAlt.g, overlay.theme.surfaceAlt.b, 0.9)
 
                 MouseArea {
@@ -506,9 +512,10 @@ Item {
         }
     }
 
-    // --------------------------------------------------- Top floating bar (draggable, 14 px inset, responsive Flow)
+    // --------------------------------------------------- Top floating bar (draggable, auto-hides on Review / Pan)
     Rectangle {
         id: topBar
+        visible: !overlay.popupsHidden
         property real userOffsetX: 0
         property real userOffsetY: 0
         property bool moving: false
@@ -769,25 +776,82 @@ Item {
                 }
 
                 PanelAction {
+                    objectName: "translateReviewButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    theme: overlay.theme
+                    text: qsTr("Review")
+                    visible: overlay.currentBubbles.length > 0
+                    onClicked: {
+                        overlay.panMode = false
+                        overlay.cardVisible = false
+                        overlay.reviewMode = true
+                    }
+                }
+
+                PanelAction {
                     objectName: "translateCloseButton"
                     anchors.verticalCenter: parent.verticalCenter
                     theme: overlay.theme
                     text: qsTr("Close")
-                    onClicked: overlay.closeRequested()
+                    onClicked: {
+                        overlay.reviewMode = false
+                        overlay.closeRequested()
+                    }
                 }
             }
         }
     }
 
-    // --------------------------------------------------- Bottom floating result card (draggable, 14 px padding)
+    // --------------------------------------------------- Compact Review-mode pill (top-right)
+    Rectangle {
+        id: reviewPill
+        objectName: "translateReviewPill"
+        visible: overlay.reviewMode && !overlay.canvasPanning
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 12
+        anchors.rightMargin: 12
+        width: reviewPillRow.implicitWidth + 16
+        height: reviewPillRow.implicitHeight + 12
+        radius: 10
+        color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b, 0.90)
+        border.width: 1
+        border.color: overlay.theme.border
+        z: 6
+
+        MouseArea { anchors.fill: parent; preventStealing: true; z: -1 }
+
+        Row {
+            id: reviewPillRow
+            anchors.centerIn: parent
+            spacing: 6
+
+            PanelAction {
+                theme: overlay.theme
+                text: qsTr("Edit translation")
+                onClicked: overlay.reviewMode = false
+            }
+
+            PanelAction {
+                theme: overlay.theme
+                text: qsTr("Close")
+                onClicked: {
+                    overlay.reviewMode = false
+                    overlay.closeRequested()
+                }
+            }
+        }
+    }
+
+    // --------------------------------------------------- Bottom floating result card (draggable, auto-hides on Review / Pan)
     Rectangle {
         id: resultCard
         property real userOffsetX: 0
         property real userOffsetY: 0
         property bool moving: false
 
-        visible: overlay.cardVisible || overlay.busy
-                 || !!(overlay.aiTask && overlay.aiTask.kind === "translate" && overlay.aiTask.error)
+        visible: !overlay.popupsHidden && (overlay.cardVisible || overlay.busy
+                 || !!(overlay.aiTask && overlay.aiTask.kind === "translate" && overlay.aiTask.error))
         x: Math.max(12, Math.min(overlay.width - width - 12, Math.round((overlay.width - width) / 2) + userOffsetX))
         y: Math.max(12, Math.min(overlay.height - height - 12, overlay.height - height - 16 + userOffsetY))
         width: Math.min(parent.width - 28, 600)
