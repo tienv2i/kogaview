@@ -77,5 +77,15 @@ build-plugin-ai-ocr:
     cargo build --manifest-path plugins/kogaview-plugin-ai-ocr/Cargo.toml --release
     @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-ai-ocr"); rel = src / "target/release"; bin_src = rel / "kogaview-plugin-ai-ocr"; libs = list(rel.glob("libonnxruntime*.so*")) + list(rel.glob("onnxruntime*.dll")); [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-ai-ocr"), [shutil.copy2(l, d/"bin"/l.name) for l in libs]) for d in [data/"kogaview-dev/plugins/kogaview-ocr-ai", data/"kogaview/plugins/kogaview-ocr-ai"] ]; print("Installed kogaview-plugin-ai-ocr +", len(libs), "runtime lib(s) to", data/"kogaview[-dev]/plugins/kogaview-ocr-ai")'
 
+# Optional Watermark Remover plugin (Gemini Reverse Alpha Blending + General Region Inpaint).
+build-plugin-dewatermark:
+    cargo build --manifest-path plugins/kogaview-plugin-dewatermark/Cargo.toml --release
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-dewatermark"); bin_src = src / "target/release/kogaview-plugin-dewatermark"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-dewatermark")) for d in [data/"kogaview-dev/plugins/kogaview-dewatermark", data/"kogaview/plugins/kogaview-dewatermark"] ]; print("Installed kogaview-plugin-dewatermark to", data/"kogaview[-dev]/plugins/kogaview-dewatermark")'
+
+# Optional AI Image Captioner plugin (WD14 v3 Tagger ONNX -> .txt sidecar & Editor).
+build-plugin-caption:
+    cargo build --manifest-path plugins/kogaview-plugin-caption/Cargo.toml --release
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-caption"); rel = src / "target/release"; bin_src = rel / "kogaview-plugin-caption"; libs = list(rel.glob("libonnxruntime*.so*")) + list(rel.glob("onnxruntime*.dll")); [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-caption"), [shutil.copy2(l, d/"bin"/l.name) for l in libs]) for d in [data/"kogaview-dev/plugins/kogaview-caption-onnx", data/"kogaview/plugins/kogaview-caption-onnx"] ]; print("Installed kogaview-plugin-caption +", len(libs), "runtime lib(s) to", data/"kogaview[-dev]/plugins/kogaview-caption-onnx")'
+
 # Build & install all optional plugins at once.
-build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr build-plugin-translate build-plugin-ai-ocr
+build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr build-plugin-translate build-plugin-ai-ocr build-plugin-dewatermark build-plugin-caption

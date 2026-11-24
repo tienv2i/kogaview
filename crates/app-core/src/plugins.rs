@@ -166,6 +166,7 @@ pub enum AiWorkerEvent {
         device_used: String,
         clipboard_text: Option<String>,
         translation: Option<TranslationResult>,
+        caption_text: Option<String>,
     },
     Failed {
         message: String,
@@ -660,6 +661,7 @@ pub fn run_plugin_inference(
     let mut device_used = device.as_str().to_owned();
     let mut clipboard_text: Option<String> = None;
     let mut translation: Option<TranslationResult> = None;
+    let mut caption_text: Option<String> = None;
 
     for line in reader.lines() {
         if cancel.load(Ordering::SeqCst) {
@@ -695,6 +697,9 @@ pub fn run_plugin_inference(
                     }
                     if let Some(text) = meta.get("clipboardText").and_then(Value::as_str) {
                         clipboard_text = Some(text.to_owned());
+                    }
+                    if let Some(cap) = meta.get("captionText").and_then(Value::as_str) {
+                        caption_text = Some(cap.to_owned());
                     }
                     if let Some(tr_val) = meta.get("translation") {
                         if let Ok(parsed) =
@@ -737,7 +742,10 @@ pub fn run_plugin_inference(
     if let Some(message) = failed_msg {
         let _ = tx.send(AiWorkerEvent::Failed { message });
     } else if completed
-        && (output_path.is_file() || clipboard_text.is_some() || translation.is_some())
+        && (output_path.is_file()
+            || clipboard_text.is_some()
+            || translation.is_some()
+            || caption_text.is_some())
     {
         tracing::info!(
             target: "kogaview::plugins",
@@ -753,6 +761,7 @@ pub fn run_plugin_inference(
             device_used,
             clipboard_text,
             translation,
+            caption_text,
         });
     } else {
         let mut stderr_text = String::new();

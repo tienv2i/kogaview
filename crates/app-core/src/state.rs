@@ -200,6 +200,8 @@ pub struct UiState {
     pub ai_task: Option<AiTaskState>,
     /// Persisted translation bubbles loaded from `<dir>/.kogaview/translation/<file>.json`.
     pub viewer_saved_translation: Option<SavedTranslation>,
+    /// Caption text loaded from `<stem>.txt` beside the open Editor image.
+    pub editor_caption: Option<String>,
     pub busy: bool,
     /// What the status bar says, as a translatable line.
     pub status: UiText,
@@ -254,6 +256,7 @@ impl UiState {
             quick_actions: Vec::new(),
             ai_task: None,
             viewer_saved_translation: None,
+            editor_caption: None,
             busy: false,
             status: UiText::new("ready"),
             config_path,
@@ -306,6 +309,7 @@ impl UiState {
             quick_actions: &self.quick_actions,
             ai_task: &self.ai_task,
             viewer_saved_translation: &self.viewer_saved_translation,
+            editor_caption: &self.editor_caption,
             busy: self.busy,
             status: &self.status,
             config_path: &self.config_path,
@@ -366,6 +370,7 @@ pub struct StateMeta<'a> {
     pub quick_actions: &'a [AiQuickAction],
     pub ai_task: &'a Option<AiTaskState>,
     pub viewer_saved_translation: &'a Option<SavedTranslation>,
+    pub editor_caption: &'a Option<String>,
     pub busy: bool,
     pub status: &'a UiText,
     pub config_path: &'a str,

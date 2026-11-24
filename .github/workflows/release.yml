@@ -1,0 +1,213 @@
+name: Release KogaView
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v2.0.0)'
+        required: true
+        default: 'v2.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-ubuntu-deb-tar-appimage:
+    name: Linux (.deb, .tar.gz, .AppImage + Plugins)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 6 & build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config python3 \
+            qt6-base-dev qt6-declarative-dev qt6-svg-dev qt6-5compat-dev \
+            qt6-l10n-tools libgl1-mesa-dev desktop-file-utils appstream \
+            dpkg-dev file fuse libfuse2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build KogaView Release
+        run: |
+          cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build/release --target kogaview kogaview_translations -j"$(nproc)"
+      - name: Build all 8 standalone plugins
+        run: |
+          for p in rembg upscale utils ocr translate ai-ocr dewatermark caption; do
+            cargo build --manifest-path "plugins/kogaview-plugin-$p/Cargo.toml" --release
+          done
+      - name: Package .tar.gz, plugins .tar.gz, .deb, and .AppImage
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          mkdir -p dist
+
+          # 1. Portable Linux .tar.gz
+          STAGE="dist/kogaview-${VER}-linux-x86_64"
+          mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/metainfo" "$STAGE/share/icons/hicolor/scalable/apps"
+          install -m755 build/release/bin/kogaview "$STAGE/bin/kogaview"
+          install -m644 build/release/io.github.tienv2i.KogaView.desktop "$STAGE/share/applications/"
+          install -m644 build/release/io.github.tienv2i.KogaView.metainfo.xml "$STAGE/share/metainfo/"
+          install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$STAGE/share/icons/hicolor/scalable/apps/"
+          tar -C dist -czf "dist/kogaview-${VER}-linux-x86_64.tar.gz" "kogaview-${VER}-linux-x86_64"
+
+          # 2. All 8 Plugins Bundle .tar.gz
+          PSTAGE="dist/kogaview-plugins-${VER}-linux-x86_64"
+          declare -A PDIRS=(
+            [rembg]=kogaview-rmbg-onnx
+            [upscale]=kogaview-upscale-onnx
+            [utils]=kogaview-utils
+            [ocr]=kogaview-ocr-tesseract
+            [translate]=kogaview-translate
+            [ai-ocr]=kogaview-ocr-ai
+            [dewatermark]=kogaview-dewatermark
+            [caption]=kogaview-caption-onnx
+          )
+          for p in "${!PDIRS[@]}"; do
+            d="$PSTAGE/${PDIRS[$p]}"
+            mkdir -p "$d/bin"
+            install -m644 "plugins/kogaview-plugin-$p/manifest.json" "$d/manifest.json"
+            install -m755 "plugins/kogaview-plugin-$p/target/release/kogaview-plugin-$p" "$d/bin/kogaview-plugin-$p"
+          done
+          tar -C dist -czf "dist/kogaview-plugins-${VER}-linux-x86_64.tar.gz" "kogaview-plugins-${VER}-linux-x86_64"
+
+          # 3. Debian / Ubuntu .deb
+          DEB="dist/deb-root"
+          mkdir -p "$DEB/DEBIAN" "$DEB/usr/bin" "$DEB/usr/share/applications" "$DEB/usr/share/metainfo" "$DEB/usr/share/icons/hicolor/scalable/apps"
+          install -m755 build/release/bin/kogaview "$DEB/usr/bin/kogaview"
+          install -m644 build/release/io.github.tienv2i.KogaView.desktop "$DEB/usr/share/applications/"
+          install -m644 build/release/io.github.tienv2i.KogaView.metainfo.xml "$DEB/usr/share/metainfo/"
+          install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$DEB/usr/share/icons/hicolor/scalable/apps/"
+          cat > "$DEB/DEBIAN/control" <<EOF
+          Package: kogaview
+          Version: ${VER}-1
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Depends: libqt6core6t64 | libqt6core6, libqt6gui6t64 | libqt6gui6, libqt6qml6, libqt6quick6, libqt6svg6
+          Maintainer: KogaView Contributors <tienv2i@gmail.com>
+          Description: Fast native desktop photo manager, manga reader, editor & AI plugin suite
+          EOF
+          dpkg-deb --build "$DEB" "dist/kogaview_${VER}-1_amd64.deb"
+
+          # 4. AppImage
+          APPDIR="dist/KogaView.AppDir"
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/scalable/apps"
+          install -m755 build/release/bin/kogaview "$APPDIR/usr/bin/kogaview"
+          install -m644 build/release/io.github.tienv2i.KogaView.desktop "$APPDIR/io.github.tienv2i.KogaView.desktop"
+          install -m644 packaging/linux/io.github.tienv2i.KogaView.svg "$APPDIR/io.github.tienv2i.KogaView.svg"
+          ln -sf io.github.tienv2i.KogaView.svg "$APPDIR/.DirIcon"
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/kogaview" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+          curl -fsSL -o dist/appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x dist/appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 dist/appimagetool "$APPDIR" "dist/KogaView-${VER}-x86_64.AppImage"
+
+          # 5. Source archive
+          git archive --format=tar.gz --prefix="kogaview-${VER}/" -o "dist/kogaview-${VER}-src.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.AppImage
+
+  build-arch-zst:
+    name: Arch Linux (.pkg.tar.zst)
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Arch build dependencies
+        run: |
+          pacman -Syu --noconfirm base-devel cmake ninja rust cargo qt6-base qt6-declarative qt6-svg qt6-5compat qt6-tools python git
+      - name: Build .pkg.tar.zst via makepkg
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          su - builder -c "cd '$PWD/packaging/arch' && KOGAVIEW_SRC='$PWD' makepkg -f --noconfirm"
+          mkdir -p dist
+          cp packaging/arch/*.pkg.tar.zst dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-artifacts
+          path: dist/*.pkg.tar.zst
+
+  build-fedora-rpm:
+    name: Fedora / RPM (.rpm)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:41
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Fedora RPM build dependencies
+        run: |
+          dnf install -y rpm-build cmake ninja-build gcc-c++ rust cargo \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtsvg-devel qt6-qt5compat-devel \
+            qt6-linguist python3 git desktop-file-utils
+      - name: Build .rpm via rpmbuild
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} dist
+          git archive --format=tar.gz --prefix="kogaview-${VER}/" -o ~/rpmbuild/SOURCES/kogaview-${VER}.tar.gz HEAD
+          cp packaging/rpm/kogaview.spec ~/rpmbuild/SPECS/
+          rpmbuild -bb ~/rpmbuild/SPECS/kogaview.spec
+          cp ~/rpmbuild/RPMS/x86_64/*.rpm dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-artifacts
+          path: dist/*.rpm
+
+  build-flatpak:
+    name: Flatpak (.flatpak)
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Flatpak bundle
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          mkdir -p dist
+          flatpak-builder --force-clean --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
+          flatpak build-bundle flatpak-repo "dist/KogaView-${VER}-x86_64.flatpak" io.github.tienv2i.KogaView
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-artifacts
+          path: dist/*.flatpak
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-ubuntu-deb-tar-appimage, build-arch-zst, build-fedora-rpm, build-flatpak]
+    if: always() && (needs.build-ubuntu-deb-tar-appimage.result == 'success')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: all-dist
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          cd all-dist
+          sha256sum * > SHA256SUMS.txt
+          ls -lh
+      - name: Create / Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "KogaView ${{ github.event.inputs.tag || github.ref_name }}"
+          generate_release_notes: true
+          files: all-dist/*

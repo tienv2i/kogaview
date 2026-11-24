@@ -668,6 +668,9 @@ pub struct AiTaskState {
     /// Structured translation result produced by a Read & Translate plugin.
     #[serde(default)]
     pub translation: Option<TranslationResult>,
+    /// Generated caption text returned by `editor.caption` / `caption.generate_save`.
+    #[serde(default)]
+    pub caption_text: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1250,7 +1253,72 @@ pub enum Command {
     ViewerDeleteTranslation {
         path: String,
     },
+    /// Remove the Gemini/Imagen corner logo from the open Editor document via
+    /// Reverse Alpha Blending (`kogaview-plugin-dewatermark`).
+    EditorDewatermarkGemini {
+        #[serde(default = "default_wm_size")]
+        size: String,
+        #[serde(default = "default_wm_logo_value")]
+        logo_value: f32,
+        #[serde(default)]
+        force: bool,
+        #[serde(default)]
+        offset_x: i32,
+        #[serde(default)]
+        offset_y: i32,
+    },
+    /// Remove an arbitrary rectangular watermark region from the open Editor
+    /// document via harmonic diffusion inpainting (`kogaview-plugin-dewatermark`).
+    EditorInpaintRegion {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        #[serde(default = "default_inpaint_feather")]
+        feather: u32,
+    },
+    /// Generate AI tags/caption for the open Editor document with custom parameters
+    /// (`kogaview-plugin-caption`).
+    EditorGenerateCaption {
+        #[serde(default = "default_caption_model")]
+        model_id: String,
+        #[serde(default = "default_caption_gen_thresh")]
+        general_threshold: f32,
+        #[serde(default = "default_caption_char_thresh")]
+        character_threshold: f32,
+        #[serde(default = "default_true")]
+        replace_underscores: bool,
+        #[serde(default)]
+        prefix: String,
+        #[serde(default)]
+        suffix: String,
+        #[serde(default)]
+        exclude_tags: String,
+    },
+    /// Save or delete the `<stem>.txt` caption file beside the open Editor image.
+    EditorSaveCaption {
+        text: String,
+    },
     CancelOperation,
+}
+
+fn default_wm_size() -> String {
+    "auto".to_owned()
+}
+fn default_wm_logo_value() -> f32 {
+    255.0
+}
+fn default_inpaint_feather() -> u32 {
+    4
+}
+fn default_caption_model() -> String {
+    "wd-vit-tagger-v3".to_owned()
+}
+fn default_caption_gen_thresh() -> f32 {
+    0.35
+}
+fn default_caption_char_thresh() -> f32 {
+    0.85
 }
 
 fn default_translate_source() -> String {
@@ -1332,6 +1400,10 @@ impl Command {
             Self::ViewerTranslate { .. } => "viewer_translate",
             Self::ViewerSaveTranslation { .. } => "viewer_save_translation",
             Self::ViewerDeleteTranslation { .. } => "viewer_delete_translation",
+            Self::EditorDewatermarkGemini { .. } => "editor_dewatermark_gemini",
+            Self::EditorInpaintRegion { .. } => "editor_inpaint_region",
+            Self::EditorGenerateCaption { .. } => "editor_generate_caption",
+            Self::EditorSaveCaption { .. } => "editor_save_caption",
         }
     }
 }

@@ -616,6 +616,7 @@ impl Core {
         self.editor = None;
         self.editor_rendering = false;
         self.state.editor = None;
+        self.state.editor_caption = None;
         self.state.busy = false;
         self.clear_editor_draft();
         if let Some(preview) = self.editor_preview_path.take() {
@@ -845,9 +846,11 @@ impl Core {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_default();
+                let caption = super::ai::load_caption_for_image(document.source_path());
                 self.editor = Some(document);
                 self.editor_rendering = false;
                 self.state.busy = false;
+                self.state.editor_caption = caption;
                 self.state.status =
                     UiText::with("editing", [name, width.to_string(), height.to_string()]);
                 self.publish_editor();

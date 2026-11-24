@@ -2976,6 +2976,30 @@ Item {
                             view.forceActiveFocus()
                         }
                     }
+                    ToolRailButton {
+                        objectName: "toolWatermark"
+                        theme: view.theme
+                        iconSource: "icons/reset-edits.svg"
+                        tooltip: qsTr("Remove watermark (Gemini / Region)")
+                        active: view.tool === "watermark"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "watermark" ? "pointer" : "watermark"
+                            view.forceActiveFocus()
+                        }
+                    }
+                    ToolRailButton {
+                        objectName: "toolCaption"
+                        theme: view.theme
+                        iconSource: "icons/info.svg"
+                        tooltip: qsTr("Caption & tags (.txt)")
+                        active: view.tool === "caption"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "caption" ? "pointer" : "caption"
+                            view.forceActiveFocus()
+                        }
+                    }
                 }
 
                 Rectangle {
@@ -4945,7 +4969,15 @@ Item {
                                 spacing: 10
                                 visible: view.tool === "removeBg"
 
-                                readonly property var models: (view.state && view.state.aiModels) || []
+                                readonly property var models: {
+                                    var all = (view.state && view.state.aiModels) || []
+                                    var out = []
+                                    for (var i = 0; i < all.length; ++i) {
+                                        var t = (all[i].tier || "").toLowerCase()
+                                        if (t !== "ocr" && t !== "upscale" && t !== "caption") out.push(all[i])
+                                    }
+                                    return out
+                                }
                                 readonly property var activeTask: (view.state && view.state.aiTask) || null
                                 readonly property bool aiBusy: !!(activeTask && activeTask.running)
                                 readonly property var selectedModel: {
@@ -5081,6 +5113,443 @@ Item {
                                         text: qsTr("Cancel")
                                         focusPolicy: Qt.NoFocus
                                         onClicked: view.command({ type: "ai_cancel" })
+                                    }
+                                }
+                            }
+
+                            // ------------------------------------------- Watermark Remover (Gemini + General Region)
+                            ColumnLayout {
+                                id: watermarkOptionsPanel
+                                objectName: "editorWatermarkPanel"
+                                Layout.fillWidth: true
+                                spacing: 10
+                                visible: view.tool === "watermark"
+
+                                property string wmMode: "gemini" // "gemini" | "region"
+                                readonly property var activeTask: (view.state && view.state.aiTask) || null
+                                readonly property bool wmBusy: !!(activeTask && activeTask.running)
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("Gemini logo")
+                                        primary: watermarkOptionsPanel.wmMode === "gemini"
+                                        onClicked: watermarkOptionsPanel.wmMode = "gemini"
+                                    }
+                                    PanelAction {
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        text: qsTr("General region")
+                                        primary: watermarkOptionsPanel.wmMode === "region"
+                                        onClicked: watermarkOptionsPanel.wmMode = "region"
+                                    }
+                                }
+
+                                // Mode 1: Gemini Reverse Alpha Blending (Advanced)
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    visible: watermarkOptionsPanel.wmMode === "gemini"
+
+                                    Label {
+                                        text: qsTr("Logo size")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    ComboBox {
+                                        id: geminiSizeCombo
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        readonly property var keys: ["auto", "small", "large"]
+                                        model: [qsTr("Auto (48 / 96 px)"), "48 × 48 px", "96 × 96 px"]
+                                        currentIndex: 0
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            text: qsTr("Logo brightness")
+                                            color: view.theme.textMuted
+                                            font.pixelSize: 12
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: Math.round(geminiLogoSlider.value)
+                                            color: view.theme.text
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                    Slider {
+                                        id: geminiLogoSlider
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        from: 200
+                                        to: 255
+                                        stepSize: 1
+                                        value: 255
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Label { text: "dX"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField {
+                                            id: geminiOffX
+                                            Layout.fillWidth: true
+                                            text: "0"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            Keys.onEscapePressed: focus = false
+                                        }
+                                        Label { text: "dY"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField {
+                                            id: geminiOffY
+                                            Layout.fillWidth: true
+                                            text: "0"
+                                            inputMethodHints: Qt.ImhDigitsOnly
+                                            Keys.onEscapePressed: focus = false
+                                        }
+                                    }
+
+                                    CheckBox {
+                                        id: geminiForceCheck
+                                        text: qsTr("Force remove (skip detection)")
+                                        checked: false
+                                        focusPolicy: Qt.NoFocus
+                                    }
+
+                                    PanelAction {
+                                        objectName: "editorGeminiRunBtn"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        primary: true
+                                        text: qsTr("Remove Gemini logo")
+                                        enabled: view.documentReady && !watermarkOptionsPanel.wmBusy
+                                        onClicked: {
+                                            view.command({
+                                                type: "editor_dewatermark_gemini",
+                                                size: geminiSizeCombo.keys[geminiSizeCombo.currentIndex] || "auto",
+                                                logo_value: geminiLogoSlider.value,
+                                                force: geminiForceCheck.checked,
+                                                offset_x: parseInt(geminiOffX.text) || 0,
+                                                offset_y: parseInt(geminiOffY.text) || 0
+                                            })
+                                        }
+                                    }
+                                }
+
+                                // Mode 2: General Watermark Region Inpaint
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    visible: watermarkOptionsPanel.wmMode === "region"
+
+                                    Label {
+                                        text: qsTr("Quick corner presets")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: "↘"
+                                            onClicked: {
+                                                var rw = Math.round(view.docWidth * 0.18)
+                                                var rh = Math.round(view.docHeight * 0.10)
+                                                inpaintX.text = String(Math.max(0, view.docWidth - rw - 16))
+                                                inpaintY.text = String(Math.max(0, view.docHeight - rh - 16))
+                                                inpaintW.text = String(Math.max(24, rw))
+                                                inpaintH.text = String(Math.max(24, rh))
+                                            }
+                                        }
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: "↙"
+                                            onClicked: {
+                                                var rw = Math.round(view.docWidth * 0.18)
+                                                var rh = Math.round(view.docHeight * 0.10)
+                                                inpaintX.text = "16"
+                                                inpaintY.text = String(Math.max(0, view.docHeight - rh - 16))
+                                                inpaintW.text = String(Math.max(24, rw))
+                                                inpaintH.text = String(Math.max(24, rh))
+                                            }
+                                        }
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: "↗"
+                                            onClicked: {
+                                                var rw = Math.round(view.docWidth * 0.18)
+                                                var rh = Math.round(view.docHeight * 0.10)
+                                                inpaintX.text = String(Math.max(0, view.docWidth - rw - 16))
+                                                inpaintY.text = "16"
+                                                inpaintW.text = String(Math.max(24, rw))
+                                                inpaintH.text = String(Math.max(24, rh))
+                                            }
+                                        }
+                                        PanelAction {
+                                            Layout.fillWidth: true
+                                            theme: view.theme
+                                            text: "↖"
+                                            onClicked: {
+                                                var rw = Math.round(view.docWidth * 0.18)
+                                                var rh = Math.round(view.docHeight * 0.10)
+                                                inpaintX.text = "16"
+                                                inpaintY.text = "16"
+                                                inpaintW.text = String(Math.max(24, rw))
+                                                inpaintH.text = String(Math.max(24, rh))
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Label { text: "X"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField { id: inpaintX; Layout.fillWidth: true; text: "0"; Keys.onEscapePressed: focus = false }
+                                        Label { text: "Y"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField { id: inpaintY; Layout.fillWidth: true; text: "0"; Keys.onEscapePressed: focus = false }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Label { text: "W"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField { id: inpaintW; Layout.fillWidth: true; text: "120"; Keys.onEscapePressed: focus = false }
+                                        Label { text: "H"; color: view.theme.textMuted; font.pixelSize: 12 }
+                                        TextField { id: inpaintH; Layout.fillWidth: true; text: "60"; Keys.onEscapePressed: focus = false }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { text: qsTr("Edge blend"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                        Label { text: Math.round(inpaintFeatherSlider.value) + " px"; color: view.theme.text; font.pixelSize: 12 }
+                                    }
+                                    Slider {
+                                        id: inpaintFeatherSlider
+                                        Layout.fillWidth: true
+                                        focusPolicy: Qt.NoFocus
+                                        from: 0
+                                        to: 20
+                                        stepSize: 1
+                                        value: 4
+                                    }
+
+                                    PanelAction {
+                                        objectName: "editorInpaintRunBtn"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        primary: true
+                                        text: qsTr("Remove watermark region")
+                                        enabled: view.documentReady && !watermarkOptionsPanel.wmBusy
+                                        onClicked: {
+                                            view.command({
+                                                type: "editor_inpaint_region",
+                                                x: parseInt(inpaintX.text) || 0,
+                                                y: parseInt(inpaintY.text) || 0,
+                                                width: Math.max(4, parseInt(inpaintW.text) || 64),
+                                                height: Math.max(4, parseInt(inpaintH.text) || 32),
+                                                feather: Math.round(inpaintFeatherSlider.value)
+                                            })
+                                        }
+                                    }
+                                }
+
+                                Label {
+                                    visible: !!(watermarkOptionsPanel.activeTask && !watermarkOptionsPanel.wmBusy && watermarkOptionsPanel.activeTask.error)
+                                    text: watermarkOptionsPanel.activeTask && watermarkOptionsPanel.activeTask.error ? watermarkOptionsPanel.activeTask.error : ""
+                                    color: view.theme.danger
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+
+                            // ------------------------------------------- AI Caption & .txt Editor (Advanced)
+                            ColumnLayout {
+                                id: captionOptionsPanel
+                                objectName: "editorCaptionPanel"
+                                Layout.fillWidth: true
+                                spacing: 10
+                                visible: view.tool === "caption"
+
+                                readonly property var activeTask: (view.state && view.state.aiTask) || null
+                                readonly property bool capBusy: !!(activeTask && activeTask.running)
+                                readonly property string savedCaption: (view.state && view.state.editorCaption) || ""
+                                property string _lastAppliedCap: ""
+
+                                onSavedCaptionChanged: {
+                                    if (!captionTextArea.activeFocus) {
+                                        captionTextArea.text = savedCaption
+                                    }
+                                }
+
+                                onActiveTaskChanged: {
+                                    if (!activeTask || activeTask.running || !activeTask.captionText) return
+                                    if (activeTask.captionText === _lastAppliedCap) return
+                                    _lastAppliedCap = activeTask.captionText
+                                    if (captionAppendCheck.checked && captionTextArea.text.trim().length > 0) {
+                                        captionTextArea.text = captionTextArea.text.trim() + ", " + activeTask.captionText
+                                    } else {
+                                        captionTextArea.text = activeTask.captionText
+                                    }
+                                }
+
+                                Label {
+                                    text: qsTr("Caption model")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                ComboBox {
+                                    id: captionModelCombo
+                                    Layout.fillWidth: true
+                                    focusPolicy: Qt.NoFocus
+                                    readonly property var ids: ["wd-vit-tagger-v3", "wd-swinv2-tagger-v3"]
+                                    model: ["WD-ViT v3 (Fast)", "WD-SwinV2 v3 (Accurate)"]
+                                    currentIndex: 0
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("General threshold"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: captionGenThresh.value.toFixed(2); color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    id: captionGenThresh
+                                    Layout.fillWidth: true
+                                    focusPolicy: Qt.NoFocus
+                                    from: 0.15
+                                    to: 0.85
+                                    stepSize: 0.05
+                                    value: 0.35
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: qsTr("Character threshold"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
+                                    Label { text: captionCharThresh.value.toFixed(2); color: view.theme.text; font.pixelSize: 12 }
+                                }
+                                Slider {
+                                    id: captionCharThresh
+                                    Layout.fillWidth: true
+                                    focusPolicy: Qt.NoFocus
+                                    from: 0.30
+                                    to: 0.95
+                                    stepSize: 0.05
+                                    value: 0.85
+                                }
+
+                                TextField {
+                                    id: captionPrefixField
+                                    Layout.fillWidth: true
+                                    placeholderText: qsTr("Prefix tags (optional)")
+                                    Keys.onEscapePressed: focus = false
+                                }
+                                TextField {
+                                    id: captionExcludeField
+                                    Layout.fillWidth: true
+                                    placeholderText: qsTr("Exclude tags (comma-separated)")
+                                    Keys.onEscapePressed: focus = false
+                                }
+
+                                CheckBox {
+                                    id: captionSpacesCheck
+                                    text: qsTr("Replace underscores with spaces")
+                                    checked: true
+                                    focusPolicy: Qt.NoFocus
+                                }
+                                CheckBox {
+                                    id: captionAppendCheck
+                                    text: qsTr("Append to existing caption")
+                                    checked: false
+                                    focusPolicy: Qt.NoFocus
+                                }
+
+                                PanelAction {
+                                    objectName: "editorCaptionGenerateBtn"
+                                    Layout.fillWidth: true
+                                    theme: view.theme
+                                    primary: true
+                                    text: qsTr("Generate caption (AI)")
+                                    enabled: view.documentReady && !captionOptionsPanel.capBusy
+                                    onClicked: {
+                                        captionOptionsPanel._lastAppliedCap = ""
+                                        view.command({
+                                            type: "editor_generate_caption",
+                                            model_id: captionModelCombo.ids[captionModelCombo.currentIndex] || "wd-vit-tagger-v3",
+                                            general_threshold: captionGenThresh.value,
+                                            character_threshold: captionCharThresh.value,
+                                            replace_underscores: captionSpacesCheck.checked,
+                                            prefix: captionPrefixField.text,
+                                            suffix: "",
+                                            exclude_tags: captionExcludeField.text
+                                        })
+                                    }
+                                }
+
+                                ProgressBar {
+                                    Layout.fillWidth: true
+                                    visible: captionOptionsPanel.capBusy
+                                    from: 0
+                                    to: 100
+                                    value: captionOptionsPanel.activeTask ? captionOptionsPanel.activeTask.percent : 0
+                                }
+
+                                Label {
+                                    visible: !!(captionOptionsPanel.activeTask && !captionOptionsPanel.capBusy && captionOptionsPanel.activeTask.error)
+                                    text: captionOptionsPanel.activeTask && captionOptionsPanel.activeTask.error ? captionOptionsPanel.activeTask.error : ""
+                                    color: view.theme.danger
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Label {
+                                    text: qsTr("Caption (.txt)")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 140
+                                    clip: true
+                                    TextArea {
+                                        id: captionTextArea
+                                        objectName: "editorCaptionTextArea"
+                                        wrapMode: TextArea.Wrap
+                                        placeholderText: qsTr("Edit or type tags / caption here…")
+                                        text: captionOptionsPanel.savedCaption
+                                        color: view.theme.text
+                                        Keys.onEscapePressed: focus = false
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    PanelAction {
+                                        objectName: "editorCaptionSaveBtn"
+                                        Layout.fillWidth: true
+                                        theme: view.theme
+                                        primary: true
+                                        text: qsTr("Save .txt")
+                                        enabled: view.documentReady
+                                        onClicked: view.command({ type: "editor_save_caption", text: captionTextArea.text })
+                                    }
+                                    PanelAction {
+                                        theme: view.theme
+                                        text: qsTr("Clear")
+                                        enabled: view.documentReady && (captionTextArea.text.length > 0 || captionOptionsPanel.savedCaption.length > 0)
+                                        onClicked: {
+                                            captionTextArea.text = ""
+                                            view.command({ type: "editor_save_caption", text: "" })
+                                        }
                                     }
                                 }
                             }

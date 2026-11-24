@@ -226,6 +226,10 @@ QtObject {
         case "ai_translating": return qsTr("Translating…");
         case "ai_translate_done": return qsTr("Translation complete");
         case "ai_translation_deleted": return qsTr("Saved translation deleted");
+        case "ai_caption_running": return qsTr("Generating caption…");
+        case "ai_caption_done": return qsTr("Caption generated");
+        case "ai_caption_saved": return qsTr("Caption saved (.txt)");
+        case "ai_caption_deleted": return qsTr("Caption file deleted");
         case "ai_translate_plugin_missing": return qsTr("Read & Translate plugin is not installed (run: just build-plugin-translate)");
         case "ai_inference_failed": return qsTr("AI processing failed");
         case "operation_cancelled": return qsTr("Operation cancelled");

@@ -583,6 +583,38 @@ impl Core {
                 self.viewer_save_translation(&path, blocks)
             }
             Command::ViewerDeleteTranslation { path } => self.viewer_delete_translation(&path),
+            Command::EditorDewatermarkGemini {
+                size,
+                logo_value,
+                force,
+                offset_x,
+                offset_y,
+            } => self.editor_dewatermark_gemini(&size, logo_value, force, offset_x, offset_y),
+            Command::EditorInpaintRegion {
+                x,
+                y,
+                width,
+                height,
+                feather,
+            } => self.editor_inpaint_region(x, y, width, height, feather),
+            Command::EditorGenerateCaption {
+                model_id,
+                general_threshold,
+                character_threshold,
+                replace_underscores,
+                prefix,
+                suffix,
+                exclude_tags,
+            } => self.editor_generate_caption(
+                &model_id,
+                general_threshold,
+                character_threshold,
+                replace_underscores,
+                &prefix,
+                &suffix,
+                &exclude_tags,
+            ),
+            Command::EditorSaveCaption { text } => self.editor_save_caption(&text),
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {

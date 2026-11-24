@@ -10,7 +10,7 @@
 
 ### Out-of-Process Plugin Ecosystem (Zero Startup Cost)
 - **Strict isolation**: Plugins run as standalone out-of-process binaries (`jsonl-stdio` protocol, [ADR 0024](docs/adr/0024-ai-plugin-architecture.md)) under `$XDG_DATA_HOME/kogaview/plugins/`. **Zero plugins or AI models are loaded at startup**; workers spawn on demand and exit automatically after each job to free RAM/VRAM.
-- **6 Official Standalone Plugins** (see full reference in [**`docs/PLUGINS.md`**](docs/PLUGINS.md)):
+- **8 Official Standalone Plugins** (see full reference in [**`docs/PLUGINS.md`**](docs/PLUGINS.md)):
 
 | Plugin | Type | Capabilities & Highlights | Build Command |
 |---|---|---|---|
@@ -20,6 +20,8 @@
 | **Offline OCR** (`kogaview-plugin-ocr`) | Tesseract | 100% offline text extraction in **5 languages** (`EN`, `JA` / `JA Vertical`, `VI`, `ZH`, `KO`) · Full-image clipboard Quick Actions + interactive region OCR + Tier-1 manga preprocessing | `just build-plugin-ocr` |
 | **Read & Translate** (`kogaview-plugin-translate`) | OCR + Translate | Interactive speech-bubble & full-page translation via Tesseract + Google Translate (with auto-retry) | `just build-plugin-translate` |
 | **AI OCR — Manga-OCR & RapidOCR** (`kogaview-plugin-ai-ocr`) | AI ONNX | **Manga-OCR** (ViT + BERT ONNX for Japanese manga, vertical text, furigana & screentones) + **RapidOCR** (PP-OCRv4 DBNet + SVTR for complex colored backgrounds & manhwa/manhua) | `just build-plugin-ai-ocr` |
+| **Watermark Remover** (`kogaview-plugin-dewatermark`) | Math / Inpaint | **Gemini / Imagen Logo** lossless Reverse Alpha Blending (auto 48/96 px, Quick Action + Editor Advanced) + **General Watermark Region** harmonic diffusion inpainting | `just build-plugin-dewatermark` |
+| **AI Captioner** (`kogaview-plugin-caption`) | AI ONNX | **WD14 v3 Tagger** (`WD-ViT v3` & `WD-SwinV2 v3`) · Quick Action saves `<stem>.txt` + Editor Advanced panel with thresholds, prefix/exclude & live `.txt` editor | `just build-plugin-caption` |
 
 - **Safe Quick Actions**: Right-click any image in Browser or Viewer → **Quick actions**. File-modifying actions automatically create numbered backups (`<file>~`, `<file>.2~`, `<file>.3~`) before atomically overwriting and refreshing the image.
 - **Unified Settings → Plugins**: Filterable model & language pack manager (`All` · `Background` · `Upscale` · `OCR languages`) with progress bars, cancellation, delete, and local custom `.onnx` overrides.

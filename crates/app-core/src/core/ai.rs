@@ -82,6 +82,7 @@ impl Core {
             error: None,
             clipboard_text: None,
             translation: None,
+            caption_text: None,
         });
         self.state.status = UiText::with("ai_downloading_model", [spec.name.clone()]);
 
@@ -258,6 +259,7 @@ impl Core {
             error: None,
             clipboard_text: None,
             translation: None,
+            caption_text: None,
         });
         self.state.status = UiText::new("ai_removing_background");
 
@@ -410,6 +412,7 @@ impl Core {
             error: None,
             clipboard_text: None,
             translation: None,
+            caption_text: None,
         });
         self.state.status = UiText::new("ai_removing_background");
 
@@ -534,6 +537,7 @@ impl Core {
             error: None,
             clipboard_text: None,
             translation: None,
+            caption_text: None,
         });
         self.state.status = UiText::new("ai_translating");
 
@@ -629,6 +633,7 @@ impl Core {
                     device_used,
                     clipboard_text,
                     translation,
+                    caption_text,
                 } => {
                     finished = true;
                     if let Some(tr) = translation {
@@ -650,9 +655,20 @@ impl Core {
                             task.stage = format!("Copied {chars} characters");
                             task.error = None;
                             task.clipboard_text = Some(text);
+                            task.caption_text = caption_text;
                         }
                         self.state.status =
                             UiText::with("ai_quick_action_copied", [chars.to_string()]);
+                    } else if let Some(cap) = caption_text {
+                        self.ai_quick_action_output = None;
+                        if let Some(task) = self.state.ai_task.as_mut() {
+                            task.running = false;
+                            task.percent = 100;
+                            task.stage = "Caption generated".to_owned();
+                            task.error = None;
+                            task.caption_text = Some(cap);
+                        }
+                        self.state.status = UiText::new("ai_caption_done");
                     } else if let Some(target_path) = self.ai_quick_action_output.take() {
                         match backup_and_overwrite(&target_path, &output_path) {
                             Ok(backup_path) => {
@@ -975,6 +991,321 @@ impl Core {
             self.state.viewer_saved_translation = None;
         }
         Ok(Some(UiText::new("ai_translation_deleted")))
+    }
+
+    /// Run Gemini Reverse Alpha Blending watermark removal on the open Editor
+    /// document (non-destructive, pushes `EditOperation::AiResult`).
+    pub(super) fn editor_dewatermark_gemini(
+        &mut self,
+        size: &str,
+        logo_value: f32,
+        force: bool,
+        offset_x: i32,
+        offset_y: i32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        self.run_editor_image_plugin(
+            "editor.dewatermark_gemini",
+            "Remove Gemini logo…",
+            json!({
+                "size": size,
+                "logoValue": logo_value,
+                "force": force,
+                "offsetX": offset_x,
+                "offsetY": offset_y,
+            }),
+            "Watermark Remover plugin is not installed (run: just build-plugin-dewatermark)",
+        )
+    }
+
+    /// Run general rectangular watermark inpainting on the open Editor document
+    /// (non-destructive, pushes `EditOperation::AiResult`).
+    pub(super) fn editor_inpaint_region(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        feather: u32,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        self.run_editor_image_plugin(
+            "editor.inpaint_region",
+            "Removing watermark region…",
+            json!({
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "feather": feather,
+            }),
+            "Watermark Remover plugin is not installed (run: just build-plugin-dewatermark)",
+        )
+    }
+
+    /// Shared helper to run an image-output plugin on the open Editor document
+    /// non-destructively (renders current working image -> temp PNG -> plugin -> `AiResult`).
+    fn run_editor_image_plugin(
+        &mut self,
+        action: &str,
+        stage_label: &str,
+        params: serde_json::Value,
+        missing_msg: &str,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if self.ai_rx.is_some() {
+            return Err(ProtocolError::with_line(
+                "busy",
+                "an AI task is already running",
+                UiText::new("ai_task_busy"),
+            ));
+        }
+        let pixels = self
+            .editor
+            .as_ref()
+            .ok_or_else(no_editor_document)?
+            .pixels();
+
+        self.refresh_ai_inventory();
+        let Some(plugin) = self
+            .ai_plugins
+            .iter()
+            .find(|p| p.available && p.manifest.capabilities.iter().any(|c| c.action == action))
+            .cloned()
+        else {
+            return Err(ProtocolError::with_line(
+                "plugin_missing",
+                missing_msg,
+                UiText::new("ai_inference_failed"),
+            ));
+        };
+
+        fs::create_dir_all(&self.paths.ai_ipc_dir).map_err(|error| {
+            ProtocolError::with_line(
+                "io_error",
+                format!("cannot create ai-ipc directory: {error}"),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+        self.ai_generation += 1;
+        let gen = self.ai_generation;
+        let tmp_in = self.paths.ai_ipc_dir.join(format!("wm-in-{gen}.png"));
+        let tmp_out = self.paths.ai_ipc_dir.join(format!("wm-out-{gen}.png"));
+        let _ = fs::remove_file(&tmp_out);
+        pixels.save(&tmp_in).map_err(|error| {
+            ProtocolError::with_line(
+                "io_error",
+                format!("cannot write plugin input PNG: {error}"),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.ai_rx = Some(rx);
+        self.ai_cancel = Some(Arc::clone(&cancel));
+        self.ai_temp_input = Some(tmp_in.clone());
+        self.ai_temp_output = Some(tmp_out.clone());
+        self.ai_quick_action_output = None;
+        self.state.busy = true;
+        self.state.ai_task = Some(AiTaskState {
+            kind: "inference".to_owned(),
+            target: action.to_owned(),
+            running: true,
+            percent: 10,
+            stage: stage_label.to_owned(),
+            error: None,
+            clipboard_text: None,
+            translation: None,
+            caption_text: None,
+        });
+        self.state.status = UiText::new("ai_removing_background");
+
+        let device = self.config.ai.device;
+        let action_owned = action.to_owned();
+        std::thread::spawn(move || {
+            let empty_model = PathBuf::new();
+            plugins::run_plugin_inference(
+                &plugin,
+                &action_owned,
+                "",
+                &empty_model,
+                device,
+                &tmp_in,
+                &tmp_out,
+                params,
+                cancel,
+                &tx,
+            );
+        });
+        Ok(Some(UiText::new("ai_removing_background")))
+    }
+
+    /// Generate AI tags/caption for the open Editor image via `kogaview-plugin-caption`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn editor_generate_caption(
+        &mut self,
+        model_id: &str,
+        general_threshold: f32,
+        character_threshold: f32,
+        replace_underscores: bool,
+        prefix: &str,
+        suffix: &str,
+        exclude_tags: &str,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if self.ai_rx.is_some() {
+            return Err(ProtocolError::with_line(
+                "busy",
+                "an AI task is already running",
+                UiText::new("ai_task_busy"),
+            ));
+        }
+        let Some(doc) = self.editor.as_ref() else {
+            return Err(ProtocolError::with_line(
+                "no_document",
+                "no image is open in the Editor",
+                UiText::new("ai_inference_failed"),
+            ));
+        };
+        let src_path = doc.source_path().to_path_buf();
+
+        self.refresh_ai_inventory();
+        let Some(plugin) = self
+            .ai_plugins
+            .iter()
+            .find(|p| {
+                p.available
+                    && p.manifest
+                        .capabilities
+                        .iter()
+                        .any(|c| c.action == "editor.caption")
+            })
+            .cloned()
+        else {
+            return Err(ProtocolError::with_line(
+                "plugin_missing",
+                "AI Caption plugin is not installed (run: just build-plugin-caption)",
+                UiText::new("ai_inference_failed"),
+            ));
+        };
+
+        let model_path = self
+            .state
+            .ai_models
+            .iter()
+            .find(|m| m.id == model_id)
+            .and_then(|m| m.effective_path.as_ref())
+            .map(PathBuf::from)
+            .unwrap_or_default();
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.ai_rx = Some(rx);
+        self.ai_cancel = Some(Arc::clone(&cancel));
+        self.ai_temp_input = None;
+        self.ai_temp_output = None;
+        self.ai_quick_action_output = None;
+        self.state.busy = true;
+        self.state.ai_task = Some(AiTaskState {
+            kind: "caption".to_owned(),
+            target: model_id.to_owned(),
+            running: true,
+            percent: 10,
+            stage: "Generating caption…".to_owned(),
+            error: None,
+            clipboard_text: None,
+            translation: None,
+            caption_text: None,
+        });
+        self.state.status = UiText::new("ai_caption_running");
+
+        let device = self.config.ai.device;
+        let models_dir = self.paths.models_dir.display().to_string();
+        let model_id_owned = model_id.to_owned();
+        let params = json!({
+            "modelId": model_id,
+            "modelsDir": models_dir,
+            "generalThreshold": general_threshold,
+            "characterThreshold": character_threshold,
+            "replaceUnderscores": replace_underscores,
+            "prefix": prefix,
+            "suffix": suffix,
+            "excludeTags": exclude_tags,
+        });
+
+        std::thread::spawn(move || {
+            let empty_out = PathBuf::new();
+            plugins::run_plugin_inference(
+                &plugin,
+                "editor.caption",
+                &model_id_owned,
+                &model_path,
+                device,
+                &src_path,
+                &empty_out,
+                params,
+                cancel,
+                &tx,
+            );
+        });
+        Ok(Some(UiText::new("ai_caption_running")))
+    }
+
+    /// Save (or remove if empty) `<image_stem>.txt` beside the open Editor image.
+    pub(super) fn editor_save_caption(
+        &mut self,
+        text: &str,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        let Some(doc) = self.editor.as_ref() else {
+            return Err(ProtocolError::with_line(
+                "no_document",
+                "no image is open in the Editor",
+                UiText::new("ai_inference_failed"),
+            ));
+        };
+        let txt_path = doc.source_path().with_extension("txt");
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            if txt_path.exists() {
+                fs::remove_file(&txt_path).map_err(|e| {
+                    ProtocolError::with_line(
+                        "io_error",
+                        format!("cannot remove '{}': {e}", txt_path.display()),
+                        UiText::new("ai_inference_failed"),
+                    )
+                })?;
+            }
+            self.state.editor_caption = None;
+            return Ok(Some(UiText::new("ai_caption_deleted")));
+        }
+
+        let tmp = txt_path.with_extension("txt.tmp");
+        fs::write(&tmp, trimmed.as_bytes()).map_err(|e| {
+            ProtocolError::with_line(
+                "io_error",
+                format!("cannot write '{}': {e}", tmp.display()),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+        fs::rename(&tmp, &txt_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp);
+            ProtocolError::with_line(
+                "io_error",
+                format!("cannot save '{}': {e}", txt_path.display()),
+                UiText::new("ai_inference_failed"),
+            )
+        })?;
+        self.state.editor_caption = Some(trimmed.to_owned());
+        Ok(Some(UiText::new("ai_caption_saved")))
+    }
+}
+
+/// Load `<image_stem>.txt` if it exists beside `image_path`.
+pub(crate) fn load_caption_for_image(image_path: &Path) -> Option<String> {
+    let txt_path = image_path.with_extension("txt");
+    let content = fs::read_to_string(txt_path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
     }
 }
 

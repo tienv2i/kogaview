@@ -759,14 +759,16 @@ DialogFrame {
                         if (tier === "ocr" || id.indexOf("ocr") === 0) out.push(m)
                     } else if (modelCategory === "upscale") {
                         if (tier === "upscale" || id.indexOf("upscale") === 0 || id.indexOf("esrgan") >= 0) out.push(m)
+                    } else if (modelCategory === "caption") {
+                        if (tier === "caption" || id.indexOf("wd-") === 0) out.push(m)
                     } else if (modelCategory === "rembg") {
-                        if (tier !== "ocr" && tier !== "upscale" && id.indexOf("ocr") !== 0 && id.indexOf("upscale") !== 0) out.push(m)
+                        if (tier !== "ocr" && tier !== "upscale" && tier !== "caption" && id.indexOf("ocr") !== 0 && id.indexOf("upscale") !== 0 && id.indexOf("wd-") !== 0) out.push(m)
                     }
                 }
                 return out
             }
 
-            // Category filter pills so RemBG, Upscale, and OCR language packs
+            // Category filter pills so RemBG, Upscale, Caption, and OCR language packs
             // are cleanly separated instead of one long mixed list.
             Flow {
                 Layout.fillWidth: true
@@ -777,7 +779,8 @@ DialogFrame {
                         { key: "all", label: qsTr("All") },
                         { key: "rembg", label: qsTr("Background") },
                         { key: "upscale", label: qsTr("Upscale") },
-                        { key: "ocr", label: qsTr("OCR languages") }
+                        { key: "ocr", label: qsTr("OCR languages") },
+                        { key: "caption", label: qsTr("Caption") }
                     ]
                     delegate: PanelAction {
                         required property var modelData

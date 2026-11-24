@@ -131,6 +131,38 @@ Open **Settings → Plugins** in KogaView to:
 
 ---
 
+### 7. `kogaview-plugin-dewatermark` — Watermark Remover (Gemini Logo + General Region)
+- **Plugin ID**: `kogaview.dewatermark`
+- **Source**: [`plugins/kogaview-plugin-dewatermark/`](../plugins/kogaview-plugin-dewatermark/)
+- **Permissions**: `network: false`, `gpu: false` · **No model downloads required** (reference 48×48 and 96×96 Gemini alpha maps are embedded)
+- **Two Modes**:
+  1. **Gemini / Imagen Logo Removal (Reverse Alpha Blending)**:
+     - Mathematically reverses Google Gemini's translucent corner sparkle (`original = (watermarked - alpha * logo) / (1 - alpha)`) with zero blur or quality loss.
+     - Automatically selects `96×96` (64 px margin) for images `> 1024×1024` or `48×48` (32 px margin) otherwise, with multi-method watermark scoring.
+     - **Quick Actions (Browser & Viewer)**: `Remove Gemini logo (Auto)` and `Remove Gemini logo (Force)` (creates `<file>~` backup before overwriting).
+     - **Editor Advanced Mode**: Non-destructive Undo/Redo tool with **Logo size** (`Auto` / `48×48` / `96×96`), **Logo brightness** (`200–255`), fine-tune **`dX` / `dY`** offset, and **Force remove**.
+  2. **General Watermark Region Removal (Editor Advanced)**:
+     - Multi-scale harmonic diffusion inpainting for any rectangular corner logo, timestamp, or stray mark, with quick 4-corner presets (`↘`, `↙`, `↗`, `↖`), custom `X/Y/W/H`, and **Edge blend** feathering.
+
+---
+
+### 8. `kogaview-plugin-caption` — AI Image Captioner (WD14 v3 Tagger ONNX)
+- **Plugin ID**: `kogaview.caption.onnx`
+- **Source**: [`plugins/kogaview-plugin-caption/`](../plugins/kogaview-plugin-caption/)
+- **Permissions**: `network: false`, `gpu: false`
+- **On-Demand Models** (Settings → Plugins → **Caption**):
+  - `wd-vit-tagger-v3` (WD-ViT Tagger v3, ~361 MB — fast & balanced)
+  - `wd-swinv2-tagger-v3` (WD-SwinV2 Tagger v3, ~446 MB — highest accuracy)
+  - `wd-v3-selected-tags` (Tag vocabulary CSV, ~301 KB — shared across both v3 models)
+- **Quick Actions (Browser & Viewer)**:
+  - `Generate & save caption (.txt — WD-ViT v3)` / `(WD-SwinV2 v3)`: predicts tags, atomically writes `<image_stem>.txt` beside the image, and copies the caption to clipboard.
+- **Editor Advanced Mode**:
+  - Auto-loads existing `<image_stem>.txt` when opening an image in Editor.
+  - Tune **Model**, **General threshold** (`0.15–0.85`), **Character threshold** (`0.30–0.95`), **Prefix tags**, **Exclude tags**, **Replace underscores with spaces**, and **Append to existing caption**.
+  - Interactive multi-line editor to manually add/edit/remove tags and click **Save .txt** or **Clear**.
+
+---
+
 ## Using the Viewer Read & Translate Overlay (`L`)
 
 1. Open any image or manga chapter in **Viewer** (works in **Single**, **Dual**, and **Webtoon** modes).
