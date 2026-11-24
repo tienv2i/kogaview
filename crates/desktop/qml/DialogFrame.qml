@@ -130,7 +130,7 @@ Dialog {
         var chrome = frame.headerHeight + frame.footerHeight
                      + 2 * frame.bodyPadding + frame.stripHeight() + 4
         var natural = chrome + bodyColumn.implicitHeight
-        if (!frame.fitToContent) return Math.min(limit, Math.max(frame.preferredHeight, natural))
+        if (!frame.fitToContent) return Math.min(limit, frame.preferredHeight)
         return Math.min(limit, natural)
     }
 

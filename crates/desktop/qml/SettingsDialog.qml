@@ -55,19 +55,17 @@ DialogFrame {
     property var aiModels: []
     property var aiTask: null
 
-    /// The page on screen: `general`, `performance`, `browser`, `editor`, `viewer`, or `ai`.
+    /// The page on screen: `general`, `browser`, `editor`, `viewer`, or `plugins`.
     property string section: "general"
-    /// The strip's tabs. The labels are the workspace's own word; the drawings
-    /// are this repository's SVGs so the strip follows the theme on a desktop
-    /// with no icons for them.
+    /// The strip's tabs (kept to 5 concise sections so they fit cleanly even
+    /// when the parent window is narrow; `settingsTabs.compact` folds labels
+    /// to icons + tooltips below 560 px).
     readonly property var sections: [
         { key: "general", label: qsTr("General"), icon: "icons/preferences.svg" },
-        { key: "performance", label: qsTr("Performance"), icon: "icons/adjust.svg" },
         { key: "browser", label: qsTr("Browser"), icon: "icons/browser.svg" },
         { key: "editor", label: qsTr("Editor"), icon: "icons/editor.svg" },
         { key: "viewer", label: qsTr("Viewer"), icon: "icons/viewer.svg" },
-        { key: "ai", label: qsTr("AI"), icon: "icons/ai-rembg.svg" },
-        { key: "plugins", label: qsTr("Plugins"), icon: "icons/batch.svg" }
+        { key: "plugins", label: qsTr("Plugins"), icon: "icons/ai-rembg.svg" }
     ]
 
     /// The panels each workspace offers, with the keys `LayoutState` uses.
@@ -369,6 +367,7 @@ DialogFrame {
                 x: dialog.bodyPadding
                 y: 6
                 width: parent.width - 2 * dialog.bodyPadding
+                compact: width < 520
                 theme: dialog.theme
                 tabs: dialog.sections
                 currentKey: dialog.section
@@ -530,14 +529,6 @@ DialogFrame {
                 onToggled: if (dialog.visible) dialog.changed()
             }
         }
-    }
-
-    // -------------------------------------------------- Performance
-    ColumnLayout {
-        objectName: "settingsPerformancePage"
-        Layout.fillWidth: true
-        spacing: 12
-        visible: dialog.section === "performance"
 
         FormSection {
             theme: dialog.theme
@@ -701,12 +692,12 @@ DialogFrame {
         }
     }
 
-    // -------------------------------------------------- AI (On-demand plugins & models)
+    // -------------------------------------------------- Plugins & AI (On-demand)
     ColumnLayout {
-        objectName: "settingsAiPage"
+        objectName: "settingsPluginsPage"
         Layout.fillWidth: true
         spacing: 10
-        visible: dialog.section === "ai"
+        visible: dialog.section === "plugins"
 
         FormSection {
             theme: dialog.theme
@@ -846,16 +837,6 @@ DialogFrame {
                 }
             }
         }
-
-        // End of AI page
-    }
-
-    // -------------------------------------------------- Plugins
-    ColumnLayout {
-        objectName: "settingsPluginsPage"
-        Layout.fillWidth: true
-        spacing: 10
-        visible: dialog.section === "plugins"
 
         FormSection {
             theme: dialog.theme

@@ -71,7 +71,7 @@ Item {
     readonly property int browserSeparators: 1
     readonly property int viewerButtons: 15
     readonly property int viewerSeparators: 3
-    readonly property int editorButtons: 11
+    readonly property int editorButtons: 12
     readonly property int editorSeparators: 3
 
     /// The buttons each workspace keeps once the window is too narrow for the

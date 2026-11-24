@@ -350,7 +350,10 @@ ApplicationWindow {
     }
     Connections {
         target: snapshot
-        function onStateChanged() { root.syncInterfaceLanguage(); }
+        function onStateChanged() {
+            root.syncInterfaceLanguage();
+            root.completePostSaveLeave();
+        }
     }
     /// True while the file chooser was opened from the Editor, so a chosen
     /// file loads into the editor instead of replacing the Viewer.
@@ -543,10 +546,10 @@ ApplicationWindow {
         }
     }
 
-    /// True while the Editor holds edits that are not on disk. Every way out of
-    /// the Editor asks this first.
+    /// True while the Editor holds edits that are not on disk. Matches Core's
+    /// authoritative `EditorDocument::has_unsaved_changes()` (`!saved`).
     readonly property bool editorHasUnsavedChanges:
-        !!(root.state.editor && root.state.editor.modified && !root.state.editor.saved)
+        !!(root.state.editor && !root.state.editor.saved)
 
     /// Open `path` in the Editor, asking about unsaved edits first.
     ///
@@ -643,37 +646,67 @@ ApplicationWindow {
     /// A request to leave the Editor while edits are unsaved. `action` is what
     /// happens if the user says "Discard"; "quit" closes the window.
     property var pendingLeave: null
+    /// Deferred follow-up actions waiting for an async `editor_save` triggered
+    /// from `unsavedDialog`'s Save button to finish on the worker thread.
+    property var postSaveLeave: null
+
     function guardEditorLeave(action) {
-        if (root.state.workspace !== "editor" || !root.editorHasUnsavedChanges) {
+        // Switching from Viewer to Editor when Viewer shows a different image
+        // than the Editor's unsaved document would silently fail in Core unless
+        // we ask the user first.
+        if (action && action.workspace === "editor"
+                && root.state.workspace === "viewer"
+                && root.editorHasUnsavedChanges
+                && root.state.viewerPath
+                && root.state.editor
+                && root.state.viewerPath !== root.state.editor.path) {
+            root.pendingLeave = { editorOpen: root.state.viewerPath, select: false };
+            unsavedDialog.open();
+            return;
+        }
+        var needsGuard = (action === "quit" || (action && action.close)
+                          || root.state.workspace === "editor");
+        if (!needsGuard || !root.editorHasUnsavedChanges) {
             root.runLeave(action);
             return;
         }
         root.pendingLeave = action;
         unsavedDialog.open();
     }
-    /// The dialog's Save answer: write, then go. The save and the leave are
-    /// queued, because each command republishes the state and a leave sent in
-    /// the same turn as the save could be dropped.
+    /// The dialog's Save answer: start the async save, then execute the
+    /// follow-up (`editor_open`, `set_workspace`, `editor_close`, or `quit`)
+    /// once Core reports `saved: true` and `saving: false`.
     function leaveAfterSave() {
         var leave = root.pendingLeave;
         root.pendingLeave = null;
         unsavedDialog.close();
-        var following = leave === "quit"
-                ? []
-                : (leave && leave.editorOpen
-                   ? root.editorOpenCommands(leave.editorOpen, leave.select)
-                   : [ leave && leave.workspace
-                       ? { type: "set_workspace", workspace: leave.workspace }
-                       : { type: "editor_close" } ]);
-        root.sendSequence([{ type: "editor_save" }].concat(following));
-        if (leave === "quit") Qt.callLater(function() { root.runLeave("quit"); });
+        root.postSaveLeave = leave;
+        root.send({ type: "editor_save" });
     }
-    /// The dialog's Discard answer: drop the edits and go. Dropping them is a
-    /// command of its own (`editor_reset`), not just a disappearance of the
-    /// question: the document stays open, and without the reset Core would
-    /// still consider it edited and would refuse to replace it with the
-    /// picture the Viewer shows next. Quitting skips the reset — nothing
-    /// survives the window.
+    function completePostSaveLeave() {
+        if (!root.postSaveLeave) return;
+        if (root.state.editor && root.state.editor.saving) return;
+        var leave = root.postSaveLeave;
+        root.postSaveLeave = null;
+        if (root.state.editor && !root.state.editor.saved) {
+            // Save failed; keep the user in the Editor so no edits are lost.
+            return;
+        }
+        if (leave === "quit") {
+            root.runLeave("quit");
+        } else if (leave && leave.editorOpen) {
+            root.runEditorOpen(leave.editorOpen, leave.select);
+        } else {
+            root.runLeave(leave);
+        }
+    }
+    /// The dialog's Discard answer: drop the edits and go.
+    /// - Opening another image (`editorOpen`): closes the dirty document first
+    ///   (`editor_close`) so Core unconditionally replaces it with the new image.
+    /// - Leaving Editor for another workspace: resets the document first
+    ///   (`editor_reset`) so Core no longer considers it dirty.
+    /// - Closing Editor (`close`): sends `editor_close` directly.
+    /// - Quitting: skips reset and exits immediately.
     function leaveAfterDiscard() {
         var leave = root.pendingLeave;
         root.pendingLeave = null;
@@ -687,11 +720,9 @@ ApplicationWindow {
                 : [ leave && leave.workspace
                     ? { type: "set_workspace", workspace: leave.workspace }
                     : (leave && leave.close ? { type: "editor_close" } : null) ];
-        // Leaving the Editor for another workspace keeps the document open, so
-        // the edits have to be reverted for real. Closing the document drops it
-        // anyway. An open replaces the document too, but Core refuses to do so
-        // while the document is dirty, so the reset has to come first.
-        if (leave && (leave.workspace || leave.editorOpen)) {
+        if (leave && leave.editorOpen) {
+            root.sendSequence([{ type: "editor_close" }].concat(following));
+        } else if (leave && leave.workspace) {
             root.sendSequence([{ type: "editor_reset" }].concat(following));
         } else if (following[0]) {
             root.send(following[0]);
@@ -1339,6 +1370,7 @@ ApplicationWindow {
             onRequestOpen: root.chooseEditorImage()
             onRequestSaveAs: root.chooseEditorSaveAs()
             onRequestExportPath: root.chooseEditorExportPath()
+            onRequestClose: root.guardEditorLeave({ close: true })
         }
     }
 

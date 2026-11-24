@@ -86,8 +86,10 @@ Item {
                 // when the labels are folded; a RowLayout as the content item
                 // would keep the icon at the left edge even alone.
                 contentItem: Item {
+                    clip: true
                     RowLayout {
                         anchors.centerIn: parent
+                        width: Math.min(implicitWidth, parent.width)
                         spacing: 4
 
                         IconImage {
@@ -108,6 +110,7 @@ Item {
                             color: tab.ink
                             font.pixelSize: 11
                             elide: Text.ElideRight
+                            Layout.fillWidth: true
                             verticalAlignment: Text.AlignVCenter
                         }
                     }

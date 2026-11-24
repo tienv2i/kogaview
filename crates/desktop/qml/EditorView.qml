@@ -2169,6 +2169,8 @@ Item {
     signal requestSaveAs()
     /// Raised by Export's Browse button: Main owns the file chooser.
     signal requestExportPath()
+    /// Raised by the Close editor button; Main checks unsaved changes first.
+    signal requestClose()
     /// The user dragged the dock's splitter: the shell keeps one width for all
     /// three workspaces, so the view reports the number rather than owning it.
     /// A layout interaction — a splitter, the rail's columns, a reference tab
@@ -2754,6 +2756,17 @@ Item {
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Reset to original")
                 onClicked: view.command({ type: "editor_reset" })
+            }
+            ToolbarButton {
+                objectName: "editorToolbarClose"
+                theme: view.theme
+                visible: !view.miniToolbar
+                icon.name: "window-close-symbolic"
+                display: AbstractButton.IconOnly
+                enabled: view.hasDocument && !view.saving
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Close editor")
+                onClicked: view.requestClose()
             }
             ToolbarButton {
                 objectName: "editorOverflowButton"
@@ -5605,6 +5618,12 @@ Item {
             icon.name: "document-revert-symbolic"
             enabled: view.modified
             onTriggered: view.command({ type: "editor_reset" })
+        }
+        MenuItem {
+            text: view.theme.menuEntries[28]
+            icon.name: "window-close-symbolic"
+            enabled: view.hasDocument && !view.saving
+            onTriggered: view.requestClose()
         }
     }
 
