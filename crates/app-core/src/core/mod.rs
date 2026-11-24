@@ -186,12 +186,21 @@ pub struct Core {
     /// be running at the same time.
     batch_rx: Option<Receiver<BatchEvent>>,
     batch_cancel: Option<Arc<AtomicBool>>,
+    /// Discovered AI plugin manifests (static JSON only; never spawned at startup).
+    ai_plugins: Vec<crate::plugins::DiscoveredPlugin>,
+    /// Active AI model download or out-of-process inference worker.
+    ai_rx: Option<Receiver<crate::plugins::AiWorkerEvent>>,
+    ai_cancel: Option<Arc<AtomicBool>>,
+    ai_generation: u64,
+    ai_temp_input: Option<PathBuf>,
+    ai_temp_output: Option<PathBuf>,
     /// Bumped whenever the folder listing is replaced. The Qt adapter ships the
     /// listing on its own and only re-sends it when this changes, because it is
     /// the one part of the snapshot that grows with the folder.
     listing_epoch: u64,
 }
 
+mod ai;
 mod browsing;
 mod editing;
 mod gateway;
@@ -255,9 +264,16 @@ impl Core {
             pending_export: None,
             batch_rx: None,
             batch_cancel: None,
+            ai_plugins: Vec::new(),
+            ai_rx: None,
+            ai_cancel: None,
+            ai_generation: 0,
+            ai_temp_input: None,
+            ai_temp_output: None,
             listing_epoch: 0,
         };
 
+        core.refresh_ai_inventory();
         core.restore_last_session();
         core
     }
@@ -311,6 +327,9 @@ impl Core {
             log_dir: base.join("state/logs"),
             journal_dir: base.join("state/journal"),
             screenshot_dir: base.join("state/screenshots"),
+            plugins_dir: base.join("data/plugins"),
+            models_dir: base.join("data/models"),
+            ai_ipc_dir: base.join("cache/ai-ipc"),
         };
         let journal = Journal::new(&paths.journal_dir);
         let (editor_tx, editor_rx) = mpsc::channel();
@@ -355,6 +374,12 @@ impl Core {
             pending_export: None,
             batch_rx: None,
             batch_cancel: None,
+            ai_plugins: Vec::new(),
+            ai_rx: None,
+            ai_cancel: None,
+            ai_generation: 0,
+            ai_temp_input: None,
+            ai_temp_output: None,
             listing_epoch: 0,
         }
     }

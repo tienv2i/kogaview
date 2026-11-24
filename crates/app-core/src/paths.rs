@@ -19,23 +19,34 @@ pub struct AppPaths {
     pub log_dir: PathBuf,
     pub journal_dir: PathBuf,
     pub screenshot_dir: PathBuf,
+    pub plugins_dir: PathBuf,
+    pub models_dir: PathBuf,
+    pub ai_ipc_dir: PathBuf,
 }
 
 impl AppPaths {
     pub fn for_identity(identity: &AppIdentity) -> Self {
         let dir_name = identity.profile.dir_name();
         let state_dir = state_home().join(dir_name);
+        let cache_dir = cache_home().join(dir_name);
+        let data_dir = data_home().join(dir_name);
         let log_dir = state_dir.join("logs");
         let journal_dir = state_dir.join("journal");
         let screenshot_dir = state_dir.join("screenshots");
+        let plugins_dir = data_dir.join("plugins");
+        let models_dir = data_dir.join("models");
+        let ai_ipc_dir = cache_dir.join("ai-ipc");
         Self {
-            cache_dir: cache_home().join(dir_name),
+            cache_dir,
             config_dir: config_home().join(dir_name),
-            data_dir: data_home().join(dir_name),
+            data_dir,
             state_dir,
             log_dir,
             journal_dir,
             screenshot_dir,
+            plugins_dir,
+            models_dir,
+            ai_ipc_dir,
         }
     }
 

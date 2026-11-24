@@ -1416,6 +1416,25 @@ ApplicationWindow {
         id: settingsDialog
         objectName: "settingsDialog"
         theme: appTheme
+        aiSettings: root.state.aiSettings || ({ device: "cpu", autoUnloadSecs: 60, customModelPaths: ({}) })
+        aiPlugins: root.state.aiPlugins || []
+        aiModels: root.state.aiModels || []
+        aiTask: root.state.aiTask || null
+        onAiSettingsSaveRequested: function(device, autoUnloadSecs) {
+            root.send({ type: "ai_set_settings", device: device, auto_unload_secs: autoUnloadSecs });
+        }
+        onAiDownloadModelRequested: function(modelId) {
+            root.send({ type: "ai_download_model", model_id: modelId });
+        }
+        onAiDeleteModelRequested: function(modelId) {
+            root.send({ type: "ai_delete_model", model_id: modelId });
+        }
+        onAiBrowseModelRequested: function(modelId) {
+            onnxModelDialog.targetModelId = modelId;
+            onnxModelDialog.open();
+        }
+        onAiCancelRequested: root.send({ type: "ai_cancel" })
+        onAiRefreshPluginsRequested: root.send({ type: "ai_refresh_plugins" })
         /// Live preview: the window repaints with the value under the control
         /// that was just changed, before anything is saved. The theme is an
         /// ephemeral override (`previewTheme`); the language goes through the
@@ -1451,6 +1470,25 @@ ApplicationWindow {
             root.applyInterfaceLanguage(root.state.language === "system"
                                         ? "" : (root.state.language || ""));
         }
+    }
+
+    FileDialog {
+        id: onnxModelDialog
+        property string targetModelId: ""
+        title: qsTr("Select ONNX model file")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [qsTr("ONNX models (*.onnx)"), qsTr("All files (*)")]
+        onAccepted: {
+            if (targetModelId && selectedFile) {
+                root.send({
+                    type: "ai_set_custom_model",
+                    model_id: targetModelId,
+                    path: root.toLocalPath(selectedFile)
+                });
+            }
+            targetModelId = "";
+        }
+        onRejected: targetModelId = ""
     }
 
     FileDialog {

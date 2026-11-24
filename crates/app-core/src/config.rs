@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kogaview_protocol::{Language, LayoutState, Theme};
+use kogaview_protocol::{AiSettings, Language, LayoutState, Theme};
 use serde::{Deserialize, Serialize};
 
 use crate::paths;
@@ -65,6 +65,8 @@ pub struct Config {
     pub hardware_acceleration: bool,
     #[serde(default = "default_true")]
     pub anti_aliasing: bool,
+    #[serde(default)]
+    pub ai: AiSettings,
 }
 
 fn default_true() -> bool {
@@ -89,6 +91,7 @@ impl Default for Config {
             background_thumbnails: true,
             hardware_acceleration: true,
             anti_aliasing: true,
+            ai: AiSettings::default(),
         }
     }
 }

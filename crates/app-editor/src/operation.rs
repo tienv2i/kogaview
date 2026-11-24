@@ -1,5 +1,8 @@
 //! What one edit is, and the line History shows for it.
 
+use std::sync::Arc;
+
+use image::RgbaImage;
 use kogaview_protocol::{FlipAxis, ResizeFilter, ResizeMode, UiText};
 use serde::Serialize;
 
@@ -93,6 +96,14 @@ pub enum EditOperation {
         radius: f64,
         opacity: f64,
         erase: bool,
+    },
+    /// Non-destructive pixel output produced by an out-of-process AI plugin
+    /// (e.g. Remove Background, Upscale). Stored as an `Arc<RgbaImage>` so
+    /// Undo and Redo are instant without re-running model inference.
+    AiResult {
+        label: UiText,
+        #[serde(skip)]
+        pixels: Arc<RgbaImage>,
     },
 }
 
@@ -191,6 +202,7 @@ impl EditOperation {
                     UiText::new("brush_stroke")
                 }
             }
+            Self::AiResult { label, .. } => label.clone(),
         }
     }
 }

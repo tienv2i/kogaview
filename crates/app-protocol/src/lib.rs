@@ -424,6 +424,179 @@ pub const LAYOUT_VIEWER_DISPLAY_MODES: [&str; 3] = ["single", "dual", "webtoon"]
 /// Compact / Fullscreen floating HUD docked edges.
 pub const LAYOUT_COMPACT_HUD_EDGES: [&str; 4] = ["top", "bottom", "left", "right"];
 
+/// Execution device preference for local AI plugins.
+///
+/// Defaults to `Cpu` so every desktop works out of the box without GPU driver
+/// setup; `Auto` and `Gpu` attempt hardware acceleration and fall back to CPU
+/// when unavailable or out of VRAM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiDevice {
+    #[default]
+    Cpu,
+    Auto,
+    Gpu,
+}
+
+impl AiDevice {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Auto => "auto",
+            Self::Gpu => "gpu",
+        }
+    }
+}
+
+/// Persisted AI plugin preferences stored in `config.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiSettings {
+    pub device: AiDevice,
+    /// Seconds of idle time before `PluginHost` shuts down a spawned worker to
+    /// release RAM/VRAM (`10..=600`).
+    pub auto_unload_secs: u32,
+    /// Optional user-supplied local `.onnx` path overrides keyed by `model_id`.
+    pub custom_model_paths: BTreeMap<String, String>,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            device: AiDevice::Cpu,
+            auto_unload_secs: 60,
+            custom_model_paths: BTreeMap::new(),
+        }
+    }
+}
+
+impl AiSettings {
+    pub fn sanitized(mut self) -> Self {
+        self.auto_unload_secs = self.auto_unload_secs.clamp(10, 600);
+        self.custom_model_paths
+            .retain(|k, v| !k.trim().is_empty() && !v.trim().is_empty());
+        self
+    }
+}
+
+/// Static plugin entry declaration inside `manifest.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginEntry {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_plugin_protocol")]
+    pub protocol: String,
+}
+
+fn default_plugin_protocol() -> String {
+    "jsonl-stdio".to_owned()
+}
+
+/// Declared plugin permissions in `manifest.json`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PluginPermissions {
+    pub network: bool,
+    pub gpu: bool,
+}
+
+/// One downloadable/selectable AI model entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginModelSpec {
+    pub id: String,
+    pub name: String,
+    pub tier: String,
+    pub file: String,
+    pub size_bytes: u64,
+    #[serde(default)]
+    pub sha256: String,
+    pub url: String,
+}
+
+/// One UI-configurable parameter declared by a plugin capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginParamSpec {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub min: i32,
+    #[serde(default)]
+    pub max: i32,
+    #[serde(default)]
+    pub default: i32,
+}
+
+/// One capability exposed by a plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCapability {
+    pub action: String,
+    pub workspace: String,
+    pub label: String,
+    pub output: String,
+    #[serde(default)]
+    pub params: Vec<PluginParamSpec>,
+}
+
+/// Declarative `manifest.json` read by Core without spawning any process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginManifest {
+    pub api_version: u32,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub entry: PluginEntry,
+    #[serde(default)]
+    pub permissions: PluginPermissions,
+    #[serde(default)]
+    pub models: Vec<PluginModelSpec>,
+    #[serde(default)]
+    pub capabilities: Vec<PluginCapability>,
+}
+
+/// Live status of one AI model published in `UiState` for `Settings → AI` and Editor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelStatus {
+    pub id: String,
+    pub name: String,
+    pub tier: String,
+    pub size_bytes: u64,
+    pub installed: bool,
+    pub custom_path: Option<String>,
+    pub effective_path: Option<String>,
+}
+
+/// Live status of one discovered plugin published in `UiState`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPluginStatus {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub available: bool,
+    pub actions: Vec<String>,
+}
+
+/// Active or most-recent AI background job (model download or inference).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTaskState {
+    /// `"download"` | `"inference"` | `""`
+    pub kind: String,
+    pub target: String,
+    pub running: bool,
+    pub percent: u8,
+    pub stage: String,
+    pub error: Option<String>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -941,7 +1114,46 @@ pub enum Command {
         #[serde(default)]
         output: BatchOutput,
     },
+    /// Rescan `$XDG_DATA_HOME/kogaview[-dev]/plugins/` manifests and model files.
+    AiRefreshPlugins,
+    /// Persist AI execution device (`cpu` / `auto` / `gpu`) and idle auto-unload.
+    AiSetSettings {
+        device: AiDevice,
+        #[serde(default = "default_ai_auto_unload_secs")]
+        auto_unload_secs: u32,
+    },
+    /// Download a catalog AI model on demand into `$XDG_DATA_HOME/.../models/`.
+    AiDownloadModel {
+        model_id: String,
+    },
+    /// Remove a previously downloaded AI model file to reclaim disk space.
+    AiDeleteModel {
+        model_id: String,
+    },
+    /// Point a model slot at a user-provided local `.onnx` file (empty clears override).
+    AiSetCustomModel {
+        model_id: String,
+        path: String,
+    },
+    /// Cancel an active AI model download or inference worker task.
+    AiCancel,
+    /// Run the Remove Background AI plugin on the open Editor document and push
+    /// the transparent RGBA result as a single undoable `EditOperation`.
+    EditorAiRemoveBackground {
+        #[serde(default = "default_rembg_model_id")]
+        model_id: String,
+        #[serde(default)]
+        feather: u8,
+    },
     CancelOperation,
+}
+
+fn default_ai_auto_unload_secs() -> u32 {
+    60
+}
+
+fn default_rembg_model_id() -> String {
+    "rmbg-1.4".to_owned()
 }
 
 impl Command {
@@ -996,6 +1208,13 @@ impl Command {
             Self::EditorReset => "editor_reset",
             Self::EditorClose => "editor_close",
             Self::BatchRun { .. } => "batch_run",
+            Self::AiRefreshPlugins => "ai_refresh_plugins",
+            Self::AiSetSettings { .. } => "ai_set_settings",
+            Self::AiDownloadModel { .. } => "ai_download_model",
+            Self::AiDeleteModel { .. } => "ai_delete_model",
+            Self::AiSetCustomModel { .. } => "ai_set_custom_model",
+            Self::AiCancel => "ai_cancel",
+            Self::EditorAiRemoveBackground { .. } => "editor_ai_remove_background",
         }
     }
 }

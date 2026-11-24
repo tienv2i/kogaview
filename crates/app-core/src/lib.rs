@@ -16,6 +16,7 @@ pub mod journal;
 pub mod logging;
 pub mod ops;
 pub mod paths;
+pub mod plugins;
 pub mod state;
 
 pub use config::Config;

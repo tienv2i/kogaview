@@ -151,5 +151,6 @@ pub fn render_operation(image: &RgbaImage, operation: &EditOperation) -> Result<
                 image, points, *color, *radius, *opacity, *erase,
             ))
         }
+        EditOperation::AiResult { pixels, .. } => Ok(pixels.as_ref().clone()),
     }
 }

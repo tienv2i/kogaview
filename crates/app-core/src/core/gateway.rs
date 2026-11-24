@@ -265,6 +265,8 @@ impl Core {
             }
         }
 
+        changed |= self.poll_ai();
+
         if changed {
             self.state.bump();
         }
@@ -551,6 +553,20 @@ impl Core {
                 source,
                 output,
             } => self.batch_run(operation, source, output),
+            Command::AiRefreshPlugins => self.ai_refresh_plugins(),
+            Command::AiSetSettings {
+                device,
+                auto_unload_secs,
+            } => self.ai_set_settings(device, auto_unload_secs),
+            Command::AiDownloadModel { model_id } => self.ai_download_model(&model_id),
+            Command::AiDeleteModel { model_id } => self.ai_delete_model(&model_id),
+            Command::AiSetCustomModel { model_id, path } => {
+                self.ai_set_custom_model(&model_id, &path)
+            }
+            Command::AiCancel => self.ai_cancel(),
+            Command::EditorAiRemoveBackground { model_id, feather } => {
+                self.editor_ai_remove_background(&model_id, feather)
+            }
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {
@@ -558,6 +574,10 @@ impl Core {
                     cancelled = true;
                 }
                 if let Some(cancel) = &self.batch_cancel {
+                    cancel.store(true, Ordering::SeqCst);
+                    cancelled = true;
+                }
+                if let Some(cancel) = &self.ai_cancel {
                     cancel.store(true, Ordering::SeqCst);
                     cancelled = true;
                 }

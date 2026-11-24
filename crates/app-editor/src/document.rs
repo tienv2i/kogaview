@@ -319,6 +319,7 @@ impl EditorDocument {
                 // no "nothing to do" case to report.
                 Ok(false)
             }
+            EditOperation::AiResult { .. } => Ok(false),
         }
     }
 
@@ -338,7 +339,7 @@ impl EditorDocument {
             | EditOperation::AdjustColor { .. } => Undo::Snapshot(before),
             // A stroke blends over the pixels underneath it, so inverting it
             // would need the original alpha at every touched pixel. Snapshot.
-            EditOperation::Paint { .. } => Undo::Snapshot(before),
+            EditOperation::Paint { .. } | EditOperation::AiResult { .. } => Undo::Snapshot(before),
         };
         self.undo.push(Step { operation, undo });
         self.redo.clear();

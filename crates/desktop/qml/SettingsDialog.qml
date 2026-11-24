@@ -49,8 +49,13 @@ DialogFrame {
     /// The saved layout, as `set_layout` carries it (`LayoutState` in the
     /// protocol). The dialog edits a copy, so a checkbox is a preview.
     property var initialLayout: ({})
+    /// Live AI settings, plugins, models, and task state from Core.
+    property var aiSettings: ({ device: "cpu", autoUnloadSecs: 60, customModelPaths: ({}) })
+    property var aiPlugins: []
+    property var aiModels: []
+    property var aiTask: null
 
-    /// The page on screen: `general`, `browser`, `editor` or `viewer`.
+    /// The page on screen: `general`, `performance`, `browser`, `editor`, `viewer`, or `ai`.
     property string section: "general"
     /// The strip's tabs. The labels are the workspace's own word; the drawings
     /// are this repository's SVGs so the strip follows the theme on a desktop
@@ -60,7 +65,8 @@ DialogFrame {
         { key: "performance", label: qsTr("Performance"), icon: "icons/adjust.svg" },
         { key: "browser", label: qsTr("Browser"), icon: "icons/browser.svg" },
         { key: "editor", label: qsTr("Editor"), icon: "icons/editor.svg" },
-        { key: "viewer", label: qsTr("Viewer"), icon: "icons/viewer.svg" }
+        { key: "viewer", label: qsTr("Viewer"), icon: "icons/viewer.svg" },
+        { key: "ai", label: qsTr("AI"), icon: "icons/ai-rembg.svg" }
     ]
 
     /// The panels each workspace offers, with the keys `LayoutState` uses.
@@ -694,6 +700,186 @@ DialogFrame {
         }
     }
 
+    // -------------------------------------------------- AI (On-demand plugins & models)
+    ColumnLayout {
+        objectName: "settingsAiPage"
+        Layout.fillWidth: true
+        spacing: 10
+        visible: dialog.section === "ai"
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Execution & memory")
+            Layout.fillWidth: true
+
+            FormRow {
+                theme: dialog.theme
+                label: qsTr("Device")
+                ComboBox {
+                    id: aiDeviceChoice
+                    objectName: "settingsAiDeviceChoice"
+                    Layout.fillWidth: true
+                    model: [
+                        qsTr("CPU (Default — safest)"),
+                        qsTr("Auto (GPU with CPU fallback)"),
+                        qsTr("GPU (Fallback to CPU if unavailable)")
+                    ]
+                    readonly property var deviceKeys: ["cpu", "auto", "gpu"]
+                    currentIndex: {
+                        var dev = (dialog.aiSettings && dialog.aiSettings.device) || "cpu"
+                        var idx = deviceKeys.indexOf(dev)
+                        return idx >= 0 ? idx : 0
+                    }
+                    onActivated: function(index) {
+                        var dev = deviceKeys[index] || "cpu"
+                        var secs = (dialog.aiSettings && dialog.aiSettings.autoUnloadSecs) || 60
+                        dialog.aiSettingsSaveRequested(dev, secs)
+                    }
+                }
+            }
+
+            Label {
+                text: qsTr("AI plugins run out-of-process, load only when invoked, and unload automatically after each job to free RAM and VRAM.")
+                color: dialog.theme.textMuted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+        }
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Remove Background models (On-demand)")
+            Layout.fillWidth: true
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                visible: !!(dialog.aiTask && dialog.aiTask.running && dialog.aiTask.kind === "download")
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Label {
+                        text: dialog.aiTask ? dialog.aiTask.stage : ""
+                        color: dialog.theme.text
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    PanelAction {
+                        theme: dialog.theme
+                        text: qsTr("Cancel")
+                        onClicked: dialog.aiCancelRequested()
+                    }
+                }
+                ProgressBar {
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 100
+                    value: dialog.aiTask ? dialog.aiTask.percent : 0
+                }
+            }
+
+            Repeater {
+                model: dialog.aiModels || []
+                delegate: Rectangle {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    implicitHeight: modelRow.implicitHeight + 14
+                    radius: dialog.theme.radius
+                    color: dialog.theme.surfaceAlt
+                    border.width: 1
+                    border.color: dialog.theme.border
+
+                    RowLayout {
+                        id: modelRow
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        spacing: 8
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Label {
+                                text: modelData.name
+                                color: dialog.theme.text
+                                font.pixelSize: 13
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: (modelData.installed ? qsTr("Installed") : qsTr("Not downloaded"))
+                                      + " · " + dialog.theme.formatBytes(modelData.sizeBytes || 0)
+                                      + (modelData.customPath ? " (" + qsTr("Custom file") + ")" : "")
+                                color: modelData.installed ? dialog.theme.accent : dialog.theme.textMuted
+                                font.pixelSize: 11
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        PanelAction {
+                            theme: dialog.theme
+                            text: qsTr("Local .onnx…")
+                            enabled: !(dialog.aiTask && dialog.aiTask.running)
+                            onClicked: dialog.aiBrowseModelRequested(modelData.id)
+                        }
+
+                        PanelAction {
+                            theme: dialog.theme
+                            text: modelData.installed ? qsTr("Delete") : qsTr("Download")
+                            primary: !modelData.installed
+                            enabled: !(dialog.aiTask && dialog.aiTask.running)
+                            onClicked: {
+                                if (modelData.installed) {
+                                    dialog.aiDeleteModelRequested(modelData.id)
+                                } else {
+                                    dialog.aiDownloadModelRequested(modelData.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        FormSection {
+            theme: dialog.theme
+            title: qsTr("Plugins")
+            Layout.fillWidth: true
+
+            Repeater {
+                model: dialog.aiPlugins || []
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Label {
+                        text: modelData.name + " v" + modelData.version
+                        color: dialog.theme.text
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+                    Label {
+                        text: modelData.available
+                              ? qsTr("Ready")
+                              : qsTr("Not built (just build-plugin-rembg)")
+                        color: modelData.available ? dialog.theme.accent : dialog.theme.textMuted
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
+            PanelAction {
+                theme: dialog.theme
+                text: qsTr("Refresh plugins")
+                onClicked: dialog.aiRefreshPluginsRequested()
+            }
+        }
+    }
+
     Label {
         objectName: "settingsHint"
         text: qsTr("Changes are previewed as you make them. Apply saves them; OK saves and closes.")
@@ -770,6 +956,12 @@ DialogFrame {
     signal saveRequested(string themeName, bool rememberLastFolder,
                          bool backgroundThumbnails, string language)
     signal layoutSaveRequested(var layout)
+    signal aiSettingsSaveRequested(string device, int autoUnloadSecs)
+    signal aiDownloadModelRequested(string modelId)
+    signal aiDeleteModelRequested(string modelId)
+    signal aiBrowseModelRequested(string modelId)
+    signal aiCancelRequested()
+    signal aiRefreshPluginsRequested()
     /// Cancel, × or Escape: everything previewed is being undone. Emitted
     /// before the dialog closes.
     signal revertRequested()

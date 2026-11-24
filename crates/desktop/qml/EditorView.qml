@@ -2951,6 +2951,18 @@ Item {
                             view.forceActiveFocus()
                         }
                     }
+                    ToolRailButton {
+                        objectName: "toolRemoveBg"
+                        theme: view.theme
+                        iconSource: "icons/ai-rembg.svg"
+                        tooltip: qsTr("Remove background (AI)")
+                        active: view.tool === "removeBg"
+                        enabled: view.documentReady
+                        onClicked: {
+                            view.tool = view.tool === "removeBg" ? "pointer" : "removeBg"
+                            view.forceActiveFocus()
+                        }
+                    }
                 }
 
                 Rectangle {
@@ -4911,6 +4923,153 @@ Item {
                                 theme: view.theme
                                 viewOnly: false
                                 showReset: false
+                            }
+
+                            ColumnLayout {
+                                id: removeBgOptionsPanel
+                                objectName: "editorRemoveBgPanel"
+                                Layout.fillWidth: true
+                                spacing: 10
+                                visible: view.tool === "removeBg"
+
+                                readonly property var models: (view.state && view.state.aiModels) || []
+                                readonly property var activeTask: (view.state && view.state.aiTask) || null
+                                readonly property bool aiBusy: !!(activeTask && activeTask.running)
+                                readonly property var selectedModel: {
+                                    if (models.length === 0) return null
+                                    var idx = Math.max(0, Math.min(models.length - 1, rembgModelCombo.currentIndex))
+                                    return models[idx]
+                                }
+
+                                Label {
+                                    text: qsTr("Model")
+                                    color: view.theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                ComboBox {
+                                    id: rembgModelCombo
+                                    objectName: "rembgModelCombo"
+                                    Layout.fillWidth: true
+                                    currentIndex: 1
+                                    model: {
+                                        var list = removeBgOptionsPanel.models
+                                        var labels = []
+                                        for (var i = 0; i < list.length; ++i) {
+                                            var m = list[i]
+                                            labels.push(m.name + (m.installed ? "" : " (" + qsTr("Not downloaded") + ")"))
+                                        }
+                                        return labels
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Label {
+                                        text: qsTr("Edge feather")
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+                                    Label {
+                                        text: rembgFeatherSlider.value + " px"
+                                        color: view.theme.text
+                                        font.pixelSize: 12
+                                    }
+                                }
+                                Slider {
+                                    id: rembgFeatherSlider
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: 20
+                                    stepSize: 1
+                                    value: 0
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    visible: removeBgOptionsPanel.aiBusy
+
+                                    Label {
+                                        text: removeBgOptionsPanel.activeTask ? removeBgOptionsPanel.activeTask.stage : ""
+                                        color: view.theme.textMuted
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    ProgressBar {
+                                        Layout.fillWidth: true
+                                        from: 0
+                                        to: 100
+                                        value: removeBgOptionsPanel.activeTask ? removeBgOptionsPanel.activeTask.percent : 0
+                                    }
+                                }
+
+                                Label {
+                                    visible: !!(removeBgOptionsPanel.activeTask
+                                                && !removeBgOptionsPanel.activeTask.running
+                                                && removeBgOptionsPanel.activeTask.error)
+                                    text: removeBgOptionsPanel.activeTask && removeBgOptionsPanel.activeTask.error
+                                          ? removeBgOptionsPanel.activeTask.error : ""
+                                    color: view.theme.danger
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Button {
+                                    objectName: "rembgDownloadButton"
+                                    Layout.fillWidth: true
+                                    visible: !!(removeBgOptionsPanel.selectedModel
+                                                && !removeBgOptionsPanel.selectedModel.installed
+                                                && !removeBgOptionsPanel.aiBusy)
+                                    text: qsTr("Download model (%1)")
+                                        .arg(view.theme.formatBytes(removeBgOptionsPanel.selectedModel
+                                                                    ? (removeBgOptionsPanel.selectedModel.sizeBytes || 0) : 0))
+                                    focusPolicy: Qt.NoFocus
+                                    onClicked: {
+                                        if (removeBgOptionsPanel.selectedModel) {
+                                            view.command({
+                                                type: "ai_download_model",
+                                                model_id: removeBgOptionsPanel.selectedModel.id
+                                            })
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Button {
+                                        objectName: "rembgRunButton"
+                                        Layout.fillWidth: true
+                                        text: qsTr("Remove background")
+                                        focusPolicy: Qt.NoFocus
+                                        enabled: view.documentReady
+                                                 && !removeBgOptionsPanel.aiBusy
+                                                 && !!(removeBgOptionsPanel.selectedModel
+                                                       && removeBgOptionsPanel.selectedModel.installed)
+                                        onClicked: {
+                                            if (removeBgOptionsPanel.selectedModel) {
+                                                view.command({
+                                                    type: "editor_ai_remove_background",
+                                                    model_id: removeBgOptionsPanel.selectedModel.id,
+                                                    feather: Math.round(rembgFeatherSlider.value)
+                                                })
+                                            }
+                                        }
+                                    }
+
+                                    Button {
+                                        objectName: "rembgCancelButton"
+                                        visible: removeBgOptionsPanel.aiBusy
+                                        text: qsTr("Cancel")
+                                        focusPolicy: Qt.NoFocus
+                                        onClicked: view.command({ type: "ai_cancel" })
+                                    }
+                                }
                             }
                         }
                     }

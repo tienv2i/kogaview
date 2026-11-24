@@ -1,0 +1,55 @@
+{
+  "apiVersion": 1,
+  "id": "kogaview.rmbg.onnx",
+  "name": "Remove Background (ONNX)",
+  "version": "1.2.0",
+  "entry": {
+    "command": "bin/kogaview-plugin-rembg",
+    "args": ["--device", "${device}"],
+    "protocol": "jsonl-stdio"
+  },
+  "permissions": {
+    "network": false,
+    "gpu": true
+  },
+  "models": [
+    {
+      "id": "u2netp",
+      "name": "U²-Net Lite (Fast)",
+      "tier": "fast",
+      "file": "u2netp.onnx",
+      "sizeBytes": 4716000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
+    },
+    {
+      "id": "rmbg-1.4",
+      "name": "BRIA RMBG-1.4 (Balanced)",
+      "tier": "balanced",
+      "file": "rmbg-1.4.onnx",
+      "sizeBytes": 44500000,
+      "sha256": "",
+      "url": "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model_quantized.onnx"
+    },
+    {
+      "id": "isnet-general-use",
+      "name": "IS-Net General (High)",
+      "tier": "high",
+      "file": "isnet-general-use.onnx",
+      "sizeBytes": 176000000,
+      "sha256": "",
+      "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx"
+    }
+  ],
+  "capabilities": [
+    {
+      "action": "editor.remove_background",
+      "workspace": "editor",
+      "label": "Remove background",
+      "output": "rgba_image",
+      "params": [
+        { "key": "feather", "type": "int", "min": 0, "max": 20, "default": 0 }
+      ]
+    }
+  ]
+}

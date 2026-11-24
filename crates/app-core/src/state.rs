@@ -3,7 +3,9 @@
 //! The UI renders this snapshot; it never mutates it. Every field here is
 //! produced by Core after a command or a completed background task.
 
-use kogaview_protocol::{Language, LayoutState, Theme, Workspace};
+use kogaview_protocol::{
+    AiModelStatus, AiPluginStatus, AiSettings, AiTaskState, Language, LayoutState, Theme, Workspace,
+};
 use serde::Serialize;
 
 // The line shape is part of the protocol: both a successful command result and
@@ -185,6 +187,14 @@ pub struct UiState {
     /// The batch job in flight, or the last one that finished. `None` until the
     /// first job, so the Batch page can tell "never run" from "finished".
     pub batch: Option<BatchState>,
+    /// Persisted AI preferences (`device`, `autoUnloadSecs`, custom model paths).
+    pub ai_settings: AiSettings,
+    /// Discovered AI plugins (manifest metadata only; 0 processes spawned).
+    pub ai_plugins: Vec<AiPluginStatus>,
+    /// On-demand AI model catalog and installation status.
+    pub ai_models: Vec<AiModelStatus>,
+    /// Active or most-recent AI background task (download or inference).
+    pub ai_task: Option<AiTaskState>,
     pub busy: bool,
     /// What the status bar says, as a translatable line.
     pub status: UiText,
@@ -233,6 +243,10 @@ impl UiState {
             viewer_size: 0,
             editor: None,
             batch: None,
+            ai_settings: AiSettings::default(),
+            ai_plugins: Vec::new(),
+            ai_models: Vec::new(),
+            ai_task: None,
             busy: false,
             status: UiText::new("ready"),
             config_path,
@@ -279,6 +293,10 @@ impl UiState {
             viewer_size: self.viewer_size,
             editor: &self.editor,
             batch: &self.batch,
+            ai_settings: &self.ai_settings,
+            ai_plugins: &self.ai_plugins,
+            ai_models: &self.ai_models,
+            ai_task: &self.ai_task,
             busy: self.busy,
             status: &self.status,
             config_path: &self.config_path,
@@ -333,6 +351,10 @@ pub struct StateMeta<'a> {
     pub viewer_size: u64,
     pub editor: &'a Option<EditorState>,
     pub batch: &'a Option<BatchState>,
+    pub ai_settings: &'a AiSettings,
+    pub ai_plugins: &'a [AiPluginStatus],
+    pub ai_models: &'a [AiModelStatus],
+    pub ai_task: &'a Option<AiTaskState>,
     pub busy: bool,
     pub status: &'a UiText,
     pub config_path: &'a str,

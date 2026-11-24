@@ -56,5 +56,6 @@
     <file alias="icons/viewer-mode.svg">qml/icons/viewer-mode.svg</file>
     <file alias="icons/fullscreen.svg">qml/icons/fullscreen.svg</file>
     <file alias="icons/fullscreen-exit.svg">qml/icons/fullscreen-exit.svg</file>
+    <file alias="icons/ai-rembg.svg">qml/icons/ai-rembg.svg</file>
   </qresource>
 </RCC>
