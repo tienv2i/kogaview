@@ -214,7 +214,8 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          flatpak-builder --force-clean --install-deps-from=flathub --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
+          dbus-uuidgen --ensure=/etc/machine-id || true
+          flatpak-builder --force-clean --disable-rofiles-fuse --install-deps-from=flathub --repo=flatpak-repo build-flatpak packaging/flatpak/io.github.tienv2i.KogaView.yml
           flatpak build-bundle flatpak-repo "dist/KogaView-${VER}-x86_64.flatpak" io.github.tienv2i.KogaView
       - uses: actions/upload-artifact@v4
         with:
