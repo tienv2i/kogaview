@@ -61,8 +61,10 @@ Item {
     property var latestResult: null
     property string lastTargetPath: ""
     property var lastRegion: null
+    property int selectedBubbleIndex: -1
     property int _replacingBubbleIndex: -1
     property bool cardVisible: false
+    property bool cardShowOriginal: false
     property string _lastResultKey: ""
 
     readonly property bool isOcrMode: overlay.overlayMode === "ocr"
@@ -148,10 +150,32 @@ Item {
         overlay.translateRequested(targetPath, overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
     }
 
+    function selectBubble(idx) {
+        var list = overlay.currentBubbles
+        if (idx < 0 || idx >= list.length) return
+        var b = list[idx]
+        overlay.selectedBubbleIndex = idx
+        overlay.lastTargetPath = overlay.imagePath
+        overlay.lastRegion = [b.x, b.y, b.w, b.h]
+        overlay.latestResult = {
+            path: overlay.imagePath,
+            originalText: b.original || "",
+            translatedText: b.translated || "",
+            blocks: [b]
+        }
+        overlay.cardShowOriginal = !(b.translated && b.translated.length > 0)
+        if (!overlay.reviewMode) {
+            overlay.cardVisible = true
+        }
+    }
+
     function retryLast() {
         if (overlay.busy) return
         var targetPath = overlay.lastTargetPath || overlay.imagePath
         if (!targetPath) return
+        if (overlay.selectedBubbleIndex >= 0 && overlay.selectedBubbleIndex < overlay.currentBubbles.length) {
+            overlay._replacingBubbleIndex = overlay.selectedBubbleIndex
+        }
         overlay._lastResultKey = ""
         overlay.translateRequested(targetPath, overlay.sourceCode(), overlay.targetCode(), overlay.lastRegion, overlay.engineCode())
     }
@@ -196,24 +220,29 @@ Item {
 
         var existing = (overlay.bubblesByPath[trPath] || []).slice()
         var incoming = tr.blocks || []
+        var activeIdx = -1
         if (overlay._replacingBubbleIndex >= 0
                 && overlay._replacingBubbleIndex < existing.length
                 && incoming.length > 0) {
             existing[overlay._replacingBubbleIndex] = incoming[0]
+            activeIdx = overlay._replacingBubbleIndex
             overlay._replacingBubbleIndex = -1
         } else {
             overlay._replacingBubbleIndex = -1
             for (var i = 0; i < incoming.length; ++i) {
                 existing.push(incoming[i])
             }
+            activeIdx = existing.length - 1
         }
         var map = overlay.bubblesByPath
         map[trPath] = existing
         overlay.bubblesByPath = map
         if (trPath === overlay.imagePath) {
             overlay.currentBubbles = existing
+            overlay.selectedBubbleIndex = activeIdx
         }
         overlay.latestResult = tr
+        overlay.cardShowOriginal = !(tr.translatedText && tr.translatedText.length > 0)
         overlay.cardVisible = true
         overlay.saveTranslationRequested(trPath, existing)
     }
@@ -308,6 +337,11 @@ Item {
             property real dragDx: 0
             property real dragDy: 0
             property bool moving: false
+            property bool showOriginal: false
+            readonly property bool hasBoth: !!(modelData.original && modelData.translated)
+            readonly property bool isSelected: overlay.selectedBubbleIndex === index
+
+            HoverHandler { id: bubbleHover }
 
             readonly property var mapped: {
                 if (overlay.webtoonMode && overlay.webtoonItem) {
@@ -345,7 +379,7 @@ Item {
             radius: 8
             color: Qt.rgba(overlay.theme.surface.r, overlay.theme.surface.g, overlay.theme.surface.b,
                            overlay.translucentBubbles ? 0.80 : 0.95)
-            border.width: moving ? 2 : 1
+            border.width: (moving || isSelected) ? 2 : 1
             border.color: overlay.reviewMode ? overlay.theme.border : overlay.theme.accent
             clip: true
 
@@ -362,7 +396,7 @@ Item {
                 MouseArea {
                     id: bubbleDragArea
                     anchors.fill: parent
-                    anchors.rightMargin: 48
+                    anchors.rightMargin: bubbleRect.hasBoth ? 92 : 48
                     acceptedButtons: Qt.LeftButton
                     preventStealing: true
                     cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
@@ -371,6 +405,7 @@ Item {
                     property real startScreenY: 0
 
                     onPressed: function(mouse) {
+                        overlay.selectBubble(index)
                         var pt = bubbleHeader.mapToItem(overlay, mouse.x, mouse.y)
                         startScreenX = pt.x
                         startScreenY = pt.y
@@ -424,8 +459,44 @@ Item {
                     opacity: 0.8
                 }
 
+                // Per-bubble language toggle (Original <-> Translation, 1 language shown at a time)
+                Rectangle {
+                    id: bubbleLangToggle
+                    visible: bubbleRect.hasBoth
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: retryBubbleBtn.left
+                    anchors.rightMargin: 4
+                    width: bubbleLangLbl.implicitWidth + 10
+                    height: 18
+                    radius: 9
+                    z: 2
+                    color: langToggleHover.hovered ? overlay.theme.accent : overlay.theme.surface
+                    border.width: 1
+                    border.color: langToggleHover.hovered ? overlay.theme.accent : overlay.theme.border
+                    HoverHandler { id: langToggleHover }
+                    Text {
+                        id: bubbleLangLbl
+                        anchors.centerIn: parent
+                        text: bubbleRect.showOriginal ? qsTr("Trans") : qsTr("Orig")
+                        color: langToggleHover.hovered ? overlay.theme.accentText : overlay.theme.textMuted
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: {
+                            bubbleRect.showOriginal = !bubbleRect.showOriginal
+                            overlay.selectBubble(index)
+                            overlay.cardShowOriginal = bubbleRect.showOriginal
+                        }
+                    }
+                }
+
                 // Per-bubble Reload / Retry OCR & translate button
                 Rectangle {
+                    id: retryBubbleBtn
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: removeBubbleBtn.left
                     anchors.rightMargin: 4
@@ -486,7 +557,7 @@ Item {
                 }
             }
 
-            // Selectable read-only text inside the bubble (Ctrl+C copies selection)
+            // Selectable read-only text inside the bubble (shows 1 language at a time)
             TextEdit {
                 id: bubbleText
                 anchors.top: bubbleHeader.bottom
@@ -499,7 +570,9 @@ Item {
                 anchors.bottomMargin: 10
                 readOnly: true
                 selectByMouse: true
-                text: modelData.translated || modelData.original || ""
+                text: (bubbleRect.showOriginal || !modelData.translated)
+                      ? (modelData.original || "")
+                      : modelData.translated
                 color: overlay.theme.text
                 selectionColor: overlay.theme.accent
                 selectedTextColor: overlay.theme.accentText
@@ -508,6 +581,38 @@ Item {
                 horizontalAlignment: TextEdit.AlignHCenter
                 verticalAlignment: TextEdit.AlignVCenter
                 Keys.onEscapePressed: focus = false
+                onActiveFocusChanged: {
+                    if (activeFocus) overlay.selectBubble(index)
+                }
+            }
+
+            // Subtle hover-only language flip pill during Review mode
+            Rectangle {
+                visible: overlay.reviewMode && bubbleRect.hasBoth && bubbleHover.hovered
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: 4
+                width: revLangLbl.implicitWidth + 10
+                height: 18
+                radius: 9
+                z: 3
+                color: overlay.theme.surfaceAlt
+                border.width: 1
+                border.color: overlay.theme.border
+                Text {
+                    id: revLangLbl
+                    anchors.centerIn: parent
+                    text: bubbleRect.showOriginal ? qsTr("Trans") : qsTr("Orig")
+                    color: overlay.theme.textMuted
+                    font.pixelSize: 10
+                    font.bold: true
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    preventStealing: true
+                    onClicked: bubbleRect.showOriginal = !bubbleRect.showOriginal
+                }
             }
         }
     }
@@ -978,63 +1083,61 @@ Item {
                 }
             }
 
-            // Original / OCR text box
-            Rectangle {
-                visible: !overlay.busy && !!(overlay.latestResult && overlay.latestResult.originalText)
+            // Single-language toggle row inside resultCard (shows 1 language at a time)
+            RowLayout {
                 Layout.fillWidth: true
-                implicitHeight: Math.min(96, origText.implicitHeight + 16)
-                radius: 6
-                color: overlay.theme.surfaceAlt
-                border.width: 1
-                border.color: overlay.theme.border
-                clip: true
+                spacing: 6
+                visible: !overlay.busy && !!(overlay.latestResult
+                         && overlay.latestResult.originalText
+                         && overlay.latestResult.translatedText)
 
-                Flickable {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    contentWidth: width
-                    contentHeight: origText.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-                    TextEdit {
-                        id: origText
-                        width: parent.width
-                        readOnly: true
-                        selectByMouse: true
-                        text: overlay.latestResult ? overlay.latestResult.originalText : ""
-                        color: (overlay.latestResult && overlay.latestResult.translatedText)
-                               ? overlay.theme.textMuted : overlay.theme.text
-                        selectionColor: overlay.theme.accent
-                        selectedTextColor: overlay.theme.accentText
-                        font.pixelSize: (overlay.latestResult && overlay.latestResult.translatedText) ? 12 : 14
-                        wrapMode: TextEdit.WordWrap
-                        Keys.onEscapePressed: focus = false
-                    }
+                PanelAction {
+                    theme: overlay.theme
+                    text: qsTr("Translation")
+                    primary: !overlay.cardShowOriginal
+                    onClicked: overlay.cardShowOriginal = false
                 }
+
+                PanelAction {
+                    theme: overlay.theme
+                    text: qsTr("Original")
+                    primary: overlay.cardShowOriginal
+                    onClicked: overlay.cardShowOriginal = true
+                }
+
+                Item { Layout.fillWidth: true }
             }
 
-            // Translated text box
+            // Single active text box (either Translated or Original)
             Rectangle {
-                visible: !overlay.busy && !!(overlay.latestResult && overlay.latestResult.translatedText)
+                readonly property string activeText: {
+                    if (!overlay.latestResult) return ""
+                    if (overlay.cardShowOriginal || !overlay.latestResult.translatedText) {
+                        return overlay.latestResult.originalText || ""
+                    }
+                    return overlay.latestResult.translatedText || ""
+                }
+                visible: !overlay.busy && activeText.length > 0
                 Layout.fillWidth: true
-                implicitHeight: Math.min(140, transText.implicitHeight + 24)
+                implicitHeight: Math.min(160, cardText.implicitHeight + 24)
                 radius: 6
                 color: overlay.theme.surfaceAlt
                 border.width: 1
-                border.color: overlay.theme.accent
+                border.color: overlay.cardShowOriginal ? overlay.theme.border : overlay.theme.accent
                 clip: true
 
                 Flickable {
                     anchors.fill: parent
                     anchors.margins: 12
                     contentWidth: width
-                    contentHeight: transText.implicitHeight
+                    contentHeight: cardText.implicitHeight
                     boundsBehavior: Flickable.StopAtBounds
                     TextEdit {
-                        id: transText
+                        id: cardText
                         width: parent.width
                         readOnly: true
                         selectByMouse: true
-                        text: overlay.latestResult ? overlay.latestResult.translatedText : ""
+                        text: parent.parent.activeText
                         color: overlay.theme.text
                         selectionColor: overlay.theme.accent
                         selectedTextColor: overlay.theme.accentText
@@ -1067,7 +1170,9 @@ Item {
                     text: qsTr("Copy")
                     onClicked: {
                         if (!overlay.latestResult) return
-                        var txt = overlay.latestResult.translatedText || overlay.latestResult.originalText || ""
+                        var txt = (overlay.cardShowOriginal || !overlay.latestResult.translatedText)
+                                  ? (overlay.latestResult.originalText || "")
+                                  : (overlay.latestResult.translatedText || "")
                         if (txt) overlay.copyTextRequested(txt)
                     }
                 }
