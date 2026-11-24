@@ -69,8 +69,8 @@ Item {
     /// never draws.
     readonly property int browserButtons: 4
     readonly property int browserSeparators: 1
-    readonly property int viewerButtons: 11
-    readonly property int viewerSeparators: 2
+    readonly property int viewerButtons: 14
+    readonly property int viewerSeparators: 3
     readonly property int editorButtons: 11
     readonly property int editorSeparators: 3
 
@@ -182,13 +182,18 @@ Item {
                 + Math.max(0, buttons + separators - 1) * metrics.buttonSpacing
     }
 
+    /// Width of the Viewer's 24 px canvas-background swatch plus its 2 px gap.
+    readonly property int viewerBgSwatchWidth: 26
+
     /// Width of one workspace's toolbar: its buttons, separators and any text
     /// readout between them (the Viewer's image counter, the Editor's zoom).
     readonly property real browserToolbarWidth:
         metrics.toolbarWidth(metrics.browserButtons, metrics.browserSeparators)
-    readonly property real viewerToolbarWidth:
+    readonly property real viewerNoCounterToolbarWidth:
         metrics.toolbarWidth(metrics.viewerButtons, metrics.viewerSeparators)
-        + viewerCounterLabel.advanceWidth
+        + metrics.viewerBgSwatchWidth
+    readonly property real viewerToolbarWidth:
+        metrics.viewerNoCounterToolbarWidth + viewerCounterLabel.advanceWidth
     readonly property real editorToolbarWidth:
         metrics.toolbarWidth(metrics.editorButtons, metrics.editorSeparators)
         + Math.max(metrics.editorZoomLabelWidth, editorZoomLabel.advanceWidth)
@@ -246,6 +251,8 @@ Item {
         metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.browserToolbarWidth)
     readonly property real viewerCollapsedRowWidth:
         metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.viewerToolbarWidth)
+    readonly property real viewerNoCounterRowWidth:
+        metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.viewerNoCounterToolbarWidth)
     readonly property real editorCollapsedRowWidth:
         metrics.rowWidth(metrics.switcherCollapsedWidth, metrics.editorToolbarWidth)
 
@@ -358,6 +365,62 @@ Item {
         if (width >= compact) return "compact"
         if (width >= collapsed) return "collapsed"
         return "mini"
+    }
+
+    /// True once the Viewer's `1 / N` image counter must hide (after the
+    /// switcher collapses to 1 dropdown, before folding toolbar buttons).
+    function viewerHideCounterFor(windowWidth) {
+        return windowWidth < metrics.viewerCollapsedRowWidth
+    }
+
+    /// How many trailing Viewer toolbar controls must fold one-by-one into `⋯`
+    /// at `windowWidth`:
+    ///   0  ⇒ all controls fit (counter may be hidden)
+    ///   1  ⇒ Canvas background swatch folded
+    ///   2  ⇒ + Viewer mode & layout folded
+    ///   3  ⇒ + Info & color folded
+    ///   4  ⇒ + Filmstrip folded
+    ///   5  ⇒ + Fullscreen folded (also drops separator 3)
+    ///   6  ⇒ + Flip vertical folded
+    ///   7  ⇒ + Flip horizontal folded
+    ///   8  ⇒ + Rotate right folded
+    ///   9  ⇒ + Rotate left folded (also drops separator 2)
+    ///   10 ⇒ + Actual size 100% folded
+    ///   11 ⇒ + Zoom in folded
+    ///   12 ⇒ + Zoom out folded (also drops separator 1; leaves Prev, Next, Fit, ⋯)
+    function viewerFoldCountFor(windowWidth) {
+        if (windowWidth >= metrics.viewerNoCounterRowWidth) return 0
+        var avail = Math.max(0, windowWidth
+                                - metrics.switcherCollapsedWidth
+                                - metrics.separatorWidth
+                                - metrics.busyIndicatorWidth
+                                - metrics.menuButtonWidth
+                                - metrics.rowGaps)
+        var slot = metrics.buttonWidth + metrics.buttonSpacing
+        var sepSlot = metrics.separatorWidth + metrics.buttonSpacing
+        // Showing `⋯` costs one button slot; start with all controls + `⋯`.
+        var needed = metrics.viewerNoCounterToolbarWidth + slot
+        var widths = [
+            metrics.viewerBgSwatchWidth, // 1: Canvas background
+            slot,                        // 2: Viewer mode & layout
+            slot,                        // 3: Info & color
+            slot,                        // 4: Filmstrip
+            slot + sepSlot,              // 5: Fullscreen + sep 3
+            slot,                        // 6: Flip vertical
+            slot,                        // 7: Flip horizontal
+            slot,                        // 8: Rotate right
+            slot + sepSlot,              // 9: Rotate left + sep 2
+            slot,                        // 10: Actual size 100%
+            slot,                        // 11: Zoom in
+            slot + sepSlot               // 12: Zoom out + sep 1
+        ]
+        var folded = 0
+        for (var i = 0; i < widths.length; ++i) {
+            needed -= widths[i]
+            folded = i + 1
+            if (needed <= avail) break
+        }
+        return folded
     }
 
     /// The window floor: the widest folded row *and* room left for a sidebar and

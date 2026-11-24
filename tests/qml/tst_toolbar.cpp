@@ -351,6 +351,32 @@ private slots:
     QVERIFY2(number(QStringLiteral("browserLabelThreshold"))
                < number(QStringLiteral("editorLabelThreshold")),
              "the Browser and Editor label thresholds are not per workspace");
+
+    // Viewer hides its `1 / N` counter before folding trailing buttons one by one.
+    const qreal viewerCollapsed = number(QStringLiteral("viewerCollapsedRowWidth"));
+    const qreal viewerNoCounter = number(QStringLiteral("viewerNoCounterRowWidth"));
+    QVERIFY(viewerNoCounter < viewerCollapsed);
+    QVariant hideAtCollapsed, hideBelowCollapsed, foldAtNoCounter, foldNarrow, foldFloor;
+    QVERIFY(QMetaObject::invokeMethod(m_metrics, "viewerHideCounterFor",
+                                      Q_RETURN_ARG(QVariant, hideAtCollapsed),
+                                      Q_ARG(QVariant, viewerCollapsed)));
+    QVERIFY(QMetaObject::invokeMethod(m_metrics, "viewerHideCounterFor",
+                                      Q_RETURN_ARG(QVariant, hideBelowCollapsed),
+                                      Q_ARG(QVariant, viewerCollapsed - 1)));
+    QVERIFY(QMetaObject::invokeMethod(m_metrics, "viewerFoldCountFor",
+                                      Q_RETURN_ARG(QVariant, foldAtNoCounter),
+                                      Q_ARG(QVariant, viewerNoCounter)));
+    QVERIFY(QMetaObject::invokeMethod(m_metrics, "viewerFoldCountFor",
+                                      Q_RETURN_ARG(QVariant, foldNarrow),
+                                      Q_ARG(QVariant, viewerNoCounter - 40)));
+    QVERIFY(QMetaObject::invokeMethod(m_metrics, "viewerFoldCountFor",
+                                      Q_RETURN_ARG(QVariant, foldFloor),
+                                      Q_ARG(QVariant, number(QStringLiteral("minimumWindowWidth")))));
+    QCOMPARE(hideAtCollapsed.toBool(), false);
+    QCOMPARE(hideBelowCollapsed.toBool(), true);
+    QCOMPARE(foldAtNoCounter.toInt(), 0);
+    QVERIFY(foldNarrow.toInt() > 0 && foldNarrow.toInt() < foldFloor.toInt());
+    QVERIFY(foldFloor.toInt() < 12);
   }
 
   /// The counted buttons in `ToolbarMetrics` must match the real toolbars. A

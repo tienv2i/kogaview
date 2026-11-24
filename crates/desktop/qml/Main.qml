@@ -90,6 +90,12 @@ ApplicationWindow {
     /// True below the collapsed row: secondary buttons fold into `⋯` and
     /// Viewer hides its `1 / N` counter.
     readonly property bool toolbarMini: root.toolbarMode === "mini"
+    /// Viewer-specific progressive compaction: hide `1 / N` counter first,
+    /// then fold trailing buttons one-by-one into `⋯`.
+    readonly property bool toolbarViewerHideCounter:
+        toolbarMetrics.viewerHideCounterFor(root.width)
+    readonly property int toolbarViewerFoldCount:
+        toolbarMetrics.viewerFoldCountFor(root.width)
 
     /// The layout on screen. Core owns the saved one (`state.layout`); while
     /// Settings is open the form edits a copy and the window draws *that*, so
@@ -1283,7 +1289,9 @@ ApplicationWindow {
             theme: appTheme
             menuLabelWidths: appTheme.menuLabelWidths
             menuShortcutWidths: appTheme.menuShortcutWidths
-            miniToolbar: root.toolbarMini
+            miniToolbar: root.toolbarViewerFoldCount > 0
+            hideCounter: root.toolbarViewerHideCounter
+            toolbarFoldCount: root.toolbarViewerFoldCount
             state: root.state
             entries: snapshot.entries
             viewerImages: snapshot.viewerImages

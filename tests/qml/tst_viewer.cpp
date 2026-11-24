@@ -1306,16 +1306,22 @@ private slots:
       { QStringLiteral("zoom-fit-best-symbolic"), QStringLiteral("Fit to window (F)") },
       { QStringLiteral("zoom-original-symbolic"),
         QStringLiteral("Actual size at 100% (0/1)") },
-      { QStringLiteral("viewerTransformButton"),
-        QStringLiteral("Rotate & flip") },
-      { QStringLiteral("viewerColorAdjustButton"),
-        QStringLiteral("Color & light") },
-      { QStringLiteral("viewerUiModeButton"),
-        QStringLiteral("Viewer mode & layout (M)") },
+      { QStringLiteral("viewerRotateLeftButton"),
+        QStringLiteral("Rotate left (Shift+R)") },
+      { QStringLiteral("viewerRotateRightButton"),
+        QStringLiteral("Rotate right (R)") },
+      { QStringLiteral("viewerFlipHButton"),
+        QStringLiteral("Flip horizontal (H)") },
+      { QStringLiteral("viewerFlipVButton"),
+        QStringLiteral("Flip vertical (V)") },
       { QStringLiteral("viewerFullscreenButton"),
         QStringLiteral("Fullscreen (F11)") },
       { QStringLiteral("viewerFilmstripToggle"),
         QStringLiteral("Toggle thumbnail filmstrip (T)") },
+      { QStringLiteral("viewerColorAdjustButton"),
+        QStringLiteral("Info & color") },
+      { QStringLiteral("viewerUiModeButton"),
+        QStringLiteral("Viewer mode & layout (M)") },
     };
     QList<QQuickItem*> all;
     collectAll(row, &all);
@@ -1417,7 +1423,7 @@ private slots:
     }
     QVERIFY2(overflow != nullptr, "the toolbar has no overflow button");
     QCOMPARE(overflow->isVisible(), mini);
-    QCOMPARE(buttons, mini ? 4 : 11);
+    QCOMPARE(buttons, mini ? 4 : 14);
 
     if (mini) {
       // The folded actions are still reachable, from one menu.
@@ -1429,9 +1435,39 @@ private slots:
       QMetaObject::invokeMethod(menu, "close");
       QTRY_VERIFY(!menu->property("visible").toBool());
       // Zoom in/out, actual size, rotate left/right, flip horizontal/vertical,
-      // reset view, color & light, viewer mode & layout, fullscreen, filmstrip,
+      // reset view, fullscreen, filmstrip, info & color, viewer mode & layout,
       // and canvas background, with two separators.
       QCOMPARE(rows, 15);
+    } else {
+      // Progressive 1-by-1 folding hides Canvas bg, Viewer mode, then Info & color.
+      QQuickItem* bgSwatch = row->findChild<QQuickItem*>(QStringLiteral("viewerBgSwatch"));
+      QQuickItem* modeBtn = row->findChild<QQuickItem*>(QStringLiteral("viewerUiModeButton"));
+      QQuickItem* infoBtn = row->findChild<QQuickItem*>(QStringLiteral("viewerColorAdjustButton"));
+      QVERIFY(bgSwatch != nullptr && modeBtn != nullptr && infoBtn != nullptr);
+
+      m_viewer->setProperty("toolbarFoldCount", 1);
+      QCoreApplication::processEvents();
+      QVERIFY(!bgSwatch->isVisible());
+      QVERIFY(modeBtn->isVisible());
+      QVERIFY(infoBtn->isVisible());
+      QVERIFY(overflow->isVisible());
+
+      m_viewer->setProperty("toolbarFoldCount", 2);
+      QCoreApplication::processEvents();
+      QVERIFY(!bgSwatch->isVisible());
+      QVERIFY(!modeBtn->isVisible());
+      QVERIFY(infoBtn->isVisible());
+
+      m_viewer->setProperty("toolbarFoldCount", 3);
+      QCoreApplication::processEvents();
+      QVERIFY(!bgSwatch->isVisible());
+      QVERIFY(!modeBtn->isVisible());
+      QVERIFY(!infoBtn->isVisible());
+
+      m_viewer->setProperty("toolbarFoldCount", 0);
+      QCoreApplication::processEvents();
+      QVERIFY(bgSwatch->isVisible());
+      QVERIFY(!overflow->isVisible());
     }
     m_viewer->setProperty("miniToolbar", false);
   }
@@ -1541,8 +1577,10 @@ private slots:
     QCoreApplication::processEvents();
 
     QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel", Q_ARG(QVariant, QVariant())));
-    QCOMPARE(m_viewer->property("viewerRightTab").toString(), QStringLiteral("adjust"));
     QCOMPARE(layoutSpy.count(), 1);
+    const QVariantMap patch = layoutSpy.at(0).at(0).toMap();
+    QCOMPARE(patch.value(QStringLiteral("panels")).toMap().value(QStringLiteral("viewer.info")).toBool(),
+             true);
   }
 
   /// "Show in folder" is the shell's job: the view only asks, and both the file
@@ -1841,12 +1879,20 @@ private slots:
     QVERIFY(rightPanel->isVisible());
     QVERIFY(!compactHud->isVisible());
 
-    // Simple mode: right panel hidden, compact HUD still off.
+    // Simple mode: right panel hidden by default, compact HUD off, and
+    // toggling Info & Color opens/closes the right sidebar on demand.
     layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("simple"));
     m_viewer->setProperty("layout", layout);
     QCoreApplication::processEvents();
     QVERIFY(!rightPanel->isVisible());
     QVERIFY(!compactHud->isVisible());
+
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel", Q_ARG(QVariant, QVariant())));
+    QCoreApplication::processEvents();
+    QVERIFY2(rightPanel->isVisible(), "Simple mode should allow opening the right sidebar on button click");
+    QVERIFY(QMetaObject::invokeMethod(m_viewer, "toggleColorAdjustPanel", Q_ARG(QVariant, QVariant())));
+    QCoreApplication::processEvents();
+    QVERIFY2(!rightPanel->isVisible(), "Second toggle should close the right sidebar in Simple mode");
 
     // Compact mode: right panel hidden, compact HUD active.
     layout.insert(QStringLiteral("viewerUiMode"), QStringLiteral("compact"));

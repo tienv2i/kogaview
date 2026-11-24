@@ -119,9 +119,20 @@ Item {
     property var menuLabelWidths: []
     property var menuShortcutWidths: []
     property real menuWidth: theme.menuWidth(menuLabelWidths, menuShortcutWidths)
-    /// True while the window is below the full icon row (`Main.qml`): the
-    /// toolbar keeps its navigation and folds the rest into `viewerOverflowMenu`.
+    /// True while the window is below the full icon row (`Main.qml`): when set
+    /// directly without an explicit `toolbarFoldCount`, folds all foldable
+    /// controls into `viewerOverflowMenu`.
     property bool miniToolbar: false
+    /// True once the `1 / N` image counter hides before folding toolbar buttons.
+    property bool hideCounter: false
+    /// Number of trailing controls folded one-by-one into `viewerOverflowMenu`
+    /// (0 = none folded, 1 = Canvas bg, 2 = +Viewer mode, 3 = +Info & color, ...).
+    property int toolbarFoldCount: 0
+    readonly property int effectiveFoldCount:
+        view.toolbarFoldCount > 0 ? view.toolbarFoldCount : (view.miniToolbar ? 12 : 0)
+    readonly property bool counterHidden:
+        view.hideCounter || view.effectiveFoldCount > 0 || view.miniToolbar
+    readonly property bool overflowVisible: view.effectiveFoldCount > 0
 
     /// The saved layout. The shell owns one copy for the three workspaces; a
     /// view reports an interaction and never writes it.
@@ -130,6 +141,9 @@ Item {
     function panelShown(key) { return view.panels[key] !== false }
     readonly property bool infoPanelVisible: view.panelShown("viewer.info")
     readonly property bool sidebarShown: view.infoPanelVisible
+    /// In Simple mode the right sidebar (Info + Color & Light) is hidden by
+    /// default and can be toggled open on demand from the toolbar button.
+    property bool simpleSidebarOpen: false
     /// Viewer UI chrome density: `"compact"` (image + floating HUD),
     /// `"simple"` (toolbar only), or `"standard"` (full workspace).
     readonly property string uiMode: {
@@ -138,6 +152,13 @@ Item {
                ? mode : "standard"
     }
     readonly property bool standardChrome: !view.fullscreen && view.uiMode === "standard"
+    readonly property bool rightDockAllowed:
+        !view.fullscreen && (view.uiMode === "standard" || view.uiMode === "simple")
+    readonly property bool rightDockVisible:
+        !view.fullscreen && (
+            (view.uiMode === "standard" && view.sidebarShown)
+            || (view.uiMode === "simple" && view.simpleSidebarOpen)
+        )
 
     readonly property string displayMode: {
         var mode = view.layout && view.layout.viewerDisplayMode
@@ -168,7 +189,11 @@ Item {
         view.setUiMode(next)
     }
 
-    onUiModeChanged: Qt.callLater(view.refitOrClamp)
+    onUiModeChanged: {
+        view.simpleSidebarOpen = false
+        Qt.callLater(view.refitOrClamp)
+    }
+    onRightDockVisibleChanged: Qt.callLater(view.refitOrClamp)
     onDisplayModeChanged: {
         if (view.displayMode === "webtoon") {
             Qt.callLater(function() { webtoonView.jumpToPage(view.imageIndex) })
@@ -200,21 +225,19 @@ Item {
         view.layoutRequested(patch)
     }
 
-    /// Toggle Color & Light: in Standard mode opens the RightDock Color tab;
-    /// in Simple / Compact / Fullscreen opens the floating Color popover.
+    /// Toggle Info & Color: in Standard and Simple modes toggles the right
+    /// sidebar (Info + Color & Light tabs); in Compact / Fullscreen opens the
+    /// floating Color popover.
     function toggleColorAdjustPanel(anchor) {
-        if (!view.standardChrome) {
+        if (!view.rightDockAllowed) {
             viewerColorPopover.toggleNear(anchor || view, "top")
             return
         }
-        if (!view.infoPanelVisible) {
-            view.viewerRightTab = "adjust"
-            view.setPanelVisible("info", true)
-        } else if (view.viewerRightTab !== "adjust") {
-            view.viewerRightTab = "adjust"
-        } else {
-            view.setPanelVisible("info", false)
+        if (view.uiMode === "simple") {
+            view.simpleSidebarOpen = !view.simpleSidebarOpen
+            return
         }
+        view.setPanelVisible("info", !view.infoPanelVisible)
     }
 
     property string currentPath: view.state.viewerPath || ""
@@ -876,7 +899,7 @@ Item {
 
         PanelSplitter {
             objectName: "viewerRightSplitter"
-            visible: view.standardChrome && view.sidebarShown
+            visible: view.rightDockVisible
             Layout.fillHeight: true
             theme: view.theme
             value: view.dockWidth
@@ -898,16 +921,16 @@ Item {
         // adjustments (presentation-only, never saved to disk).
         RightDock {
             objectName: "viewerRightPanel"
-            visible: view.standardChrome && view.sidebarShown
+            visible: view.rightDockVisible
             Layout.preferredWidth: view.dockWidth
             Layout.fillHeight: true
             theme: view.theme
             backgroundColor: view.theme.sidebar
             tabs: [
                 { key: "info", label: qsTr("Info"), icon: "icons/info.svg",
-                  shown: view.infoPanelVisible },
+                  shown: true },
                 { key: "adjust", label: qsTr("Color"), icon: "icons/adjust.svg",
-                  shown: view.infoPanelVisible }
+                  shown: true }
             ]
             currentKey: view.viewerRightTab
             onActivated: function(key) { view.viewerRightTab = key }
@@ -1089,6 +1112,8 @@ Item {
         implicitWidth: view.menuWidth
 
         MenuItem {
+            visible: view.effectiveFoldCount >= 11
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[30]
             icon.name: "zoom-in-symbolic"
             enabled: !!view.currentPath
@@ -1096,6 +1121,8 @@ Item {
             MenuShortcut { text: "+" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 12
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[31]
             icon.name: "zoom-out-symbolic"
             enabled: !!view.currentPath
@@ -1103,14 +1130,21 @@ Item {
             MenuShortcut { text: "-" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 10
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[22]
             icon.name: "zoom-original-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.actualSize()
             MenuShortcut { text: "0/1" }
         }
-        MenuSeparator {}
+        MenuSeparator {
+            visible: view.effectiveFoldCount >= 10
+            height: visible ? implicitHeight : 0
+        }
         MenuItem {
+            visible: view.effectiveFoldCount >= 9
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[23]
             icon.name: "object-rotate-left-symbolic"
             enabled: !!view.currentPath
@@ -1118,6 +1152,8 @@ Item {
             MenuShortcut { text: "Shift+R" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 8
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[24]
             icon.name: "object-rotate-right-symbolic"
             enabled: !!view.currentPath
@@ -1125,6 +1161,8 @@ Item {
             MenuShortcut { text: "R" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 7
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[25]
             icon.name: "object-flip-horizontal-symbolic"
             enabled: !!view.currentPath
@@ -1132,6 +1170,8 @@ Item {
             MenuShortcut { text: "H" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 6
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[26]
             icon.name: "object-flip-vertical-symbolic"
             enabled: !!view.currentPath
@@ -1139,28 +1179,20 @@ Item {
             MenuShortcut { text: "V" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 6
+            height: visible ? implicitHeight : 0
             text: qsTr("Reset view")
             icon.name: "view-refresh-symbolic"
             enabled: !!view.currentPath
             onTriggered: view.resetView()
         }
-        MenuSeparator {}
-        MenuItem {
-            text: qsTr("Color & light")
-            icon.source: "icons/adjust.svg"
-            checkable: true
-            checked: view.standardChrome
-                     ? (view.infoPanelVisible && view.viewerRightTab === "adjust")
-                     : (viewerColorPopover.visible || viewerAdjustPanel.changed)
-            onTriggered: view.toggleColorAdjustPanel(view._overflowAnchor)
+        MenuSeparator {
+            visible: view.effectiveFoldCount >= 6
+            height: visible ? implicitHeight : 0
         }
         MenuItem {
-            text: qsTr("Viewer mode & layout")
-            icon.source: "icons/viewer-mode.svg"
-            onTriggered: viewerModePopup.toggleBelow(view._overflowAnchor || view)
-            MenuShortcut { text: "M" }
-        }
-        MenuItem {
+            visible: view.effectiveFoldCount >= 5
+            height: visible ? implicitHeight : 0
             text: qsTr("Fullscreen")
             icon.source: view.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
             checkable: true
@@ -1169,6 +1201,8 @@ Item {
             MenuShortcut { text: "F11" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 4
+            height: visible ? implicitHeight : 0
             text: view.theme.menuEntries[32]
             icon.name: "view-list-symbolic"
             checkable: true
@@ -1177,6 +1211,27 @@ Item {
             MenuShortcut { text: "T" }
         }
         MenuItem {
+            visible: view.effectiveFoldCount >= 3
+            height: visible ? implicitHeight : 0
+            text: qsTr("Info & color")
+            icon.source: "icons/adjust.svg"
+            checkable: true
+            checked: view.rightDockAllowed
+                     ? view.rightDockVisible
+                     : (viewerColorPopover.visible || viewerAdjustPanel.changed)
+            onTriggered: view.toggleColorAdjustPanel(view._overflowAnchor)
+        }
+        MenuItem {
+            visible: view.effectiveFoldCount >= 2
+            height: visible ? implicitHeight : 0
+            text: qsTr("Viewer mode & layout")
+            icon.source: "icons/viewer-mode.svg"
+            onTriggered: viewerModePopup.toggleBelow(view._overflowAnchor || view)
+            MenuShortcut { text: "M" }
+        }
+        MenuItem {
+            visible: view.effectiveFoldCount >= 1
+            height: visible ? implicitHeight : 0
             text: qsTr("Canvas background")
             onTriggered: {
                 viewerBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
@@ -1219,7 +1274,7 @@ Item {
             }
             Label {
                 objectName: "viewerImageCounter"
-                visible: !view.miniToolbar && view.images.length > 0
+                visible: !view.counterHidden && view.images.length > 0
                 text: (view.imageIndex + 1) + " / " + view.images.length
                 color: view.theme.textMuted
                 padding: 6
@@ -1236,12 +1291,12 @@ Item {
 
             ToolbarSeparator {
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 12
             }
 
             ToolbarButton {
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 12
                 icon.name: "zoom-out-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1260,7 +1315,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 11
                 icon.name: "zoom-in-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1270,7 +1325,7 @@ Item {
             }
             ToolbarButton {
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 10
                 icon.name: "zoom-original-symbolic"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
@@ -1281,49 +1336,65 @@ Item {
 
             ToolbarSeparator {
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 9
             }
 
             ToolbarButton {
-                objectName: "viewerTransformButton"
+                objectName: "viewerRotateLeftButton"
                 theme: view.theme
-                visible: !view.miniToolbar
-                checked: view.rotationAngle !== 0 || view.flipH || view.flipV
+                visible: view.effectiveFoldCount < 9
+                icon.source: "icons/rotate-left.svg"
+                display: AbstractButton.IconOnly
+                enabled: !!view.currentPath
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Rotate left (Shift+R)")
+                onClicked: view.rotateLeft()
+            }
+            ToolbarButton {
+                objectName: "viewerRotateRightButton"
+                theme: view.theme
+                visible: view.effectiveFoldCount < 8
                 icon.source: "icons/rotate-right.svg"
                 display: AbstractButton.IconOnly
                 enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Rotate & flip")
-                onClicked: viewerTransformMenu.toggleFrom(this)
+                ToolTip.text: qsTr("Rotate right (R)")
+                onClicked: view.rotateRight()
             }
             ToolbarButton {
-                objectName: "viewerColorAdjustButton"
+                objectName: "viewerFlipHButton"
                 theme: view.theme
-                visible: !view.miniToolbar
-                checked: view.standardChrome
-                         ? (view.infoPanelVisible && view.viewerRightTab === "adjust")
-                         : (viewerColorPopover.visible || viewerAdjustPanel.changed)
-                icon.source: "icons/adjust.svg"
+                visible: view.effectiveFoldCount < 7
+                checked: view.flipH
+                icon.source: "icons/flip-horizontal.svg"
                 display: AbstractButton.IconOnly
+                enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Color & light")
-                onClicked: view.toggleColorAdjustPanel(this)
+                ToolTip.text: qsTr("Flip horizontal (H)")
+                onClicked: view.toggleFlipH()
             }
             ToolbarButton {
-                objectName: "viewerUiModeButton"
+                objectName: "viewerFlipVButton"
                 theme: view.theme
-                visible: !view.miniToolbar
-                checked: view.uiMode !== "standard" || view.displayMode !== "single"
-                icon.source: "icons/viewer-mode.svg"
+                visible: view.effectiveFoldCount < 6
+                checked: view.flipV
+                icon.source: "icons/flip-vertical.svg"
                 display: AbstractButton.IconOnly
+                enabled: !!view.currentPath
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Viewer mode & layout (M)")
-                onClicked: viewerModePopup.toggleBelow(this)
+                ToolTip.text: qsTr("Flip vertical (V)")
+                onClicked: view.toggleFlipV()
             }
+
+            ToolbarSeparator {
+                theme: view.theme
+                visible: view.effectiveFoldCount < 5
+            }
+
             ToolbarButton {
                 objectName: "viewerFullscreenButton"
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 5
                 checked: view.fullscreen
                 icon.source: view.fullscreen ? "icons/fullscreen-exit.svg" : "icons/fullscreen.svg"
                 display: AbstractButton.IconOnly
@@ -1334,7 +1405,7 @@ Item {
             ToolbarButton {
                 objectName: "viewerFilmstripToggle"
                 theme: view.theme
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 4
                 checkable: true
                 checked: !!view.state.filmstrip
                 icon.source: "icons/view-thumbnails.svg"
@@ -1343,10 +1414,34 @@ Item {
                 ToolTip.text: qsTr("Toggle thumbnail filmstrip (T)")
                 onClicked: view.command({ type: "toggle_filmstrip" })
             }
+            ToolbarButton {
+                objectName: "viewerColorAdjustButton"
+                theme: view.theme
+                visible: view.effectiveFoldCount < 3
+                checked: view.rightDockAllowed
+                         ? view.rightDockVisible
+                         : (viewerColorPopover.visible || viewerAdjustPanel.changed)
+                icon.source: "icons/adjust.svg"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Info & color")
+                onClicked: view.toggleColorAdjustPanel(this)
+            }
+            ToolbarButton {
+                objectName: "viewerUiModeButton"
+                theme: view.theme
+                visible: view.effectiveFoldCount < 2
+                checked: view.uiMode !== "standard" || view.displayMode !== "single"
+                icon.source: "icons/viewer-mode.svg"
+                display: AbstractButton.IconOnly
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Viewer mode & layout (M)")
+                onClicked: viewerModePopup.toggleBelow(this)
+            }
             Rectangle {
                 id: viewerBgSwatch
                 objectName: "viewerBgSwatch"
-                visible: !view.miniToolbar
+                visible: view.effectiveFoldCount < 1
                 implicitWidth: 24
                 implicitHeight: 24
                 radius: view.theme.radius
@@ -1379,7 +1474,7 @@ Item {
             ToolbarButton {
                 objectName: "viewerOverflowButton"
                 theme: view.theme
-                visible: view.miniToolbar
+                visible: view.overflowVisible
                 icon.name: "view-more-symbolic"
                 display: AbstractButton.IconOnly
                 ToolTip.visible: hovered
@@ -1396,49 +1491,6 @@ Item {
     property bool canvasBgUseTheme: true
     property bool canvasBgChecker: false
     property color canvasBgColor: "#ffffff"
-
-    AppMenu {
-        id: viewerTransformMenu
-        objectName: "viewerTransformMenu"
-        theme: view.theme
-        implicitWidth: view.menuWidth
-
-        MenuItem {
-            text: view.theme.menuEntries[23]
-            icon.name: "object-rotate-left-symbolic"
-            enabled: !!view.currentPath
-            onTriggered: view.rotateLeft()
-            MenuShortcut { text: "Shift+R" }
-        }
-        MenuItem {
-            text: view.theme.menuEntries[24]
-            icon.name: "object-rotate-right-symbolic"
-            enabled: !!view.currentPath
-            onTriggered: view.rotateRight()
-            MenuShortcut { text: "R" }
-        }
-        MenuItem {
-            text: view.theme.menuEntries[25]
-            icon.name: "object-flip-horizontal-symbolic"
-            enabled: !!view.currentPath
-            onTriggered: view.toggleFlipH()
-            MenuShortcut { text: "H" }
-        }
-        MenuItem {
-            text: view.theme.menuEntries[26]
-            icon.name: "object-flip-vertical-symbolic"
-            enabled: !!view.currentPath
-            onTriggered: view.toggleFlipV()
-            MenuShortcut { text: "V" }
-        }
-        MenuSeparator {}
-        MenuItem {
-            text: qsTr("Reset view")
-            icon.name: "view-refresh-symbolic"
-            enabled: !!view.currentPath
-            onTriggered: view.resetView()
-        }
-    }
 
     ViewerModePopup {
         id: viewerModePopup
