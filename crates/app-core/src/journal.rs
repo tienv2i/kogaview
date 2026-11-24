@@ -107,7 +107,9 @@ fn sanitized_paths(command: &Command) -> Vec<String> {
         | Command::RemoveFavorite { path }
         | Command::MoveFavorite { path, .. } => vec![sanitize(path)],
         Command::NewFolder { parent, .. } => vec![sanitize(parent)],
-        Command::EditorOpen { path } | Command::AiSetCustomModel { path, .. } => {
+        Command::EditorOpen { path }
+        | Command::AiSetCustomModel { path, .. }
+        | Command::ViewerTranslate { path, .. } => {
             vec![sanitize(path)]
         }
         Command::CopyTo { paths, destination } | Command::MoveTo { paths, destination } => {

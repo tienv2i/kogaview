@@ -21,6 +21,7 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/ViewerCompactHud.qml \
           ../crates/desktop/qml/ViewerDualSpread.qml \
           ../crates/desktop/qml/ViewerWebtoonView.qml \
+          ../crates/desktop/qml/ViewerTranslateOverlay.qml \
           ../crates/desktop/qml/EditorView.qml \
           ../crates/desktop/qml/EditorResizePanel.qml \
           ../crates/desktop/qml/EditorCanvasSizePanel.qml \

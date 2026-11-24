@@ -67,5 +67,10 @@ build-plugin-ocr:
     cargo build --manifest-path plugins/kogaview-plugin-ocr/Cargo.toml --release
     @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-ocr"); bin_src = src / "target/release/kogaview-plugin-ocr"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-ocr")) for d in [data/"kogaview-dev/plugins/kogaview-ocr-tesseract", data/"kogaview/plugins/kogaview-ocr-tesseract"] ]; print("Installed kogaview-plugin-ocr to", data/"kogaview[-dev]/plugins/kogaview-ocr-tesseract")'
 
+# Optional Read & Translate plugin (Tesseract OCR + Google Translate).
+build-plugin-translate:
+    cargo build --manifest-path plugins/kogaview-plugin-translate/Cargo.toml --release
+    @python3 -c 'import os, pathlib, shutil; home = pathlib.Path.home(); data = pathlib.Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")); src = pathlib.Path("plugins/kogaview-plugin-translate"); bin_src = src / "target/release/kogaview-plugin-translate"; [ (d.mkdir(parents=True, exist_ok=True), (d/"bin").mkdir(exist_ok=True), shutil.copy2(src/"manifest.json", d/"manifest.json"), shutil.copy2(bin_src, d/"bin/kogaview-plugin-translate")) for d in [data/"kogaview-dev/plugins/kogaview-translate", data/"kogaview/plugins/kogaview-translate"] ]; print("Installed kogaview-plugin-translate to", data/"kogaview[-dev]/plugins/kogaview-translate")'
+
 # Build & install all optional plugins at once.
-build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr
+build-plugins: build-plugin-rembg build-plugin-upscale build-plugin-utils build-plugin-ocr build-plugin-translate

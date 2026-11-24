@@ -81,6 +81,7 @@ impl Core {
             stage: format!("Downloading {}…", spec.name),
             error: None,
             clipboard_text: None,
+            translation: None,
         });
         self.state.status = UiText::with("ai_downloading_model", [spec.name.clone()]);
 
@@ -256,6 +257,7 @@ impl Core {
             stage: "Starting Remove Background…".to_owned(),
             error: None,
             clipboard_text: None,
+            translation: None,
         });
         self.state.status = UiText::new("ai_removing_background");
 
@@ -407,6 +409,7 @@ impl Core {
             stage: format!("{}…", qa.label),
             error: None,
             clipboard_text: None,
+            translation: None,
         });
         self.state.status = UiText::new("ai_removing_background");
 
@@ -436,6 +439,103 @@ impl Core {
         });
 
         Ok(Some(UiText::new("ai_removing_background")))
+    }
+
+    /// Translate an entire image or a cropped `[x, y, w, h]` region in Viewer
+    /// using the `viewer.translate` plugin (OCR + Google Translate).
+    pub(super) fn viewer_translate(
+        &mut self,
+        path: &str,
+        source_lang: &str,
+        target_lang: &str,
+        region: Option<[i32; 4]>,
+    ) -> Result<Option<UiText>, ProtocolError> {
+        if self.ai_rx.is_some() {
+            return Err(ProtocolError::with_line(
+                "busy",
+                "an AI task is already running",
+                UiText::new("ai_task_busy"),
+            ));
+        }
+        let src_path = PathBuf::from(path);
+        if !src_path.is_file() {
+            return Err(ProtocolError::with_line(
+                "not_found",
+                format!("image not found: {}", src_path.display()),
+                UiText::new("no_existing_paths"),
+            ));
+        }
+
+        self.refresh_ai_inventory();
+
+        let Some(plugin) = self
+            .ai_plugins
+            .iter()
+            .find(|p| {
+                p.available
+                    && p.manifest
+                        .capabilities
+                        .iter()
+                        .any(|c| c.action == "viewer.translate")
+            })
+            .cloned()
+        else {
+            return Err(ProtocolError::with_line(
+                "plugin_missing",
+                "Read & Translate plugin is not installed (run: just build-plugin-translate)",
+                UiText::new("ai_translate_plugin_missing"),
+            ));
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.ai_rx = Some(rx);
+        self.ai_cancel = Some(Arc::clone(&cancel));
+        self.ai_temp_input = None;
+        self.ai_temp_output = None;
+        self.ai_quick_action_output = None;
+        self.state.busy = true;
+        self.state.ai_task = Some(AiTaskState {
+            kind: "translate".to_owned(),
+            target: path.to_owned(),
+            running: true,
+            percent: 10,
+            stage: "Translating…".to_owned(),
+            error: None,
+            clipboard_text: None,
+            translation: None,
+        });
+        self.state.status = UiText::new("ai_translating");
+
+        let device = self.config.ai.device;
+        let models_dir = self.paths.models_dir.display().to_string();
+        let mut params = json!({
+            "sourceLang": source_lang,
+            "targetLang": target_lang,
+            "modelsDir": models_dir,
+        });
+        if let Some([x, y, w, h]) = region {
+            params["region"] = json!({ "x": x, "y": y, "width": w, "height": h });
+        }
+
+        std::thread::spawn(move || {
+            let empty_out = PathBuf::new();
+            let empty_model = PathBuf::new();
+            plugins::run_plugin_inference(
+                &plugin,
+                "viewer.translate",
+                "",
+                &empty_model,
+                device,
+                &src_path,
+                &empty_out,
+                params,
+                cancel,
+                &tx,
+            );
+        });
+
+        Ok(Some(UiText::new("ai_translating")))
     }
 
     /// Drain events from any active AI download or inference worker.
@@ -482,9 +582,20 @@ impl Core {
                     output_path,
                     device_used,
                     clipboard_text,
+                    translation,
                 } => {
                     finished = true;
-                    if let Some(text) = clipboard_text {
+                    if let Some(tr) = translation {
+                        self.ai_quick_action_output = None;
+                        if let Some(task) = self.state.ai_task.as_mut() {
+                            task.running = false;
+                            task.percent = 100;
+                            task.stage = "Translated".to_owned();
+                            task.error = None;
+                            task.translation = Some(tr);
+                        }
+                        self.state.status = UiText::new("ai_translate_done");
+                    } else if let Some(text) = clipboard_text {
                         self.ai_quick_action_output = None;
                         let chars = text.chars().count();
                         if let Some(task) = self.state.ai_task.as_mut() {

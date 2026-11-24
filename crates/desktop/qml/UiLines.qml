@@ -223,6 +223,9 @@ QtObject {
         case "ai_remove_background_done": return qsTr("Background removed");
         case "ai_quick_action_saved": return qsTr("Saved %1").arg(args[0]);
         case "ai_quick_action_copied": return qsTr("Copied %1 characters to clipboard").arg(args[0]);
+        case "ai_translating": return qsTr("Translating…");
+        case "ai_translate_done": return qsTr("Translation complete");
+        case "ai_translate_plugin_missing": return qsTr("Read & Translate plugin is not installed (run: just build-plugin-translate)");
         case "ai_inference_failed": return qsTr("AI processing failed");
         case "operation_cancelled": return qsTr("Operation cancelled");
         }

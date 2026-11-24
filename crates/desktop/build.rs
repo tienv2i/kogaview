@@ -52,6 +52,7 @@ fn main() {
         "qml/ViewerCompactHud.qml",
         "qml/ViewerDualSpread.qml",
         "qml/ViewerWebtoonView.qml",
+        "qml/ViewerTranslateOverlay.qml",
         "qml/EditorView.qml",
         "qml/EditorResizePanel.qml",
         "qml/EditorCanvasSizePanel.qml",

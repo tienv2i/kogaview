@@ -89,6 +89,7 @@ Item {
         && view.filmstripEnabled && view.images.length > 1
 
     property bool fullscreen: false
+    property bool translateMode: false
     signal toggleFullscreen()
 
     signal command(var command)
@@ -496,6 +497,12 @@ Item {
                 event.accepted = true;
             }
             break;
+        case Qt.Key_L:
+            if (hasImage && !event.isAutoRepeat) {
+                view.translateMode = !view.translateMode;
+                event.accepted = true;
+            }
+            break;
         case Qt.Key_Delete:
             if (hasImage && !event.isAutoRepeat) {
                 view.command({ type: "trash", paths: [view.currentPath] });
@@ -503,7 +510,9 @@ Item {
             }
             break;
         case Qt.Key_Escape:
-            if (view.fullscreen) {
+            if (view.translateMode) {
+                view.translateMode = false;
+            } else if (view.fullscreen) {
                 view.toggleFullscreen();
             } else if (view.uiMode === "compact") {
                 view.setUiMode("standard");
@@ -562,7 +571,7 @@ Item {
                 clampOnZoom: false
                 // Free pan in Viewer (always behaves like Hand tool without a separate mode).
                 panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
-                inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
+                inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || view.translateMode
                 rotationAngle: view.rotationAngle
                 flipH: view.flipH
                 flipV: view.flipV
@@ -741,7 +750,7 @@ Item {
                         brightness: viewerAdjustPanel.brightness
                         contrast: viewerAdjustPanel.contrast
                         saturation: viewerAdjustPanel.saturation
-                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging
+                        inputBlocked: viewerBgColorDialog.visible || compactHud.dragging || view.translateMode
                         onPageCentered: function(idx) {
                             view.openImageAt(idx)
                         }
@@ -751,6 +760,31 @@ Item {
                             canvasMenu.popup(view, local.x, local.y)
                         }
                     }
+                }
+
+                ViewerTranslateOverlay {
+                    id: translateOverlay
+                    theme: view.theme
+                    active: view.translateMode && !!view.currentPath
+                    imagePath: view.currentPath
+                    canvasItem: canvas
+                    zoom: view.zoom
+                    offsetX: view.offsetX
+                    offsetY: view.offsetY
+                    aiTask: (view.state && view.state.aiTask) || null
+                    onTranslateRequested: function(sourceLang, targetLang, region) {
+                        var cmd = {
+                            type: "viewer_translate",
+                            path: view.currentPath,
+                            source_lang: sourceLang,
+                            target_lang: targetLang
+                        }
+                        if (region) cmd.region = region
+                        view.command(cmd)
+                    }
+                    onCopyTextRequested: function(text) { view.copyText(text) }
+                    onCancelRequested: view.command({ type: "ai_cancel" })
+                    onCloseRequested: view.translateMode = false
                 }
 
                 ViewerCompactHud {
@@ -1076,6 +1110,15 @@ Item {
                     paths: paths
                 })
             }
+        }
+        MenuItem {
+            text: qsTr("Read & translate")
+            icon.source: "icons/ai-rembg.svg"
+            checkable: true
+            checked: view.translateMode
+            enabled: !!view.currentPath
+            onTriggered: view.translateMode = !view.translateMode
+            MenuShortcut { text: "L" }
         }
         MenuItem {
             text: qsTr("Open with…")

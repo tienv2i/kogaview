@@ -104,7 +104,8 @@ QtObject {
         qsTr("Fullscreen"),
         qsTr("Canvas background"),
         qsTr("Info & color"),
-        qsTr("Quick actions")
+        qsTr("Quick actions"),
+        qsTr("Read & translate")
     ]
     /// The labels the menus are built from (`Main.qml`, the Editor's canvas
     /// menu). Same list, kept as a name of its own so the views read
@@ -112,7 +113,7 @@ QtObject {
     readonly property var menuEntries: menuEntryLabels
     /// The shell's way into the Browser's batch form. Named rather than indexed
     /// by callers so appending new measured labels never breaks the entry.
-    readonly property string batchToolsLabel: menuEntryLabels[menuEntryLabels.length - 8]
+    readonly property string batchToolsLabel: menuEntryLabels[menuEntryLabels.length - 9]
     /// Pixels each of `menuEntryLabels` needs, measured once by the shell with the
     /// window font the entries are drawn in (`Main.qml` fills this in).
     property var menuLabelWidths: []

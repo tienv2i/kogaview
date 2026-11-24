@@ -572,6 +572,12 @@ impl Core {
                 action_id,
                 paths,
             } => self.quick_action_run(&plugin_id, &action_id, paths),
+            Command::ViewerTranslate {
+                path,
+                source_lang,
+                target_lang,
+                region,
+            } => self.viewer_translate(&path, &source_lang, &target_lang, region),
             Command::CancelOperation => {
                 let mut cancelled = false;
                 if let Some(cancel) = &self.cancel_op {

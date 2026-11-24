@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use kogaview_protocol::{
     AiDevice, AiModelStatus, AiPluginStatus, AiQuickAction, AiSettings, PluginCapability,
     PluginEntry, PluginManifest, PluginModelSpec, PluginParamSpec, PluginPermissions,
-    PluginQuickAction,
+    PluginQuickAction, TranslationResult,
 };
 use serde_json::{json, Value};
 
@@ -165,6 +165,7 @@ pub enum AiWorkerEvent {
         output_path: PathBuf,
         device_used: String,
         clipboard_text: Option<String>,
+        translation: Option<TranslationResult>,
     },
     Failed {
         message: String,
@@ -658,6 +659,7 @@ pub fn run_plugin_inference(
     let mut failed_msg: Option<String> = None;
     let mut device_used = device.as_str().to_owned();
     let mut clipboard_text: Option<String> = None;
+    let mut translation: Option<TranslationResult> = None;
 
     for line in reader.lines() {
         if cancel.load(Ordering::SeqCst) {
@@ -694,6 +696,13 @@ pub fn run_plugin_inference(
                     if let Some(text) = meta.get("clipboardText").and_then(Value::as_str) {
                         clipboard_text = Some(text.to_owned());
                     }
+                    if let Some(tr_val) = meta.get("translation") {
+                        if let Ok(parsed) =
+                            serde_json::from_value::<TranslationResult>(tr_val.clone())
+                        {
+                            translation = Some(parsed);
+                        }
+                    }
                 }
                 completed = true;
                 break;
@@ -727,7 +736,9 @@ pub fn run_plugin_inference(
 
     if let Some(message) = failed_msg {
         let _ = tx.send(AiWorkerEvent::Failed { message });
-    } else if completed && (output_path.is_file() || clipboard_text.is_some()) {
+    } else if completed
+        && (output_path.is_file() || clipboard_text.is_some() || translation.is_some())
+    {
         tracing::info!(
             target: "kogaview::plugins",
             plugin = %plugin.manifest.id,
@@ -741,6 +752,7 @@ pub fn run_plugin_inference(
             output_path: output_path.to_path_buf(),
             device_used,
             clipboard_text,
+            translation,
         });
     } else {
         let mut stderr_text = String::new();

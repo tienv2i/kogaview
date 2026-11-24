@@ -616,11 +616,36 @@ pub struct AiPluginStatus {
     pub quick_actions: Vec<String>,
 }
 
+/// One translated text block in document pixel coordinates.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationBlock {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub original: String,
+    pub translated: String,
+}
+
+/// Structured result returned by a Read & Translate plugin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationResult {
+    pub path: String,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub original_text: String,
+    pub translated_text: String,
+    #[serde(default)]
+    pub blocks: Vec<TranslationBlock>,
+}
+
 /// Active or most-recent AI background job (model download or inference).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiTaskState {
-    /// `"download"` | `"inference"` | `""`
+    /// `"download"` | `"inference"` | `"translate"` | `""`
     pub kind: String,
     pub target: String,
     pub running: bool,
@@ -631,6 +656,9 @@ pub struct AiTaskState {
     /// to copy to the system clipboard.
     #[serde(default)]
     pub clipboard_text: Option<String>,
+    /// Structured translation result produced by a Read & Translate plugin.
+    #[serde(default)]
+    pub translation: Option<TranslationResult>,
 }
 
 fn default_true() -> bool {
@@ -1188,7 +1216,27 @@ pub enum Command {
         action_id: String,
         paths: Vec<String>,
     },
+    /// Translate an entire image or a cropped `[x, y, w, h]` region in Viewer
+    /// via the `viewer.translate` plugin (OCR + Google Translate).
+    ViewerTranslate {
+        path: String,
+        #[serde(default = "default_translate_source")]
+        source_lang: String,
+        #[serde(default = "default_translate_target")]
+        target_lang: String,
+        /// Optional `[x, y, width, height]` in document pixels.
+        #[serde(default)]
+        region: Option<[i32; 4]>,
+    },
     CancelOperation,
+}
+
+fn default_translate_source() -> String {
+    "eng".to_owned()
+}
+
+fn default_translate_target() -> String {
+    "vi".to_owned()
 }
 
 fn default_ai_auto_unload_secs() -> u32 {
@@ -1259,6 +1307,7 @@ impl Command {
             Self::AiCancel => "ai_cancel",
             Self::EditorAiRemoveBackground { .. } => "editor_ai_remove_background",
             Self::QuickActionRun { .. } => "quick_action_run",
+            Self::ViewerTranslate { .. } => "viewer_translate",
         }
     }
 }
