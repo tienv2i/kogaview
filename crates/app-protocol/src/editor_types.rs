@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::plugins::{default_crop_unit, default_true};
 use crate::opaque_fill_alpha;
+use crate::plugins::{default_crop_unit, default_true};
 
 /// The axis a flip mirrors the working image across. Parts of the Editor
 /// protocol; kept here so the CLI/IPC/MCP front ends share the one type.
@@ -469,4 +469,3 @@ pub struct BatchOutput {
     #[serde(default)]
     pub overwrite: bool,
 }
-

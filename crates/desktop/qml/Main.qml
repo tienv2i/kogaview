@@ -1097,7 +1097,7 @@ ApplicationWindow {
             if (rest.length > 0) {
                 var editTarget = root.toLocalPath(rest[0]);
                 root.send({ type: "open_file", paths: rest });
-                root.send({ type: "editor_open", path: editTarget });
+                root.runEditorOpen(editTarget, false);
             } else {
                 root.send({ type: "set_workspace", workspace: "editor" });
             }

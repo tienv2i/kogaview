@@ -207,6 +207,9 @@ QtObject {
         case "adjust_hsv": return qsTr("HSV adjustment");
         case "color_balance": return qsTr("Color balance");
         case "invalid_color_adjustment": return qsTr("Invalid color adjustment values");
+        case "brush": return qsTr("Brush");
+        case "eraser": return qsTr("Eraser");
+        case "mask_paint": return qsTr("Paint mask");
         case "brush_stroke": return qsTr("Brush stroke");
         case "eraser_stroke": return qsTr("Eraser stroke");
         case "draw_line": return qsTr("Draw line");

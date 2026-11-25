@@ -23,6 +23,9 @@ SOURCES = ../crates/desktop/qml/Main.qml \
           ../crates/desktop/qml/ViewerWebtoonView.qml \
           ../crates/desktop/qml/ViewerTranslateOverlay.qml \
           ../crates/desktop/qml/EditorView.qml \
+          ../crates/desktop/qml/EditorColorPopups.qml \
+          ../crates/desktop/qml/EditorPluginPanel.qml \
+          ../crates/desktop/qml/EditorToolRail.qml \
           ../crates/desktop/qml/EditorResizePanel.qml \
           ../crates/desktop/qml/EditorCanvasSizePanel.qml \
           ../crates/desktop/qml/ColorAdjustPanel.qml \

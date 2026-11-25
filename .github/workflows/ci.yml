@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  ci:
+    name: Build & Test (Debian Trixie / Qt 6.8)
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.8 & build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential cmake ninja-build pkg-config python3 git curl ca-certificates \
+            qt6-base-dev qt6-declarative-dev qt6-svg-dev libqt6core5compat6-dev \
+            qt6-l10n-tools libdav1d-dev libgl1-mesa-dev desktop-file-utils appstream \
+            qt6-base-private-dev
+
+      - name: Install Rust stable & rustfmt
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component rustfmt
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Run Rust workspace tests
+        run: cargo test --workspace
+
+      - name: Check translations
+        run: python3 scripts/check_translations.py
+
+      - name: Check Linux packaging metadata
+        run: python3 scripts/check_packaging.py
+
+      - name: Build & run Qt Quick test suites
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKOGAVIEW_BUILD_TESTS=ON
+          cmake --build build/ci --target \
+            kogaview_qml_tests \
+            kogaview_browser_qml_tests \
+            kogaview_batch_tests \
+            kogaview_browser_cache_tests \
+            kogaview_state_tests \
+            kogaview_settings_tests \
+            kogaview_dialogs_tests \
+            kogaview_editor_tests \
+            kogaview_language_tests \
+            kogaview_toolbar_tests \
+            -j"$(nproc)"
+          for bin in \
+            kogaview_qml_tests \
+            kogaview_browser_qml_tests \
+            kogaview_batch_tests \
+            kogaview_browser_cache_tests \
+            kogaview_state_tests \
+            kogaview_settings_tests \
+            kogaview_dialogs_tests \
+            kogaview_editor_tests \
+            kogaview_language_tests \
+            kogaview_toolbar_tests; do
+            echo "=== Running $bin ==="
+            XDG_STATE_HOME="$(mktemp -d)" XDG_CONFIG_HOME="$(mktemp -d)" XDG_CACHE_HOME="$(mktemp -d)" \
+              "build/ci/bin/$bin"
+          done

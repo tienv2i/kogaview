@@ -106,7 +106,50 @@ QtObject {
         qsTr("Info & color"),
         qsTr("Quick actions"),
         qsTr("Read & translate"),
-        qsTr("Scan text region (OCR)")
+        qsTr("Scan text region (OCR)"),
+        // Editor top-bar, Filter, and canvas selection menus.
+        qsTr("Undo (Ctrl+Z)"),
+        qsTr("Redo (Ctrl+Shift+Z)"),
+        qsTr("Cut (Ctrl+X)"),
+        qsTr("Copy (Ctrl+C)"),
+        qsTr("Paste as new layer (Ctrl+V)"),
+        qsTr("Delete (Del)"),
+        qsTr("Fill selection…"),
+        qsTr("Stroke selection…"),
+        qsTr("Duplicate selection to layer"),
+        qsTr("Select all (Ctrl+A)"),
+        qsTr("Deselect (Ctrl+D)"),
+        qsTr("Invert selection (Ctrl+Shift+I)"),
+        qsTr("Grow…"),
+        qsTr("Shrink…"),
+        qsTr("Border…"),
+        qsTr("Feather…"),
+        qsTr("Smooth…"),
+        qsTr("Crop to selection"),
+        qsTr("Remove background (AI)"),
+        qsTr("Remove watermark (Gemini / Region)"),
+        qsTr("Caption && tags (.txt)"),
+        qsTr("New image… (Ctrl+N)"),
+        qsTr("Open image…"),
+        qsTr("Save (Ctrl+S)"),
+        qsTr("Save as… (Ctrl+Shift+S)"),
+        qsTr("Copy"),
+        qsTr("Cut"),
+        qsTr("Paste"),
+        qsTr("To new layer"),
+        qsTr("Duplicate layer"),
+        qsTr("Transform"),
+        qsTr("Select all"),
+        qsTr("Deselect"),
+        qsTr("Invert"),
+        qsTr("Fill…"),
+        qsTr("Stroke…"),
+        qsTr("Delete"),
+        qsTr("Crop"),
+        qsTr("Brightness / Contrast…"),
+        qsTr("HSV Adjustment… (Ctrl+U)"),
+        qsTr("Curves… (Ctrl+M)"),
+        qsTr("Color balance… (Ctrl+B)")
     ]
     /// The labels the menus are built from (`Main.qml`, the Editor's canvas
     /// menu). Same list, kept as a name of its own so the views read
@@ -114,7 +157,7 @@ QtObject {
     readonly property var menuEntries: menuEntryLabels
     /// The shell's way into the Browser's batch form. Named rather than indexed
     /// by callers so appending new measured labels never breaks the entry.
-    readonly property string batchToolsLabel: menuEntryLabels[menuEntryLabels.length - 10]
+    readonly property string batchToolsLabel: menuEntryLabels[39]
     /// Pixels each of `menuEntryLabels` needs, measured once by the shell with the
     /// window font the entries are drawn in (`Main.qml` fills this in).
     property var menuLabelWidths: []

@@ -71,8 +71,8 @@ Item {
     readonly property int browserSeparators: 1
     readonly property int viewerButtons: 15
     readonly property int viewerSeparators: 3
-    readonly property int editorButtons: 12
-    readonly property int editorSeparators: 3
+    readonly property int editorButtons: 10
+    readonly property int editorSeparators: 2
 
     /// The buttons each workspace keeps once the window is too narrow for the
     /// whole icon row, the overflow button included. The rest of its actions

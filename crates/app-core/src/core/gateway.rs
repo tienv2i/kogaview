@@ -869,8 +869,8 @@ impl Core {
                         for y in 0..lh {
                             let row = (y as usize) * (lw as usize);
                             for x in 0..lw {
-                                buf[row + x as usize] =
-                                    sel.alpha_at(x as i32 + layer.offset_x, y as i32 + layer.offset_y);
+                                buf[row + x as usize] = sel
+                                    .alpha_at(x as i32 + layer.offset_x, y as i32 + layer.offset_y);
                             }
                         }
                         Some(std::sync::Arc::new(buf))
@@ -902,12 +902,8 @@ impl Core {
             Command::EditorLayerMaskSetLinked { id, linked } => {
                 self.editor_layer_op(crate::editor::LayerOperation::SetMaskLinked { id, linked })
             }
-            Command::EditorLayerAddAdjustment { name, adjustment } => {
-                self.editor_layer_op(crate::editor::LayerOperation::AddAdjustment {
-                    name,
-                    adjustment,
-                })
-            }
+            Command::EditorLayerAddAdjustment { name, adjustment } => self
+                .editor_layer_op(crate::editor::LayerOperation::AddAdjustment { name, adjustment }),
             Command::EditorLayerUpdateAdjustment { id, adjustment } => {
                 self.editor_layer_op(crate::editor::LayerOperation::UpdateAdjustment {
                     id,

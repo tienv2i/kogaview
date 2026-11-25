@@ -860,7 +860,10 @@ pub fn blend_layer_onto(canvas: &mut RgbaImage, layer: &Layer) {
         let opacity = layer.opacity.clamp(0.0, 1.0);
         let (lw, lh) = layer.dimensions();
         let active_mask = if layer.mask_enabled {
-            layer.mask.as_deref().filter(|m| m.len() == (lw as usize) * (lh as usize))
+            layer
+                .mask
+                .as_deref()
+                .filter(|m| m.len() == (lw as usize) * (lh as usize))
         } else {
             None
         };
@@ -884,14 +887,17 @@ pub fn blend_layer_onto(canvas: &mut RgbaImage, layer: &Layer) {
                     let df = f32::from(d) / 255.0;
                     let sf = f32::from(s) / 255.0;
                     let b = blend_channel(mode, df, sf);
-                    ((df * (1.0 - t) + b * t) * 255.0)
-                        .round()
-                        .clamp(0.0, 255.0) as u8
+                    ((df * (1.0 - t) + b * t) * 255.0).round().clamp(0.0, 255.0) as u8
                 };
                 canvas.put_pixel(
                     x,
                     y,
-                    Rgba([mix(dp[0], sp[0]), mix(dp[1], sp[1]), mix(dp[2], sp[2]), dp[3]]),
+                    Rgba([
+                        mix(dp[0], sp[0]),
+                        mix(dp[1], sp[1]),
+                        mix(dp[2], sp[2]),
+                        dp[3],
+                    ]),
                 );
             }
         }
@@ -913,7 +919,10 @@ pub fn blend_layer_onto(canvas: &mut RgbaImage, layer: &Layer) {
     let opacity = layer.opacity.clamp(0.0, 1.0);
     let mode = layer.blend_mode;
     let active_mask = if layer.mask_enabled {
-        layer.mask.as_deref().filter(|m| m.len() == (lw as usize) * (lh as usize))
+        layer
+            .mask
+            .as_deref()
+            .filter(|m| m.len() == (lw as usize) * (lh as usize))
     } else {
         None
     };

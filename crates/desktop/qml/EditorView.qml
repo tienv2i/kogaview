@@ -315,6 +315,7 @@ Item {
     /// or `"mask"` (translucent red overlay on unselected pixels).
     property string selectionDisplayMode: "ants"
     property bool selectionAntsPhase: false
+    property string previousTool: "pointer"
     readonly property bool isColorFilterTool:
         view.tool === "adjust" || view.tool === "hsv"
         || view.tool === "curves" || view.tool === "colorBalance"
@@ -855,24 +856,19 @@ Item {
     /// which ends the binding, so a pair that changed since (X, D or a typed
     /// hex) would otherwise reopen on the old colour.
     function openForegroundChooser() {
-        foregroundColorDialog.selectedColor = view.foregroundColor
-        foregroundColorDialog.open()
+        colorPopups.openForegroundChooser()
     }
 
     /// The background's list, opened under the swatch that was clicked. A
     /// `ColorDialog` cannot say "no colour", so the background has a popup of
     /// its own and `Custom color…` reaches the chooser from inside it.
     function openBackgroundPopup(anchor) {
-        if (!anchor) return
-        backgroundPopup.transparent = view.backgroundTransparent
-        backgroundPopup.colour = view.backgroundColor
-        backgroundPopup.showBelow(anchor)
+        colorPopups.openBackgroundPopup(anchor)
     }
 
     /// The chooser behind `Custom color…` in the background list.
     function openBackgroundChooser() {
-        backgroundColorDialog.selectedColor = view.backgroundColor
-        backgroundColorDialog.open()
+        colorPopups.openBackgroundChooser()
     }
 
     // Canvas backdrop colour (presentation-only: theme default, checkerboard,
@@ -882,14 +878,10 @@ Item {
     property bool canvasBgChecker: false
     property color canvasBgColor: "#ffffff"
     function openCanvasBgPopup(anchor) {
-        if (!anchor) return
-        canvasBgPopup.transparent = !view.canvasBgUseTheme && view.canvasBgChecker
-        canvasBgPopup.colour = view.canvasBgColor
-        canvasBgPopup.showBelow(anchor)
+        colorPopups.openCanvasBgPopup(anchor)
     }
     function openCanvasBgChooser() {
-        canvasBgColorDialog.selectedColor = view.canvasBgColor
-        canvasBgColorDialog.open()
+        colorPopups.openCanvasBgChooser()
     }
 
     /// Sample a `#rrggbb` colour directly from the open Editor canvas (in-RAM
@@ -3461,11 +3453,18 @@ Item {
     // down: the user draws one, clicks the picture, or types a size — a crop
     // tool does not guess which part of the picture is wanted.
     onToolChanged: {
+        var wasColorFilterTool = view.previousTool === "adjust" || view.previousTool === "hsv"
+                                 || view.previousTool === "curves" || view.previousTool === "colorBalance"
+        view.previousTool = view.tool
         draftDebounce.restart()
         // The tool panel is where a tool is configured. A user who put it
         // away and then arms a tool gets the panel back; the pointer is the
         // no-op tool, so it never forces the panel open. Panel visibility is
         // Core's layout, so asking for it is a patch, not a local write.
+        if (view.tool !== "pointer" && view.tool !== "hand" && view.tool !== "eyedropper") {
+            inspector.topTab = "options"
+            inspector.topCollapsed = false
+        }
         if (view.tool !== "pointer" && view.tool !== "hand" && !view.toolOptionsVisible)
             view.layoutRequested({ panels: { "editor.options": true } })
         if (view.tool === "transform") view.resetTransformCorners()
@@ -3477,7 +3476,7 @@ Item {
         if (typeof adjustPreviewTimer !== "undefined" && adjustPreviewTimer) {
             adjustPreviewTimer.stop()
         }
-        if (view.documentReady && !view.isColorFilterTool) {
+        if (view.documentReady && wasColorFilterTool && !view.isColorFilterTool) {
             view.command({ type: "editor_preview_filter", clear: true })
         }
     }
@@ -3934,353 +3933,8 @@ Item {
         // `icons.qrc`) because the desktop themes disagree: Breeze ships crop,
         // brush and eraser drawings, Adwaita and Papirus do not, and a missing
         // icon in an icon-only rail is an empty button.
-        Rectangle {
-            objectName: "editorTools"
-            Layout.preferredWidth: view.toolRailWidth
-            Layout.fillHeight: true
-            color: view.theme.sidebar
-            enabled: !view.filterDialogOpen
-            opacity: view.filterDialogOpen ? 0.55 : 1.0
-            // The rail is a panel of its own: it is a column beside the
-            // canvas, so Settings › Appearance can put it away, and the canvas
-            // takes its width when it does.
-            visible: view.toolsShown
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
-
-                Label {
-                    objectName: "editsHeading"
-                    // A one-column rail is narrower than the word; the tooltips
-                    // already name everything, so the heading goes rather than
-                    // eliding to "T…".
-                    visible: view.toolColumns === 2
-                    text: qsTr("Tools")
-                    color: view.theme.text
-                    font.bold: true
-                }
-
-                // The tools. The pointer selects nothing, so Core never sees a
-                // command from it; Crop, Transform and Paint write the canvas
-                // and their options live in the right column. Resize is not a
-                // canvas mode: it opens a dialog, and its button stays lit
-                // while that form is up so the rail still says where the
-                // question came from.
-                GridLayout {
-                    objectName: "editorToolGrid"
-                    Layout.fillWidth: true
-                    columns: view.toolColumns
-                    columnSpacing: 4
-                    rowSpacing: 4
-
-                    ToolRailButton {
-                        objectName: "toolPointer"
-                        theme: view.theme
-                        iconSource: "icons/pointer.svg"
-                        tooltip: qsTr("Pointer")
-                        active: view.tool === "pointer"
-                        onClicked: {
-                            view.tool = "pointer"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolHand"
-                        theme: view.theme
-                        iconSource: "icons/hand.svg"
-                        tooltip: qsTr("Hand (H)")
-                        active: view.tool === "hand"
-                        onClicked: {
-                            view.tool = "hand"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolZoom"
-                        theme: view.theme
-                        iconSource: "icons/zoom.svg"
-                        tooltip: qsTr("Zoom (Z)")
-                        active: view.tool === "zoom"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "zoom" ? "pointer" : "zoom"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolBrush"
-                        theme: view.theme
-                        iconSource: "icons/brush.svg"
-                        tooltip: qsTr("Brush (B)")
-                        active: view.tool === "paint" && view.paintMode === "brush"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = "paint"
-                            view.selectPaintMode("brush")
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolEraser"
-                        theme: view.theme
-                        iconSource: "icons/eraser.svg"
-                        tooltip: qsTr("Eraser (E)")
-                        active: view.tool === "paint" && view.paintMode === "eraser"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = "paint"
-                            view.selectPaintMode("eraser")
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolDraw"
-                        theme: view.theme
-                        iconSource: "icons/draw-shapes.svg"
-                        tooltip: qsTr("Shapes & Curves (U)")
-                        active: view.tool === "draw"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "draw" ? "pointer" : "draw"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolFill"
-                        theme: view.theme
-                        iconSource: "icons/fill.svg"
-                        tooltip: qsTr("Fill / Paint Bucket")
-                        active: view.tool === "fill"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "fill" ? "pointer" : "fill"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolGradient"
-                        theme: view.theme
-                        iconSource: "icons/gradient.svg"
-                        tooltip: qsTr("Gradient (G)")
-                        active: view.tool === "gradient"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "gradient" ? "pointer" : "gradient"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolLiquify"
-                        theme: view.theme
-                        iconSource: "icons/liquify.svg"
-                        tooltip: qsTr("Liquify (Q)")
-                        active: view.tool === "liquify"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "liquify" ? "pointer" : "liquify"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolEyedropper"
-                        theme: view.theme
-                        iconSource: "icons/eyedropper.svg"
-                        tooltip: qsTr("Color picker / Eyedropper (I)")
-                        active: view.tool === "eyedropper"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "eyedropper" ? "pointer" : "eyedropper"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolSelect"
-                        theme: view.theme
-                        iconSource: "icons/select.svg"
-                        tooltip: qsTr("Select (M)")
-                        active: view.tool === "select"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "select" ? "pointer" : "select"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolResize"
-                        theme: view.theme
-                        iconSource: "icons/resize.svg"
-                        tooltip: qsTr("Image size — resize or canvas size")
-                        active: view.tool === "resize"
-                        enabled: view.documentReady
-                        onClicked: view.openResizeDialog()
-                    }
-                    ToolRailButton {
-                        objectName: "toolCrop"
-                        theme: view.theme
-                        iconSource: "icons/crop.svg"
-                        tooltip: qsTr("Crop")
-                        active: view.tool === "crop"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "crop" ? "pointer" : "crop"
-                            view.forceActiveFocus()
-                        }
-                    }
-                    ToolRailButton {
-                        objectName: "toolTransform"
-                        theme: view.theme
-                        iconSource: "icons/transform.svg"
-                        tooltip: qsTr("Transform — move, scale, rotate and flip")
-                        active: view.tool === "transform"
-                        enabled: view.documentReady
-                        onClicked: {
-                            view.tool = view.tool === "transform" ? "pointer" : "transform"
-                            view.forceActiveFocus()
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    Layout.topMargin: 2
-                    Layout.bottomMargin: 2
-                    color: view.theme.border
-                }
-
-                // These change pixels the moment they are pressed, so they are
-                // actions rather than tools. Undo, Redo and Reset live on the
-                // toolbar; the rail keeps the tools and the quick edits.
-                GridLayout {
-                    objectName: "editorEditGrid"
-                    Layout.fillWidth: true
-                    columns: view.toolColumns
-                    columnSpacing: 4
-                    rowSpacing: 4
-
-                    ToolRailButton {
-                        objectName: "editsRotateLeft"
-                        theme: view.theme
-                        iconSource: "icons/rotate-left.svg"
-                        tooltip: qsTr("Rotate left")
-                        enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_rotate", degrees: -90, target: "whole_image" })
-                    }
-                    ToolRailButton {
-                        objectName: "editsRotateRight"
-                        theme: view.theme
-                        iconSource: "icons/rotate-right.svg"
-                        tooltip: qsTr("Rotate right")
-                        enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_rotate", degrees: 90, target: "whole_image" })
-                    }
-                    ToolRailButton {
-                        objectName: "editsFlipHorizontal"
-                        theme: view.theme
-                        iconSource: "icons/flip-horizontal.svg"
-                        tooltip: qsTr("Flip horizontal")
-                        enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_flip", axis: "horizontal", target: "whole_image" })
-                    }
-                    ToolRailButton {
-                        objectName: "editsFlipVertical"
-                        theme: view.theme
-                        iconSource: "icons/flip-vertical.svg"
-                        tooltip: qsTr("Flip vertical")
-                        enabled: view.documentReady
-                        onClicked: view.command({ type: "editor_flip", axis: "vertical", target: "whole_image" })
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    Layout.topMargin: 2
-                    Layout.bottomMargin: 2
-                    color: view.theme.border
-                }
-
-                // The pair is the Editor's, not the brush's: it sits under the
-                // tools because every tool that takes a colour reads one of
-                // its two roles, and it stays visible with no document open —
-                // dimmed — so the rail does not grow and shrink a row at a
-                // time.
-                Item {
-                    objectName: "colourPairRow"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 34
-
-                    ColourPair {
-                        id: railColourPair
-                        objectName: "colourPair"
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        enabled: view.documentReady
-                        theme: view.theme
-                        foreground: view.foregroundColor
-                        background: view.backgroundColor
-                        backgroundTransparent: view.backgroundTransparent
-                        onForegroundClicked: view.openForegroundChooser()
-                        onBackgroundClicked:
-                            view.openBackgroundPopup(railColourPair.backgroundBox)
-                        onSwapRequested: {
-                            view.swapColours()
-                            view.forceActiveFocus()
-                        }
-                        onResetRequested: {
-                            view.resetColours()
-                            view.forceActiveFocus()
-                        }
-                    }
-                }
-
-                // Canvas background swatch: full width of the rail (2 columns
-                // wide in normal mode, 1 column in compact mode), directly below
-                // the foreground/background pair.
-                Rectangle {
-                    id: canvasBgSwatch
-                    objectName: "canvasBgSwatch"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 22
-                    radius: view.theme.radius
-                    color: (!view.canvasBgUseTheme && view.canvasBgChecker)
-                           ? "transparent"
-                           : (view.canvasBgUseTheme ? view.theme.thumb : view.canvasBgColor)
-                    border.width: 1
-                    border.color: canvasBgHover.hovered ? view.theme.accent : view.theme.border
-                    clip: true
-
-                    Checkerboard {
-                        anchors.fill: parent
-                        visible: !view.canvasBgUseTheme && view.canvasBgChecker
-                    }
-                    HoverHandler { id: canvasBgHover; cursorShape: Qt.PointingHandCursor }
-                    MouseArea {
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        ToolTip.visible: containsMouse
-                        ToolTip.delay: 400
-                        ToolTip.text: qsTr("Canvas background")
-                        onClicked: view.openCanvasBgPopup(canvasBgSwatch)
-                    }
-                }
-
-                Item { Layout.fillHeight: true }
-
-                // The rail's own width is its one control: no splitter, because
-                // a rail dragged wide is a column again.
-                ToolRailButton {
-                    objectName: "toolRailColumns"
-                    theme: view.theme
-                    iconSource: view.toolColumns === 2 ? "icons/columns-one.svg"
-                                                       : "icons/columns-two.svg"
-                    tooltip: view.toolColumns === 2 ? qsTr("One column")
-                                                    : qsTr("Two columns")
-                    onClicked: view.setToolColumns(view.toolColumns === 2 ? 1 : 2)
-                }
-            }
+        EditorToolRail {
+            view: view
         }
 
         // ------------------------------------------------------------- canvas
@@ -4307,8 +3961,7 @@ Item {
             // while keeping the image reachable inside the viewport.
             panMargin: Math.max(64, Math.round(Math.min(width, height) * 0.35))
             inputBlocked: view.resizeDialogOpen || view.canvasSizeDialogOpen
-                          || foregroundColorDialog.visible || backgroundColorDialog.visible
-                          || canvasBgColorDialog.visible
+                          || colorPopups.colorPickerOpen
             requireHoverToPan: true
             allowLeftPan: view.filterDialogOpen || view.isColorFilterTool || view.tool === "hand" || view.spacePanning
             allowMiddlePan: true
@@ -5007,9 +4660,9 @@ Item {
                     objectName: "watermarkRegionOverlay"
                     anchors.fill: parent
                     visible: view.tool === "watermark" && view.documentReady
-                             && (watermarkOptionsPanel.wmMode === "region"
-                                 || (watermarkOptionsPanel.wmMode === "ai"
-                                     && aiDetectorCombo.keys[aiDetectorCombo.currentIndex] === "none"))
+                             && (pluginOptionsPanel.wmMode === "region"
+                                 || (pluginOptionsPanel.wmMode === "ai"
+                                     && pluginOptionsPanel.wmDetectorKey === "none"))
                     enabled: visible && !view.spacePanning
 
                     onVisibleChanged: {
@@ -5147,8 +4800,8 @@ Item {
                     objectName: "watermarkBrushOverlay"
                     anchors.fill: parent
                     visible: view.tool === "watermark" && view.documentReady
-                             && watermarkOptionsPanel.wmMode === "ai"
-                             && aiDetectorCombo.keys[aiDetectorCombo.currentIndex] === "brush"
+                             && pluginOptionsPanel.wmMode === "ai"
+                             && pluginOptionsPanel.wmDetectorKey === "brush"
                     enabled: visible && !view.spacePanning
 
                     Canvas {
@@ -5251,11 +4904,11 @@ Item {
                     objectName: "rembgBrushOverlay"
                     anchors.fill: parent
                     visible: view.tool === "removeBg" && view.documentReady
-                             && removeBgOptionsPanel.rembgBrushMode !== "off"
+                             && pluginOptionsPanel.rembgBrushMode !== "off"
                     enabled: visible && !view.spacePanning
 
                     property var activePoints: []
-                    readonly property bool isRestore: removeBgOptionsPanel.rembgBrushMode === "restore"
+                    readonly property bool isRestore: pluginOptionsPanel.rembgBrushMode === "restore"
 
                     Canvas {
                         id: rembgBrushCanvas
@@ -5271,7 +4924,7 @@ Item {
                             ctx.fillStyle = col
                             ctx.lineCap = "round"
                             ctx.lineJoin = "round"
-                            var r = Math.max(1, removeBgOptionsPanel.rembgBrushRadius * view.zoom)
+                            var r = Math.max(1, pluginOptionsPanel.rembgBrushRadius * view.zoom)
                             if (pts.length === 1) {
                                 ctx.beginPath()
                                 ctx.arc(view.docToHostX(pts[0][0]), view.docToHostY(pts[0][1]), r, 0, Math.PI * 2)
@@ -5318,12 +4971,12 @@ Item {
                             rembgBrushOverlay.activePoints = []
                             rembgBrushCanvas.requestPaint()
                             if (pts.length === 0) return
-                            var stroke = [{ radius: removeBgOptionsPanel.rembgBrushRadius, points: pts }]
+                            var stroke = [{ radius: pluginOptionsPanel.rembgBrushRadius, points: pts }]
                             view.command({
                                 type: "editor_refine_alpha",
                                 erase_strokes: rembgBrushOverlay.isRestore ? [] : stroke,
                                 restore_strokes: rembgBrushOverlay.isRestore ? stroke : [],
-                                softness: removeBgOptionsPanel.rembgBrushSoftness
+                                softness: pluginOptionsPanel.rembgBrushSoftness
                             })
                         }
                         onExited: {
@@ -5334,7 +4987,7 @@ Item {
 
                     Rectangle {
                         visible: rembgBrushArea.containsMouse
-                        width: Math.max(6, removeBgOptionsPanel.rembgBrushRadius * 2 * view.zoom)
+                        width: Math.max(6, pluginOptionsPanel.rembgBrushRadius * 2 * view.zoom)
                         height: width
                         radius: width / 2
                         x: rembgBrushArea.hoverX - width / 2
@@ -6542,124 +6195,8 @@ Item {
                 }
 
                 // ------------------------------------------ Liquify warp tool (live RAM warp)
-                Item {
-                    id: liquifyOverlay
-                    objectName: "liquifyOverlay"
-                    anchors.fill: parent
-                    visible: view.tool === "liquify" && view.documentReady
-                    enabled: visible && !view.spacePanning
-
-                    property var pendingPts: []
-                    property var lastDocPt: null
-                    property bool dragging: false
-                    property real cursorX: -1000
-                    property real cursorY: -1000
-                    property bool cursorInside: false
-
-                    Timer {
-                        id: liquifyFlushTimer
-                        interval: 24
-                        repeat: true
-                        onTriggered: {
-                            if (!liquifyOverlay.dragging) return
-                            if (liquifyOverlay.pendingPts.length > 0) {
-                                var batch = liquifyOverlay.pendingPts.slice()
-                                liquifyOverlay.pendingPts = []
-                                view.command({ type: "editor_live_stroke_step", points: batch })
-                            } else if (view.liquifyMode !== "push" && liquifyOverlay.lastDocPt) {
-                                // Continuous Bloat / Pucker / Twirl while holding mouse stationary
-                                view.command({ type: "editor_live_stroke_step", points: [liquifyOverlay.lastDocPt] })
-                            }
-                        }
-                    }
-
-                    // Circular Liquify brush cursor
-                    Rectangle {
-                        visible: liquifyOverlay.cursorInside
-                        readonly property real d: Math.max(8, view.liquifyRadius * 2 * view.zoom)
-                        width: d
-                        height: d
-                        radius: d / 2
-                        x: liquifyOverlay.cursorX - d / 2
-                        y: liquifyOverlay.cursorY - d / 2
-                        color: "transparent"
-                        border.width: 1.5
-                        border.color: "#ffffff"
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: 1
-                            radius: width / 2
-                            color: "transparent"
-                            border.width: 1
-                            border.color: Qt.rgba(0, 0, 0, 0.65)
-                        }
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 4; height: 4; radius: 2
-                            color: view.theme.accent
-                        }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.BlankCursor
-                        onEntered: liquifyOverlay.cursorInside = true
-                        onExited: liquifyOverlay.cursorInside = false
-                        onPressed: function(mouse) {
-                            view.forceActiveFocus()
-                            liquifyOverlay.cursorX = mouse.x
-                            liquifyOverlay.cursorY = mouse.y
-                            var dx = view.hostToDocX(mouse.x)
-                            var dy = view.hostToDocY(mouse.y)
-                            liquifyOverlay.lastDocPt = [dx, dy]
-                            liquifyOverlay.pendingPts = []
-                            liquifyOverlay.dragging = true
-                            view.command({
-                                type: "editor_live_stroke_begin",
-                                kind: "liquify",
-                                mode: view.liquifyMode,
-                                radius: view.liquifyRadius,
-                                strength: view.liquifyStrength / 100.0,
-                                x: dx,
-                                y: dy
-                            })
-                            liquifyFlushTimer.start()
-                        }
-                        onPositionChanged: function(mouse) {
-                            liquifyOverlay.cursorX = mouse.x
-                            liquifyOverlay.cursorY = mouse.y
-                            liquifyOverlay.cursorInside = true
-                            if (!liquifyOverlay.dragging) return
-                            var dx = view.hostToDocX(mouse.x)
-                            var dy = view.hostToDocY(mouse.y)
-                            var last = liquifyOverlay.lastDocPt
-                            if (!last || Math.hypot(dx - last[0], dy - last[1]) >= 2.0) {
-                                liquifyOverlay.lastDocPt = [dx, dy]
-                                liquifyOverlay.pendingPts.push([dx, dy])
-                            }
-                        }
-                        onReleased: {
-                            if (!liquifyOverlay.dragging) return
-                            liquifyFlushTimer.stop()
-                            liquifyOverlay.dragging = false
-                            if (liquifyOverlay.pendingPts.length > 0) {
-                                var batch = liquifyOverlay.pendingPts.slice()
-                                liquifyOverlay.pendingPts = []
-                                view.command({ type: "editor_live_stroke_step", points: batch })
-                            }
-                            liquifyOverlay.lastDocPt = null
-                            view.command({ type: "editor_live_stroke_end", commit: true })
-                        }
-                        onCanceled: {
-                            if (!liquifyOverlay.dragging) return
-                            liquifyFlushTimer.stop()
-                            liquifyOverlay.dragging = false
-                            liquifyOverlay.pendingPts = []
-                            liquifyOverlay.lastDocPt = null
-                            view.command({ type: "editor_live_stroke_end", commit: false })
-                        }
-                    }
+                EditorLiquifyOverlay {
+                    view: view
                 }
 
                 // ------------------------------------------ Zoom tool (click & scrubby drag)
@@ -8812,8 +8349,7 @@ Item {
                                                     view.gradientSelectedStop = index
                                                     var arr = view.rawGradientStops()
                                                     var cur = (index >= 0 && index < arr.length) ? arr[index] : null
-                                                    gradientStopColorDialog.selectedColor = cur ? cur.hex : view.foregroundColor
-                                                    gradientStopColorDialog.open()
+                                                    colorPopups.openGradientStopChooser(cur ? cur.hex : view.foregroundColor)
                                                 }
                                                 onPositionChanged: function(mouse) {
                                                     if (!pressed) return
@@ -8864,8 +8400,7 @@ Item {
                                             onClicked: {
                                                 view.ensureCustomGradientStops()
                                                 var cur = gradStopColorBtn.curStop
-                                                gradientStopColorDialog.selectedColor = cur ? cur.hex : view.foregroundColor
-                                                gradientStopColorDialog.open()
+                                                colorPopups.openGradientStopChooser(cur ? cur.hex : view.foregroundColor)
                                             }
                                         }
                                     }
@@ -10630,979 +10165,9 @@ Item {
                                 onCancelRequested: view.tool = "pointer"
                             }
 
-                            ColumnLayout {
-                                id: removeBgOptionsPanel
-                                objectName: "editorRemoveBgPanel"
-                                Layout.fillWidth: true
-                                spacing: 10
-                                visible: view.tool === "removeBg"
-
-                                readonly property var models: {
-                                    var all = (view.state && view.state.aiModels) || []
-                                    var out = []
-                                    for (var i = 0; i < all.length; ++i) {
-                                        var t = (all[i].tier || "").toLowerCase()
-                                        if (t !== "ocr" && t !== "upscale" && t !== "caption"
-                                            && t !== "detector" && t !== "inpaint") out.push(all[i])
-                                    }
-                                    return out
-                                }
-                                property string rembgBrushMode: "off" // "off" | "erase" | "restore"
-                                property int rembgBrushRadius: 24
-                                property real rembgBrushSoftness: 0.30
-                                readonly property var activeTask: (view.state && view.state.aiTask) || null
-                                readonly property bool aiBusy: !!(activeTask && activeTask.running)
-                                readonly property var selectedModel: {
-                                    if (models.length === 0) return null
-                                    var idx = Math.max(0, Math.min(models.length - 1, rembgModelCombo.currentIndex))
-                                    return models[idx]
-                                }
-
-                                Label {
-                                    text: qsTr("Model")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 12
-                                }
-                                ComboBox {
-                                    id: rembgModelCombo
-                                    objectName: "rembgModelCombo"
-                                    Layout.fillWidth: true
-                                    currentIndex: 1
-                                    model: {
-                                        var list = removeBgOptionsPanel.models
-                                        var labels = []
-                                        for (var i = 0; i < list.length; ++i) {
-                                            var m = list[i]
-                                            labels.push(m.name + (m.installed ? "" : " (" + qsTr("Not downloaded") + ")"))
-                                        }
-                                        return labels
-                                    }
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    Label {
-                                        text: qsTr("Edge feather")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                        Layout.fillWidth: true
-                                    }
-                                    Label {
-                                        text: rembgFeatherSlider.value + " px"
-                                        color: view.theme.text
-                                        font.pixelSize: 12
-                                    }
-                                }
-                                Slider {
-                                    id: rembgFeatherSlider
-                                    Layout.fillWidth: true
-                                    from: 0
-                                    to: 20
-                                    stepSize: 1
-                                    value: 0
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-                                    visible: removeBgOptionsPanel.aiBusy
-
-                                    Label {
-                                        text: removeBgOptionsPanel.activeTask ? removeBgOptionsPanel.activeTask.stage : ""
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                    ProgressBar {
-                                        Layout.fillWidth: true
-                                        from: 0
-                                        to: 100
-                                        value: removeBgOptionsPanel.activeTask ? removeBgOptionsPanel.activeTask.percent : 0
-                                    }
-                                }
-
-                                Label {
-                                    visible: !!(removeBgOptionsPanel.activeTask
-                                                && !removeBgOptionsPanel.activeTask.running
-                                                && removeBgOptionsPanel.activeTask.error)
-                                    text: removeBgOptionsPanel.activeTask && removeBgOptionsPanel.activeTask.error
-                                          ? removeBgOptionsPanel.activeTask.error : ""
-                                    color: view.theme.danger
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-
-                                Button {
-                                    objectName: "rembgDownloadButton"
-                                    Layout.fillWidth: true
-                                    visible: !!(removeBgOptionsPanel.selectedModel
-                                                && !removeBgOptionsPanel.selectedModel.installed
-                                                && !removeBgOptionsPanel.aiBusy)
-                                    text: qsTr("Download model (%1)")
-                                        .arg(view.theme.formatBytes(removeBgOptionsPanel.selectedModel
-                                                                    ? (removeBgOptionsPanel.selectedModel.sizeBytes || 0) : 0))
-                                    focusPolicy: Qt.NoFocus
-                                    onClicked: {
-                                        if (removeBgOptionsPanel.selectedModel) {
-                                            view.command({
-                                                type: "ai_download_model",
-                                                model_id: removeBgOptionsPanel.selectedModel.id
-                                            })
-                                        }
-                                    }
-                                }
-
-                                RowLayout {
-                                    objectName: "rembgApplyTargetRow"
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    Label {
-                                        text: qsTr("Apply to")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                    }
-                                    ComboBox {
-                                        objectName: "rembgApplyTargetCombo"
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        readonly property var keys: ["active_layer", "whole_image", "new_layer"]
-                                        model: [qsTr("Active layer"), qsTr("Whole image"), qsTr("New layer")]
-                                        currentIndex: Math.max(0, keys.indexOf(view.aiApplyTarget))
-                                        onActivated: function(idx) {
-                                            view.aiApplyTarget = keys[idx] || "active_layer"
-                                        }
-                                    }
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Button {
-                                        objectName: "rembgRunButton"
-                                        Layout.fillWidth: true
-                                        text: qsTr("Remove background")
-                                        focusPolicy: Qt.NoFocus
-                                        enabled: view.documentReady
-                                                 && !removeBgOptionsPanel.aiBusy
-                                                 && !!(removeBgOptionsPanel.selectedModel
-                                                       && removeBgOptionsPanel.selectedModel.installed)
-                                        onClicked: {
-                                            if (removeBgOptionsPanel.selectedModel) {
-                                                view.command({
-                                                    type: "editor_ai_remove_background",
-                                                    model_id: removeBgOptionsPanel.selectedModel.id,
-                                                    feather: Math.round(rembgFeatherSlider.value),
-                                                    target: view.effectiveAiTarget()
-                                                })
-                                            }
-                                        }
-                                    }
-
-                                    Button {
-                                        objectName: "rembgCancelButton"
-                                        visible: removeBgOptionsPanel.aiBusy
-                                        text: qsTr("Cancel")
-                                        focusPolicy: Qt.NoFocus
-                                        onClicked: view.command({ type: "ai_cancel" })
-                                    }
-                                }
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 1
-                                    Layout.topMargin: 4
-                                    Layout.bottomMargin: 2
-                                    color: view.theme.border
-                                }
-
-                                Label {
-                                    text: qsTr("Refine mask (Brush)")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 12
-                                }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-                                    PanelAction {
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("Off")
-                                        primary: removeBgOptionsPanel.rembgBrushMode === "off"
-                                        onClicked: removeBgOptionsPanel.rembgBrushMode = "off"
-                                    }
-                                    PanelAction {
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("Erase BG")
-                                        primary: removeBgOptionsPanel.rembgBrushMode === "erase"
-                                        onClicked: removeBgOptionsPanel.rembgBrushMode = "erase"
-                                    }
-                                    PanelAction {
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("Restore FG")
-                                        primary: removeBgOptionsPanel.rembgBrushMode === "restore"
-                                        onClicked: removeBgOptionsPanel.rembgBrushMode = "restore"
-                                    }
-                                }
-
-                                Label {
-                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
-                                    text: removeBgOptionsPanel.rembgBrushMode === "restore"
-                                        ? qsTr("Paint on the image to restore cut subject pixels from original (Ctrl+Z to undo)")
-                                        : qsTr("Paint on the image to erase leftover background to transparent (Ctrl+Z to undo)")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
-                                    Label { text: qsTr("Mask brush size"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
-                                    Label { text: removeBgOptionsPanel.rembgBrushRadius + " px"; color: view.theme.text; font.pixelSize: 12 }
-                                }
-                                Slider {
-                                    Layout.fillWidth: true
-                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
-                                    focusPolicy: Qt.NoFocus
-                                    from: 6; to: 120; stepSize: 2
-                                    value: removeBgOptionsPanel.rembgBrushRadius
-                                    onMoved: removeBgOptionsPanel.rembgBrushRadius = Math.round(value)
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
-                                    Label { text: qsTr("Brush softness"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
-                                    Label { text: Math.round(removeBgOptionsPanel.rembgBrushSoftness * 100) + "%"; color: view.theme.text; font.pixelSize: 12 }
-                                }
-                                Slider {
-                                    Layout.fillWidth: true
-                                    visible: removeBgOptionsPanel.rembgBrushMode !== "off"
-                                    focusPolicy: Qt.NoFocus
-                                    from: 0.0; to: 1.0; stepSize: 0.05
-                                    value: removeBgOptionsPanel.rembgBrushSoftness
-                                    onMoved: removeBgOptionsPanel.rembgBrushSoftness = value
-                                }
-                            }
-
-                            // ------------------------------------------- Watermark Remover (Gemini + General Region)
-                            ColumnLayout {
-                                id: watermarkOptionsPanel
-                                objectName: "editorWatermarkPanel"
-                                Layout.fillWidth: true
-                                spacing: 10
-                                visible: view.tool === "watermark"
-
-                                property string wmMode: "ai" // "ai" | "gemini" | "region"
-                                readonly property var activeTask: (view.state && view.state.aiTask) || null
-                                readonly property bool wmBusy: !!(activeTask && activeTask.running)
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-                                    PanelAction {
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("AI Auto")
-                                        primary: watermarkOptionsPanel.wmMode === "ai"
-                                        onClicked: watermarkOptionsPanel.wmMode = "ai"
-                                    }
-                                    PanelAction {
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("Gemini")
-                                        primary: watermarkOptionsPanel.wmMode === "gemini"
-                                        onClicked: watermarkOptionsPanel.wmMode = "gemini"
-                                    }
-                                    PanelAction {
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("Region")
-                                        primary: watermarkOptionsPanel.wmMode === "region"
-                                        onClicked: watermarkOptionsPanel.wmMode = "region"
-                                    }
-                                }
-
-                                RowLayout {
-                                    objectName: "watermarkApplyTargetRow"
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    Label {
-                                        text: qsTr("Apply to")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                    }
-                                    ComboBox {
-                                        objectName: "watermarkApplyTargetCombo"
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        readonly property var keys: ["active_layer", "whole_image", "new_layer"]
-                                        model: [qsTr("Active layer"), qsTr("Whole image"), qsTr("New layer")]
-                                        currentIndex: Math.max(0, keys.indexOf(view.aiApplyTarget))
-                                        onActivated: function(idx) {
-                                            view.aiApplyTarget = keys[idx] || "active_layer"
-                                        }
-                                    }
-                                }
-
-                                // Mode 0: AI Watermark Detector (YOLO26 / YOLO11) + Inpainter (MI-GAN / LaMa)
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    visible: watermarkOptionsPanel.wmMode === "ai"
-
-                                    readonly property string detKey: aiDetectorCombo.keys[aiDetectorCombo.currentIndex] || "watermark-yolo26"
-                                    readonly property bool manualMode: detKey === "none"
-                                    readonly property bool brushMode: detKey === "brush"
-                                    readonly property bool autoDetectMode: !manualMode && !brushMode
-
-                                    Label {
-                                        text: qsTr("Detector model")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                    }
-                                    ComboBox {
-                                        id: aiDetectorCombo
-                                        objectName: "editorAiDetectorCombo"
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        readonly property var keys: ["watermark-yolo26", "watermark-yolo11", "brush", "none"]
-                                        model: [
-                                            qsTr("YOLO26 Watermark (Fast, 9.8 MB)"),
-                                            qsTr("YOLO11 Watermark (Balanced, 11 MB)"),
-                                            qsTr("Brush mask (Paint on image)"),
-                                            qsTr("Manual region (No detector)")
-                                        ]
-                                        currentIndex: 0
-                                    }
-
-                                    Label {
-                                        text: qsTr("Inpainter model")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                    }
-                                    ComboBox {
-                                        id: aiInpainterCombo
-                                        objectName: "editorAiInpainterCombo"
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        readonly property var keys: ["migan-pipeline-v2", "lama-fp32"]
-                                        model: [
-                                            qsTr("MI-GAN v2 (Fast CPU, 28 MB)"),
-                                            qsTr("LaMa FFC (High Quality, 208 MB)")
-                                        ]
-                                        currentIndex: 0
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        visible: parent.autoDetectMode
-                                        Label {
-                                            text: qsTr("Confidence")
-                                            color: view.theme.textMuted
-                                            font.pixelSize: 12
-                                            Layout.fillWidth: true
-                                        }
-                                        Label {
-                                            text: Math.round(aiConfSlider.value * 100) + "%"
-                                            color: view.theme.text
-                                            font.pixelSize: 12
-                                        }
-                                    }
-                                    Slider {
-                                        id: aiConfSlider
-                                        Layout.fillWidth: true
-                                        visible: parent.autoDetectMode
-                                        focusPolicy: Qt.NoFocus
-                                        from: 0.15
-                                        to: 0.90
-                                        stepSize: 0.05
-                                        value: 0.45
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        visible: parent.autoDetectMode
-                                        Label {
-                                            text: qsTr("Mask padding")
-                                            color: view.theme.textMuted
-                                            font.pixelSize: 12
-                                            Layout.fillWidth: true
-                                        }
-                                        Label {
-                                            text: Math.round(aiPadSlider.value) + " px"
-                                            color: view.theme.text
-                                            font.pixelSize: 12
-                                        }
-                                    }
-                                    Slider {
-                                        id: aiPadSlider
-                                        Layout.fillWidth: true
-                                        visible: parent.autoDetectMode
-                                        focusPolicy: Qt.NoFocus
-                                        from: 0
-                                        to: 32
-                                        stepSize: 2
-                                        value: 8
-                                    }
-
-                                    // Freehand brush mask controls when detector == "brush"
-                                    Label {
-                                        visible: parent.brushMode
-                                        text: qsTr("Paint directly over the watermark on the image")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        visible: parent.brushMode
-                                        Label {
-                                            text: qsTr("Mask brush size")
-                                            color: view.theme.textMuted
-                                            font.pixelSize: 12
-                                            Layout.fillWidth: true
-                                        }
-                                        Label {
-                                            text: view.wmBrushRadius + " px"
-                                            color: view.theme.text
-                                            font.pixelSize: 12
-                                        }
-                                    }
-                                    Slider {
-                                        id: aiBrushRadiusSlider
-                                        Layout.fillWidth: true
-                                        visible: parent.brushMode
-                                        focusPolicy: Qt.NoFocus
-                                        from: 6
-                                        to: 120
-                                        stepSize: 2
-                                        value: view.wmBrushRadius
-                                        onMoved: view.wmBrushRadius = Math.round(value)
-                                    }
-                                    PanelAction {
-                                        visible: parent.brushMode
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        text: qsTr("Clear mask")
-                                        enabled: (view.wmBrushStrokes || []).length > 0
-                                        onClicked: view.clearWmBrushMask()
-                                    }
-
-                                    // Manual region inputs when detector == "none"
-                                    Label {
-                                        visible: parent.manualMode
-                                        text: qsTr("Drag on the image to mark the watermark area")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 4
-                                        visible: parent.manualMode
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↘"; onClicked: view.setWmCornerPreset("br") }
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↙"; onClicked: view.setWmCornerPreset("bl") }
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↗"; onClicked: view.setWmCornerPreset("tr") }
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↖"; onClicked: view.setWmCornerPreset("tl") }
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true; spacing: 6; visible: parent.manualMode
-                                        Label { text: "X"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionX)
-                                            onEditingFinished: view.setWmRegion(parseInt(text) || 0, view.wmRegionY, view.wmRegionW, view.wmRegionH)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                        Label { text: "Y"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionY)
-                                            onEditingFinished: view.setWmRegion(view.wmRegionX, parseInt(text) || 0, view.wmRegionW, view.wmRegionH)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true; spacing: 6; visible: parent.manualMode
-                                        Label { text: "W"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionW)
-                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, parseInt(text) || 24, view.wmRegionH)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                        Label { text: "H"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionH)
-                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, view.wmRegionW, parseInt(text) || 24)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                    }
-
-                                    PanelAction {
-                                        objectName: "editorAiInpaintRunBtn"
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        primary: true
-                                        text: parent.brushMode ? qsTr("Inpaint painted mask (AI)")
-                                            : parent.manualMode ? qsTr("Inpaint region (AI)")
-                                            : qsTr("Detect & remove watermark (AI)")
-                                        enabled: view.documentReady && !watermarkOptionsPanel.wmBusy
-                                                 && (!parent.brushMode || (view.wmBrushStrokes || []).length > 0)
-                                        onClicked: {
-                                            view.command({
-                                                type: "editor_ai_inpaint",
-                                                detector_model: aiDetectorCombo.keys[aiDetectorCombo.currentIndex] || "watermark-yolo26",
-                                                inpainter_model: aiInpainterCombo.keys[aiInpainterCombo.currentIndex] || "migan-pipeline-v2",
-                                                confidence: aiConfSlider.value,
-                                                mask_padding: Math.round(aiPadSlider.value),
-                                                region_x: view.wmRegionX,
-                                                region_y: view.wmRegionY,
-                                                region_width: Math.max(8, view.wmRegionW),
-                                                region_height: Math.max(8, view.wmRegionH),
-                                                brush_strokes: view.wmBrushStrokes || [],
-                                                target: view.effectiveAiTarget()
-                                            })
-                                        }
-                                    }
-                                }
-
-                                // Mode 1: Gemini Reverse Alpha Blending (Advanced)
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    visible: watermarkOptionsPanel.wmMode === "gemini"
-
-                                    Label {
-                                        text: qsTr("Logo size")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                    }
-                                    ComboBox {
-                                        id: geminiSizeCombo
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        readonly property var keys: ["auto", "small", "large"]
-                                        model: [qsTr("Auto (48 / 96 px)"), "48 × 48 px", "96 × 96 px"]
-                                        currentIndex: 0
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        Label {
-                                            text: qsTr("Logo brightness")
-                                            color: view.theme.textMuted
-                                            font.pixelSize: 12
-                                            Layout.fillWidth: true
-                                        }
-                                        Label {
-                                            text: Math.round(geminiLogoSlider.value)
-                                            color: view.theme.text
-                                            font.pixelSize: 12
-                                        }
-                                    }
-                                    Slider {
-                                        id: geminiLogoSlider
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        from: 200
-                                        to: 255
-                                        stepSize: 1
-                                        value: 255
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 6
-                                        Label { text: "dX"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            id: geminiOffX
-                                            Layout.fillWidth: true
-                                            text: "0"
-                                            inputMethodHints: Qt.ImhDigitsOnly
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                        Label { text: "dY"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            id: geminiOffY
-                                            Layout.fillWidth: true
-                                            text: "0"
-                                            inputMethodHints: Qt.ImhDigitsOnly
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                    }
-
-                                    CheckBox {
-                                        id: geminiForceCheck
-                                        text: qsTr("Force remove (skip detection)")
-                                        checked: false
-                                        focusPolicy: Qt.NoFocus
-                                    }
-
-                                    PanelAction {
-                                        objectName: "editorGeminiRunBtn"
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        primary: true
-                                        text: qsTr("Remove Gemini logo")
-                                        enabled: view.documentReady && !watermarkOptionsPanel.wmBusy
-                                        onClicked: {
-                                            view.command({
-                                                type: "editor_dewatermark_gemini",
-                                                size: geminiSizeCombo.keys[geminiSizeCombo.currentIndex] || "auto",
-                                                logo_value: geminiLogoSlider.value,
-                                                force: geminiForceCheck.checked,
-                                                offset_x: parseInt(geminiOffX.text) || 0,
-                                                offset_y: parseInt(geminiOffY.text) || 0,
-                                                target: view.effectiveAiTarget()
-                                            })
-                                        }
-                                    }
-                                }
-
-                                // Mode 2: General Watermark Region Inpaint
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    visible: watermarkOptionsPanel.wmMode === "region"
-
-                                    Label {
-                                        text: qsTr("Drag on the image to mark the watermark area")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                        wrapMode: Text.WordWrap
-                                        Layout.fillWidth: true
-                                    }
-                                    Label {
-                                        text: qsTr("Quick corner presets")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 12
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 4
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↘"; onClicked: view.setWmCornerPreset("br") }
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↙"; onClicked: view.setWmCornerPreset("bl") }
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↗"; onClicked: view.setWmCornerPreset("tr") }
-                                        PanelAction { Layout.fillWidth: true; theme: view.theme; text: "↖"; onClicked: view.setWmCornerPreset("tl") }
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 6
-                                        Label { text: "X"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionX)
-                                            onEditingFinished: view.setWmRegion(parseInt(text) || 0, view.wmRegionY, view.wmRegionW, view.wmRegionH)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                        Label { text: "Y"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionY)
-                                            onEditingFinished: view.setWmRegion(view.wmRegionX, parseInt(text) || 0, view.wmRegionW, view.wmRegionH)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 6
-                                        Label { text: "W"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionW)
-                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, parseInt(text) || 24, view.wmRegionH)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                        Label { text: "H"; color: view.theme.textMuted; font.pixelSize: 12 }
-                                        TextField {
-                                            Layout.fillWidth: true; text: String(view.wmRegionH)
-                                            onEditingFinished: view.setWmRegion(view.wmRegionX, view.wmRegionY, view.wmRegionW, parseInt(text) || 24)
-                                            Keys.onEscapePressed: focus = false
-                                        }
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        Label { text: qsTr("Edge blend"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
-                                        Label { text: Math.round(inpaintFeatherSlider.value) + " px"; color: view.theme.text; font.pixelSize: 12 }
-                                    }
-                                    Slider {
-                                        id: inpaintFeatherSlider
-                                        Layout.fillWidth: true
-                                        focusPolicy: Qt.NoFocus
-                                        from: 0
-                                        to: 20
-                                        stepSize: 1
-                                        value: 4
-                                    }
-
-                                    PanelAction {
-                                        objectName: "editorInpaintRunBtn"
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        primary: true
-                                        text: qsTr("Remove watermark region")
-                                        enabled: view.documentReady && !watermarkOptionsPanel.wmBusy
-                                        onClicked: {
-                                            view.command({
-                                                type: "editor_inpaint_region",
-                                                x: view.wmRegionX,
-                                                y: view.wmRegionY,
-                                                width: Math.max(8, view.wmRegionW),
-                                                height: Math.max(8, view.wmRegionH),
-                                                feather: Math.round(inpaintFeatherSlider.value),
-                                                target: view.effectiveAiTarget()
-                                            })
-                                        }
-                                    }
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-                                    visible: watermarkOptionsPanel.wmBusy
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: watermarkOptionsPanel.activeTask && watermarkOptionsPanel.activeTask.stage
-                                            ? watermarkOptionsPanel.activeTask.stage : qsTr("Working…")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 6
-                                        ProgressBar {
-                                            Layout.fillWidth: true
-                                            from: 0; to: 100
-                                            value: watermarkOptionsPanel.activeTask ? watermarkOptionsPanel.activeTask.percent : 0
-                                        }
-                                        Button {
-                                            text: qsTr("Cancel")
-                                            focusPolicy: Qt.NoFocus
-                                            onClicked: view.command({ type: "ai_cancel" })
-                                        }
-                                    }
-                                }
-
-                                Label {
-                                    visible: !!(watermarkOptionsPanel.activeTask && !watermarkOptionsPanel.wmBusy && watermarkOptionsPanel.activeTask.error)
-                                    text: watermarkOptionsPanel.activeTask && watermarkOptionsPanel.activeTask.error ? watermarkOptionsPanel.activeTask.error : ""
-                                    color: view.theme.danger
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-                            }
-
-                            // ------------------------------------------- AI Caption & .txt Editor (Advanced)
-                            ColumnLayout {
-                                id: captionOptionsPanel
-                                objectName: "editorCaptionPanel"
-                                Layout.fillWidth: true
-                                spacing: 10
-                                visible: view.tool === "caption"
-
-                                readonly property var activeTask: (view.state && view.state.aiTask) || null
-                                readonly property bool capBusy: !!(activeTask && activeTask.running)
-                                readonly property string savedCaption: (view.state && view.state.editorCaption) || ""
-                                property string _lastAppliedCap: ""
-
-                                onSavedCaptionChanged: {
-                                    if (!captionTextArea.activeFocus) {
-                                        captionTextArea.text = savedCaption
-                                    }
-                                }
-
-                                onActiveTaskChanged: {
-                                    if (!activeTask || activeTask.running || !activeTask.captionText) return
-                                    if (activeTask.captionText === _lastAppliedCap) return
-                                    _lastAppliedCap = activeTask.captionText
-                                    if (captionAppendCheck.checked && captionTextArea.text.trim().length > 0) {
-                                        captionTextArea.text = captionTextArea.text.trim() + ", " + activeTask.captionText
-                                    } else {
-                                        captionTextArea.text = activeTask.captionText
-                                    }
-                                }
-
-                                Label {
-                                    text: qsTr("Caption model")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 12
-                                }
-                                ComboBox {
-                                    id: captionModelCombo
-                                    Layout.fillWidth: true
-                                    focusPolicy: Qt.NoFocus
-                                    readonly property var ids: ["wd-vit-tagger-v3", "wd-swinv2-tagger-v3"]
-                                    model: ["WD-ViT v3 (Fast)", "WD-SwinV2 v3 (Accurate)"]
-                                    currentIndex: 0
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label { text: qsTr("General threshold"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
-                                    Label { text: captionGenThresh.value.toFixed(2); color: view.theme.text; font.pixelSize: 12 }
-                                }
-                                Slider {
-                                    id: captionGenThresh
-                                    Layout.fillWidth: true
-                                    focusPolicy: Qt.NoFocus
-                                    from: 0.15
-                                    to: 0.85
-                                    stepSize: 0.05
-                                    value: 0.35
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label { text: qsTr("Character threshold"); color: view.theme.textMuted; font.pixelSize: 12; Layout.fillWidth: true }
-                                    Label { text: captionCharThresh.value.toFixed(2); color: view.theme.text; font.pixelSize: 12 }
-                                }
-                                Slider {
-                                    id: captionCharThresh
-                                    Layout.fillWidth: true
-                                    focusPolicy: Qt.NoFocus
-                                    from: 0.30
-                                    to: 0.95
-                                    stepSize: 0.05
-                                    value: 0.85
-                                }
-
-                                TextField {
-                                    id: captionPrefixField
-                                    Layout.fillWidth: true
-                                    placeholderText: qsTr("Prefix tags (optional)")
-                                    Keys.onEscapePressed: focus = false
-                                }
-                                TextField {
-                                    id: captionExcludeField
-                                    Layout.fillWidth: true
-                                    placeholderText: qsTr("Exclude tags (comma-separated)")
-                                    Keys.onEscapePressed: focus = false
-                                }
-
-                                CheckBox {
-                                    id: captionSpacesCheck
-                                    text: qsTr("Replace underscores with spaces")
-                                    checked: true
-                                    focusPolicy: Qt.NoFocus
-                                }
-                                CheckBox {
-                                    id: captionAppendCheck
-                                    text: qsTr("Append to existing caption")
-                                    checked: false
-                                    focusPolicy: Qt.NoFocus
-                                }
-
-                                PanelAction {
-                                    objectName: "editorCaptionGenerateBtn"
-                                    Layout.fillWidth: true
-                                    theme: view.theme
-                                    primary: true
-                                    text: qsTr("Generate caption (AI)")
-                                    enabled: view.documentReady && !captionOptionsPanel.capBusy
-                                    onClicked: {
-                                        captionOptionsPanel._lastAppliedCap = ""
-                                        view.command({
-                                            type: "editor_generate_caption",
-                                            model_id: captionModelCombo.ids[captionModelCombo.currentIndex] || "wd-vit-tagger-v3",
-                                            general_threshold: captionGenThresh.value,
-                                            character_threshold: captionCharThresh.value,
-                                            replace_underscores: captionSpacesCheck.checked,
-                                            prefix: captionPrefixField.text,
-                                            suffix: "",
-                                            exclude_tags: captionExcludeField.text
-                                        })
-                                    }
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-                                    visible: captionOptionsPanel.capBusy
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: captionOptionsPanel.activeTask && captionOptionsPanel.activeTask.stage
-                                            ? captionOptionsPanel.activeTask.stage : qsTr("Working…")
-                                        color: view.theme.textMuted
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 6
-                                        ProgressBar {
-                                            Layout.fillWidth: true
-                                            from: 0; to: 100
-                                            value: captionOptionsPanel.activeTask ? captionOptionsPanel.activeTask.percent : 0
-                                        }
-                                        Button {
-                                            text: qsTr("Cancel")
-                                            focusPolicy: Qt.NoFocus
-                                            onClicked: view.command({ type: "ai_cancel" })
-                                        }
-                                    }
-                                }
-
-                                Label {
-                                    visible: !!(captionOptionsPanel.activeTask && !captionOptionsPanel.capBusy && captionOptionsPanel.activeTask.error)
-                                    text: captionOptionsPanel.activeTask && captionOptionsPanel.activeTask.error ? captionOptionsPanel.activeTask.error : ""
-                                    color: view.theme.danger
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-
-                                Label {
-                                    text: qsTr("Caption (.txt)")
-                                    color: view.theme.textMuted
-                                    font.pixelSize: 12
-                                }
-
-                                ScrollView {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 140
-                                    clip: true
-                                    TextArea {
-                                        id: captionTextArea
-                                        objectName: "editorCaptionTextArea"
-                                        wrapMode: TextArea.Wrap
-                                        placeholderText: qsTr("Edit or type tags / caption here…")
-                                        text: captionOptionsPanel.savedCaption
-                                        color: view.theme.text
-                                        Keys.onEscapePressed: focus = false
-                                    }
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-                                    PanelAction {
-                                        objectName: "editorCaptionSaveBtn"
-                                        Layout.fillWidth: true
-                                        theme: view.theme
-                                        primary: true
-                                        text: qsTr("Save .txt")
-                                        enabled: view.documentReady
-                                        onClicked: view.command({ type: "editor_save_caption", text: captionTextArea.text })
-                                    }
-                                    PanelAction {
-                                        theme: view.theme
-                                        text: qsTr("Clear")
-                                        enabled: view.documentReady && (captionTextArea.text.length > 0 || captionOptionsPanel.savedCaption.length > 0)
-                                        onClicked: {
-                                            captionTextArea.text = ""
-                                            view.command({ type: "editor_save_caption", text: "" })
-                                        }
-                                    }
-                                }
+                            EditorPluginPanel {
+                                id: pluginOptionsPanel
+                                view: view
                             }
 
                             RowLayout {
@@ -11858,10 +10423,7 @@ Item {
                     onCommandRequested: function(cmd) { view.command(cmd) }
                     onPasteRequested: view.requestPasteImage()
                     onCanvasBackgroundPopupRequested: function(anchor) {
-                        var bg = view.editor ? view.editor.canvasBackground : null
-                        docCanvasBgPopup.transparent = !(bg && bg.length === 3)
-                        docCanvasBgPopup.colour = layersZone.bgColorHex()
-                        docCanvasBgPopup.showBelow(anchor)
+                        colorPopups.openDocCanvasBgPopup(anchor)
                     }
                     onToggleCollapsed: inspector.bottomCollapsed = !inspector.bottomCollapsed
                     onToggleDetached: inspector.setBottomDetached(!inspector.bottomDetached)
@@ -12125,83 +10687,10 @@ Item {
         }
     }
 
-    /// The foreground's chooser. One instance for every pair, because there is
-    /// one foreground: a click says which role is being changed, never which
-    /// copy of it. A cancelled chooser changes nothing, and the box keeps
-    /// showing what the next mark would get.
-    ColorPickerDialog {
-        id: foregroundColorDialog
-        objectName: "foregroundColorDialog"
-        theme: view.theme
-        title: qsTr("Foreground color")
-        selectedColor: view.foregroundColor
-        onAccepted: {
-            view.setForegroundColor(view.colorText(selectedColor))
-            view.forceActiveFocus()
-        }
-    }
-
-    /// New canvas, as a list: transparent, three named colours, or the chooser.
-    /// One instance serves the rail, the Crop panel and the Resize form, so a
-    /// border grown by hand and a padded resize cannot describe two different
-    /// backgrounds.
-    BackgroundPopup {
-        id: backgroundPopup
-        objectName: "backgroundPopup"
-        theme: view.theme
-        transparent: view.backgroundTransparent
-        colour: view.backgroundColor
-        alphaLostWarning: view.documentIsJpeg
-        onTransparentPicked: view.setBackgroundTransparent(true)
-        onColourPicked: function(value) { view.setBackgroundColor(value) }
-        onCustomPicked: view.openBackgroundChooser()
-    }
-
-    /// The chooser behind `Custom color…`. Uses the shared `ColorPickerDialog`
-    /// built on `DialogFrame`.
-    ColorPickerDialog {
-        id: backgroundColorDialog
-        objectName: "backgroundColorDialog"
-        theme: view.theme
-        title: qsTr("Background color")
-        selectedColor: view.backgroundColor
-        onAccepted: {
-            view.setBackgroundColor(view.colorText(selectedColor))
-            view.forceActiveFocus()
-        }
-    }
-
-    /// Canvas backdrop list (checkerboard, white, black, gray, custom).
-    BackgroundPopup {
-        id: canvasBgPopup
-        objectName: "canvasBgPopup"
-        theme: view.theme
-        transparent: !view.canvasBgUseTheme && view.canvasBgChecker
-        colour: view.canvasBgColor
-        onTransparentPicked: {
-            view.canvasBgUseTheme = false
-            view.canvasBgChecker = true
-        }
-        onColourPicked: function(value) {
-            view.canvasBgUseTheme = false
-            view.canvasBgChecker = false
-            view.canvasBgColor = value
-        }
-        onCustomPicked: view.openCanvasBgChooser()
-    }
-
-    ColorPickerDialog {
-        id: canvasBgColorDialog
-        objectName: "canvasBgColorDialog"
-        theme: view.theme
-        title: qsTr("Canvas background")
-        selectedColor: view.canvasBgColor
-        onAccepted: {
-            view.canvasBgUseTheme = false
-            view.canvasBgChecker = false
-            view.canvasBgColor = view.colorText(selectedColor)
-            view.forceActiveFocus()
-        }
+    EditorColorPopups {
+        id: colorPopups
+        view: view
+        layersPanel: layersZone
     }
 
     // Krita-style quick pop-up color selector triggered by pressing `C` while painting.
@@ -12572,59 +11061,6 @@ Item {
                 preserve_luminosity: preserveLum,
                 target: target
             })
-        }
-    }
-
-    /// Document-wide Canvas Background popup (Krita / Affinity style, from LayersPanel).
-    BackgroundPopup {
-        id: docCanvasBgPopup
-        objectName: "docCanvasBgPopup"
-        theme: view.theme
-        transparent: !(view.editor && view.editor.canvasBackground && view.editor.canvasBackground.length === 3)
-        colour: layersZone.bgColorHex()
-        alphaLostWarning: view.documentIsJpeg
-        onTransparentPicked: view.command({
-            type: "editor_set_canvas_background",
-            transparent: true
-        })
-        onColourPicked: function(value) {
-            view.command({
-                type: "editor_set_canvas_background",
-                transparent: false,
-                color: view.colorBytes(value)
-            })
-        }
-        onCustomPicked: {
-            docCanvasBgColorDialog.selectedColor = layersZone.bgColorHex()
-            docCanvasBgColorDialog.open()
-        }
-    }
-
-    ColorPickerDialog {
-        id: docCanvasBgColorDialog
-        objectName: "docCanvasBgColorDialog"
-        theme: view.theme
-        title: qsTr("Canvas background")
-        selectedColor: "#ffffff"
-        onAccepted: {
-            view.command({
-                type: "editor_set_canvas_background",
-                transparent: false,
-                color: view.colorBytes(view.colorText(selectedColor))
-            })
-            view.forceActiveFocus()
-        }
-    }
-
-    ColorPickerDialog {
-        id: gradientStopColorDialog
-        objectName: "gradientStopColorDialog"
-        theme: view.theme
-        title: qsTr("Gradient stop color")
-        selectedColor: "#ffffff"
-        onAccepted: {
-            view.updateGradientStop(view.gradientSelectedStop, { hex: view.colorText(selectedColor) })
-            view.forceActiveFocus()
         }
     }
 

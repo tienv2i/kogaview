@@ -311,7 +311,7 @@ mod tests {
                     radius: 8.0,
                     opacity: 0.75,
                     erase: false,
-                brush: Default::default(),
+                    brush: Default::default(),
                 },
                 "editor_paint_stroke",
             ),

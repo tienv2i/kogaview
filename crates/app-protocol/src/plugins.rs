@@ -264,4 +264,3 @@ pub(crate) fn default_crop_unit() -> String {
 pub(crate) fn default_canvas_anchor() -> String {
     "center".to_owned()
 }
-

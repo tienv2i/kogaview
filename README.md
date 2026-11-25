@@ -1,16 +1,16 @@
 # KogaView — Fast Native Photo Manager, Manga/Webtoon Reader, Non-Destructive Editor & AI Plugin Suite
 
-**KogaView** (`v2.0.0`) is a fast, native desktop photo manager, manga/webtoon reader, non-destructive image editor, and extensible out-of-process AI/OCR plugin platform built with **Rust** and **Qt 6 / QML** via **CXX-Qt**. Designed for Linux desktops (GNOME, KDE Plasma, Wayland/X11) with first-class **XDG Desktop Portal** and **Flatpak** readiness, every domain action flows through a single typed command gateway in Rust Core with revisioned state, structured logs, and a command journal.
+**KogaView** (`v2.2.0`) is a fast, native desktop photo manager, manga/webtoon reader, non-destructive image editor, and extensible out-of-process AI/OCR plugin platform built with **Rust** and **Qt 6 / QML** via **CXX-Qt**. Designed for Linux desktops (GNOME, KDE Plasma, Wayland/X11) with first-class **XDG Desktop Portal** and **Flatpak** readiness, every domain action flows through a single typed command gateway in Rust Core with revisioned state, structured logs, and a command journal.
 
 ![KogaView Browser Workspace](docs/screenshots/browser.png)
 
 ---
 
-## Highlights (v2.0.0)
+## Highlights (v2.2.0)
 
 ### Out-of-Process Plugin Ecosystem (Zero Startup Cost)
 - **Strict isolation**: Plugins run as standalone out-of-process binaries (`jsonl-stdio` protocol, [ADR 0024](docs/adr/0024-ai-plugin-architecture.md)) under `$XDG_DATA_HOME/kogaview/plugins/`. **Zero plugins or AI models are loaded at startup**; workers spawn on demand and exit automatically after each job to free RAM/VRAM.
-- **8 Official Standalone Plugins** (see full reference in [**`docs/PLUGINS.md`**](docs/PLUGINS.md)):
+- **9 Official Standalone Plugins** (see full reference in [**`docs/PLUGINS.md`**](docs/PLUGINS.md)):
 
 | Plugin | Type | Capabilities & Highlights | Build Command |
 |---|---|---|---|
@@ -22,6 +22,7 @@
 | **AI OCR — Manga-OCR & RapidOCR** (`kogaview-plugin-ai-ocr`) | AI ONNX | **Manga-OCR** (ViT + BERT ONNX for Japanese manga, vertical text, furigana & screentones) + **RapidOCR** (PP-OCRv4 DBNet + SVTR for complex colored backgrounds & manhwa/manhua) | `just build-plugin-ai-ocr` |
 | **Watermark Remover** (`kogaview-plugin-dewatermark`) | Math / Inpaint | **Gemini / Imagen Logo** lossless Reverse Alpha Blending (auto 48/96 px, Quick Action + Editor Advanced) + **General Watermark Region** harmonic diffusion inpainting | `just build-plugin-dewatermark` |
 | **AI Captioner** (`kogaview-plugin-caption`) | AI ONNX | **WD14 v3 Tagger** (`WD-ViT v3` & `WD-SwinV2 v3`) · Quick Action saves `<stem>.txt` + Editor Advanced panel with thresholds, prefix/exclude & live `.txt` editor | `just build-plugin-caption` |
+| **AI Watermark Remover** (`kogaview-plugin-ai-inpaint`) | AI ONNX | **YOLO26 / YOLO11 Detector** + **LaMa / MI-GAN Inpainter** · Auto-detect & inpaint watermarks (Quick Actions + Editor Advanced) | `just build-plugin-ai-inpaint` |
 
 - **Safe Quick Actions**: Right-click any image in Browser or Viewer → **Quick actions**. File-modifying actions automatically create numbered backups (`<file>~`, `<file>.2~`, `<file>.3~`) before atomically overwriting and refreshing the image.
 - **Unified Settings → Plugins**: Filterable model & language pack manager (`All` · `Background` · `Upscale` · `OCR languages`) with progress bars, cancellation, delete, and local custom `.onnx` overrides.
@@ -101,7 +102,7 @@ just run             # build and launch the dev app
 just test            # run Rust workspace, translation, packaging, and QML suites
 just install         # build optimized release and install to /usr/local
 just install-dev     # build optimized dev-prod with dev hooks and install
-just build-plugins   # build & install all 6 optional plugins to ~/.local/share/kogaview/plugins/
+just build-plugins   # build & install all 9 optional plugins to ~/.local/share/kogaview/plugins/
 just uninstall       # remove installed binary and desktop integration
 just doctor          # inspect versions, app identity, and environment
 ```
@@ -115,6 +116,9 @@ just build-plugin-utils
 just build-plugin-ocr
 just build-plugin-translate
 just build-plugin-ai-ocr
+just build-plugin-dewatermark
+just build-plugin-caption
+just build-plugin-ai-inpaint
 ```
 
 CLI usage:
@@ -148,7 +152,7 @@ kogaview --version
 
 ## Documentation
 
-- [**`docs/PLUGINS.md`**](docs/PLUGINS.md) — Complete guide to all 6 plugins, models, OCR/Translate workflow & plugin authoring
+- [**`docs/PLUGINS.md`**](docs/PLUGINS.md) — Complete guide to all 9 plugins, models, OCR/Translate workflow & plugin authoring
 - [`docs/PRD.md`](docs/PRD.md) — Product requirements
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Core/UI split, command bus, persistence
 - [`docs/UI-DESIGN-SYSTEM.md`](docs/UI-DESIGN-SYSTEM.md) — UI/UX design system & Qt 6 QML engineering rules

@@ -721,7 +721,7 @@ fn a_brush_stroke_paints_its_colour_and_undoes_in_one_step() {
             radius: 4.0,
             opacity: 1.0,
             erase: false,
-                brush: Default::default(),
+            brush: Default::default(),
         })
         .unwrap());
 
@@ -759,7 +759,7 @@ fn an_eraser_lowers_alpha_without_building_up_at_a_join() {
             radius: 3.0,
             opacity: 0.5,
             erase: true,
-                brush: Default::default(),
+            brush: Default::default(),
         })
         .unwrap());
 
@@ -788,7 +788,7 @@ fn an_eraser_lowers_alpha_without_building_up_at_a_join() {
             radius: 3.0,
             opacity: 0.5,
             erase: true,
-                brush: Default::default(),
+            brush: Default::default(),
         })
         .unwrap());
     assert_eq!(
@@ -812,7 +812,7 @@ fn a_malformed_stroke_is_rejected_with_a_line() {
             radius,
             opacity,
             erase: false,
-                brush: Default::default(),
+            brush: Default::default(),
         })
     };
 
@@ -2119,7 +2119,7 @@ fn selection_mask_shapes_combine_paint_masking_and_actions() {
         radius: 3.0,
         opacity: 1.0,
         erase: false,
-                brush: Default::default(),
+        brush: Default::default(),
     })
     .unwrap();
     assert_eq!(
@@ -2667,7 +2667,11 @@ fn draw_shape_respects_active_layer_and_selection_mask() {
     let img = RgbaImage::from_pixel(32, 32, image::Rgba([255, 255, 255, 255]));
     let mut doc = EditorDocument::from_image(dir.join("base.png"), img);
 
-    doc.apply_selection_mask(SelectionMask::rect(32, 32, 0, 0, 16, 32), SelectionMode::Replace, 0);
+    doc.apply_selection_mask(
+        SelectionMask::rect(32, 32, 0, 0, 16, 32),
+        SelectionMode::Replace,
+        0,
+    );
 
     assert!(doc
         .apply(EditOperation::DrawShape {
@@ -2744,7 +2748,10 @@ fn krita_brush_tips_and_layer_mask_workflow() {
         })
         .unwrap());
     assert_eq!(doc.pixels().get_pixel(16, 16).0[3], 0);
-    assert_eq!(doc.active_layer().pixels.get_pixel(16, 16).0, [200, 100, 50, 255]);
+    assert_eq!(
+        doc.active_layer().pixels.get_pixel(16, 16).0,
+        [200, 100, 50, 255]
+    );
 
     assert!(doc
         .apply_layer_op(LayerOperation::SetMaskEnabled {
@@ -2773,7 +2780,12 @@ fn krita_brush_tips_and_layer_mask_workflow() {
     assert_eq!(doc.active_layer().pixels.get_pixel(1, 1).0[3], 0);
     assert_eq!(doc.active_layer().pixels.get_pixel(16, 16).0[3], 255);
 
-    for tip in [BrushTip::Flat, BrushTip::Chalk, BrushTip::Spray, BrushTip::Pixel] {
+    for tip in [
+        BrushTip::Flat,
+        BrushTip::Chalk,
+        BrushTip::Spray,
+        BrushTip::Pixel,
+    ] {
         assert!(doc
             .apply(EditOperation::Paint {
                 points: vec![[4.0, 16.0], [28.0, 16.0]],
@@ -2804,7 +2816,11 @@ fn selection_modify_grow_shrink_border_smooth() {
     let img = RgbaImage::from_pixel(40, 40, image::Rgba([255, 255, 255, 255]));
     let mut doc = EditorDocument::from_image(dir.join("selmod.png"), img);
 
-    doc.apply_selection_mask(SelectionMask::rect(40, 40, 12, 12, 16, 16), SelectionMode::Replace, 0);
+    doc.apply_selection_mask(
+        SelectionMask::rect(40, 40, 12, 12, 16, 16),
+        SelectionMode::Replace,
+        0,
+    );
     assert_eq!(doc.selection_bounds(), Some([12, 12, 16, 16]));
 
     assert!(doc.modify_selection(SelectionModifyOp::Grow, 2));
@@ -2853,7 +2869,11 @@ fn flood_fill_and_gradient_respect_selection_and_mask() {
     assert_eq!(doc.pixels().get_pixel(24, 16).0, [255, 255, 255, 255]);
 
     // 2. Multi-stop linear gradient clipped to right half selection [17..32]
-    doc.apply_selection_mask(SelectionMask::rect(32, 32, 17, 0, 15, 32), SelectionMode::Replace, 0);
+    doc.apply_selection_mask(
+        SelectionMask::rect(32, 32, 17, 0, 15, 32),
+        SelectionMode::Replace,
+        0,
+    );
     assert!(doc
         .apply(EditOperation::Gradient {
             start: [17.0, 16.0],
@@ -2863,9 +2883,21 @@ fn flood_fill_and_gradient_respect_selection_and_mask() {
             end_color: [0, 255, 0],
             end_alpha: 1.0,
             stops: vec![
-                kogaview_protocol::GradientStop { pos: 0.0, color: [255, 0, 0], alpha: 1.0 },
-                kogaview_protocol::GradientStop { pos: 0.5, color: [0, 0, 255], alpha: 1.0 },
-                kogaview_protocol::GradientStop { pos: 1.0, color: [0, 255, 0], alpha: 1.0 },
+                kogaview_protocol::GradientStop {
+                    pos: 0.0,
+                    color: [255, 0, 0],
+                    alpha: 1.0
+                },
+                kogaview_protocol::GradientStop {
+                    pos: 0.5,
+                    color: [0, 0, 255],
+                    alpha: 1.0
+                },
+                kogaview_protocol::GradientStop {
+                    pos: 1.0,
+                    color: [0, 255, 0],
+                    alpha: 1.0
+                },
             ],
             opacity: 1.0,
             shape: GradientShape::Linear,
@@ -2905,7 +2937,10 @@ fn adjustment_layer_and_mask_non_destructive() {
     // Composite is inverted: [55, 155, 205, 255]
     assert_eq!(doc.pixels().get_pixel(8, 8).0, [55, 155, 205, 255]);
     // Background layer pixels are completely untouched (non-destructive)
-    assert_eq!(doc.layers()[0].pixels.get_pixel(8, 8).0, [200, 100, 50, 255]);
+    assert_eq!(
+        doc.layers()[0].pixels.get_pixel(8, 8).0,
+        [200, 100, 50, 255]
+    );
 
     // 2. Attach a Hide-All mask to the Adjustment Layer -> effect disappears!
     assert!(doc

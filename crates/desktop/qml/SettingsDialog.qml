@@ -434,7 +434,13 @@ DialogFrame {
                 ComboBox {
                 id: languageChoice
                 objectName: "languageChoice"
-                Layout.preferredWidth: 220
+                property string longestLabel: "System language (Theo hệ thống)"
+                TextMetrics {
+                    id: languageChoiceMetrics
+                    font: Qt.application.font
+                    text: languageChoice.longestLabel
+                }
+                Layout.preferredWidth: Math.max(260, Math.ceil(Math.max(languageChoiceMetrics.width, languageChoiceMetrics.advanceWidth)) + 56)
                 // A picker you can only read in the language you do not
                 // speak yet is useless, so an entry names its language in
                 // that language and, in parentheses, in English. The
@@ -455,17 +461,21 @@ DialogFrame {
                     var entries = [];
                     var index = 0;
                     var selected = 0;
+                    var widest = "System language (Theo hệ thống)";
                     for (var choice = 0; choice < choices.length; choice++) {
                         var entry = choices[choice];
+                        var entryLabel = entry.code === "vi"
+                                         ? entry.vietnamese
+                                         : entry.english + " (" + entry.vietnamese + ")";
+                        if (entryLabel.length > widest.length) widest = entryLabel;
                         entries.push({
                             code: entry.code,
-                            label: entry.code === "vi"
-                                  ? entry.vietnamese
-                                  : entry.english + " (" + entry.vietnamese + ")"
+                            label: entryLabel
                         });
                         if (entry.code === current) selected = index;
                         index++;
                     }
+                    longestLabel = widest;
                     model = entries;
                     currentIndex = selected;
                 }

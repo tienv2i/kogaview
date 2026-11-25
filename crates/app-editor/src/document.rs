@@ -284,7 +284,6 @@ impl EditorDocument {
         Ok(true)
     }
 
-
     /// Clear all pixels on the active layer to transparent (used by Cut when
     /// no selection is active on a single-layer document).
     pub fn clear_active_layer(&mut self) -> Result<bool, UiText> {
@@ -308,7 +307,6 @@ impl EditorDocument {
         self.saved = false;
         Ok(true)
     }
-
 
     /// Fill the active selection on the active layer with `color` at `opacity` (undoable).
     pub fn selection_fill(&mut self, color: [u8; 3], opacity: f32) -> Result<bool, UiText> {
@@ -376,7 +374,6 @@ impl EditorDocument {
         Ok(true)
     }
 
-
     /// Stroke the boundary of the active selection on the active layer (undoable).
     pub fn selection_stroke(
         &mut self,
@@ -432,7 +429,9 @@ impl EditorDocument {
             for x in 0..lw {
                 let dx = x as i32 + ox;
                 let dy = y as i32 + oy;
-                let m = outer.alpha_at(dx, dy).saturating_sub(inner.alpha_at(dx, dy));
+                let m = outer
+                    .alpha_at(dx, dy)
+                    .saturating_sub(inner.alpha_at(dx, dy));
                 if m == 0 {
                     continue;
                 }
@@ -476,7 +475,6 @@ impl EditorDocument {
         self.saved = false;
         Ok(true)
     }
-
 
     /// Apply a Liquify warp stroke on the active layer (undoable).
     pub fn liquify_stroke(
@@ -640,20 +638,16 @@ impl EditorDocument {
                         }
                         let mask_color = if erase { [0, 0, 0] } else { color };
                         let painted = crate::pixels::paint_stroke_with_brush(
-                            &rgba,
-                            &local_pts,
-                            mask_color,
-                            radius,
-                            opacity,
-                            false,
-                            brush,
+                            &rgba, &local_pts, mask_color, radius, opacity, false, brush,
                         );
                         let mut next_mask = (**mask_arc).clone();
                         next_mask.resize((mw as usize) * (mh as usize), 255);
                         for y in 0..mh {
                             for x in 0..mw {
                                 let sf = match &sel {
-                                    Some(s) => s.alpha_at(x as i32 + ox, y as i32 + oy) as f32 / 255.0,
+                                    Some(s) => {
+                                        s.alpha_at(x as i32 + ox, y as i32 + oy) as f32 / 255.0
+                                    }
                                     None => 1.0,
                                 };
                                 if sf <= 1e-4 {
@@ -665,11 +659,13 @@ impl EditorDocument {
                                     + 0.587 * p[1] as f32
                                     + 0.114 * p[2] as f32)
                                     .round()
-                                    .clamp(0.0, 255.0)) as u8;
+                                    .clamp(0.0, 255.0))
+                                    as u8;
                                 let orig = next_mask[idx];
                                 let blended = (orig as f32 * (1.0 - sf) + lum as f32 * sf)
                                     .round()
-                                    .clamp(0.0, 255.0) as u8;
+                                    .clamp(0.0, 255.0)
+                                    as u8;
                                 next_mask[idx] = blended;
                             }
                         }
@@ -678,13 +674,7 @@ impl EditorDocument {
                 } else {
                     let prev = Arc::clone(&active.pixels);
                     let mut painted = crate::pixels::paint_stroke_with_brush(
-                        &prev,
-                        &local_pts,
-                        color,
-                        radius,
-                        opacity,
-                        erase,
-                        brush,
+                        &prev, &local_pts, color, radius, opacity, erase, brush,
                     );
                     if let Some(s) = &sel {
                         let (lw, lh) = painted.dimensions();
@@ -704,10 +694,14 @@ impl EditorDocument {
                                         x,
                                         y,
                                         image::Rgba([
-                                            (a[0] as f32 * (1.0 - f) + b[0] as f32 * f).round() as u8,
-                                            (a[1] as f32 * (1.0 - f) + b[1] as f32 * f).round() as u8,
-                                            (a[2] as f32 * (1.0 - f) + b[2] as f32 * f).round() as u8,
-                                            (a[3] as f32 * (1.0 - f) + b[3] as f32 * f).round() as u8,
+                                            (a[0] as f32 * (1.0 - f) + b[0] as f32 * f).round()
+                                                as u8,
+                                            (a[1] as f32 * (1.0 - f) + b[1] as f32 * f).round()
+                                                as u8,
+                                            (a[2] as f32 * (1.0 - f) + b[2] as f32 * f).round()
+                                                as u8,
+                                            (a[3] as f32 * (1.0 - f) + b[3] as f32 * f).round()
+                                                as u8,
                                         ]),
                                     );
                                 }
@@ -1880,7 +1874,13 @@ impl EditorDocument {
             };
             let mut next = render_operation(&active.pixels, &local_op)?;
             if let Some(sel) = &self.selection {
-                blend_with_selection(&active.pixels, &mut next, sel, active.offset_x, active.offset_y);
+                blend_with_selection(
+                    &active.pixels,
+                    &mut next,
+                    sel,
+                    active.offset_x,
+                    active.offset_y,
+                );
             }
             self.stack.active_layer_mut().pixels = Arc::new(next);
             return Ok(());
@@ -2732,8 +2732,7 @@ impl EditorDocument {
                 fill_opacity,
                 ..
             } => {
-                if points.is_empty()
-                    || points.iter().any(|[x, y]| !x.is_finite() || !y.is_finite())
+                if points.is_empty() || points.iter().any(|[x, y]| !x.is_finite() || !y.is_finite())
                 {
                     return Ok(true);
                 }
@@ -2746,9 +2745,7 @@ impl EditorDocument {
                     fill_color.is_some() && fill_opacity.is_finite() && *fill_opacity > 0.0;
                 Ok(!has_stroke && !has_fill)
             }
-            EditOperation::FloodFill { opacity, .. } => {
-                Ok(!opacity.is_finite() || *opacity <= 0.0)
-            }
+            EditOperation::FloodFill { opacity, .. } => Ok(!opacity.is_finite() || *opacity <= 0.0),
             EditOperation::Gradient {
                 start,
                 end,

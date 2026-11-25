@@ -288,91 +288,98 @@ pub fn paint_stroke_with_brush(
     let sin_a = angle_rad.sin();
     let r = radius.max(0.5);
 
-    let stamp_dab = |coverage: &mut [f32], cx: f64, cy: f64, dab_r: f64, dab_flow: f32, seed: u32| {
-        let pad = dab_r + 1.5;
-        let x0 = (cx - pad).floor().max(left as f64) as usize;
-        let y0 = (cy - pad).floor().max(top as f64) as usize;
-        let x1 = ((cx + pad).ceil().max(0.0) as usize).min(right as usize);
-        let y1 = ((cy + pad).ceil().max(0.0) as usize).min(bottom as usize);
-        if x0 >= x1 || y0 >= y1 {
-            return;
-        }
-        let inner = dab_r * hardness;
-        let falloff = (dab_r - inner).max(0.5);
-        for py in y0..y1 {
-            let fy = py as f64 + 0.5 - cy;
-            let row = (py - top as usize) * box_w;
-            for px in x0..x1 {
-                let fx = px as f64 + 0.5 - cx;
-                let mask = match brush.tip {
-                    BrushTip::Round => {
-                        let d = fx.hypot(fy);
-                        if d <= inner {
-                            1.0f32
-                        } else if d < dab_r + 0.5 {
-                            let t = ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32;
-                            // Smooth cubic Hermite falloff for natural Krita airbrush feel.
-                            t * t * (3.0 - 2.0 * t)
-                        } else {
-                            0.0
-                        }
-                    }
-                    BrushTip::Flat => {
-                        let rx = fx * cos_a + fy * sin_a;
-                        let ry = (-fx * sin_a + fy * cos_a) * 3.2;
-                        let d = rx.hypot(ry);
-                        if d <= inner {
-                            1.0f32
-                        } else if d < dab_r + 0.5 {
-                            let t = ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32;
-                            t * t * (3.0 - 2.0 * t)
-                        } else {
-                            0.0
-                        }
-                    }
-                    BrushTip::Chalk => {
-                        let d = fx.hypot(fy);
-                        if d >= dab_r + 0.5 {
-                            0.0
-                        } else {
-                            let base = if d <= inner {
+    let stamp_dab =
+        |coverage: &mut [f32], cx: f64, cy: f64, dab_r: f64, dab_flow: f32, seed: u32| {
+            let pad = dab_r + 1.5;
+            let x0 = (cx - pad).floor().max(left as f64) as usize;
+            let y0 = (cy - pad).floor().max(top as f64) as usize;
+            let x1 = ((cx + pad).ceil().max(0.0) as usize).min(right as usize);
+            let y1 = ((cy + pad).ceil().max(0.0) as usize).min(bottom as usize);
+            if x0 >= x1 || y0 >= y1 {
+                return;
+            }
+            let inner = dab_r * hardness;
+            let falloff = (dab_r - inner).max(0.5);
+            for py in y0..y1 {
+                let fy = py as f64 + 0.5 - cy;
+                let row = (py - top as usize) * box_w;
+                for px in x0..x1 {
+                    let fx = px as f64 + 0.5 - cx;
+                    let mask = match brush.tip {
+                        BrushTip::Round => {
+                            let d = fx.hypot(fy);
+                            if d <= inner {
                                 1.0f32
+                            } else if d < dab_r + 0.5 {
+                                let t =
+                                    ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32;
+                                // Smooth cubic Hermite falloff for natural Krita airbrush feel.
+                                t * t * (3.0 - 2.0 * t)
                             } else {
-                                ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32
-                            };
-                            // Spatial paper grain + coarse bristle texture.
-                            let g1 = hash_f32(px as i32, py as i32, 17);
-                            let g2 = hash_f32((px as i32) >> 1, (py as i32) >> 1, 53);
-                            let grain = (g1 * 0.55 + g2 * 0.45 - 0.18).clamp(0.0, 1.0);
-                            (base * grain * 1.35).clamp(0.0, 1.0)
+                                0.0
+                            }
                         }
-                    }
-                    BrushTip::Pixel => {
-                        if fx.abs() <= dab_r && fy.abs() <= dab_r {
-                            1.0
-                        } else {
-                            0.0
+                        BrushTip::Flat => {
+                            let rx = fx * cos_a + fy * sin_a;
+                            let ry = (-fx * sin_a + fy * cos_a) * 3.2;
+                            let d = rx.hypot(ry);
+                            if d <= inner {
+                                1.0f32
+                            } else if d < dab_r + 0.5 {
+                                let t =
+                                    ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32;
+                                t * t * (3.0 - 2.0 * t)
+                            } else {
+                                0.0
+                            }
                         }
-                    }
-                    BrushTip::Spray => {
-                        let d = fx.hypot(fy);
-                        if d <= dab_r {
-                            let t = (1.0 - d / (dab_r + 0.5)).clamp(0.0, 1.0) as f32;
-                            let n = hash_f32(px as i32, py as i32, seed);
-                            if n > 0.35 { t } else { 0.0 }
-                        } else {
-                            0.0
+                        BrushTip::Chalk => {
+                            let d = fx.hypot(fy);
+                            if d >= dab_r + 0.5 {
+                                0.0
+                            } else {
+                                let base = if d <= inner {
+                                    1.0f32
+                                } else {
+                                    ((dab_r + 0.5 - d) / (falloff + 0.5)).clamp(0.0, 1.0) as f32
+                                };
+                                // Spatial paper grain + coarse bristle texture.
+                                let g1 = hash_f32(px as i32, py as i32, 17);
+                                let g2 = hash_f32((px as i32) >> 1, (py as i32) >> 1, 53);
+                                let grain = (g1 * 0.55 + g2 * 0.45 - 0.18).clamp(0.0, 1.0);
+                                (base * grain * 1.35).clamp(0.0, 1.0)
+                            }
                         }
+                        BrushTip::Pixel => {
+                            if fx.abs() <= dab_r && fy.abs() <= dab_r {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        BrushTip::Spray => {
+                            let d = fx.hypot(fy);
+                            if d <= dab_r {
+                                let t = (1.0 - d / (dab_r + 0.5)).clamp(0.0, 1.0) as f32;
+                                let n = hash_f32(px as i32, py as i32, seed);
+                                if n > 0.35 {
+                                    t
+                                } else {
+                                    0.0
+                                }
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
+                    if mask > 0.0 {
+                        let idx = row + (px - left as usize);
+                        let add = (mask * dab_flow).clamp(0.0, 1.0);
+                        coverage[idx] = 1.0 - (1.0 - coverage[idx]) * (1.0 - add);
                     }
-                };
-                if mask > 0.0 {
-                    let idx = row + (px - left as usize);
-                    let add = (mask * dab_flow).clamp(0.0, 1.0);
-                    coverage[idx] = 1.0 - (1.0 - coverage[idx]) * (1.0 - add);
                 }
             }
-        }
-    };
+        };
 
     for (idx, &[dx, dy]) in dabs.iter().enumerate() {
         let seed = (idx as u32).wrapping_add(1);
@@ -383,7 +390,8 @@ pub fn paint_stroke_with_brush(
                 let s = seed.wrapping_mul(31).wrapping_add(d * 7 + 3);
                 let ang = hash_f32(idx as i32, d as i32, s) as f64 * std::f64::consts::TAU;
                 let dist = (hash_f32(d as i32, idx as i32, s ^ 0x55aa) as f64).sqrt() * spread;
-                let drop_r = (r * 0.16 * (0.5 + hash_f32(idx as i32, d as i32, s ^ 0x1234) as f64)).max(0.8);
+                let drop_r =
+                    (r * 0.16 * (0.5 + hash_f32(idx as i32, d as i32, s ^ 0x1234) as f64)).max(0.8);
                 stamp_dab(
                     &mut coverage,
                     dx + ang.cos() * dist,
@@ -627,12 +635,7 @@ pub fn canvas_size(
 /// Rotate `image` clockwise by an arbitrary angle (in degrees), expanding the
 /// canvas to hold the rotated bounding box and filling uncovered corners with
 /// `fill` / `fill_alpha`.
-pub fn rotate_angle(
-    image: &RgbaImage,
-    degrees: f64,
-    fill: [u8; 3],
-    fill_alpha: u8,
-) -> RgbaImage {
+pub fn rotate_angle(image: &RgbaImage, degrees: f64, fill: [u8; 3], fill_alpha: u8) -> RgbaImage {
     let (w, h) = image.dimensions();
     let wf = f64::from(w);
     let hf = f64::from(h);
@@ -1026,12 +1029,7 @@ pub fn adjust_curves(
 
 /// Krita-style HSV adjustment (`hue_deg` in `-180..=180`, `saturation` & `value`
 /// in `-1.0..=1.0`, `0.0` = unchanged), preserving alpha untouched.
-pub fn adjust_hsv(
-    image: &RgbaImage,
-    hue_deg: f64,
-    saturation: f64,
-    value: f64,
-) -> RgbaImage {
+pub fn adjust_hsv(image: &RgbaImage, hue_deg: f64, saturation: f64, value: f64) -> RgbaImage {
     let dh = hue_deg.clamp(-180.0, 180.0);
     let ds = saturation.clamp(-1.0, 1.0);
     let dv = value.clamp(-1.0, 1.0);
@@ -1435,7 +1433,6 @@ pub fn draw_shape(
     result
 }
 
-
 /// Krita-style flood fill using a reference image (either the active layer or
 /// the composited stack when `sample_all_layers` is true), with optional
 /// morphological `grow` to eliminate 1px anti-aliased halos on lineart.
@@ -1460,11 +1457,7 @@ pub fn flood_fill(
         return result;
     }
     let mut mask = crate::selection::SelectionMask::magic_wand(
-        reference,
-        seed_x,
-        seed_y,
-        tolerance,
-        contiguous,
+        reference, seed_x, seed_y, tolerance, contiguous,
     );
     if mask.is_empty() {
         return result;
@@ -1525,7 +1518,13 @@ pub fn render_gradient(
     let mut ramp: Vec<(f32, [u8; 3], f32)> = if stops.len() >= 2 {
         stops
             .iter()
-            .map(|s| (s.pos.clamp(0.0, 1.0) as f32, s.color, s.alpha.clamp(0.0, 1.0) as f32))
+            .map(|s| {
+                (
+                    s.pos.clamp(0.0, 1.0) as f32,
+                    s.color,
+                    s.alpha.clamp(0.0, 1.0) as f32,
+                )
+            })
             .collect()
     } else {
         vec![
@@ -1549,12 +1548,18 @@ pub fn render_gradient(
         let t = if reverse { 1.0 - t_in } else { t_in }.clamp(0.0, 1.0);
         if t <= ramp[0].0 {
             let c = ramp[0].1;
-            return ([f32::from(c[0]), f32::from(c[1]), f32::from(c[2])], ramp[0].2);
+            return (
+                [f32::from(c[0]), f32::from(c[1]), f32::from(c[2])],
+                ramp[0].2,
+            );
         }
         let last = ramp.len() - 1;
         if t >= ramp[last].0 {
             let c = ramp[last].1;
-            return ([f32::from(c[0]), f32::from(c[1]), f32::from(c[2])], ramp[last].2);
+            return (
+                [f32::from(c[0]), f32::from(c[1]), f32::from(c[2])],
+                ramp[last].2,
+            );
         }
         for i in 0..last {
             let (p0, c0, a0) = ramp[i];
@@ -1572,7 +1577,10 @@ pub fn render_gradient(
             }
         }
         let c = ramp[last].1;
-        ([f32::from(c[0]), f32::from(c[1]), f32::from(c[2])], ramp[last].2)
+        (
+            [f32::from(c[0]), f32::from(c[1]), f32::from(c[2])],
+            ramp[last].2,
+        )
     };
 
     for y in 0..h {
@@ -1605,7 +1613,11 @@ pub fn render_gradient(
                 GradientRepeat::Forwards => raw_t.rem_euclid(1.0),
                 GradientRepeat::Alternating => {
                     let m = raw_t.rem_euclid(2.0);
-                    if m <= 1.0 { m } else { 2.0 - m }
+                    if m <= 1.0 {
+                        m
+                    } else {
+                        2.0 - m
+                    }
                 }
             } as f32;
 
@@ -1614,7 +1626,11 @@ pub fn render_gradient(
             if sa <= 1e-5 {
                 continue;
             }
-            let d = if dither { BAYER4[by][(x as usize) & 3] } else { 0.0 };
+            let d = if dither {
+                BAYER4[by][(x as usize) & 3]
+            } else {
+                0.0
+            };
             let sr = (rf + d).round().clamp(0.0, 255.0) as u8;
             let sg = (gf + d).round().clamp(0.0, 255.0) as u8;
             let sb = (bf + d).round().clamp(0.0, 255.0) as u8;
@@ -1638,7 +1654,11 @@ pub fn render_gradient(
                         crate::layer::BlendMode::Multiply => dc * sc,
                         crate::layer::BlendMode::Screen => 1.0 - (1.0 - dc) * (1.0 - sc),
                         crate::layer::BlendMode::Overlay => {
-                            if dc < 0.5 { 2.0 * dc * sc } else { 1.0 - 2.0 * (1.0 - dc) * (1.0 - sc) }
+                            if dc < 0.5 {
+                                2.0 * dc * sc
+                            } else {
+                                1.0 - 2.0 * (1.0 - dc) * (1.0 - sc)
+                            }
                         }
                         crate::layer::BlendMode::Darken => dc.min(sc),
                         crate::layer::BlendMode::Lighten => dc.max(sc),
@@ -1757,7 +1777,13 @@ pub fn liquify_stroke(
     if points.len() == 1 {
         let p = points[0];
         if !matches!(mode, kogaview_protocol::LiquifyMode::Push) {
-            apply_dab(&mut result, p[0] as f32 - ox as f32, p[1] as f32 - oy as f32, 0.0, 0.0);
+            apply_dab(
+                &mut result,
+                p[0] as f32 - ox as f32,
+                p[1] as f32 - oy as f32,
+                0.0,
+                0.0,
+            );
         }
         return result;
     }

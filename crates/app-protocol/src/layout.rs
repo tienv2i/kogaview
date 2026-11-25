@@ -134,7 +134,6 @@ pub const LAYOUT_VIEWER_DISPLAY_MODES: [&str; 3] = ["single", "dual", "webtoon"]
 /// Compact / Fullscreen floating HUD docked edges.
 pub const LAYOUT_COMPACT_HUD_EDGES: [&str; 4] = ["top", "bottom", "left", "right"];
 
-
 /// The persisted layout: which panels each workspace shows, how wide its docks
 /// are, and how the Editor splits its two halves.
 ///
@@ -316,4 +315,3 @@ impl LayoutState {
         layout
     }
 }
-

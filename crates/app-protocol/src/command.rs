@@ -2,9 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::*;
 use crate::editor_types::{default_fill_tolerance, default_one_f64};
 use crate::plugins::{default_canvas_anchor, default_true};
+use crate::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1190,4 +1190,3 @@ impl ProtocolError {
         }
     }
 }
-

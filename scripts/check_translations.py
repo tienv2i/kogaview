@@ -264,6 +264,7 @@ def table() -> list[tuple[str, str]]:
 CORE_DIRS = (
     ROOT / "crates" / "app-core" / "src",
     ROOT / "crates" / "app-editor" / "src",
+    ROOT / "crates" / "app-image" / "src",
 )
 UI_LINES = QML_DIR / "UiLines.qml"
 

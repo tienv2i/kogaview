@@ -88,4 +88,3 @@ impl Default for Workspace {
         Self::Browser
     }
 }
-
