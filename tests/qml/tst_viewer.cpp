@@ -1078,7 +1078,7 @@ private:
   {
     QObject* menu = canvasMenu();
     QVERIFY2(menu != nullptr, "the viewer has no canvas menu");
-    QMetaObject::invokeMethod(menu, "popup");
+    QMetaObject::invokeMethod(menu, "open");
     QTRY_VERIFY2(menu->property("visible").toBool(), "the canvas menu did not open");
   }
 

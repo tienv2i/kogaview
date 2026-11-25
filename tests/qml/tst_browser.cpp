@@ -756,7 +756,7 @@ private slots:
     for (const QString& name : expectedMenus) {
       QObject* menu = findPopup(name);
       QVERIFY2(menu != nullptr, qPrintable(name + QStringLiteral(" is missing")));
-      QMetaObject::invokeMethod(menu, "popup");
+      QMetaObject::invokeMethod(menu, "open");
       QTRY_VERIFY2(menu->property("visible").toBool(),
                    qPrintable(name + QStringLiteral(" did not open")));
     }
@@ -1699,7 +1699,7 @@ private slots:
                                  QStringLiteral("quickMenu") }) {
       QObject* menu = findPopup(name);
       QVERIFY2(menu != nullptr, qPrintable(name + QStringLiteral(" is missing")));
-      QMetaObject::invokeMethod(menu, "popup");
+      QMetaObject::invokeMethod(menu, "open");
       QTRY_VERIFY2(menu->property("visible").toBool(),
                    qPrintable(name + QStringLiteral(" did not open")));
 
@@ -1793,7 +1793,7 @@ private slots:
          { QStringLiteral("fileMenu"), QStringLiteral("folderMenu"), QStringLiteral("quickMenu") }) {
       QObject* menu = findPopup(name);
       QVERIFY2(menu != nullptr, qPrintable(name + QStringLiteral(" is missing")));
-      QMetaObject::invokeMethod(menu, "popup");
+      QMetaObject::invokeMethod(menu, "open");
       QTRY_VERIFY2(menu->property("visible").toBool(),
                    qPrintable(name + QStringLiteral(" did not open")));
 
@@ -1956,7 +1956,7 @@ private slots:
       if (menu == nullptr) {
         return labels;
       }
-      QMetaObject::invokeMethod(menu, "popup");
+      QMetaObject::invokeMethod(menu, "open");
       const int count = menu->property("count").toInt();
       for (int index = 0; index < count; ++index) {
         QQuickItem* entry = nullptr;
@@ -2021,7 +2021,7 @@ private slots:
 
     QObject* menu = findPopup(QStringLiteral("fileMenu"));
     QVERIFY(menu != nullptr);
-    QMetaObject::invokeMethod(menu, "popup");
+    QMetaObject::invokeMethod(menu, "open");
     QTRY_VERIFY(menu->property("visible").toBool());
 
     const qreal entryWidth = menu->property("width").toReal();
@@ -2058,7 +2058,7 @@ private slots:
     QSignalSpy openExternal(browserRoot(), SIGNAL(openExternal(QString)));
 
     browserRoot()->setProperty("menuPath", QStringLiteral("/root/img.png"));
-    QMetaObject::invokeMethod(menu, "popup");
+    QMetaObject::invokeMethod(menu, "open");
     QTRY_VERIFY(menu->property("visible").toBool());
 
     QQuickItem* entry = nullptr;
@@ -2107,7 +2107,7 @@ private slots:
     browserRoot()->setProperty("menuPath", QStringLiteral("/root/img.png"));
     browserRoot()->setProperty("menuIsImage", true);
     browserRoot()->setProperty("menuIsDir", false);
-    QMetaObject::invokeMethod(menu, "popup");
+    QMetaObject::invokeMethod(menu, "open");
     QTRY_VERIFY(menu->property("visible").toBool());
 
     QQuickItem* entry = nullptr;
@@ -2654,7 +2654,7 @@ private slots:
       QObject* menu = findPopup(QString::fromLatin1(name));
       QVERIFY2(menu != nullptr, qPrintable(QString::fromLatin1(name) + " is missing"));
       browserRoot()->setProperty("menuPath", QStringLiteral("/root/img.png"));
-      QMetaObject::invokeMethod(menu, "popup");
+      QMetaObject::invokeMethod(menu, "open");
       QTRY_VERIFY2(menu->property("visible").toBool(),
                    qPrintable(QString::fromLatin1(name) + " did not open"));
 
