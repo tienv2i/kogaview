@@ -189,7 +189,12 @@ endif()
 # never installed or packaged.
 option(KOGAVIEW_BUILD_TESTS "Build the Qt Quick regression tests" ON)
 if(KOGAVIEW_BUILD_TESTS)
-  find_package(Qt6 REQUIRED COMPONENTS Test GuiPrivate)
+  find_package(Qt6 REQUIRED COMPONENTS Test)
+  # Qt 6.10+ split private targets into a standalone Qt6GuiPrivate package,
+  # whereas Qt 6.8 (Debian Trixie) provides Qt6::GuiPrivate via Qt6Gui itself.
+  if(NOT TARGET Qt6::GuiPrivate)
+    find_package(Qt6 QUIET COMPONENTS GuiPrivate)
+  endif()
 
   # Suite sources are paired with the target that runs them.
   set(KOGAVIEW_QML_TEST_SUITES
@@ -230,7 +235,12 @@ if(KOGAVIEW_BUILD_TESTS)
       list(APPEND suite_sources tests/qml/stubthumbnailcache.h)
     endif()
     add_executable(${target} ${suite_sources})
-    target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::GuiPrivate Qt6::Concurrent)
+    target_link_libraries(${target} PRIVATE Qt6::Quick Qt6::Test Qt6::Concurrent)
+    if(TARGET Qt6::GuiPrivate)
+      target_link_libraries(${target} PRIVATE Qt6::GuiPrivate)
+    elseif(Qt6Gui_PRIVATE_INCLUDE_DIRS)
+      target_include_directories(${target} PRIVATE ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+    endif()
     target_compile_definitions(${target}
       PRIVATE KOGAVIEW_QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/crates/desktop/qml"
               KOGAVIEW_QML_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/qml")
