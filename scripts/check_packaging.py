@@ -37,6 +37,16 @@ import dev  # noqa: E402  (the module owns the paths and the renderer)
 ROOT = dev.ROOT
 PROTOCOL_SOURCE = ROOT / "crates" / "app-protocol" / "src" / "lib.rs"
 MIME_GLOBS = Path("/usr/share/mime/globs2")
+MIME_ALIASES = Path("/usr/share/mime/aliases")
+
+# Freedesktop shared-mime-info >= 2.5 additions that older Linux bases
+# (such as Debian Trixie / shared-mime-info 2.4) do not ship yet.
+UPSTREAM_MIME_FALLBACKS: dict[str, set[str]] = {
+    "image/vnd.ms-dds": {"*.dds"},
+    "image/vnd.radiance": {"*.hdr"},
+    "image/x-hdr": {"*.hdr"},
+    "image/x-farbfeld": {"*.ff"},
+}
 
 # Listed by the browser so such files are visible and selectable, but with no
 # decoder behind them: the desktop entry must not claim them (ADR 0005).
@@ -92,6 +102,19 @@ def mime_globs() -> dict[str, set[str]]:
             continue
         mime, glob = parts[1], parts[2]
         table.setdefault(mime, set()).add(glob)
+    if MIME_ALIASES.is_file():
+        for line in MIME_ALIASES.read_text(encoding="utf-8", errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[0].startswith("#"):
+                continue
+            alias, canonical = parts[0], parts[1]
+            patterns = table.get(alias, set()) | table.get(canonical, set())
+            if patterns:
+                table.setdefault(alias, set()).update(patterns)
+                table.setdefault(canonical, set()).update(patterns)
+    for mime, patterns in UPSTREAM_MIME_FALLBACKS.items():
+        if mime not in table:
+            table[mime] = set(patterns)
     return table
 
 
